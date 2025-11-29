@@ -123,15 +123,15 @@ export default function ChatArea() {
       <div className="flex-1 overflow-y-auto">
         {isLoadingMessages ? (
           <div className="flex justify-center items-center h-full">
-            <Loader2 className="w-8 h-8 animate-spin text-luna-500" />
+            <Loader2 className="w-8 h-8 animate-spin text-theme-accent-primary" />
           </div>
         ) : !hasMessages ? (
           <div className="flex flex-col items-center justify-center h-full px-4">
-            <div className="w-20 h-20 rounded-full bg-luna-600/20 flex items-center justify-center mb-6">
-              <Moon className="w-10 h-10 text-luna-500" />
+            <div className="w-20 h-20 rounded-full bg-theme-accent-primary/20 flex items-center justify-center mb-6">
+              <Moon className="w-10 h-10 text-theme-accent-primary" />
             </div>
-            <h2 className="text-2xl font-semibold text-white mb-2">Hello! I&apos;m Luna</h2>
-            <p className="text-gray-400 text-center max-w-md">
+            <h2 className="text-2xl font-semibold text-theme-text-primary mb-2">Hello! I&apos;m Luna</h2>
+            <p className="text-theme-text-muted text-center max-w-md">
               Your AI personal assistant and conversation companion. How can I help you today?
             </p>
           </div>
@@ -146,8 +146,8 @@ export default function ChatArea() {
                   className={clsx(
                     'inline-block max-w-[85%] px-4 py-3 rounded-2xl',
                     msg.role === 'user'
-                      ? 'bg-luna-600 text-white rounded-br-md'
-                      : 'bg-gray-800 text-gray-100 rounded-bl-md'
+                      ? 'bg-theme-message-user text-theme-message-user-text rounded-br-md'
+                      : 'bg-theme-message-assistant text-theme-message-assistant-text rounded-bl-md border border-theme-border'
                   )}
                 >
                   {msg.role === 'assistant' ? (
@@ -164,7 +164,7 @@ export default function ChatArea() {
             {/* Streaming message */}
             {streamingContent && (
               <div className="mb-6">
-                <div className="inline-block max-w-[85%] px-4 py-3 rounded-2xl bg-gray-800 text-gray-100 rounded-bl-md">
+                <div className="inline-block max-w-[85%] px-4 py-3 rounded-2xl bg-theme-message-assistant text-theme-message-assistant-text rounded-bl-md border border-theme-border">
                   <div className="message-content prose prose-invert prose-sm max-w-none">
                     <ReactMarkdown>{streamingContent}</ReactMarkdown>
                     <span className="typing-cursor" />
@@ -176,14 +176,14 @@ export default function ChatArea() {
             {/* Loading indicator */}
             {isSending && !streamingContent && (
               <div className="mb-6">
-                <div className="inline-block px-4 py-3 rounded-2xl bg-gray-800 rounded-bl-md">
+                <div className="inline-block px-4 py-3 rounded-2xl bg-theme-message-assistant rounded-bl-md border border-theme-border">
                   <div className="flex items-center gap-2">
                     <div className="flex gap-1">
-                      <span className="w-2 h-2 bg-luna-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                      <span className="w-2 h-2 bg-luna-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                      <span className="w-2 h-2 bg-luna-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                      <span className="w-2 h-2 bg-theme-accent-primary rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                      <span className="w-2 h-2 bg-theme-accent-primary rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                      <span className="w-2 h-2 bg-theme-accent-primary rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                     </div>
-                    <span className="text-gray-300 text-sm">{statusMessage || 'Luna is thinking...'}</span>
+                    <span className="text-theme-text-secondary text-sm">{statusMessage || 'Luna is thinking...'}</span>
                   </div>
                 </div>
               </div>
@@ -195,9 +195,9 @@ export default function ChatArea() {
       </div>
 
       {/* Input area */}
-      <div className="border-t border-gray-800 p-4">
+      <div className="border-t border-theme-border p-4">
         <div className="max-w-3xl mx-auto">
-          <div className="relative flex items-end gap-2 bg-gray-900 rounded-xl border border-gray-800 focus-within:border-luna-500 transition">
+          <div className="relative flex items-end gap-2 bg-theme-bg-secondary rounded-xl border border-theme-border focus-within:border-theme-border-focus transition">
             <textarea
               ref={textareaRef}
               value={input}
@@ -205,13 +205,13 @@ export default function ChatArea() {
               onKeyDown={handleKeyDown}
               placeholder="Message Luna..."
               rows={1}
-              className="flex-1 bg-transparent px-4 py-3 outline-none resize-none max-h-[200px] text-white placeholder-gray-500"
+              className="flex-1 bg-transparent px-4 py-3 outline-none resize-none max-h-[200px] text-theme-text-primary placeholder-theme-text-muted"
               disabled={isSending}
             />
             <button
               onClick={handleSend}
               disabled={!input.trim() || isSending}
-              className="p-3 m-1 bg-luna-600 hover:bg-luna-700 disabled:bg-gray-700 disabled:cursor-not-allowed rounded-lg transition"
+              className="p-3 m-1 bg-theme-accent-primary hover:bg-theme-accent-hover disabled:bg-theme-bg-tertiary disabled:cursor-not-allowed rounded-lg transition text-theme-text-primary"
             >
               {isSending ? (
                 <Loader2 className="w-5 h-5 animate-spin" />
@@ -220,7 +220,7 @@ export default function ChatArea() {
               )}
             </button>
           </div>
-          <p className="text-xs text-gray-500 text-center mt-2">
+          <p className="text-xs text-theme-text-muted text-center mt-2">
             Luna can make mistakes. Consider checking important information.
           </p>
         </div>

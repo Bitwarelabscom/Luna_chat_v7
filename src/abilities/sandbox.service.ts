@@ -1,10 +1,17 @@
 import { pool } from '../db/index.js';
 import logger from '../utils/logger.js';
 import { spawn } from 'child_process';
+import * as path from 'path';
 
 const SANDBOX_CONTAINER = process.env.SANDBOX_CONTAINER || 'luna-sandbox';
-const EXECUTION_TIMEOUT = 10000; // 10 seconds
+// Point docker CLI to the restricted docker-socket-proxy
+const DOCKER_HOST = process.env.DOCKER_HOST || 'http://docker-proxy:2375';
+const EXECUTION_TIMEOUT = 30000; // 30 seconds for file execution
+const INLINE_EXECUTION_TIMEOUT = 10000; // 10 seconds for inline code
 const MAX_OUTPUT_LENGTH = 10000;
+
+// Workspace paths
+const SANDBOX_WORKSPACE_ROOT = '/workspace'; // Inside sandbox container
 
 export interface ExecutionResult {
   id?: string;
@@ -150,12 +157,15 @@ async function executeInContainer(
     const dockerArgs = [
       'exec',
       '-i',
+      // Use proxy host via env
       SANDBOX_CONTAINER,
       command,
       ...args,
     ];
 
-    const proc = spawn('docker', dockerArgs);
+    const proc = spawn('docker', dockerArgs, {
+      env: { ...process.env, DOCKER_HOST },
+    });
 
     let stdout = '';
     let stderr = '';
@@ -174,7 +184,7 @@ async function executeInContainer(
     const timeout = setTimeout(() => {
       proc.kill();
       reject(new Error('Execution timeout'));
-    }, EXECUTION_TIMEOUT);
+    }, INLINE_EXECUTION_TIMEOUT);
 
     proc.on('close', (code) => {
       clearTimeout(timeout);
@@ -314,10 +324,216 @@ export async function executeCode(
   }
 }
 
+/**
+ * Execute a file from user's workspace in sandbox
+ */
+export async function executeWorkspaceFile(
+  userId: string,
+  filename: string,
+  sessionId?: string,
+  args: string[] = []
+): Promise<ExecutionResult> {
+  const startTime = Date.now();
+
+  // Security: validate filename to prevent path traversal
+  if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+    return {
+      success: false,
+      output: '',
+      error: 'Invalid filename - path traversal not allowed',
+      executionTimeMs: Date.now() - startTime,
+      language: 'unknown',
+    };
+  }
+
+  // Determine language from extension
+  const ext = path.extname(filename).toLowerCase();
+  let command: string;
+  let language: string;
+
+  switch (ext) {
+    case '.py':
+      command = 'python3';
+      language = 'python';
+      break;
+    case '.js':
+      command = 'node';
+      language = 'javascript';
+      break;
+    case '.sh':
+      command = 'sh';
+      language = 'shell';
+      break;
+    default:
+      return {
+        success: false,
+        output: '',
+        error: `Unsupported file type: ${ext}. Supported: .py, .js, .sh`,
+        executionTimeMs: Date.now() - startTime,
+        language: 'unknown',
+      };
+  }
+
+  try {
+    // Build path inside sandbox container
+    const sandboxFilePath = path.join(SANDBOX_WORKSPACE_ROOT, userId, filename);
+
+    const result = await executeFileInContainer(command, sandboxFilePath, args, userId);
+    const executionTimeMs = Date.now() - startTime;
+
+    // Store execution record
+    const execId = await storeExecution(
+      userId,
+      sessionId,
+      language,
+      `[file: ${filename}]`,
+      result,
+      executionTimeMs
+    );
+
+    logger.info('Executed workspace file', { userId, filename, language, success: !result.error });
+
+    return {
+      id: execId,
+      success: !result.error,
+      output: result.output.slice(0, MAX_OUTPUT_LENGTH),
+      error: result.error?.slice(0, MAX_OUTPUT_LENGTH),
+      executionTimeMs,
+      language,
+    };
+  } catch (error) {
+    const executionTimeMs = Date.now() - startTime;
+    const errorMessage = (error as Error).message;
+
+    logger.error('Failed to execute workspace file', { userId, filename, error: errorMessage });
+
+    return {
+      success: false,
+      output: '',
+      error: errorMessage,
+      executionTimeMs,
+      language,
+    };
+  }
+}
+
+/**
+ * Execute a file in Docker container with working directory set to user's workspace
+ */
+async function executeFileInContainer(
+  command: string,
+  filePath: string,
+  args: string[],
+  userId: string
+): Promise<{ output: string; error?: string }> {
+  return new Promise((resolve, reject) => {
+    const workDir = path.join(SANDBOX_WORKSPACE_ROOT, userId);
+
+    const dockerArgs = [
+      'exec',
+      '-i',
+      '-w', workDir, // Set working directory to user's workspace
+      SANDBOX_CONTAINER,
+      command,
+      filePath,
+      ...args,
+    ];
+
+    const proc = spawn('docker', dockerArgs, {
+      env: { ...process.env, DOCKER_HOST },
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout.on('data', (data) => {
+      stdout += data.toString();
+      if (stdout.length > MAX_OUTPUT_LENGTH) {
+        proc.kill();
+      }
+    });
+
+    proc.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    const timeout = setTimeout(() => {
+      proc.kill();
+      reject(new Error('Execution timeout (30s limit)'));
+    }, EXECUTION_TIMEOUT);
+
+    proc.on('close', (code) => {
+      clearTimeout(timeout);
+      if (code === 0 || stdout) {
+        resolve({
+          output: stdout.trim(),
+          error: stderr.trim() || undefined,
+        });
+      } else {
+        resolve({
+          output: stdout.trim(),
+          error: stderr.trim() || `Process exited with code ${code}`,
+        });
+      }
+    });
+
+    proc.on('error', (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+  });
+}
+
+/**
+ * List files in user's workspace from sandbox perspective
+ */
+export async function listWorkspaceFiles(userId: string): Promise<string[]> {
+  return new Promise((resolve) => {
+    const workDir = path.join(SANDBOX_WORKSPACE_ROOT, userId);
+
+    const dockerArgs = [
+      'exec',
+      '-i',
+      SANDBOX_CONTAINER,
+      'ls', '-la', workDir,
+    ];
+
+    const proc = spawn('docker', dockerArgs, {
+      env: { ...process.env, DOCKER_HOST },
+    });
+
+    let stdout = '';
+
+    proc.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    proc.on('close', () => {
+      // Parse ls output to get filenames
+      const lines = stdout.split('\n').slice(1); // Skip total line
+      const files = lines
+        .map(line => line.split(/\s+/).pop())
+        .filter((f): f is string => !!f && f !== '.' && f !== '..');
+      resolve(files);
+    });
+
+    proc.on('error', () => {
+      resolve([]);
+    });
+
+    setTimeout(() => {
+      proc.kill();
+      resolve([]);
+    }, 5000);
+  });
+}
+
 export default {
   executePython,
   executeJavaScript,
   executeCode,
   detectLanguage,
   getRecentExecutions,
+  executeWorkspaceFile,
+  listWorkspaceFiles,
 };

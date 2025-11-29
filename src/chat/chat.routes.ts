@@ -70,8 +70,9 @@ router.post('/sessions', async (req: Request, res: Response) => {
 // GET /api/chat/sessions - List user sessions
 router.get('/sessions', async (req: Request, res: Response) => {
   try {
-    const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
-    const offset = parseInt(req.query.offset as string) || 0;
+    // SECURITY: Bounds checking for pagination parameters
+    const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 50, 1), 100);
+    const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
     const includeArchived = req.query.archived === 'true';
 
     const sessions = await sessionService.getUserSessions(req.user!.userId, {

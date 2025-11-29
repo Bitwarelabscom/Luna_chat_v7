@@ -4,10 +4,67 @@ import logger from '../utils/logger.js';
 import { randomUUID } from 'crypto';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { fileTypeFromBuffer } from 'file-type';
 
 const DOCUMENTS_DIR = process.env.DOCUMENTS_DIR || '/app/documents';
 const MAX_CHUNK_SIZE = 1000; // characters per chunk
 const CHUNK_OVERLAP = 200;
+
+// SECURITY: Allowed file types whitelist
+const ALLOWED_EXTENSIONS = new Set(['.txt', '.md', '.json', '.csv', '.js', '.ts', '.html', '.xml', '.pdf']);
+const ALLOWED_MIME_TYPES = new Set([
+  'text/plain',
+  'text/markdown',
+  'text/csv',
+  'text/html',
+  'text/xml',
+  'application/json',
+  'application/javascript',
+  'application/typescript',
+  'application/pdf',
+]);
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+
+/**
+ * Validate uploaded file for security
+ */
+async function validateFile(
+  buffer: Buffer,
+  originalName: string,
+  claimedMimeType: string
+): Promise<{ isValid: boolean; error?: string; detectedMimeType?: string }> {
+  // Check file size
+  if (buffer.length > MAX_FILE_SIZE) {
+    return { isValid: false, error: `File size exceeds ${MAX_FILE_SIZE / 1024 / 1024}MB limit` };
+  }
+
+  // Check extension
+  const ext = path.extname(originalName).toLowerCase();
+  if (!ALLOWED_EXTENSIONS.has(ext)) {
+    return { isValid: false, error: `File extension "${ext}" not allowed` };
+  }
+
+  // Detect actual MIME type from file content
+  const detectedType = await fileTypeFromBuffer(buffer);
+  const detectedMimeType = detectedType?.mime || claimedMimeType;
+
+  // For text files, file-type may not detect MIME, so we trust the extension
+  const isTextFile = ['.txt', '.md', '.json', '.csv', '.js', '.ts', '.html', '.xml'].includes(ext);
+  if (!isTextFile && detectedType) {
+    // For binary files, verify the detected MIME type is allowed
+    if (!ALLOWED_MIME_TYPES.has(detectedType.mime)) {
+      return { isValid: false, error: `Detected file type "${detectedType.mime}" not allowed` };
+    }
+  }
+
+  // Prevent path traversal in filename
+  const sanitizedName = path.basename(originalName);
+  if (sanitizedName !== originalName || originalName.includes('..')) {
+    return { isValid: false, error: 'Invalid filename detected' };
+  }
+
+  return { isValid: true, detectedMimeType };
+}
 
 export interface Document {
   id: string;
@@ -29,7 +86,7 @@ export interface DocumentChunk {
 }
 
 /**
- * Upload and process a document
+ * Upload and process a document with security validation
  */
 export async function uploadDocument(
   userId: string,
@@ -39,33 +96,46 @@ export async function uploadDocument(
     mimetype: string;
   }
 ): Promise<Document> {
+  // SECURITY: Validate file before processing
+  const validation = await validateFile(file.buffer, file.originalname, file.mimetype);
+  if (!validation.isValid) {
+    logger.warn('File upload rejected', { userId, reason: validation.error, filename: file.originalname });
+    throw new Error(validation.error);
+  }
+
   const docId = randomUUID();
-  const ext = path.extname(file.originalname);
-  const filename = `${userId}/${docId}${ext}`;
+  // SECURITY: Use random UUID for filename, store original name separately in database
+  const ext = path.extname(file.originalname).toLowerCase();
+  const secureFilename = `${docId}${ext}`;  // Random filename prevents path traversal
+  const filename = `${userId}/${secureFilename}`;
   const storagePath = path.join(DOCUMENTS_DIR, filename);
 
   try {
     // Ensure directory exists
-    await fs.mkdir(path.dirname(storagePath), { recursive: true });
+    await fs.mkdir(path.dirname(storagePath), { recursive: true, mode: 0o750 });
 
-    // Save file
-    await fs.writeFile(storagePath, file.buffer);
+    // Save file with restricted permissions
+    await fs.writeFile(storagePath, file.buffer, { mode: 0o640 });
+
+    // Use detected MIME type if available
+    const mimeType = validation.detectedMimeType || file.mimetype;
 
     // Create database record
     const result = await pool.query(
       `INSERT INTO documents (id, user_id, filename, original_name, mime_type, file_size, storage_path, status)
        VALUES ($1, $2, $3, $4, $5, $6, $7, 'processing')
        RETURNING id, filename, original_name, mime_type, file_size, status, created_at`,
-      [docId, userId, filename, file.originalname, file.mimetype, file.buffer.length, storagePath]
+      [docId, userId, filename, file.originalname, mimeType, file.buffer.length, storagePath]
     );
 
     const doc = mapRowToDocument(result.rows[0]);
 
     // Process document asynchronously
-    processDocument(docId, userId, storagePath, file.mimetype).catch(error => {
+    processDocument(docId, userId, storagePath, mimeType).catch(error => {
       logger.error('Document processing failed', { docId, error: (error as Error).message });
     });
 
+    logger.info('Document uploaded successfully', { userId, docId, originalName: file.originalname });
     return doc;
   } catch (error) {
     logger.error('Failed to upload document', { error: (error as Error).message, userId });

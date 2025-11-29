@@ -1,5 +1,7 @@
 import { pool } from '../db/index.js';
 import logger from '../utils/logger.js';
+import { Parser } from 'expr-eval';
+import { validateExternalUrl } from '../utils/url-validator.js';
 
 export interface CustomTool {
   id: string;
@@ -167,6 +169,14 @@ async function executeApiTool(config: ToolConfig, params: Record<string, unknown
     url = url.replace(`{${key}}`, encodeURIComponent(String(value)));
   }
 
+  // SECURITY: Validate URL to prevent SSRF attacks
+  try {
+    await validateExternalUrl(url);
+  } catch (err) {
+    logger.warn('API tool URL validation failed', { url, error: (err as Error).message });
+    throw new Error(`URL validation failed: ${(err as Error).message}`);
+  }
+
   // Build request body if template exists
   let body: string | undefined;
   if (config.bodyTemplate) {
@@ -195,6 +205,14 @@ async function executeApiTool(config: ToolConfig, params: Record<string, unknown
 async function executeWebhookTool(config: ToolConfig, params: Record<string, unknown>): Promise<unknown> {
   if (!config.webhookUrl) throw new Error('Webhook URL not configured');
 
+  // SECURITY: Validate webhook URL to prevent SSRF attacks
+  try {
+    await validateExternalUrl(config.webhookUrl);
+  } catch (err) {
+    logger.warn('Webhook URL validation failed', { url: config.webhookUrl, error: (err as Error).message });
+    throw new Error(`URL validation failed: ${(err as Error).message}`);
+  }
+
   const response = await fetch(config.webhookUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -208,14 +226,21 @@ async function executeWebhookTool(config: ToolConfig, params: Record<string, unk
   return response.json();
 }
 
+// Safe expression parser instance (no eval/Function)
+const mathParser = new Parser();
+
 async function executeFunctionTool(config: ToolConfig, params: Record<string, unknown>): Promise<unknown> {
   // Built-in functions
   const functions: Record<string, (params: Record<string, unknown>) => unknown> = {
     calculate: (p) => {
       const expr = String(p.expression);
-      // Safe math evaluation
-      const result = Function(`"use strict"; return (${expr.replace(/[^0-9+\-*/().%\s]/g, '')})`)();
-      return { result };
+      // SECURITY: Use expr-eval for safe math evaluation (no eval/Function)
+      try {
+        const result = mathParser.evaluate(expr);
+        return { result };
+      } catch (err) {
+        throw new Error(`Invalid expression: ${(err as Error).message}`);
+      }
     },
     formatDate: (p) => {
       const date = new Date(p.date as string);

@@ -3,6 +3,10 @@ import {
   streamChatCompletion,
   searchTool,
   delegateToAgentTool,
+  workspaceWriteTool,
+  workspaceExecuteTool,
+  workspaceListTool,
+  workspaceReadTool,
   formatSearchResultsForContext,
   formatAgentResultForContext,
   type ChatMessage,
@@ -10,6 +14,8 @@ import {
 import { getUserModelConfig } from '../llm/model-config.service.js';
 import * as searxng from '../search/searxng.client.js';
 import * as agents from '../abilities/agents.service.js';
+import * as workspace from '../abilities/workspace.service.js';
+import * as sandbox from '../abilities/sandbox.service.js';
 import * as memoryService from '../memory/memory.service.js';
 import * as abilities from '../abilities/orchestrator.js';
 import { buildContextualPrompt } from '../persona/luna.persona.js';
@@ -90,7 +96,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user');
 
   // First completion - check if tools are needed
-  const availableTools = [searchTool, delegateToAgentTool];
+  const availableTools = [searchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool];
   let searchResults: SearchResult[] | undefined;
   let agentResults: Array<{ agent: string; result: string; success: boolean }> = [];
 
@@ -144,6 +150,58 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
           tool_call_id: toolCall.id,
           content: formatAgentResultForContext(args.agent, result.result, result.success),
         } as ChatMessage);
+      } else if (toolCall.function.name === 'workspace_write') {
+        const args = JSON.parse(toolCall.function.arguments);
+        try {
+          const file = await workspace.writeFile(userId, args.filename, args.content);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `File "${args.filename}" saved successfully (${file.size} bytes)`,
+          } as ChatMessage);
+        } catch (error) {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Error saving file: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'workspace_execute') {
+        const args = JSON.parse(toolCall.function.arguments);
+        const result = await sandbox.executeWorkspaceFile(userId, args.filename, sessionId, args.args || []);
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: result.success
+            ? `Execution output:\n${result.output}`
+            : `Execution error:\n${result.error}`,
+        } as ChatMessage);
+      } else if (toolCall.function.name === 'workspace_list') {
+        const files = await workspace.listFiles(userId);
+        const fileList = files.length > 0
+          ? files.map(f => `- ${f.name} (${f.size} bytes, ${f.mimeType})`).join('\n')
+          : 'No files in workspace';
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: `Workspace files:\n${fileList}`,
+        } as ChatMessage);
+      } else if (toolCall.function.name === 'workspace_read') {
+        const args = JSON.parse(toolCall.function.arguments);
+        try {
+          const content = await workspace.readFile(userId, args.filename);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Contents of ${args.filename}:\n\`\`\`\n${content}\n\`\`\``,
+          } as ChatMessage);
+        } catch (error) {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Error reading file: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
       }
     }
 
@@ -208,6 +266,81 @@ export async function* streamMessage(
 
   yield { type: 'status', status: 'Loading context...' };
 
+  // Check if this task needs multi-agent orchestration
+  if (agents.needsOrchestration(message)) {
+    logger.info('Detected orchestration-worthy task', { message: message.substring(0, 100) });
+
+    // Save user message first
+    const userMessage = await sessionService.addMessage({
+      sessionId,
+      role: 'user',
+      content: message,
+    });
+
+    // Store user message embedding (async)
+    memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user');
+
+    // Execute orchestration with streaming status updates
+    let orchestrationResult: agents.OrchestrationResult | null = null;
+
+    for await (const event of agents.orchestrateTaskStream(userId, message)) {
+      if (event.type === 'status') {
+        yield { type: 'status', status: event.status };
+      } else if (event.type === 'done') {
+        orchestrationResult = event.result;
+      }
+    }
+
+    if (!orchestrationResult) {
+      orchestrationResult = { plan: '', results: [], synthesis: 'Orchestration failed unexpectedly', success: false };
+    }
+
+    // Build the response content
+    let responseContent: string;
+    if (orchestrationResult.success) {
+      responseContent = orchestrationResult.synthesis;
+    } else {
+      responseContent = `I encountered an issue while processing your request:\n\n${orchestrationResult.error || 'Unknown error'}\n\n`;
+      if (orchestrationResult.results.length > 0) {
+        responseContent += `**Partial Results:**\n`;
+        for (const result of orchestrationResult.results) {
+          responseContent += `\n### ${result.agentName}\n${result.result}\n`;
+        }
+      }
+    }
+
+    // Stream the response character by character for smooth display
+    yield { type: 'status', status: 'Presenting results...' };
+    const chunkSize = 20; // Characters per chunk for smoother streaming
+    for (let i = 0; i < responseContent.length; i += chunkSize) {
+      yield { type: 'content', content: responseContent.slice(i, i + chunkSize) };
+    }
+
+    // Save assistant response
+    const assistantMessage = await sessionService.addMessage({
+      sessionId,
+      role: 'assistant',
+      content: responseContent,
+      tokensUsed: 0, // Orchestration doesn't track tokens the same way
+      model: 'claude-cli',
+    });
+
+    // Store assistant message embedding (async)
+    memoryService.processMessageMemory(userId, sessionId, assistantMessage.id, responseContent, 'assistant');
+
+    // Update session title if first message
+    const history = await sessionService.getSessionMessages(sessionId, { limit: 1 });
+    if (history.length <= 1) {
+      const title = await sessionService.generateSessionTitle([
+        { role: 'user', content: message } as Message,
+      ]);
+      await sessionService.updateSession(sessionId, userId, { title });
+    }
+
+    yield { type: 'done', messageId: assistantMessage.id, tokensUsed: 0 };
+    return;
+  }
+
   // Get user's model configuration for main chat
   const modelConfig = await getUserModelConfig(userId, 'main_chat');
 
@@ -255,7 +388,7 @@ export async function* streamMessage(
   memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user');
 
   // First, check if tools are needed (non-streaming call with tools)
-  const availableTools = [searchTool, delegateToAgentTool];
+  const availableTools = [searchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool];
   let searchResults: SearchResult[] | undefined;
 
   const initialCompletion = await createChatCompletion({
@@ -316,6 +449,62 @@ export async function* streamMessage(
           tool_call_id: toolCall.id,
           content: formatAgentResultForContext(args.agent, result.result, result.success),
         } as ChatMessage);
+      } else if (toolCall.function.name === 'workspace_write') {
+        const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'status', status: `Saving ${args.filename}...` };
+        try {
+          const file = await workspace.writeFile(userId, args.filename, args.content);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `File "${args.filename}" saved successfully (${file.size} bytes)`,
+          } as ChatMessage);
+        } catch (error) {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Error saving file: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'workspace_execute') {
+        const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'status', status: `Executing ${args.filename}...` };
+        const result = await sandbox.executeWorkspaceFile(userId, args.filename, sessionId, args.args || []);
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: result.success
+            ? `Execution output:\n${result.output}`
+            : `Execution error:\n${result.error}`,
+        } as ChatMessage);
+      } else if (toolCall.function.name === 'workspace_list') {
+        yield { type: 'status', status: 'Listing workspace files...' };
+        const files = await workspace.listFiles(userId);
+        const fileList = files.length > 0
+          ? files.map(f => `- ${f.name} (${f.size} bytes, ${f.mimeType})`).join('\n')
+          : 'No files in workspace';
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: `Workspace files:\n${fileList}`,
+        } as ChatMessage);
+      } else if (toolCall.function.name === 'workspace_read') {
+        const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'status', status: `Reading ${args.filename}...` };
+        try {
+          const content = await workspace.readFile(userId, args.filename);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Contents of ${args.filename}:\n\`\`\`\n${content}\n\`\`\``,
+          } as ChatMessage);
+        } catch (error) {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Error reading file: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
       }
     }
   }

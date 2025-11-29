@@ -5,20 +5,29 @@ import logger from '../utils/logger.js';
 export function authenticate(req: Request, res: Response, next: NextFunction): void {
   const authHeader = req.headers.authorization;
 
-  if (!authHeader) {
-    res.status(401).json({ error: 'No authorization header' });
-    return;
-  }
+  // Prefer Authorization header, but fall back to httpOnly cookie
+  const headerToken = (() => {
+    if (!authHeader) return null;
+    const parts = authHeader.split(' ');
+    if (parts.length !== 2 || parts[0] !== 'Bearer') return null;
+    return parts[1];
+  })();
 
-  const parts = authHeader.split(' ');
-  if (parts.length !== 2 || parts[0] !== 'Bearer') {
-    res.status(401).json({ error: 'Invalid authorization format' });
-    return;
-  }
+  const cookieHeader = req.headers.cookie || '';
+  const cookieToken = cookieHeader
+    .split(';')
+    .map(c => c.trim())
+    .find(c => c.startsWith('accessToken='))
+    ?.split('=')[1] || null;
 
-  const token = parts[1];
+  const token = headerToken || cookieToken;
 
   try {
+    if (!token) {
+      res.status(401).json({ error: 'No authorization provided' });
+      return;
+    }
+
     const payload = verifyToken(token);
 
     if (payload.type !== 'access') {
@@ -37,20 +46,28 @@ export function authenticate(req: Request, res: Response, next: NextFunction): v
 export function optionalAuth(req: Request, _res: Response, next: NextFunction): void {
   const authHeader = req.headers.authorization;
 
-  if (!authHeader) {
-    next();
-    return;
-  }
+  const headerToken = (() => {
+    if (!authHeader) return null;
+    const parts = authHeader.split(' ');
+    if (parts.length !== 2 || parts[0] !== 'Bearer') return null;
+    return parts[1];
+  })();
 
-  const parts = authHeader.split(' ');
-  if (parts.length !== 2 || parts[0] !== 'Bearer') {
-    next();
-    return;
-  }
+  const cookieHeader = req.headers.cookie || '';
+  const cookieToken = cookieHeader
+    .split(';')
+    .map(c => c.trim())
+    .find(c => c.startsWith('accessToken='))
+    ?.split('=')[1] || null;
 
-  const token = parts[1];
+  const token = headerToken || cookieToken;
 
   try {
+    if (!token) {
+      next();
+      return;
+    }
+
     const payload = verifyToken(token);
     if (payload.type === 'access') {
       req.user = payload;

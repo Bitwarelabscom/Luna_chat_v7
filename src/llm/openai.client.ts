@@ -78,8 +78,8 @@ export async function createChatCompletion(
 
   try {
     // Use max_completion_tokens for OpenAI (newer models), max_tokens for others
-    // Also skip temperature for OpenAI gpt-5 models (only supports default)
-    const isGpt5 = modelToUse.includes('gpt-5');
+    // Skip temperature for OpenAI gpt-5 and o4 models (only supports default)
+    const skipTemperature = modelToUse.includes('gpt-5') || modelToUse.includes('o4-') || modelToUse.startsWith('o4');
     const tokenParam = provider === 'openai'
       ? { max_completion_tokens: maxTokens }
       : { max_tokens: maxTokens };
@@ -99,7 +99,7 @@ export async function createChatCompletion(
       model: modelToUse,
       messages: formattedMessages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
       tools,
-      ...(isGpt5 ? {} : { temperature }),
+      ...(skipTemperature ? {} : { temperature }),
       ...tokenParam,
     });
 
@@ -138,8 +138,8 @@ export async function* streamChatCompletion(
 
   try {
     // Use max_completion_tokens for OpenAI (newer models), max_tokens for others
-    // Also skip temperature for OpenAI gpt-5 models (only supports default)
-    const isGpt5 = modelToUse.includes('gpt-5');
+    // Skip temperature for OpenAI gpt-5 and o4 models (only supports default)
+    const skipTemperature = modelToUse.includes('gpt-5') || modelToUse.includes('o4-') || modelToUse.startsWith('o4');
     const tokenParam = provider === 'openai'
       ? { max_completion_tokens: maxTokens }
       : { max_tokens: maxTokens };
@@ -159,7 +159,7 @@ export async function* streamChatCompletion(
       model: modelToUse,
       messages: formattedMessages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
       tools,
-      ...(isGpt5 ? {} : { temperature }),
+      ...(skipTemperature ? {} : { temperature }),
       ...tokenParam,
       stream: true,
       stream_options: { include_usage: true },
@@ -217,7 +217,7 @@ export const delegateToAgentTool: OpenAI.Chat.Completions.ChatCompletionTool = {
     name: 'delegate_to_agent',
     description: `Delegate a specialized task to an expert agent. Available agents:
 - researcher: Deep research, information gathering, fact-finding
-- coder: Code writing, debugging, code explanation, programming help
+- coder: Code writing, debugging, code explanation, programming help (can save scripts to workspace)
 - writer: Creative writing, professional writing, editing, content creation
 - analyst: Data analysis, calculations, statistics, insights
 - planner: Task breakdown, project planning, organizing complex goals
@@ -245,6 +245,83 @@ Use this when a task requires specialized expertise that would benefit from focu
   },
 };
 
+// Workspace tools for file management and execution
+export const workspaceWriteTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'workspace_write',
+    description: `Save a file to the user's persistent workspace. Useful for saving scripts, notes, data files, or code that the user might want to use again later. Supported file types: .py, .js, .ts, .sh, .json, .txt, .md, .csv, .xml, .yaml, .yml, .html, .css, .sql, .r, .ipynb`,
+    parameters: {
+      type: 'object',
+      properties: {
+        filename: {
+          type: 'string',
+          description: 'The filename to save (e.g., "analysis.py", "data.json", "notes.md")',
+        },
+        content: {
+          type: 'string',
+          description: 'The content to write to the file',
+        },
+      },
+      required: ['filename', 'content'],
+    },
+  },
+};
+
+export const workspaceExecuteTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'workspace_execute',
+    description: `Execute a script file from the user's workspace in a sandboxed environment. Returns the output of the script. Supported: .py (Python), .js (JavaScript/Node.js), .sh (Shell)`,
+    parameters: {
+      type: 'object',
+      properties: {
+        filename: {
+          type: 'string',
+          description: 'The filename to execute (e.g., "analysis.py", "script.js")',
+        },
+        args: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional command-line arguments to pass to the script',
+        },
+      },
+      required: ['filename'],
+    },
+  },
+};
+
+export const workspaceListTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'workspace_list',
+    description: `List all files in the user's workspace. Shows file names, sizes, and last modified dates.`,
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+};
+
+export const workspaceReadTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'workspace_read',
+    description: `Read the contents of a file from the user's workspace.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        filename: {
+          type: 'string',
+          description: 'The filename to read',
+        },
+      },
+      required: ['filename'],
+    },
+  },
+};
+
 export function formatSearchResultsForContext(results: SearchResult[]): string {
   if (results.length === 0) return '';
 
@@ -263,4 +340,15 @@ export function formatAgentResultForContext(agentName: string, result: string, s
   return `\n\n---\nResponse from ${agentName} specialist:\n${result}\n---\n`;
 }
 
-export default { createChatCompletion, streamChatCompletion, searchTool, delegateToAgentTool, formatSearchResultsForContext, formatAgentResultForContext };
+export default {
+  createChatCompletion,
+  streamChatCompletion,
+  searchTool,
+  delegateToAgentTool,
+  workspaceWriteTool,
+  workspaceExecuteTool,
+  workspaceListTool,
+  workspaceReadTool,
+  formatSearchResultsForContext,
+  formatAgentResultForContext,
+};

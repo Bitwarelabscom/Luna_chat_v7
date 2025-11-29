@@ -11,6 +11,26 @@ export const pool = new Pool({
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 2000,
+  // SECURITY: Enforce TLS for non-local production databases with certificate verification
+  // Skip SSL for Docker internal network (luna-postgres) and localhost
+  ssl: (() => {
+    const isLocalHost = config.postgres.host.includes('localhost') || config.postgres.host.includes('luna-postgres');
+    const shouldUseSsl = config.nodeEnv === 'production' && !isLocalHost && config.postgres.sslEnabled;
+    if (!shouldUseSsl) return false;
+
+    const sslConfig: {
+      rejectUnauthorized: boolean;
+      ca?: string;
+    } = {
+      rejectUnauthorized: config.postgres.sslRejectUnauthorized,
+    };
+
+    if (config.postgres.sslCa) {
+      sslConfig.ca = config.postgres.sslCa;
+    }
+
+    return sslConfig;
+  })(),
 });
 
 pool.on('error', (err) => {

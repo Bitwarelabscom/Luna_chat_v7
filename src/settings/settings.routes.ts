@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { authenticate } from '../auth/auth.middleware.js';
 import * as settingsService from './settings.service.js';
+import * as authService from '../auth/auth.service.js';
 import * as modelConfigService from '../llm/model-config.service.js';
 import { PROVIDERS, CONFIGURABLE_TASKS } from '../llm/types.js';
 import { LUNA_BASE_PROMPT, ASSISTANT_MODE_PROMPT, COMPANION_MODE_PROMPT } from '../persona/luna.persona.js';
@@ -11,6 +12,32 @@ const router = Router();
 
 // All routes require authentication
 router.use(authenticate);
+
+// === USER SETTINGS ===
+
+// Update user settings (theme, preferences)
+const updateUserSettingsSchema = z.object({
+  theme: z.enum(['dark', 'retro']).optional(),
+  crtFlicker: z.boolean().optional(),
+  language: z.string().optional(),
+  notifications: z.boolean().optional(),
+  defaultMode: z.enum(['assistant', 'companion']).optional(),
+});
+
+router.put('/user', async (req: Request, res: Response) => {
+  try {
+    const settings = updateUserSettingsSchema.parse(req.body);
+    await authService.updateUserSettings(req.user!.userId, settings);
+    res.json({ success: true, settings });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: 'Validation error', details: error.errors });
+      return;
+    }
+    logger.error('Failed to update user settings', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to update settings' });
+  }
+});
 
 // === SYSTEM PROMPTS ===
 

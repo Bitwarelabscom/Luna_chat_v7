@@ -5,6 +5,7 @@ import type { User, UserCreate, AuthTokens } from '../types/index.js';
 import logger from '../utils/logger.js';
 
 const SALT_ROUNDS = 12;
+const REFRESH_TOKEN_SALT_ROUNDS = 12;
 
 interface DbUser {
   id: string;
@@ -108,15 +109,20 @@ export async function refreshTokens(refreshToken: string): Promise<AuthTokens> {
     throw new Error('Invalid token type');
   }
 
-  // Check if token is stored and not revoked
-  const storedToken = await queryOne<{ id: string }>(
-    `SELECT id FROM refresh_tokens
+  // Check if presented token matches the most recent, unrevoked stored hash
+  const storedToken = await queryOne<{ id: string; token_hash: string }>(
+    `SELECT id, token_hash FROM refresh_tokens
      WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > NOW()
      ORDER BY created_at DESC LIMIT 1`,
     [payload.userId]
   );
 
   if (!storedToken) {
+    throw new Error('Token revoked or expired');
+  }
+
+  const matches = await bcrypt.compare(refreshToken, storedToken.token_hash);
+  if (!matches) {
     throw new Error('Token revoked or expired');
   }
 
@@ -152,7 +158,7 @@ export async function getUserById(userId: string): Promise<Omit<User, 'settings'
 }
 
 async function storeRefreshToken(userId: string, token: string): Promise<void> {
-  const hash = await bcrypt.hash(token, 4);
+  const hash = await bcrypt.hash(token, REFRESH_TOKEN_SALT_ROUNDS);
   await query(
     `INSERT INTO refresh_tokens (user_id, token_hash, expires_at)
      VALUES ($1, $2, $3)`,

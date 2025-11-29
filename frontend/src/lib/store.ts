@@ -23,16 +23,12 @@ export const useAuthStore = create<AuthState>((set) => ({
   isLoading: true,
 
   login: async (email, password) => {
-    const { user, accessToken, refreshToken } = await authApi.login(email, password);
-    localStorage.setItem('accessToken', accessToken);
-    localStorage.setItem('refreshToken', refreshToken);
+    const { user } = await authApi.login(email, password);
     set({ user, isAuthenticated: true });
   },
 
   register: async (email, password, displayName) => {
-    const { user, accessToken, refreshToken } = await authApi.register(email, password, displayName);
-    localStorage.setItem('accessToken', accessToken);
-    localStorage.setItem('refreshToken', refreshToken);
+    const { user } = await authApi.register(email, password, displayName);
     set({ user, isAuthenticated: true });
   },
 
@@ -42,24 +38,14 @@ export const useAuthStore = create<AuthState>((set) => ({
     } catch {
       // Ignore errors
     }
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('refreshToken');
     set({ user: null, isAuthenticated: false });
   },
 
   checkAuth: async () => {
-    const token = localStorage.getItem('accessToken');
-    if (!token) {
-      set({ isLoading: false });
-      return;
-    }
-
     try {
       const user = await authApi.me();
       set({ user, isAuthenticated: true, isLoading: false });
     } catch {
-      localStorage.removeItem('accessToken');
-      localStorage.removeItem('refreshToken');
       set({ user: null, isAuthenticated: false, isLoading: false });
     }
   },

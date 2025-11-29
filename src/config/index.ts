@@ -1,7 +1,20 @@
 import { z } from 'zod';
 import dotenv from 'dotenv';
+import { getOptionalSecret } from '../utils/secrets';
 
 dotenv.config();
+
+// Load secrets from Docker secrets or environment variables
+const secrets = {
+  postgresPassword: getOptionalSecret('postgres_password', 'POSTGRES_PASSWORD') || '',
+  jwtSecret: getOptionalSecret('jwt_secret', 'JWT_SECRET') || '',
+  redisPassword: getOptionalSecret('redis_password', 'REDIS_PASSWORD'),
+  openaiApiKey: getOptionalSecret('openai_api_key', 'OPENAI_API_KEY') || '',
+  groqApiKey: getOptionalSecret('groq_api_key', 'GROQ_API_KEY'),
+  anthropicApiKey: getOptionalSecret('anthropic_api_key', 'ANTHROPIC_API_KEY'),
+  xaiApiKey: getOptionalSecret('xai_api_key', 'XAI_API_KEY'),
+  encryptionKey: getOptionalSecret('encryption_key', 'ENCRYPTION_KEY'),
+};
 
 const configSchema = z.object({
   port: z.coerce.number().default(3003),
@@ -13,6 +26,10 @@ const configSchema = z.object({
     user: z.string().default('luna'),
     password: z.string(),
     database: z.string().default('luna_chat'),
+    sslEnabled: z.coerce.boolean().default(true),
+    sslRejectUnauthorized: z.coerce.boolean().default(true),
+    sslCa: z.string().optional(),
+    dockerHost: z.string().default('http://docker-proxy:2375'),
   }),
 
   redis: z.object({
@@ -65,6 +82,8 @@ const configSchema = z.object({
   cors: z.object({
     origin: z.string().default('http://localhost:3000'),
   }),
+
+  encryptionKey: z.string().min(64, 'Encryption key must be a 64 character hex string'),
 });
 
 const rawConfig = {
@@ -75,39 +94,43 @@ const rawConfig = {
     host: process.env.POSTGRES_HOST,
     port: process.env.POSTGRES_PORT,
     user: process.env.POSTGRES_USER,
-    password: process.env.POSTGRES_PASSWORD,
+    password: secrets.postgresPassword,
     database: process.env.POSTGRES_DB,
+    sslEnabled: process.env.POSTGRES_SSL_ENABLED,
+    sslRejectUnauthorized: process.env.POSTGRES_SSL_REJECT_UNAUTHORIZED,
+    sslCa: process.env.POSTGRES_SSL_CA,
+    dockerHost: process.env.DOCKER_HOST,
   },
 
   redis: {
     host: process.env.REDIS_HOST,
     port: process.env.REDIS_PORT,
-    password: process.env.REDIS_PASSWORD,
+    password: secrets.redisPassword,
   },
 
   jwt: {
-    secret: process.env.JWT_SECRET,
+    secret: secrets.jwtSecret,
     expiresIn: process.env.JWT_EXPIRES_IN,
     refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN,
   },
 
   openai: {
-    apiKey: process.env.OPENAI_API_KEY,
+    apiKey: secrets.openaiApiKey,
     model: process.env.OPENAI_MODEL,
   },
 
   groq: {
-    apiKey: process.env.GROQ_API_KEY,
+    apiKey: secrets.groqApiKey,
     enabled: process.env.GROQ_ENABLED,
   },
 
   anthropic: {
-    apiKey: process.env.ANTHROPIC_API_KEY,
+    apiKey: secrets.anthropicApiKey,
     enabled: process.env.ANTHROPIC_ENABLED,
   },
 
   xai: {
-    apiKey: process.env.XAI_API_KEY,
+    apiKey: secrets.xaiApiKey,
     enabled: process.env.XAI_ENABLED,
   },
 
@@ -129,6 +152,8 @@ const rawConfig = {
   cors: {
     origin: process.env.CORS_ORIGIN,
   },
+
+  encryptionKey: secrets.encryptionKey,
 };
 
 export const config = configSchema.parse(rawConfig);

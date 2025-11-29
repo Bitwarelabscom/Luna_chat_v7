@@ -76,7 +76,7 @@ export default function Sidebar() {
       {/* Mobile toggle */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="lg:hidden fixed top-4 left-4 z-50 p-2 bg-gray-800 rounded-lg"
+        className="lg:hidden fixed top-4 left-4 z-50 p-2 bg-theme-bg-tertiary rounded-lg text-theme-text-primary"
       >
         {isOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
       </button>
@@ -92,25 +92,25 @@ export default function Sidebar() {
       {/* Sidebar */}
       <aside
         className={clsx(
-          'fixed lg:relative z-40 h-full w-72 bg-gray-900 border-r border-gray-800 flex flex-col transition-transform duration-200',
+          'fixed lg:relative z-40 h-full w-72 bg-theme-bg-secondary border-r border-theme-border flex flex-col transition-transform duration-200',
           isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
         )}
       >
         {/* Header */}
-        <div className="p-4 border-b border-gray-800">
+        <div className="p-4 border-b border-theme-border">
           <div className="flex items-center gap-3 mb-4">
-            <div className="w-10 h-10 rounded-full bg-luna-600 flex items-center justify-center">
-              <Moon className="w-5 h-5 text-white" />
+            <div className="w-10 h-10 rounded-full bg-theme-accent-primary flex items-center justify-center">
+              <Moon className="w-5 h-5 text-theme-text-primary" />
             </div>
             <div>
-              <h1 className="font-semibold text-white">Luna</h1>
-              <p className="text-xs text-gray-400">AI Assistant</p>
+              <h1 className="font-semibold text-theme-text-primary">Luna</h1>
+              <p className="text-xs text-theme-text-muted">AI Assistant</p>
             </div>
           </div>
 
           <button
             onClick={handleNewChat}
-            className="w-full py-2.5 px-4 bg-luna-600 hover:bg-luna-700 rounded-lg font-medium transition flex items-center justify-center gap-2"
+            className="w-full py-2.5 px-4 bg-theme-accent-primary hover:bg-theme-accent-hover rounded-lg font-medium transition flex items-center justify-center gap-2 text-theme-text-primary"
           >
             <Plus className="w-4 h-4" />
             New Chat
@@ -121,10 +121,10 @@ export default function Sidebar() {
         <div className="flex-1 overflow-y-auto p-2">
           {isLoadingSessions ? (
             <div className="flex justify-center py-8">
-              <div className="animate-spin w-6 h-6 border-2 border-luna-500 border-t-transparent rounded-full" />
+              <div className="animate-spin w-6 h-6 border-2 border-theme-accent-primary border-t-transparent rounded-full" />
             </div>
           ) : sessions.length === 0 ? (
-            <p className="text-center text-gray-500 py-8 text-sm">
+            <p className="text-center text-theme-text-muted py-8 text-sm">
               No conversations yet
             </p>
           ) : (
@@ -136,8 +136,8 @@ export default function Sidebar() {
                   className={clsx(
                     'group flex items-center gap-2 px-3 py-2.5 rounded-lg cursor-pointer transition',
                     currentSession?.id === session.id
-                      ? 'bg-gray-800 text-white'
-                      : 'text-gray-400 hover:bg-gray-800/50 hover:text-gray-200'
+                      ? 'bg-theme-bg-tertiary text-theme-text-primary'
+                      : 'text-theme-text-muted hover:bg-theme-bg-tertiary/50 hover:text-theme-text-secondary'
                   )}
                 >
                   <MessageSquare className="w-4 h-4 flex-shrink-0" />
@@ -153,7 +153,7 @@ export default function Sidebar() {
                       }}
                       onBlur={() => handleSaveEdit(session.id)}
                       onClick={(e) => e.stopPropagation()}
-                      className="flex-1 bg-gray-700 px-2 py-0.5 rounded text-sm outline-none"
+                      className="flex-1 bg-theme-bg-primary px-2 py-0.5 rounded text-sm outline-none border border-theme-border text-theme-text-primary"
                       autoFocus
                     />
                   ) : (
@@ -167,7 +167,7 @@ export default function Sidebar() {
                           e.stopPropagation();
                           handleSaveEdit(session.id);
                         }}
-                        className="p-1 hover:bg-gray-700 rounded"
+                        className="p-1 hover:bg-theme-bg-primary rounded"
                       >
                         <Check className="w-3.5 h-3.5" />
                       </button>
@@ -175,13 +175,13 @@ export default function Sidebar() {
                       <>
                         <button
                           onClick={(e) => handleStartEdit(e, session)}
-                          className="p-1 hover:bg-gray-700 rounded"
+                          className="p-1 hover:bg-theme-bg-primary rounded"
                         >
                           <Pencil className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={(e) => handleDelete(e, session.id)}
-                          className="p-1 hover:bg-gray-700 rounded text-red-400"
+                          className="p-1 hover:bg-theme-bg-primary rounded text-red-400"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -195,7 +195,7 @@ export default function Sidebar() {
         </div>
 
         {/* User section */}
-        <div className="p-4 border-t border-gray-800">
+        <div className="p-4 border-t border-theme-border">
           <UserMenu
             user={user}
             onLogout={handleLogout}

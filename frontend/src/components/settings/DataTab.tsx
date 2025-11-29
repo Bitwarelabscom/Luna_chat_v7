@@ -32,25 +32,25 @@ function ConfirmDialog({
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center">
       <div className="absolute inset-0 bg-black/70" onClick={onCancel} />
-      <div className="relative w-full max-w-md bg-gray-900 rounded-xl border border-gray-800 p-6 m-4">
+      <div className="relative w-full max-w-md bg-theme-bg-secondary rounded-xl border border-theme-border p-6 m-4">
         <div className="flex items-center gap-3 mb-4">
           <div className="p-2 bg-red-500/10 rounded-lg">
             <AlertTriangle className="w-6 h-6 text-red-500" />
           </div>
-          <h3 className="text-lg font-semibold text-white">{title}</h3>
+          <h3 className="text-lg font-semibold text-theme-text-primary">{title}</h3>
         </div>
 
-        <p className="text-gray-400 mb-4">{message}</p>
+        <p className="text-theme-text-muted mb-4">{message}</p>
 
         <div className="mb-4">
-          <label className="block text-sm text-gray-400 mb-2">
+          <label className="block text-sm text-theme-text-muted mb-2">
             Type <span className="text-red-400 font-mono">{confirmText}</span> to confirm:
           </label>
           <input
             type="text"
             value={inputValue}
             onChange={e => setInputValue(e.target.value)}
-            className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-red-500"
+            className="w-full px-3 py-2 bg-theme-bg-tertiary border border-theme-border rounded-lg text-theme-text-primary focus:outline-none focus:border-red-500"
             placeholder={confirmText}
             autoFocus
           />
@@ -60,7 +60,7 @@ function ConfirmDialog({
           <button
             onClick={onCancel}
             disabled={isLoading}
-            className="px-4 py-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition"
+            className="px-4 py-2 text-theme-text-muted hover:text-theme-text-primary hover:bg-theme-bg-tertiary rounded-lg transition"
           >
             Cancel
           </button>
@@ -72,7 +72,7 @@ function ConfirmDialog({
               }
             }}
             disabled={!isValid || isLoading}
-            className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition"
+            className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition text-white"
           >
             {isLoading ? (
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -216,29 +216,29 @@ export default function DataTab() {
 
       {/* Backup Section */}
       <div>
-        <h3 className="text-lg font-medium text-white mb-2">Backup & Restore</h3>
-        <p className="text-sm text-gray-400 mb-4">
+        <h3 className="text-lg font-medium text-theme-text-primary mb-2">Backup & Restore</h3>
+        <p className="text-sm text-theme-text-muted mb-4">
           Export your data as a JSON file or restore from a previous backup.
         </p>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="p-4 bg-gray-800/50 rounded-lg border border-gray-700">
+          <div className="p-4 bg-theme-bg-tertiary/50 rounded-lg border border-theme-border">
             <div className="flex items-center gap-3 mb-3">
-              <div className="p-2 bg-luna-500/10 rounded-lg">
-                <Download className="w-5 h-5 text-luna-400" />
+              <div className="p-2 bg-theme-accent-primary/10 rounded-lg">
+                <Download className="w-5 h-5 text-theme-accent-primary" />
               </div>
               <div>
-                <h4 className="font-medium text-white">Export Data</h4>
-                <p className="text-xs text-gray-400">Download all your data</p>
+                <h4 className="font-medium text-theme-text-primary">Export Data</h4>
+                <p className="text-xs text-theme-text-muted">Download all your data</p>
               </div>
             </div>
-            <p className="text-sm text-gray-400 mb-4">
+            <p className="text-sm text-theme-text-muted mb-4">
               Exports conversations, saved prompts, and memory data.
             </p>
             <button
               onClick={handleExport}
               disabled={isExporting}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-luna-600 hover:bg-luna-700 disabled:opacity-50 rounded-lg transition"
+              className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-theme-accent-primary hover:bg-theme-accent-hover disabled:opacity-50 rounded-lg transition text-theme-text-primary"
             >
               {isExporting ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -249,17 +249,17 @@ export default function DataTab() {
             </button>
           </div>
 
-          <div className="p-4 bg-gray-800/50 rounded-lg border border-gray-700">
+          <div className="p-4 bg-theme-bg-tertiary/50 rounded-lg border border-theme-border">
             <div className="flex items-center gap-3 mb-3">
               <div className="p-2 bg-green-500/10 rounded-lg">
                 <Upload className="w-5 h-5 text-green-400" />
               </div>
               <div>
-                <h4 className="font-medium text-white">Restore Data</h4>
-                <p className="text-xs text-gray-400">Import from backup file</p>
+                <h4 className="font-medium text-theme-text-primary">Restore Data</h4>
+                <p className="text-xs text-theme-text-muted">Import from backup file</p>
               </div>
             </div>
-            <p className="text-sm text-gray-400 mb-4">
+            <p className="text-sm text-theme-text-muted mb-4">
               Restore conversations and data from a backup file.
             </p>
             <input
@@ -272,7 +272,7 @@ export default function DataTab() {
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={isImporting}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:opacity-50 rounded-lg transition"
+              className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:opacity-50 rounded-lg transition text-white"
             >
               {isImporting ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -288,7 +288,7 @@ export default function DataTab() {
       {/* Danger Zone */}
       <div>
         <h3 className="text-lg font-medium text-red-400 mb-2">Danger Zone</h3>
-        <p className="text-sm text-gray-400 mb-4">
+        <p className="text-sm text-theme-text-muted mb-4">
           Irreversible actions. Make sure to backup your data first.
         </p>
 
@@ -296,8 +296,8 @@ export default function DataTab() {
           <div className="p-4 bg-red-500/5 rounded-lg border border-red-500/30">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <h4 className="font-medium text-white">Clear Memory</h4>
-                <p className="text-sm text-gray-400 mt-1">
+                <h4 className="font-medium text-theme-text-primary">Clear Memory</h4>
+                <p className="text-sm text-theme-text-muted mt-1">
                   Delete all learned facts, embeddings, and conversation summaries.
                   Your chat history will be preserved.
                 </p>
@@ -314,8 +314,8 @@ export default function DataTab() {
           <div className="p-4 bg-red-500/5 rounded-lg border border-red-500/30">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <h4 className="font-medium text-white">Clear All Data</h4>
-                <p className="text-sm text-gray-400 mt-1">
+                <h4 className="font-medium text-theme-text-primary">Clear All Data</h4>
+                <p className="text-sm text-theme-text-muted mt-1">
                   Delete everything: conversations, memory, saved prompts.
                   This cannot be undone.
                 </p>

@@ -4,6 +4,7 @@ import { authenticate } from '../auth/auth.middleware.js';
 import * as knowledge from './knowledge.service.js';
 import * as tasks from './tasks.service.js';
 import * as sandbox from './sandbox.service.js';
+import * as workspace from './workspace.service.js';
 import * as documents from './documents.service.js';
 import * as tools from './tools.service.js';
 import * as agentsService from './agents.service.js';
@@ -223,6 +224,99 @@ router.get('/code/history', async (req: Request, res: Response) => {
     res.json(executions);
   } catch (error) {
     res.status(500).json({ error: 'Failed to get execution history' });
+  }
+});
+
+// ============================================
+// WORKSPACE (persistent file storage + execution)
+// ============================================
+
+router.get('/workspace', async (req: Request, res: Response) => {
+  try {
+    const files = await workspace.listFiles(getUserId(req));
+    res.json(files);
+  } catch (error) {
+    logger.error('Failed to list workspace files', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to list workspace files' });
+  }
+});
+
+router.get('/workspace/stats', async (req: Request, res: Response) => {
+  try {
+    const stats = await workspace.getWorkspaceStats(getUserId(req));
+    res.json(stats);
+  } catch (error) {
+    logger.error('Failed to get workspace stats', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get workspace stats' });
+  }
+});
+
+router.get('/workspace/file/:filename', async (req: Request, res: Response) => {
+  try {
+    const content = await workspace.readFile(getUserId(req), req.params.filename);
+    res.json({ filename: req.params.filename, content });
+  } catch (error) {
+    const message = (error as Error).message;
+    if (message.includes('not found')) {
+      res.status(404).json({ error: message });
+      return;
+    }
+    logger.error('Failed to read workspace file', { error: message });
+    res.status(500).json({ error: 'Failed to read workspace file' });
+  }
+});
+
+router.post('/workspace', async (req: Request, res: Response) => {
+  try {
+    const { filename, content } = req.body;
+    if (!filename || content === undefined) {
+      res.status(400).json({ error: 'filename and content are required' });
+      return;
+    }
+    const file = await workspace.writeFile(getUserId(req), filename, content);
+    res.status(201).json(file);
+  } catch (error) {
+    const message = (error as Error).message;
+    logger.error('Failed to write workspace file', { error: message });
+    res.status(400).json({ error: message });
+  }
+});
+
+router.delete('/workspace/file/:filename', async (req: Request, res: Response) => {
+  try {
+    const deleted = await workspace.deleteFile(getUserId(req), req.params.filename);
+    if (!deleted) {
+      res.status(404).json({ error: 'File not found' });
+      return;
+    }
+    res.status(204).send();
+  } catch (error) {
+    logger.error('Failed to delete workspace file', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to delete workspace file' });
+  }
+});
+
+router.post('/workspace/execute/:filename', async (req: Request, res: Response) => {
+  try {
+    const { sessionId, args } = req.body;
+
+    // First verify file exists
+    const exists = await workspace.fileExists(getUserId(req), req.params.filename);
+    if (!exists) {
+      res.status(404).json({ error: `File not found: ${req.params.filename}` });
+      return;
+    }
+
+    const result = await sandbox.executeWorkspaceFile(
+      getUserId(req),
+      req.params.filename,
+      sessionId,
+      args || []
+    );
+    res.json(result);
+  } catch (error) {
+    logger.error('Failed to execute workspace file', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to execute workspace file' });
   }
 });
 

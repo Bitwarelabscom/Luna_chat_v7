@@ -29,10 +29,10 @@ export default function ChatPage() {
 
   if (authLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center bg-theme-bg-primary">
         <div className="animate-pulse flex flex-col items-center gap-4">
-          <div className="w-16 h-16 rounded-full bg-luna-600" />
-          <p className="text-gray-400">Loading...</p>
+          <div className="w-16 h-16 rounded-full bg-theme-accent-primary" />
+          <p className="text-theme-text-muted">Loading...</p>
         </div>
       </div>
     );
@@ -43,7 +43,7 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="flex h-screen bg-gray-950">
+    <div className="flex h-screen bg-theme-bg-primary">
       <Sidebar />
       <ChatArea />
     </div>

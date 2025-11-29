@@ -16,40 +16,8 @@ class ApiError extends Error {
   }
 }
 
-async function getAccessToken(): Promise<string | null> {
-  if (typeof window === 'undefined') return null;
-  return localStorage.getItem('accessToken');
-}
-
-async function refreshTokens(): Promise<boolean> {
-  const refreshToken = localStorage.getItem('refreshToken');
-  if (!refreshToken) return false;
-
-  try {
-    const response = await fetch(`${API_URL}${API_PREFIX}/api/auth/refresh`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken }),
-    });
-
-    if (!response.ok) return false;
-
-    const data = await response.json();
-    localStorage.setItem('accessToken', data.accessToken);
-    localStorage.setItem('refreshToken', data.refreshToken);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export async function api<T>(endpoint: string, options: ApiOptions = {}): Promise<T> {
   const { method = 'GET', body, headers = {} } = options;
-
-  const token = await getAccessToken();
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
 
   if (body) {
     headers['Content-Type'] = 'application/json';
@@ -59,18 +27,24 @@ export async function api<T>(endpoint: string, options: ApiOptions = {}): Promis
     method,
     headers,
     body: body ? JSON.stringify(body) : undefined,
+    credentials: 'include',
   });
 
   // Handle token refresh
-  if (response.status === 401 && token) {
-    const refreshed = await refreshTokens();
+  if (response.status === 401) {
+    const refreshed = await fetch(`${API_URL}${API_PREFIX}/api/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ refreshToken: null }), // body ignored if cookie exists
+    }).then(r => r.ok).catch(() => false);
+
     if (refreshed) {
-      const newToken = await getAccessToken();
-      headers['Authorization'] = `Bearer ${newToken}`;
       response = await fetch(`${API_URL}${API_PREFIX}${endpoint}`, {
         method,
         headers,
         body: body ? JSON.stringify(body) : undefined,
+        credentials: 'include',
       });
     }
   }
@@ -88,15 +62,11 @@ export const authApi = {
   login: (email: string, password: string) =>
     api<{
       user: { id: string; email: string; displayName: string | null };
-      accessToken: string;
-      refreshToken: string;
     }>('/api/auth/login', { method: 'POST', body: { email, password } }),
 
   register: (email: string, password: string, displayName?: string) =>
     api<{
       user: { id: string; email: string; displayName: string | null };
-      accessToken: string;
-      refreshToken: string;
     }>('/api/auth/register', { method: 'POST', body: { email, password, displayName } }),
 
   logout: () => api<{ success: boolean }>('/api/auth/logout', { method: 'POST' }),
@@ -164,14 +134,12 @@ export async function* streamMessage(
   sessionId: string,
   message: string
 ): AsyncGenerator<{ type: 'content' | 'done' | 'status'; content?: string; status?: string; messageId?: string }> {
-  const token = await getAccessToken();
-
   const response = await fetch(`${API_URL}${API_PREFIX}/api/chat/sessions/${sessionId}/send`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
     },
+    credentials: 'include',
     body: JSON.stringify({ message, stream: true }),
   });
 
@@ -307,7 +275,21 @@ export interface UserModelConfig {
   model: string;
 }
 
+export type ThemeType = 'dark' | 'retro';
+
+export interface UserSettings {
+  theme?: ThemeType;
+  crtFlicker?: boolean;
+  language?: string;
+  notifications?: boolean;
+  defaultMode?: 'assistant' | 'companion';
+}
+
 export const settingsApi = {
+  // User Settings
+  updateUserSettings: (settings: UserSettings) =>
+    api<{ success: boolean; settings: UserSettings }>('/api/settings/user', { method: 'PUT', body: settings }),
+
   // Prompts
   getDefaultPrompts: () =>
     api<{ basePrompt: string; assistantMode: string; companionMode: string }>('/api/settings/prompts/defaults'),

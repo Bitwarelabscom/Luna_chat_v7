@@ -1,5 +1,6 @@
 import { pool } from '../db/index.js';
 import logger from '../utils/logger.js';
+import { encryptToken, decryptToken, isEncryptionAvailable } from '../utils/encryption.js';
 
 export interface CalendarConnection {
   id: string;
@@ -23,7 +24,7 @@ export interface CalendarEvent {
 }
 
 /**
- * Store OAuth connection (tokens stored encrypted in real implementation)
+ * Store OAuth connection with encrypted tokens
  */
 export async function storeCalendarConnection(
   userId: string,
@@ -36,6 +37,18 @@ export async function storeCalendarConnection(
   }
 ): Promise<CalendarConnection> {
   try {
+    // SECURITY: Encrypt OAuth tokens before storing in database
+    let accessTokenToStore = tokens.accessToken;
+    let refreshTokenToStore = tokens.refreshToken;
+
+    if (isEncryptionAvailable()) {
+      accessTokenToStore = encryptToken(tokens.accessToken);
+      refreshTokenToStore = encryptToken(tokens.refreshToken);
+      logger.debug('OAuth tokens encrypted for storage', { userId, provider });
+    } else {
+      logger.warn('Encryption key not configured - storing OAuth tokens unencrypted', { userId, provider });
+    }
+
     const result = await pool.query(
       `INSERT INTO calendar_connections (user_id, provider, access_token, refresh_token, token_expires_at, calendar_id)
        VALUES ($1, $2, $3, $4, $5, $6)
@@ -47,7 +60,7 @@ export async function storeCalendarConnection(
          is_active = true,
          updated_at = NOW()
        RETURNING id, provider, calendar_id, is_active, last_sync_at, created_at`,
-      [userId, provider, tokens.accessToken, tokens.refreshToken, tokens.expiresAt, tokens.calendarId]
+      [userId, provider, accessTokenToStore, refreshTokenToStore, tokens.expiresAt, tokens.calendarId]
     );
 
     logger.info('Stored calendar connection', { userId, provider });
@@ -168,7 +181,24 @@ export async function syncCalendarEvents(
 
     const conn = connResult.rows[0];
 
-    // TODO: Implement actual API calls based on provider
+    // SECURITY: Decrypt OAuth tokens before use
+    let accessToken = conn.access_token as string;
+    let refreshToken = conn.refresh_token as string;
+
+    if (isEncryptionAvailable() && accessToken.includes(':')) {
+      // Token appears to be encrypted (contains colon separators)
+      try {
+        accessToken = decryptToken(accessToken);
+        refreshToken = decryptToken(refreshToken);
+      } catch (err) {
+        logger.error('Failed to decrypt OAuth tokens', { error: (err as Error).message, connectionId });
+        throw new Error('Token decryption failed');
+      }
+    }
+
+    // TODO: Implement actual API calls based on provider using decrypted tokens
+    // accessToken and refreshToken are now available for API calls
+
     // For now, just update last sync time
     await pool.query(
       `UPDATE calendar_connections SET last_sync_at = NOW() WHERE id = $1`,

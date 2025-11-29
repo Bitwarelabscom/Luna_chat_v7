@@ -30,14 +30,14 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4">
+    <div className="min-h-screen flex items-center justify-center px-4 bg-theme-bg-primary">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-luna-600 mb-4">
-            <Moon className="w-8 h-8 text-white" />
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-theme-accent-primary mb-4">
+            <Moon className="w-8 h-8 text-theme-text-primary" />
           </div>
-          <h1 className="text-3xl font-bold text-white">Welcome to Luna</h1>
-          <p className="text-gray-400 mt-2">Sign in to continue</p>
+          <h1 className="text-3xl font-bold text-theme-text-primary">Welcome to Luna</h1>
+          <p className="text-theme-text-muted mt-2">Sign in to continue</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -48,7 +48,7 @@ export default function LoginPage() {
           )}
 
           <div>
-            <label htmlFor="email" className="block text-sm font-medium text-gray-300 mb-1">
+            <label htmlFor="email" className="block text-sm font-medium text-theme-text-secondary mb-1">
               Email
             </label>
             <input
@@ -56,14 +56,14 @@ export default function LoginPage() {
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-4 py-3 bg-gray-900 border border-gray-800 rounded-lg focus:ring-2 focus:ring-luna-500 focus:border-transparent outline-none transition"
+              className="w-full px-4 py-3 bg-theme-bg-secondary border border-theme-border rounded-lg focus:ring-2 focus:ring-theme-accent-primary focus:border-transparent outline-none transition text-theme-text-primary placeholder-theme-text-muted"
               placeholder="you@example.com"
               required
             />
           </div>
 
           <div>
-            <label htmlFor="password" className="block text-sm font-medium text-gray-300 mb-1">
+            <label htmlFor="password" className="block text-sm font-medium text-theme-text-secondary mb-1">
               Password
             </label>
             <div className="relative">
@@ -72,14 +72,14 @@ export default function LoginPage() {
                 type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-4 py-3 bg-gray-900 border border-gray-800 rounded-lg focus:ring-2 focus:ring-luna-500 focus:border-transparent outline-none transition pr-12"
+                className="w-full px-4 py-3 bg-theme-bg-secondary border border-theme-border rounded-lg focus:ring-2 focus:ring-theme-accent-primary focus:border-transparent outline-none transition pr-12 text-theme-text-primary placeholder-theme-text-muted"
                 placeholder="Enter your password"
                 required
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-300"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-theme-text-muted hover:text-theme-text-secondary"
               >
                 {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
               </button>
@@ -89,7 +89,7 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={isLoading}
-            className="w-full py-3 bg-luna-600 hover:bg-luna-700 disabled:bg-luna-800 disabled:cursor-not-allowed rounded-lg font-medium transition flex items-center justify-center gap-2"
+            className="w-full py-3 bg-theme-accent-primary hover:bg-theme-accent-hover disabled:opacity-50 disabled:cursor-not-allowed rounded-lg font-medium transition flex items-center justify-center gap-2 text-theme-text-primary"
           >
             {isLoading ? (
               <>

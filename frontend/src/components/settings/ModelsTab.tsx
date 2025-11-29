@@ -114,7 +114,7 @@ export default function ModelsTab() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <Loader2 className="w-6 h-6 animate-spin text-luna-500" />
+        <Loader2 className="w-6 h-6 animate-spin text-theme-accent-primary" />
       </div>
     );
   }
@@ -135,15 +135,15 @@ export default function ModelsTab() {
 
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-medium text-white">Model Configuration</h3>
-          <p className="text-sm text-gray-400 mt-1">
+          <h3 className="text-lg font-medium text-theme-text-primary">Model Configuration</h3>
+          <p className="text-sm text-theme-text-muted mt-1">
             Configure which AI models to use for different tasks
           </p>
         </div>
         <button
           onClick={handleReset}
           disabled={isSaving !== null}
-          className="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition disabled:opacity-50"
+          className="flex items-center gap-2 px-3 py-1.5 text-sm text-theme-text-muted hover:text-theme-text-primary hover:bg-theme-bg-tertiary rounded-lg transition disabled:opacity-50"
         >
           <RotateCcw className="w-4 h-4" />
           Reset to Defaults
@@ -151,7 +151,7 @@ export default function ModelsTab() {
       </div>
 
       {/* Provider Legend */}
-      <div className="flex flex-wrap gap-3 p-3 bg-gray-800/50 rounded-lg">
+      <div className="flex flex-wrap gap-3 p-3 bg-theme-bg-tertiary/50 rounded-lg">
         {providers.map(provider => (
           <div key={provider.id} className="flex items-center gap-2">
             <div
@@ -165,7 +165,7 @@ export default function ModelsTab() {
                       : 'bg-blue-500'
               }`}
             />
-            <span className="text-sm text-gray-300">{provider.name}</span>
+            <span className="text-sm text-theme-text-secondary">{provider.name}</span>
           </div>
         ))}
       </div>
@@ -180,28 +180,28 @@ export default function ModelsTab() {
           return (
             <div
               key={task.taskType}
-              className="p-4 bg-gray-800/50 border border-gray-700 rounded-lg"
+              className="p-4 bg-theme-bg-tertiary/50 border border-theme-border rounded-lg"
             >
               <div className="flex items-start justify-between mb-3">
                 <div>
-                  <h4 className="font-medium text-white">{task.displayName}</h4>
-                  <p className="text-sm text-gray-400">{task.description}</p>
+                  <h4 className="font-medium text-theme-text-primary">{task.displayName}</h4>
+                  <p className="text-sm text-theme-text-muted">{task.description}</p>
                 </div>
                 {isThisSaving && (
-                  <Loader2 className="w-4 h-4 animate-spin text-luna-500" />
+                  <Loader2 className="w-4 h-4 animate-spin text-theme-accent-primary" />
                 )}
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {/* Provider Select */}
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">Provider</label>
+                  <label className="block text-xs text-theme-text-muted mb-1">Provider</label>
                   <div className="relative">
                     <select
                       value={config.provider}
                       onChange={e => handleProviderChange(task.taskType, e.target.value)}
                       disabled={isSaving !== null}
-                      className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm appearance-none focus:outline-none focus:border-luna-500 disabled:opacity-50"
+                      className="w-full px-3 py-2 bg-theme-bg-secondary border border-theme-border rounded-lg text-theme-text-primary text-sm appearance-none focus:outline-none focus:border-theme-border-focus disabled:opacity-50"
                     >
                       {providers.map(provider => (
                         <option key={provider.id} value={provider.id}>
@@ -209,19 +209,19 @@ export default function ModelsTab() {
                         </option>
                       ))}
                     </select>
-                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" />
+                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-muted pointer-events-none" />
                   </div>
                 </div>
 
                 {/* Model Select */}
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">Model</label>
+                  <label className="block text-xs text-theme-text-muted mb-1">Model</label>
                   <div className="relative">
                     <select
                       value={config.model}
                       onChange={e => handleModelChange(task.taskType, config.provider, e.target.value)}
                       disabled={isSaving !== null}
-                      className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm appearance-none focus:outline-none focus:border-luna-500 disabled:opacity-50"
+                      className="w-full px-3 py-2 bg-theme-bg-secondary border border-theme-border rounded-lg text-theme-text-primary text-sm appearance-none focus:outline-none focus:border-theme-border-focus disabled:opacity-50"
                     >
                       {models.map(model => (
                         <option key={model.id} value={model.id}>
@@ -229,7 +229,7 @@ export default function ModelsTab() {
                         </option>
                       ))}
                     </select>
-                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" />
+                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-muted pointer-events-none" />
                   </div>
                 </div>
               </div>
@@ -237,7 +237,7 @@ export default function ModelsTab() {
               {/* Default indicator */}
               {config.provider === task.defaultProvider &&
                 config.model === task.defaultModel && (
-                  <div className="flex items-center gap-1 mt-2 text-xs text-gray-500">
+                  <div className="flex items-center gap-1 mt-2 text-xs text-theme-text-muted">
                     <Check className="w-3 h-3" />
                     Using default
                   </div>
@@ -248,17 +248,17 @@ export default function ModelsTab() {
       </div>
 
       {/* Info */}
-      <div className="p-4 bg-gray-900/50 border border-gray-800 rounded-lg">
-        <h4 className="text-sm font-medium text-gray-300 mb-2">About Model Selection</h4>
-        <ul className="text-sm text-gray-500 space-y-1">
+      <div className="p-4 bg-theme-bg-secondary/50 border border-theme-border rounded-lg">
+        <h4 className="text-sm font-medium text-theme-text-secondary mb-2">About Model Selection</h4>
+        <ul className="text-sm text-theme-text-muted space-y-1">
           <li>
-            <strong className="text-gray-400">Main Chat:</strong> Primary conversation model for Luna
+            <strong className="text-theme-text-secondary">Main Chat:</strong> Primary conversation model for Luna
           </li>
           <li>
-            <strong className="text-gray-400">Agents:</strong> Specialized models for research, coding, writing tasks
+            <strong className="text-theme-text-secondary">Agents:</strong> Specialized models for research, coding, writing tasks
           </li>
           <li>
-            <strong className="text-gray-400">Background Tasks:</strong> Fact extraction, mood analysis use fast Groq models
+            <strong className="text-theme-text-secondary">Background Tasks:</strong> Fact extraction, mood analysis use fast Groq models
           </li>
         </ul>
       </div>

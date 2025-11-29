@@ -34,3 +34,6 @@ coverage/
 
 # Docker volumes (local dev)
 data/
+
+# Docker secrets
+secrets/

@@ -5,16 +5,18 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 
-COPY tsconfig.json ./
+COPY tsconfig.json tsconfig.production.json ./
 COPY src ./src
 
-RUN npm run build
+# SECURITY: Use production build (no source maps)
+RUN npm run build:prod
 
 FROM node:20-alpine AS runner
 
 WORKDIR /app
 
-RUN apk add --no-cache wget
+# Add docker-cli for sandbox proxy access (via docker-socket-proxy)
+RUN apk add --no-cache wget docker-cli
 
 COPY package*.json ./
 RUN npm ci --only=production

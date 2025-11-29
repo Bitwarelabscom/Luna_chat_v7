@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { X, MessageSquare, BarChart3, Database, Cpu } from 'lucide-react';
+import { X, MessageSquare, BarChart3, Database, Cpu, Palette } from 'lucide-react';
+import AppearanceTab from './settings/AppearanceTab';
 import PromptsTab from './settings/PromptsTab';
 import StatsTab from './settings/StatsTab';
 import DataTab from './settings/DataTab';
@@ -12,9 +13,10 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
-type TabId = 'prompts' | 'models' | 'stats' | 'data';
+type TabId = 'appearance' | 'prompts' | 'models' | 'stats' | 'data';
 
 const tabs: { id: TabId; label: string; icon: typeof MessageSquare }[] = [
+  { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'prompts', label: 'System Prompts', icon: MessageSquare },
   { id: 'models', label: 'Models', icon: Cpu },
   { id: 'stats', label: 'Stats', icon: BarChart3 },
@@ -22,7 +24,7 @@ const tabs: { id: TabId; label: string; icon: typeof MessageSquare }[] = [
 ];
 
 export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
-  const [activeTab, setActiveTab] = useState<TabId>('prompts');
+  const [activeTab, setActiveTab] = useState<TabId>('appearance');
 
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
@@ -51,30 +53,30 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       />
 
       {/* Modal */}
-      <div className="relative w-full max-w-4xl max-h-[90vh] bg-gray-900 rounded-xl shadow-2xl border border-gray-800 flex flex-col m-4">
+      <div className="relative w-full max-w-4xl max-h-[90vh] bg-theme-bg-secondary rounded-xl shadow-2xl border border-theme-border flex flex-col m-4">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
-          <h2 className="text-xl font-semibold text-white">Settings</h2>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-theme-border">
+          <h2 className="text-xl font-semibold text-theme-text-primary">Settings</h2>
           <button
             onClick={onClose}
-            className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition"
+            className="p-2 text-theme-text-muted hover:text-theme-text-primary hover:bg-theme-bg-tertiary rounded-lg transition"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-gray-800">
+        <div className="flex border-b border-theme-border overflow-x-auto">
           {tabs.map((tab) => {
             const Icon = tab.icon;
             return (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2 px-6 py-3 text-sm font-medium transition ${
+                className={`flex items-center gap-2 px-6 py-3 text-sm font-medium transition whitespace-nowrap ${
                   activeTab === tab.id
-                    ? 'text-luna-500 border-b-2 border-luna-500 -mb-px'
-                    : 'text-gray-400 hover:text-white'
+                    ? 'text-theme-accent-primary border-b-2 border-theme-accent-primary -mb-px'
+                    : 'text-theme-text-muted hover:text-theme-text-primary'
                 }`}
               >
                 <Icon className="w-4 h-4" />
@@ -86,6 +88,7 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6">
+          {activeTab === 'appearance' && <AppearanceTab />}
           {activeTab === 'prompts' && <PromptsTab />}
           {activeTab === 'models' && <ModelsTab />}
           {activeTab === 'stats' && <StatsTab />}

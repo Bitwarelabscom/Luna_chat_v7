@@ -1,6 +1,7 @@
 import { pool } from '../db/index.js';
 import { generateEmbedding } from '../memory/embedding.service.js';
 import logger from '../utils/logger.js';
+import { encryptToken, isEncryptionAvailable } from '../utils/encryption.js';
 
 export interface EmailConnection {
   id: string;
@@ -28,7 +29,7 @@ export interface Email {
 }
 
 /**
- * Store OAuth connection
+ * Store OAuth connection with encrypted tokens
  */
 export async function storeEmailConnection(
   userId: string,
@@ -41,6 +42,18 @@ export async function storeEmailConnection(
   }
 ): Promise<EmailConnection> {
   try {
+    // SECURITY: Encrypt OAuth tokens before storing in database
+    let accessTokenToStore = tokens.accessToken;
+    let refreshTokenToStore = tokens.refreshToken;
+
+    if (isEncryptionAvailable()) {
+      accessTokenToStore = encryptToken(tokens.accessToken);
+      refreshTokenToStore = encryptToken(tokens.refreshToken);
+      logger.debug('OAuth tokens encrypted for storage', { userId, provider });
+    } else {
+      logger.warn('Encryption key not configured - storing OAuth tokens unencrypted', { userId, provider });
+    }
+
     const result = await pool.query(
       `INSERT INTO email_connections (user_id, provider, email_address, access_token, refresh_token, token_expires_at)
        VALUES ($1, $2, $3, $4, $5, $6)
@@ -52,7 +65,7 @@ export async function storeEmailConnection(
          is_active = true,
          updated_at = NOW()
        RETURNING id, provider, email_address, is_active, last_sync_at, created_at`,
-      [userId, provider, tokens.emailAddress, tokens.accessToken, tokens.refreshToken, tokens.expiresAt]
+      [userId, provider, tokens.emailAddress, accessTokenToStore, refreshTokenToStore, tokens.expiresAt]
     );
 
     logger.info('Stored email connection', { userId, provider });
