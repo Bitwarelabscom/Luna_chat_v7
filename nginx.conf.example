@@ -1,0 +1,41 @@
+# Nginx configuration for Luna Chat
+# Add this to your bitwarelabs.com server block
+
+# Luna Chat Frontend
+location /luna-chat {
+    proxy_pass http://localhost:3004;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection 'upgrade';
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_cache_bypass $http_upgrade;
+}
+
+# Luna Chat API
+location /luna-chat/api {
+    rewrite ^/luna-chat/api(.*)$ /api$1 break;
+    proxy_pass http://localhost:3005;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection 'upgrade';
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_cache_bypass $http_upgrade;
+
+    # SSE support for streaming
+    proxy_buffering off;
+    proxy_read_timeout 86400;
+}
+
+# Luna Chat static files (Next.js)
+location /luna-chat/_next {
+    proxy_pass http://localhost:3004;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_cache_bypass $http_upgrade;
+}

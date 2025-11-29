@@ -1,0 +1,327 @@
+import { pool } from '../db/index.js';
+import { generateEmbedding } from '../memory/embedding.service.js';
+import logger from '../utils/logger.js';
+import { randomUUID } from 'crypto';
+import * as fs from 'fs/promises';
+import * as path from 'path';
+
+const DOCUMENTS_DIR = process.env.DOCUMENTS_DIR || '/app/documents';
+const MAX_CHUNK_SIZE = 1000; // characters per chunk
+const CHUNK_OVERLAP = 200;
+
+export interface Document {
+  id: string;
+  filename: string;
+  originalName: string;
+  mimeType: string;
+  fileSize: number;
+  status: 'processing' | 'ready' | 'error';
+  errorMessage?: string;
+  createdAt: Date;
+}
+
+export interface DocumentChunk {
+  id: string;
+  documentId: string;
+  chunkIndex: number;
+  content: string;
+  similarity?: number;
+}
+
+/**
+ * Upload and process a document
+ */
+export async function uploadDocument(
+  userId: string,
+  file: {
+    buffer: Buffer;
+    originalname: string;
+    mimetype: string;
+  }
+): Promise<Document> {
+  const docId = randomUUID();
+  const ext = path.extname(file.originalname);
+  const filename = `${userId}/${docId}${ext}`;
+  const storagePath = path.join(DOCUMENTS_DIR, filename);
+
+  try {
+    // Ensure directory exists
+    await fs.mkdir(path.dirname(storagePath), { recursive: true });
+
+    // Save file
+    await fs.writeFile(storagePath, file.buffer);
+
+    // Create database record
+    const result = await pool.query(
+      `INSERT INTO documents (id, user_id, filename, original_name, mime_type, file_size, storage_path, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'processing')
+       RETURNING id, filename, original_name, mime_type, file_size, status, created_at`,
+      [docId, userId, filename, file.originalname, file.mimetype, file.buffer.length, storagePath]
+    );
+
+    const doc = mapRowToDocument(result.rows[0]);
+
+    // Process document asynchronously
+    processDocument(docId, userId, storagePath, file.mimetype).catch(error => {
+      logger.error('Document processing failed', { docId, error: (error as Error).message });
+    });
+
+    return doc;
+  } catch (error) {
+    logger.error('Failed to upload document', { error: (error as Error).message, userId });
+    throw error;
+  }
+}
+
+/**
+ * Process document - extract text and create embeddings
+ */
+async function processDocument(
+  docId: string,
+  _userId: string,
+  storagePath: string,
+  mimeType: string
+): Promise<void> {
+  try {
+    // Read file content
+    const content = await fs.readFile(storagePath);
+    let text = '';
+
+    // Extract text based on mime type
+    if (mimeType === 'text/plain' || mimeType === 'text/markdown') {
+      text = content.toString('utf-8');
+    } else if (mimeType === 'application/json') {
+      const json = JSON.parse(content.toString('utf-8'));
+      text = JSON.stringify(json, null, 2);
+    } else if (mimeType.includes('javascript') || mimeType.includes('typescript')) {
+      text = content.toString('utf-8');
+    } else if (mimeType === 'text/csv') {
+      text = content.toString('utf-8');
+    } else if (mimeType === 'text/html') {
+      // Basic HTML text extraction
+      text = content.toString('utf-8')
+        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    } else if (mimeType === 'application/pdf') {
+      // For PDF, we'd need a library like pdf-parse
+      // For now, mark as error if we can't process
+      throw new Error('PDF processing requires additional setup. Please upload text files for now.');
+    } else {
+      // Try to read as text
+      text = content.toString('utf-8');
+    }
+
+    if (!text.trim()) {
+      throw new Error('No text content could be extracted');
+    }
+
+    // Chunk the text
+    const chunks = chunkText(text);
+
+    // Create embeddings for each chunk
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const { embedding } = await generateEmbedding(chunk);
+      const vectorString = `[${embedding.join(',')}]`;
+
+      await pool.query(
+        `INSERT INTO document_chunks (document_id, chunk_index, content, embedding)
+         VALUES ($1, $2, $3, $4::vector)`,
+        [docId, i, chunk, vectorString]
+      );
+    }
+
+    // Mark as ready
+    await pool.query(
+      `UPDATE documents SET status = 'ready', updated_at = NOW() WHERE id = $1`,
+      [docId]
+    );
+
+    logger.info('Document processed', { docId, chunks: chunks.length });
+  } catch (error) {
+    // Mark as error
+    await pool.query(
+      `UPDATE documents SET status = 'error', error_message = $2, updated_at = NOW() WHERE id = $1`,
+      [docId, (error as Error).message]
+    );
+    throw error;
+  }
+}
+
+/**
+ * Chunk text into smaller pieces
+ */
+function chunkText(text: string): string[] {
+  const chunks: string[] = [];
+  let start = 0;
+
+  while (start < text.length) {
+    let end = start + MAX_CHUNK_SIZE;
+
+    // Try to break at a sentence or paragraph
+    if (end < text.length) {
+      const breakPoints = ['\n\n', '\n', '. ', '! ', '? ', '; ', ', '];
+      for (const bp of breakPoints) {
+        const lastBreak = text.lastIndexOf(bp, end);
+        if (lastBreak > start + MAX_CHUNK_SIZE / 2) {
+          end = lastBreak + bp.length;
+          break;
+        }
+      }
+    }
+
+    chunks.push(text.slice(start, end).trim());
+    start = end - CHUNK_OVERLAP;
+    if (start < 0) start = 0;
+    if (start >= text.length) break;
+  }
+
+  return chunks.filter(c => c.length > 0);
+}
+
+/**
+ * Get user's documents
+ */
+export async function getDocuments(
+  userId: string,
+  options: { status?: string; limit?: number } = {}
+): Promise<Document[]> {
+  const { status, limit = 50 } = options;
+
+  try {
+    let query = `
+      SELECT id, filename, original_name, mime_type, file_size, status, error_message, created_at
+      FROM documents
+      WHERE user_id = $1
+    `;
+    const params: (string | number)[] = [userId];
+
+    if (status) {
+      query += ` AND status = $2`;
+      params.push(status);
+    }
+
+    query += ` ORDER BY created_at DESC LIMIT $${params.length + 1}`;
+    params.push(limit);
+
+    const result = await pool.query(query, params);
+    return result.rows.map(mapRowToDocument);
+  } catch (error) {
+    logger.error('Failed to get documents', { error: (error as Error).message, userId });
+    return [];
+  }
+}
+
+/**
+ * Search across documents
+ */
+export async function searchDocuments(
+  userId: string,
+  query: string,
+  options: { documentId?: string; limit?: number } = {}
+): Promise<DocumentChunk[]> {
+  const { documentId, limit = 5 } = options;
+
+  try {
+    const { embedding } = await generateEmbedding(query);
+    const vectorString = `[${embedding.join(',')}]`;
+
+    let sqlQuery = `
+      SELECT dc.id, dc.document_id, dc.chunk_index, dc.content,
+             1 - (dc.embedding <=> $1::vector) as similarity
+      FROM document_chunks dc
+      JOIN documents d ON d.id = dc.document_id
+      WHERE d.user_id = $2 AND d.status = 'ready'
+        AND 1 - (dc.embedding <=> $1::vector) > 0.5
+    `;
+    const params: (string | number)[] = [vectorString, userId];
+
+    if (documentId) {
+      sqlQuery += ` AND dc.document_id = $3`;
+      params.push(documentId);
+    }
+
+    sqlQuery += ` ORDER BY dc.embedding <=> $1::vector LIMIT $${params.length + 1}`;
+    params.push(limit);
+
+    const result = await pool.query(sqlQuery, params);
+
+    return result.rows.map((row: Record<string, unknown>) => ({
+      id: row.id as string,
+      documentId: row.document_id as string,
+      chunkIndex: row.chunk_index as number,
+      content: row.content as string,
+      similarity: parseFloat(row.similarity as string),
+    }));
+  } catch (error) {
+    logger.error('Failed to search documents', { error: (error as Error).message, userId });
+    return [];
+  }
+}
+
+/**
+ * Delete a document
+ */
+export async function deleteDocument(userId: string, docId: string): Promise<boolean> {
+  try {
+    // Get storage path
+    const result = await pool.query(
+      `SELECT storage_path FROM documents WHERE id = $1 AND user_id = $2`,
+      [docId, userId]
+    );
+
+    if (result.rows.length === 0) return false;
+
+    // Delete file
+    try {
+      await fs.unlink(result.rows[0].storage_path);
+    } catch {
+      // File might not exist
+    }
+
+    // Delete from database (cascades to chunks)
+    await pool.query(`DELETE FROM documents WHERE id = $1`, [docId]);
+
+    return true;
+  } catch (error) {
+    logger.error('Failed to delete document', { error: (error as Error).message, userId, docId });
+    return false;
+  }
+}
+
+/**
+ * Format document search results for prompt
+ */
+export function formatDocumentsForPrompt(chunks: DocumentChunk[]): string {
+  if (chunks.length === 0) return '';
+
+  const formatted = chunks.map((chunk, i) =>
+    `[Document ${i + 1}]\n${chunk.content.slice(0, 500)}${chunk.content.length > 500 ? '...' : ''}`
+  ).join('\n\n');
+
+  return `[Relevant Document Excerpts]\n${formatted}`;
+}
+
+function mapRowToDocument(row: Record<string, unknown>): Document {
+  return {
+    id: row.id as string,
+    filename: row.filename as string,
+    originalName: row.original_name as string,
+    mimeType: row.mime_type as string,
+    fileSize: row.file_size as number,
+    status: row.status as 'processing' | 'ready' | 'error',
+    errorMessage: row.error_message as string | undefined,
+    createdAt: row.created_at as Date,
+  };
+}
+
+export default {
+  uploadDocument,
+  getDocuments,
+  searchDocuments,
+  deleteDocument,
+  formatDocumentsForPrompt,
+};
