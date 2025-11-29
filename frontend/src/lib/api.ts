@@ -163,7 +163,7 @@ export const chatApi = {
 export async function* streamMessage(
   sessionId: string,
   message: string
-): AsyncGenerator<{ type: 'content' | 'done'; content?: string; messageId?: string }> {
+): AsyncGenerator<{ type: 'content' | 'done' | 'status'; content?: string; status?: string; messageId?: string }> {
   const token = await getAccessToken();
 
   const response = await fetch(`${API_URL}${API_PREFIX}/api/chat/sessions/${sessionId}/send`, {

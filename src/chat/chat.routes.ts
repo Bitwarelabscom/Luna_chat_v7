@@ -172,7 +172,9 @@ router.post('/sessions/:id/send', rateLimit, async (req: Request, res: Response)
       });
 
       for await (const chunk of stream) {
-        if (chunk.type === 'content') {
+        if (chunk.type === 'status') {
+          res.write(`data: ${JSON.stringify({ type: 'status', status: chunk.status })}\n\n`);
+        } else if (chunk.type === 'content') {
           res.write(`data: ${JSON.stringify({ type: 'content', content: chunk.content })}\n\n`);
         } else if (chunk.type === 'done') {
           res.write(`data: ${JSON.stringify({ type: 'done', messageId: chunk.messageId, tokensUsed: chunk.tokensUsed })}\n\n`);

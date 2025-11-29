@@ -72,6 +72,7 @@ interface ChatState {
   isLoadingMessages: boolean;
   isSending: boolean;
   streamingContent: string;
+  statusMessage: string;
 
   loadSessions: () => Promise<void>;
   loadSession: (id: string) => Promise<void>;
@@ -83,6 +84,7 @@ interface ChatState {
   setStreamingContent: (content: string) => void;
   appendStreamingContent: (content: string) => void;
   setIsSending: (isSending: boolean) => void;
+  setStatusMessage: (status: string) => void;
   clearCurrentSession: () => void;
 }
 
@@ -93,6 +95,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   isLoadingMessages: false,
   isSending: false,
   streamingContent: '',
+  statusMessage: '',
 
   loadSessions: async () => {
     set({ isLoadingSessions: true });
@@ -176,5 +179,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   appendStreamingContent: (content) =>
     set((state) => ({ streamingContent: state.streamingContent + content })),
   setIsSending: (isSending) => set({ isSending }),
-  clearCurrentSession: () => set({ currentSession: null, streamingContent: '' }),
+  setStatusMessage: (status) => set({ statusMessage: status }),
+  clearCurrentSession: () => set({ currentSession: null, streamingContent: '', statusMessage: '' }),
 }));

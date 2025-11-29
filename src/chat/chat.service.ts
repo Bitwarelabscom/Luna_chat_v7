@@ -203,8 +203,10 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
 
 export async function* streamMessage(
   input: ChatInput
-): AsyncGenerator<{ type: 'content' | 'done'; content?: string; messageId?: string; tokensUsed?: number }> {
+): AsyncGenerator<{ type: 'content' | 'done' | 'status'; content?: string; status?: string; messageId?: string; tokensUsed?: number }> {
   const { sessionId, userId, message, mode } = input;
+
+  yield { type: 'status', status: 'Loading context...' };
 
   // Get user's model configuration for main chat
   const modelConfig = await getUserModelConfig(userId, 'main_chat');
@@ -216,6 +218,8 @@ export async function* streamMessage(
   // Get conversation history
   const history = await sessionService.getSessionMessages(sessionId, { limit: 20 });
 
+  yield { type: 'status', status: 'Recalling memories...' };
+
   // Build memory context (facts + semantic search)
   const memoryContext = await memoryService.buildMemoryContext(userId, message, sessionId);
   const memoryPrompt = memoryService.formatMemoryForPrompt(memoryContext);
@@ -223,6 +227,8 @@ export async function* streamMessage(
   // Build ability context (tasks, calendar, knowledge, mood, etc.)
   const abilityContext = await abilities.buildAbilityContext(userId, message, sessionId);
   const abilityPrompt = abilities.formatAbilityContextForPrompt(abilityContext);
+
+  yield { type: 'status', status: 'Thinking...' };
 
   // Combine all context
   const fullContext = [memoryPrompt, abilityPrompt].filter(Boolean).join('\n\n');
@@ -277,6 +283,7 @@ export async function* streamMessage(
     for (const toolCall of initialCompletion.toolCalls) {
       if (toolCall.function.name === 'web_search') {
         const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'status', status: `Searching: ${args.query}` };
         searchResults = await searxng.search(args.query);
         logger.info('Search executed in stream', { query: args.query, results: searchResults?.length || 0 });
 
@@ -291,6 +298,7 @@ export async function* streamMessage(
         } as ChatMessage);
       } else if (toolCall.function.name === 'delegate_to_agent') {
         const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'status', status: `Invoking ${args.agent} agent...` };
         logger.info('Delegating to agent in stream', { agent: args.agent, task: args.task?.substring(0, 100) });
 
         const result = await agents.executeAgentTask(userId, {
@@ -299,6 +307,7 @@ export async function* streamMessage(
           context: args.context,
         });
 
+        yield { type: 'status', status: `${args.agent} agent completed` };
         logger.info('Agent completed in stream', { agent: args.agent, success: result.success, timeMs: result.executionTimeMs });
 
         // Add tool result to conversation
@@ -310,6 +319,8 @@ export async function* streamMessage(
       }
     }
   }
+
+  yield { type: 'status', status: 'Composing response...' };
 
   // Stream completion (with search results if any)
   let fullContent = '';

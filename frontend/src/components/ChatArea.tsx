@@ -13,6 +13,7 @@ export default function ChatArea() {
     isLoadingMessages,
     isSending,
     streamingContent,
+    statusMessage,
     loadSessions,
     createSession,
     loadSession,
@@ -21,6 +22,7 @@ export default function ChatArea() {
     appendStreamingContent,
     setIsSending,
     setStreamingContent,
+    setStatusMessage,
   } = useChatStore();
 
   const [input, setInput] = useState('');
@@ -72,17 +74,22 @@ export default function ChatArea() {
     addUserMessage(message);
     setIsSending(true);
     setStreamingContent('');
+    setStatusMessage('');
 
     try {
       // Stream the response - accumulate content locally to avoid stale closure
       let accumulatedContent = '';
       for await (const chunk of streamMessage(sessionId, message)) {
-        if (chunk.type === 'content' && chunk.content) {
+        if (chunk.type === 'status' && chunk.status) {
+          setStatusMessage(chunk.status);
+        } else if (chunk.type === 'content' && chunk.content) {
+          setStatusMessage(''); // Clear status when content starts
           accumulatedContent += chunk.content;
           appendStreamingContent(chunk.content);
         } else if (chunk.type === 'done' && chunk.messageId) {
           addAssistantMessage(accumulatedContent, chunk.messageId);
           setStreamingContent('');
+          setStatusMessage('');
         }
       }
 
@@ -172,11 +179,11 @@ export default function ChatArea() {
                 <div className="inline-block px-4 py-3 rounded-2xl bg-gray-800 rounded-bl-md">
                   <div className="flex items-center gap-2">
                     <div className="flex gap-1">
-                      <span className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                      <span className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                      <span className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                      <span className="w-2 h-2 bg-luna-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                      <span className="w-2 h-2 bg-luna-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                      <span className="w-2 h-2 bg-luna-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                     </div>
-                    <span className="text-gray-400 text-sm">Luna is thinking...</span>
+                    <span className="text-gray-300 text-sm">{statusMessage || 'Luna is thinking...'}</span>
                   </div>
                 </div>
               </div>
