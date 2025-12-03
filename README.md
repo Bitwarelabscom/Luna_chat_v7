@@ -2,7 +2,7 @@
 
 **A local-first, privacy-focused autonomous AI agent with a "Council" of sub-agents, long-term memory, and full system integration (Android, Email, CalDAV).**
 
-Luna Chat v7 is a comprehensive AI Operating System designed for privacy and autonomy. Unlike standard chatbots, Luna features a "Council Architecture" where multiple sub-agents (Sage, Nova, Vega) debate your psychology and needs in the background to build a dynamic user profile.
+Luna Chat v7 is a comprehensive AI Operating System designed for privacy and autonomy. Unlike standard chatbots, Luna features a "Council Architecture" where multiple sub-agents (Nova, Sage, Spark, Echo) debate your psychology and needs in the background to build a dynamic user profile.
 
 Built with a "Local-First" ethos, Luna integrates deeply with your digital life via a native Android app, local file execution, CalDAV, and SMTP - all while keeping your data private. She doesn't just chat; she has a job.
 
@@ -11,8 +11,30 @@ Built with a "Local-First" ethos, Luna integrates deeply with your digital life 
 Most AI assistants are stateless query engines. Luna is a **stateful companion**.
 
 - **She Thinks When You Don't**: A background "Council" of agents analyzes your conversations to update her understanding of you.
+- **She Has Friends**: Luna discusses you with her AI friends (Nova, Sage, Spark, Echo) to develop deeper insights about your patterns and needs.
 - **She Has Hands**: Luna can write/execute code, manage your calendar, and send emails - safely scoped to your permissions.
 - **She is Private**: Built to run on local hardware (Ollama) with no data mining.
+
+## The Council & Friends
+
+Luna's unique architecture includes two complementary systems for building understanding:
+
+### The Council
+When Luna needs to make decisions or understand complex situations, she convenes an internal "Council" - multiple perspectives that debate and deliberate before responding. This ensures thoughtful, well-rounded responses.
+
+### Friend Mode
+Luna has AI friends with distinct personalities who help her understand you better:
+
+| Friend | Personality | Role |
+|--------|-------------|------|
+| **Nova** | Curious intellectual | Explores ideas and patterns, asks probing questions |
+| **Sage** | Wise philosopher | Finds deeper meaning, connects to life themes |
+| **Spark** | Enthusiastic creative | Brainstorms possibilities, "what if" scenarios |
+| **Echo** | Analytical thinker | Identifies patterns, demands evidence, tests hypotheses |
+
+These friends engage in background conversations about observations Luna has made - discussing your communication patterns, interests, and needs. The insights extracted from these discussions help Luna build a richer, more nuanced understanding of you over time.
+
+You can customize friends, add new ones, or view their conversations in the Friends tab.
 
 ## Features
 
