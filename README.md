@@ -1,6 +1,18 @@
 # Luna Chat
 
-Luna is an AI-powered personal assistant and conversation companion with multi-agent capabilities, autonomous mode, long-term memory, and extensible abilities.
+**A local-first, privacy-focused autonomous AI agent with a "Council" of sub-agents, long-term memory, and full system integration (Android, Email, CalDAV).**
+
+Luna Chat v7 is a comprehensive AI Operating System designed for privacy and autonomy. Unlike standard chatbots, Luna features a "Council Architecture" where multiple sub-agents (Sage, Nova, Vega) debate your psychology and needs in the background to build a dynamic user profile.
+
+Built with a "Local-First" ethos, Luna integrates deeply with your digital life via a native Android app, local file execution, CalDAV, and SMTP - all while keeping your data private. She doesn't just chat; she has a job.
+
+## Why Luna?
+
+Most AI assistants are stateless query engines. Luna is a **stateful companion**.
+
+- **She Thinks When You Don't**: A background "Council" of agents analyzes your conversations to update her understanding of you.
+- **She Has Hands**: Luna can write/execute code, manage your calendar, and send emails - safely scoped to your permissions.
+- **She is Private**: Built to run on local hardware (Ollama) with no data mining.
 
 ## Features
 
