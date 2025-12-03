@@ -141,13 +141,13 @@ Luna can operate autonomously with several self-directed capabilities:
 
 | Provider | Models | Use Case |
 |----------|--------|----------|
-| **OpenAI** | GPT-4o, GPT-4-turbo | General purpose |
-| **Anthropic** | Claude 3.5 Sonnet, Claude 3 Opus | Complex reasoning |
-| **Groq** | Llama 3.1, Mixtral | Fast inference |
-| **Google** | Gemini Pro, Gemini Flash | Multimodal |
-| **xAI** | Grok | Alternative reasoning |
-| **OpenRouter** | Various | Model aggregation |
-| **Ollama** | Local models, BGE-M3 embeddings | Local/private |
+| **OpenAI** | GPT-5.1, GPT-5, GPT-4.1, o1/o3 reasoning | General purpose, coding |
+| **Anthropic** | Claude Opus 4.5, Claude Sonnet 4, Haiku 4.5 | Complex reasoning, agents |
+| **Groq** | Llama 3.3 70B, Mixtral 8x7B, Gemma 2 | Fast inference |
+| **Google** | Gemini 3 Pro, Gemini 2.5 Flash/Pro | Multimodal, reasoning |
+| **xAI** | Grok 4.1, Grok 4 Fast, Grok 4 Heavy | Reasoning, coding |
+| **OpenRouter** | Various (model aggregation) | Flexibility, fallback |
+| **Ollama** | Local models, BGE-M3 embeddings | Local/private, embeddings |
 
 ## Prerequisites
 
