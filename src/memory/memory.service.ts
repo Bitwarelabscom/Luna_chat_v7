@@ -1,15 +1,18 @@
 import * as embeddingService from './embedding.service.js';
 import * as factsService from './facts.service.js';
+import * as insightsService from '../autonomous/insights.service.js';
 import logger from '../utils/logger.js';
 
 export interface MemoryContext {
   facts: string;
   relevantHistory: string;
   conversationContext: string;
+  learnings: string;
 }
 
 /**
  * Build complete memory context for a conversation
+ * OPTIMIZED: Runs all queries in parallel for better performance
  */
 export async function buildMemoryContext(
   userId: string,
@@ -17,20 +20,31 @@ export async function buildMemoryContext(
   currentSessionId: string
 ): Promise<MemoryContext> {
   try {
-    // Get user facts
-    const facts = await factsService.getUserFacts(userId, { limit: 30 });
-    const factsPrompt = factsService.formatFactsForPrompt(facts);
+    // Run all queries in parallel for better performance
+    const [facts, similarMessages, similarConversations, learningsContext] = await Promise.all([
+      // Get user facts
+      factsService.getUserFacts(userId, { limit: 30 }),
+      // Search for relevant past messages (excluding current session)
+      embeddingService.searchSimilarMessages(
+        currentMessage,
+        userId,
+        {
+          limit: 5,
+          threshold: 0.75,
+          excludeSessionId: currentSessionId
+        }
+      ),
+      // Search for similar conversation summaries
+      embeddingService.searchSimilarConversations(
+        currentMessage,
+        userId,
+        3
+      ),
+      // Get active learnings from autonomous sessions
+      insightsService.getActiveLearningsForContext(userId, 10),
+    ]);
 
-    // Search for relevant past messages (excluding current session)
-    const similarMessages = await embeddingService.searchSimilarMessages(
-      currentMessage,
-      userId,
-      {
-        limit: 5,
-        threshold: 0.75,
-        excludeSessionId: currentSessionId
-      }
-    );
+    const factsPrompt = factsService.formatFactsForPrompt(facts);
 
     // Format relevant history
     let relevantHistory = '';
@@ -42,13 +56,6 @@ export async function buildMemoryContext(
       relevantHistory = `[Relevant Past Conversations]\n${historyItems.join('\n')}`;
     }
 
-    // Search for similar conversation summaries
-    const similarConversations = await embeddingService.searchSimilarConversations(
-      currentMessage,
-      userId,
-      3
-    );
-
     // Format conversation context
     let conversationContext = '';
     if (similarConversations.length > 0) {
@@ -58,17 +65,24 @@ export async function buildMemoryContext(
       conversationContext = `[Related Past Topics]\n${contextItems.join('\n')}`;
     }
 
+    // Format learnings
+    let learnings = '';
+    if (learningsContext) {
+      learnings = `[Luna's Learnings - Apply these insights to personalize responses]\n${learningsContext}`;
+    }
+
     return {
       facts: factsPrompt,
       relevantHistory,
-      conversationContext
+      conversationContext,
+      learnings,
     };
   } catch (error) {
     logger.error('Failed to build memory context', {
       error: (error as Error).message,
       userId
     });
-    return { facts: '', relevantHistory: '', conversationContext: '' };
+    return { facts: '', relevantHistory: '', conversationContext: '', learnings: '' };
   }
 }
 
@@ -88,6 +102,10 @@ export function formatMemoryForPrompt(context: MemoryContext): string {
 
   if (context.conversationContext) {
     parts.push(context.conversationContext);
+  }
+
+  if (context.learnings) {
+    parts.push(context.learnings);
   }
 
   if (parts.length === 0) return '';

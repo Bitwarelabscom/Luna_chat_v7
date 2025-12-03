@@ -27,9 +27,26 @@ function getClient(provider: ProviderId = 'openai'): OpenAI {
           baseURL: 'https://api.x.ai/v1',
         });
         break;
+      case 'openrouter':
+        if (!config.openrouter?.apiKey) throw new Error('OpenRouter API key not configured');
+        clients.openrouter = new OpenAI({
+          apiKey: config.openrouter.apiKey,
+          baseURL: 'https://openrouter.ai/api/v1',
+          defaultHeaders: {
+            'HTTP-Referer': 'https://luna-chat.bitwarelabs.com',
+            'X-Title': 'Luna Chat',
+          },
+        });
+        break;
       case 'anthropic':
         // Anthropic uses different API format, not OpenAI-compatible for tool calling
-        throw new Error('Anthropic is not supported for chat with tool calling. Use OpenAI, Groq, or xAI.');
+        throw new Error('Anthropic is not supported for chat with tool calling. Use OpenAI, Groq, xAI, or OpenRouter.');
+      case 'google':
+        // Google Gemini uses different API format, not OpenAI-compatible
+        throw new Error('Google Gemini is not supported for chat with tool calling. Use OpenAI, Groq, xAI, or OpenRouter.');
+      case 'ollama':
+        // Ollama doesn't support tool calling in the same way
+        throw new Error('Ollama is not supported for chat with tool calling. Use OpenAI, Groq, xAI, or OpenRouter.');
       default:
         throw new Error(`Unknown provider: ${provider}`);
     }
@@ -57,6 +74,8 @@ export interface ChatCompletionOptions {
 export interface ChatCompletionResult {
   content: string;
   tokensUsed: number;
+  promptTokens: number;
+  completionTokens: number;
   toolCalls?: OpenAI.Chat.Completions.ChatCompletionMessageToolCall[];
   finishReason: string;
 }
@@ -108,6 +127,8 @@ export async function createChatCompletion(
     return {
       content: choice.message.content || '',
       tokensUsed: response.usage?.total_tokens || 0,
+      promptTokens: response.usage?.prompt_tokens || 0,
+      completionTokens: response.usage?.completion_tokens || 0,
       toolCalls: choice.message.tool_calls,
       finishReason: choice.finish_reason || 'stop',
     };
@@ -123,7 +144,7 @@ export async function createChatCompletion(
 
 export async function* streamChatCompletion(
   options: ChatCompletionOptions
-): AsyncGenerator<{ content: string; done: boolean; tokensUsed?: number }> {
+): AsyncGenerator<{ content: string; done: boolean; tokensUsed?: number; promptTokens?: number; completionTokens?: number }> {
   const {
     messages,
     tools,
@@ -166,12 +187,16 @@ export async function* streamChatCompletion(
     });
 
     let tokensUsed = 0;
+    let promptTokens = 0;
+    let completionTokens = 0;
 
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta;
 
       if (chunk.usage) {
         tokensUsed = chunk.usage.total_tokens;
+        promptTokens = chunk.usage.prompt_tokens || 0;
+        completionTokens = chunk.usage.completion_tokens || 0;
       }
 
       if (delta?.content) {
@@ -179,7 +204,7 @@ export async function* streamChatCompletion(
       }
 
       if (chunk.choices[0]?.finish_reason) {
-        yield { content: '', done: true, tokensUsed };
+        yield { content: '', done: true, tokensUsed, promptTokens, completionTokens };
       }
     }
   } catch (error) {
@@ -322,6 +347,99 @@ export const workspaceReadTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   },
 };
 
+export const sendEmailTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'send_email',
+    description: `Send an email from Luna's email account (luna@bitwarelabs.com). IMPORTANT: Can ONLY send to @bitwarelabs.com email addresses. Use this when asked to email someone, send a message, or communicate via email. Always confirm with the user before sending.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        to: {
+          type: 'string',
+          description: 'The recipient email address (must be @bitwarelabs.com)',
+        },
+        subject: {
+          type: 'string',
+          description: 'The email subject line',
+        },
+        body: {
+          type: 'string',
+          description: 'The email body content. Sign off as Luna.',
+        },
+      },
+      required: ['to', 'subject', 'body'],
+    },
+  },
+};
+
+export const checkEmailTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'check_email',
+    description: `Check Luna's email inbox (luna@bitwarelabs.com) for new or recent messages. Use when asked about emails, inbox, or messages.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        unreadOnly: {
+          type: 'boolean',
+          description: 'If true, only return unread emails. Default: true',
+        },
+      },
+      required: [],
+    },
+  },
+};
+
+export const searchDocumentsTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'search_documents',
+    description: `Search the user's uploaded documents (PDFs, text files) for relevant information. Use when the user asks about their documents, files, or wants to find information in their uploaded content.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'The search query to find relevant document content',
+        },
+      },
+      required: ['query'],
+    },
+  },
+};
+
+export const suggestGoalTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'suggest_goal',
+    description: `Suggest creating a goal when the user explicitly expresses a clear desire, intention, or aspiration. ONLY use when:
+- User says "I want to...", "I'm planning to...", "I need to...", "I'd like to...", "My goal is to..."
+- The intent is clear and actionable (not hypothetical or casual mention)
+Do NOT use for casual mentions like "it would be nice" or hypothetical scenarios.
+This will create a confirmation prompt for the user to approve.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        title: {
+          type: 'string',
+          description: 'Short, clear goal title (e.g., "Learn Python", "Exercise 3x/week")',
+        },
+        description: {
+          type: 'string',
+          description: 'Optional longer description of the goal',
+        },
+        goalType: {
+          type: 'string',
+          enum: ['user_focused', 'self_improvement', 'relationship', 'research'],
+          description: 'The type of goal: user_focused (helping user), self_improvement (personal growth), relationship (connection with user), research (learning topics)',
+        },
+      },
+      required: ['title', 'goalType'],
+    },
+  },
+};
+
 export function formatSearchResultsForContext(results: SearchResult[]): string {
   if (results.length === 0) return '';
 
@@ -349,6 +467,10 @@ export default {
   workspaceExecuteTool,
   workspaceListTool,
   workspaceReadTool,
+  sendEmailTool,
+  checkEmailTool,
+  searchDocumentsTool,
+  suggestGoalTool,
   formatSearchResultsForContext,
   formatAgentResultForContext,
 };

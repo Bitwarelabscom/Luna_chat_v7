@@ -1,30 +1,41 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { X, MessageSquare, BarChart3, Database, Cpu, Palette } from 'lucide-react';
+import { X, MessageSquare, BarChart3, Database, Cpu, Palette, Link2, FolderOpen, CheckSquare, Brain, Sparkles } from 'lucide-react';
 import AppearanceTab from './settings/AppearanceTab';
 import PromptsTab from './settings/PromptsTab';
 import StatsTab from './settings/StatsTab';
 import DataTab from './settings/DataTab';
 import ModelsTab from './settings/ModelsTab';
+import IntegrationsTab from './settings/IntegrationsTab';
+import WorkspaceTab from './settings/WorkspaceTab';
+import TasksTab from './settings/TasksTab';
+import AutonomousTab from './settings/AutonomousTab';
+import MemoryTab from './settings/MemoryTab';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-type TabId = 'appearance' | 'prompts' | 'models' | 'stats' | 'data';
-
-const tabs: { id: TabId; label: string; icon: typeof MessageSquare }[] = [
-  { id: 'appearance', label: 'Appearance', icon: Palette },
-  { id: 'prompts', label: 'System Prompts', icon: MessageSquare },
-  { id: 'models', label: 'Models', icon: Cpu },
-  { id: 'stats', label: 'Stats', icon: BarChart3 },
-  { id: 'data', label: 'Data Management', icon: Database },
-];
+type TabId = 'appearance' | 'prompts' | 'models' | 'integrations' | 'workspace' | 'tasks' | 'memory' | 'autonomous' | 'stats' | 'data';
 
 export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<TabId>('appearance');
+
+  // Define tabs inside component to prevent tree-shaking issues
+  const tabs: { id: TabId; label: string; icon: typeof MessageSquare }[] = [
+    { id: 'appearance', label: 'Appearance', icon: Palette },
+    { id: 'prompts', label: 'Prompts', icon: MessageSquare },
+    { id: 'models', label: 'Models', icon: Cpu },
+    { id: 'integrations', label: 'Integrations', icon: Link2 },
+    { id: 'workspace', label: 'Workspace', icon: FolderOpen },
+    { id: 'tasks', label: 'Tasks', icon: CheckSquare },
+    { id: 'memory', label: 'Memory', icon: Sparkles },
+    { id: 'autonomous', label: 'Autonomous', icon: Brain },
+    { id: 'stats', label: 'Stats', icon: BarChart3 },
+    { id: 'data', label: 'Data', icon: Database },
+  ];
 
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
@@ -91,6 +102,11 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           {activeTab === 'appearance' && <AppearanceTab />}
           {activeTab === 'prompts' && <PromptsTab />}
           {activeTab === 'models' && <ModelsTab />}
+          {activeTab === 'integrations' && <IntegrationsTab />}
+          {activeTab === 'workspace' && <WorkspaceTab />}
+          {activeTab === 'tasks' && <TasksTab />}
+          {activeTab === 'memory' && <MemoryTab />}
+          {activeTab === 'autonomous' && <AutonomousTab />}
           {activeTab === 'stats' && <StatsTab />}
           {activeTab === 'data' && <DataTab />}
         </div>

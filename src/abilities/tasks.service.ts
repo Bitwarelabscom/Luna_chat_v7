@@ -1,4 +1,5 @@
 import { pool } from '../db/index.js';
+import * as taskPatterns from './task-patterns.service.js';
 import logger from '../utils/logger.js';
 
 export interface Task {
@@ -41,9 +42,16 @@ export async function createTask(
     );
 
     const row = result.rows[0];
-    logger.info('Created task', { userId, title: input.title });
+    const task = mapRowToTask(row);
 
-    return mapRowToTask(row);
+    // Record task creation for pattern tracking
+    taskPatterns.recordTaskAction(userId, task.id, 'created', {
+      newDueAt: input.dueAt,
+      newStatus: 'pending',
+    }).catch(() => {});
+
+    logger.info('Created task', { userId, title: input.title });
+    return task;
   } catch (error) {
     logger.error('Failed to create task', { error: (error as Error).message, userId });
     throw error;
@@ -154,6 +162,13 @@ export async function updateTaskStatus(
   status: 'pending' | 'in_progress' | 'completed' | 'cancelled'
 ): Promise<Task | null> {
   try {
+    // Get previous status for pattern tracking
+    const prevResult = await pool.query(
+      `SELECT status FROM tasks WHERE id = $1 AND user_id = $2`,
+      [taskId, userId]
+    );
+    const previousStatus = prevResult.rows[0]?.status;
+
     const completedAt = status === 'completed' ? new Date() : null;
 
     const result = await pool.query(
@@ -166,8 +181,21 @@ export async function updateTaskStatus(
 
     if (result.rows.length === 0) return null;
 
+    const task = mapRowToTask(result.rows[0]);
+
+    // Record status change for pattern tracking
+    const action: taskPatterns.TaskAction = status === 'completed' ? 'completed'
+      : status === 'cancelled' ? 'cancelled'
+      : status === 'in_progress' ? 'started'
+      : 'created';
+
+    taskPatterns.recordTaskAction(userId, taskId, action, {
+      previousStatus,
+      newStatus: status,
+    }).catch(() => {});
+
     logger.info('Updated task status', { userId, taskId, status });
-    return mapRowToTask(result.rows[0]);
+    return task;
   } catch (error) {
     logger.error('Failed to update task status', { error: (error as Error).message, userId, taskId });
     throw error;
@@ -183,6 +211,14 @@ export async function updateTask(
   updates: Partial<CreateTaskInput>
 ): Promise<Task | null> {
   try {
+    // Get previous values for pattern tracking
+    const prevResult = await pool.query(
+      `SELECT due_at, priority FROM tasks WHERE id = $1 AND user_id = $2`,
+      [taskId, userId]
+    );
+    const previousDueAt = prevResult.rows[0]?.due_at;
+    const previousPriority = prevResult.rows[0]?.priority;
+
     const setClauses: string[] = [];
     const params: unknown[] = [userId, taskId];
     let paramIndex = 3;
@@ -224,7 +260,30 @@ export async function updateTask(
     );
 
     if (result.rows.length === 0) return null;
-    return mapRowToTask(result.rows[0]);
+
+    const task = mapRowToTask(result.rows[0]);
+
+    // Track postponement if due date was pushed back
+    if (updates.dueAt && previousDueAt) {
+      const prevDate = new Date(previousDueAt);
+      const newDate = new Date(updates.dueAt);
+      if (newDate > prevDate) {
+        taskPatterns.recordTaskAction(userId, taskId, 'postponed', {
+          previousDueAt: prevDate,
+          newDueAt: newDate,
+        }).catch(() => {});
+      }
+    }
+
+    // Track priority changes
+    if (updates.priority && previousPriority && updates.priority !== previousPriority) {
+      taskPatterns.recordTaskAction(userId, taskId, 'priority_changed', {
+        previousStatus: previousPriority,
+        newStatus: updates.priority,
+      }).catch(() => {});
+    }
+
+    return task;
   } catch (error) {
     logger.error('Failed to update task', { error: (error as Error).message, userId, taskId });
     throw error;

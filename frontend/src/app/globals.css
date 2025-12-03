@@ -68,6 +68,123 @@
   --font-mono: 'VT323', monospace;
 }
 
+/* === LIGHT THEME === */
+[data-theme="light"] {
+  --theme-bg-primary: #ffffff;
+  --theme-bg-secondary: #f3f4f6;      /* gray-100 */
+  --theme-bg-tertiary: #e5e7eb;       /* gray-200 */
+  --theme-bg-input: #ffffff;
+
+  --theme-text-primary: #111827;      /* gray-900 */
+  --theme-text-secondary: #374151;    /* gray-700 */
+  --theme-text-muted: #6b7280;        /* gray-500 */
+
+  --theme-border: #d1d5db;            /* gray-300 */
+  --theme-border-focus: #6366f1;      /* luna-500 */
+
+  --theme-accent-primary: #4f46e5;    /* luna-600 */
+  --theme-accent-hover: #4338ca;      /* luna-700 */
+
+  --theme-message-user: #4f46e5;      /* luna-600 */
+  --theme-message-assistant: #f3f4f6; /* gray-100 */
+  --theme-message-user-text: #ffffff;
+  --theme-message-assistant-text: #111827; /* gray-900 */
+
+  --foreground: #111827;
+  --background: #ffffff;
+}
+
+/* === CYBERPUNK/NEON THEME === */
+[data-theme="cyberpunk"] {
+  --theme-bg-primary: #0d0221;        /* Deep purple-black */
+  --theme-bg-secondary: #1a0533;      /* Dark purple */
+  --theme-bg-tertiary: #2d0a4e;       /* Slightly lighter purple */
+  --theme-bg-input: #150428;
+
+  --theme-text-primary: #ff2a6d;      /* Hot pink */
+  --theme-text-secondary: #05d9e8;    /* Cyan */
+  --theme-text-muted: #9d4edd;        /* Purple */
+
+  --theme-border: #6930c3;            /* Electric purple */
+  --theme-border-focus: #ff2a6d;      /* Hot pink */
+
+  --theme-accent-primary: #ff2a6d;    /* Hot pink */
+  --theme-accent-hover: #ff6b9d;      /* Lighter pink */
+
+  --theme-message-user: rgba(255, 42, 109, 0.2);   /* Pink tint */
+  --theme-message-assistant: rgba(5, 217, 232, 0.1); /* Cyan tint */
+  --theme-message-user-text: #ff2a6d;
+  --theme-message-assistant-text: #05d9e8;
+
+  --foreground: #ff2a6d;
+  --background: #0d0221;
+
+  /* Cyberpunk-specific glow */
+  --neon-glow: 0 0 10px rgba(255, 42, 109, 0.5), 0 0 20px rgba(255, 42, 109, 0.3);
+  --neon-text-shadow: 0 0 5px rgba(255, 42, 109, 0.8), 0 0 10px rgba(255, 42, 109, 0.5);
+}
+
+/* Neon glow effects for cyberpunk */
+[data-theme="cyberpunk"] .neon-glow {
+  text-shadow: var(--neon-text-shadow);
+}
+
+[data-theme="cyberpunk"] .neon-border {
+  box-shadow: var(--neon-glow);
+}
+
+/* === NORD THEME === */
+[data-theme="nord"] {
+  --theme-bg-primary: #2e3440;        /* Polar Night */
+  --theme-bg-secondary: #3b4252;
+  --theme-bg-tertiary: #434c5e;
+  --theme-bg-input: #2e3440;
+
+  --theme-text-primary: #eceff4;      /* Snow Storm */
+  --theme-text-secondary: #e5e9f0;
+  --theme-text-muted: #d8dee9;
+
+  --theme-border: #4c566a;            /* Polar Night lighter */
+  --theme-border-focus: #88c0d0;      /* Frost */
+
+  --theme-accent-primary: #88c0d0;    /* Frost cyan */
+  --theme-accent-hover: #8fbcbb;      /* Frost teal */
+
+  --theme-message-user: #5e81ac;      /* Frost blue */
+  --theme-message-assistant: #3b4252;
+  --theme-message-user-text: #eceff4;
+  --theme-message-assistant-text: #eceff4;
+
+  --foreground: #eceff4;
+  --background: #2e3440;
+}
+
+/* === SOLARIZED DARK THEME === */
+[data-theme="solarized"] {
+  --theme-bg-primary: #002b36;        /* base03 */
+  --theme-bg-secondary: #073642;      /* base02 */
+  --theme-bg-tertiary: #094959;       /* Slightly lighter */
+  --theme-bg-input: #002b36;
+
+  --theme-text-primary: #839496;      /* base0 */
+  --theme-text-secondary: #93a1a1;    /* base1 */
+  --theme-text-muted: #657b83;        /* base00 */
+
+  --theme-border: #586e75;            /* base01 */
+  --theme-border-focus: #2aa198;      /* cyan */
+
+  --theme-accent-primary: #2aa198;    /* cyan */
+  --theme-accent-hover: #268bd2;      /* blue */
+
+  --theme-message-user: rgba(38, 139, 210, 0.2);    /* blue tint */
+  --theme-message-assistant: #073642;
+  --theme-message-user-text: #268bd2;  /* blue */
+  --theme-message-assistant-text: #839496;
+
+  --foreground: #839496;
+  --background: #002b36;
+}
+
 body {
   color: var(--foreground);
   background: var(--background);

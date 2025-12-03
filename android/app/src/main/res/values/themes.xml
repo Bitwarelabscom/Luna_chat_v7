@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.LunaChat" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">@color/dark_bg_primary</item>
+        <item name="android:navigationBarColor">@color/dark_bg_primary</item>
+        <item name="android:windowBackground">@color/dark_bg_primary</item>
+    </style>
+
+    <style name="Theme.LunaChat.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/dark_bg_primary</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_luna_splash</item>
+        <item name="postSplashScreenTheme">@style/Theme.LunaChat</item>
+    </style>
+</resources>

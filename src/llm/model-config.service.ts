@@ -9,13 +9,52 @@ export interface UserModelConfig {
   model: string;
 }
 
+// ============================================
+// Config Cache with TTL
+// OPTIMIZATION: Prevents repeated DB queries for model config
+// ============================================
+
+interface ConfigCacheEntry {
+  provider: ProviderId;
+  model: string;
+  timestamp: number;
+}
+
+const CONFIG_CACHE_TTL_MS = 30 * 1000; // 30 seconds
+const configCache = new Map<string, ConfigCacheEntry>();
+
+function getConfigCacheKey(userId: string, taskType: string): string {
+  return `${userId}:${taskType}`;
+}
+
+/**
+ * Invalidate user's config cache (call when config changes)
+ */
+export function invalidateUserConfigCache(userId: string): void {
+  for (const key of configCache.keys()) {
+    if (key.startsWith(`${userId}:`)) {
+      configCache.delete(key);
+    }
+  }
+}
+
 /**
  * Get user's model configuration for a specific task
+ * OPTIMIZED: Uses cache to prevent repeated DB queries
  */
 export async function getUserModelConfig(
   userId: string,
   taskType: string
 ): Promise<{ provider: ProviderId; model: string }> {
+  const cacheKey = getConfigCacheKey(userId, taskType);
+  const now = Date.now();
+
+  // Check cache first
+  const cached = configCache.get(cacheKey);
+  if (cached && (now - cached.timestamp) < CONFIG_CACHE_TTL_MS) {
+    return { provider: cached.provider, model: cached.model };
+  }
+
   try {
     const result = await pool.query(
       `SELECT provider, model FROM user_model_config
@@ -23,24 +62,31 @@ export async function getUserModelConfig(
       [userId, taskType]
     );
 
+    let config: { provider: ProviderId; model: string };
+
     if (result.rows.length > 0) {
-      return {
+      config = {
         provider: result.rows[0].provider as ProviderId,
         model: result.rows[0].model,
       };
+    } else {
+      // Return default from CONFIGURABLE_TASKS
+      const defaultConfig = CONFIGURABLE_TASKS.find(t => t.taskType === taskType);
+      if (defaultConfig) {
+        config = {
+          provider: defaultConfig.defaultProvider,
+          model: defaultConfig.defaultModel,
+        };
+      } else {
+        // Ultimate fallback
+        config = { provider: 'openai', model: 'gpt-5.1-chat-latest' };
+      }
     }
 
-    // Return default from CONFIGURABLE_TASKS
-    const defaultConfig = CONFIGURABLE_TASKS.find(t => t.taskType === taskType);
-    if (defaultConfig) {
-      return {
-        provider: defaultConfig.defaultProvider,
-        model: defaultConfig.defaultModel,
-      };
-    }
+    // Store in cache
+    configCache.set(cacheKey, { ...config, timestamp: now });
 
-    // Ultimate fallback
-    return { provider: 'openai', model: 'gpt-5.1-chat-latest' };
+    return config;
   } catch (error) {
     logger.error('Failed to get user model config', {
       error: (error as Error).message,
@@ -120,6 +166,9 @@ export async function setUserModelConfig(
       [userId, taskType, provider, model]
     );
 
+    // Invalidate cache after update
+    invalidateUserConfigCache(userId);
+
     logger.debug('Set user model config', { userId, taskType, provider, model });
   } catch (error) {
     logger.error('Failed to set user model config', {
@@ -137,6 +186,10 @@ export async function setUserModelConfig(
 export async function resetUserModelConfigs(userId: string): Promise<void> {
   try {
     await pool.query(`DELETE FROM user_model_config WHERE user_id = $1`, [userId]);
+
+    // Invalidate cache after reset
+    invalidateUserConfigCache(userId);
+
     logger.debug('Reset user model configs to defaults', { userId });
   } catch (error) {
     logger.error('Failed to reset user model configs', {
@@ -152,4 +205,5 @@ export default {
   getAllUserModelConfigs,
   setUserModelConfig,
   resetUserModelConfigs,
+  invalidateUserConfigCache,
 };

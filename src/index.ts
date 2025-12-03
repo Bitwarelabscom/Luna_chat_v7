@@ -11,11 +11,23 @@ import authRoutes from './auth/auth.routes.js';
 import chatRoutes from './chat/chat.routes.js';
 import abilitiesRoutes from './abilities/abilities.routes.js';
 import settingsRoutes from './settings/settings.routes.js';
+import oauthRoutes from './integrations/oauth.routes.js';
+import localEmailRoutes from './integrations/local-email.routes.js';
+import autonomousRoutes from './autonomous/autonomous.routes.js';
+import { startJobs, stopJobs } from './jobs/job-runner.js';
+import { ipWhitelistMiddleware } from './security/ip-whitelist.middleware.js';
+import { fail2banMiddleware } from './security/fail2ban.middleware.js';
 
 const app = express();
 
 // Trust proxy for accurate IP in rate limiting and X-Forwarded-* headers
 app.set('trust proxy', 1);
+
+// SECURITY: IP whitelist - block non-whitelisted IPs before any processing
+app.use(ipWhitelistMiddleware);
+
+// SECURITY: Fail2ban - block IPs with too many failed login attempts
+app.use(fail2banMiddleware);
 
 // SECURITY: HTTPS enforcement in production (skip for health checks)
 if (config.nodeEnv === 'production') {
@@ -67,6 +79,10 @@ app.use(cors({
 // Body parsing
 app.use(express.json({ limit: '1mb' }));
 
+// Static file serving for Luna media (images and videos)
+import path from 'path';
+app.use('/api/images', express.static(path.join(process.cwd(), 'images')));
+
 // Request logging
 app.use((req, res, next) => {
   const start = Date.now();
@@ -108,6 +124,9 @@ app.use('/api/auth', authRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/abilities', abilitiesRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/integrations/oauth', oauthRoutes);
+app.use('/api/email', localEmailRoutes);
+app.use('/api/autonomous', autonomousRoutes);
 
 // 404 handler
 app.use((_req, res) => {
@@ -123,6 +142,7 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 // Graceful shutdown
 async function shutdown() {
   logger.info('Shutting down...');
+  stopJobs();
   await closePool();
   await closeRedis();
   process.exit(0);
@@ -138,6 +158,9 @@ app.listen(config.port, () => {
     memorycore: config.memorycore.enabled ? 'enabled' : 'disabled',
     searxng: config.searxng.enabled ? 'enabled' : 'disabled',
   });
+
+  // Start background jobs
+  startJobs();
 });
 
 export default app;

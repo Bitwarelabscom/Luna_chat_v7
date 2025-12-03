@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Modern Dark Theme Colors -->
+    <color name="dark_bg_primary">#FF030712</color>
+    <color name="dark_bg_secondary">#FF111827</color>
+    <color name="dark_bg_tertiary">#FF1F2937</color>
+    <color name="dark_text_primary">#FFF9FAFB</color>
+    <color name="dark_text_secondary">#FFE5E7EB</color>
+    <color name="dark_text_muted">#FF9CA3AF</color>
+    <color name="dark_border">#FF374151</color>
+    <color name="dark_accent">#FF4F46E5</color>
+    <color name="dark_accent_hover">#FF4338CA</color>
+
+    <!-- Retro Theme Colors -->
+    <color name="retro_bg_primary">#FF0A0A0A</color>
+    <color name="retro_bg_secondary">#FF0D1A0D</color>
+    <color name="retro_text_primary">#FF33FF33</color>
+    <color name="retro_text_amber">#FFFFB000</color>
+    <color name="retro_text_cyan">#FF00FFFF</color>
+    <color name="retro_border">#FF1A4D1A</color>
+
+    <!-- Common Colors -->
+    <color name="white">#FFFFFFFF</color>
+    <color name="black">#FF000000</color>
+    <color name="transparent">#00000000</color>
+    <color name="error">#FFEF4444</color>
+    <color name="success">#FF22C55E</color>
+</resources>

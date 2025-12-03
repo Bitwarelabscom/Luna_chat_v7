@@ -58,6 +58,21 @@ export default function ModelsTab() {
     return provider?.models || [];
   }
 
+  function formatCost(cost: number | undefined): string {
+    if (cost === undefined) return '';
+    if (cost < 0.001) return `$${(cost * 1000).toFixed(2)}/M`;
+    return `$${cost.toFixed(4)}/1K`;
+  }
+
+  function getSelectedModelCost(providerId: string, modelId: string): { input?: number; output?: number } | null {
+    const models = getModelsForProvider(providerId);
+    const model = models.find(m => m.id === modelId);
+    if (!model || (model.costPer1kInput === undefined && model.costPer1kOutput === undefined)) {
+      return null;
+    }
+    return { input: model.costPer1kInput, output: model.costPer1kOutput };
+  }
+
   async function handleProviderChange(taskType: string, newProvider: string) {
     const models = getModelsForProvider(newProvider);
     const firstModel = models[0]?.id || '';
@@ -225,7 +240,7 @@ export default function ModelsTab() {
                     >
                       {models.map(model => (
                         <option key={model.id} value={model.id}>
-                          {model.name}
+                          {model.name}{model.costPer1kInput !== undefined ? ` - ${formatCost(model.costPer1kInput)} in` : ''}
                         </option>
                       ))}
                     </select>
@@ -233,6 +248,23 @@ export default function ModelsTab() {
                   </div>
                 </div>
               </div>
+
+              {/* Cost Display */}
+              {(() => {
+                const cost = getSelectedModelCost(config.provider, config.model);
+                if (!cost) return null;
+                return (
+                  <div className="mt-2 text-xs text-theme-text-muted flex items-center gap-3">
+                    <span>Cost:</span>
+                    {cost.input !== undefined && (
+                      <span className="text-green-400">{formatCost(cost.input)} input</span>
+                    )}
+                    {cost.output !== undefined && (
+                      <span className="text-blue-400">{formatCost(cost.output)} output</span>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Default indicator */}
               {config.provider === task.defaultProvider &&

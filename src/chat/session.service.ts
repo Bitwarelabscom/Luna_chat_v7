@@ -1,5 +1,7 @@
 import { query, queryOne } from '../db/postgres.js';
 import type { Session, SessionCreate, Message, MessageCreate } from '../types/index.js';
+import { createCompletion } from '../llm/router.js';
+import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
 
 interface DbSession {
@@ -186,15 +188,73 @@ export async function addMessage(data: MessageCreate): Promise<Message> {
   return mapDbMessage(message);
 }
 
+export async function updateMessage(
+  messageId: string,
+  sessionId: string,
+  content: string
+): Promise<Message | null> {
+  const message = await queryOne<DbMessage>(
+    `UPDATE messages SET content = $1
+     WHERE id = $2 AND session_id = $3
+     RETURNING *`,
+    [content, messageId, sessionId]
+  );
+
+  if (!message) return null;
+
+  // Update session's updated_at
+  await query('UPDATE sessions SET updated_at = NOW() WHERE id = $1', [sessionId]);
+
+  return mapDbMessage(message);
+}
+
+export async function deleteMessage(messageId: string, sessionId: string): Promise<boolean> {
+  const result = await query(
+    'DELETE FROM messages WHERE id = $1 AND session_id = $2',
+    [messageId, sessionId]
+  );
+
+  if (result.length === 0) return false;
+
+  // Update session's updated_at
+  await query('UPDATE sessions SET updated_at = NOW() WHERE id = $1', [sessionId]);
+
+  return true;
+}
+
 export async function generateSessionTitle(messages: Message[]): Promise<string> {
-  // Simple title generation from first user message
   const firstUserMessage = messages.find((m) => m.role === 'user');
   if (!firstUserMessage) return 'New Chat';
 
   const content = firstUserMessage.content;
-  if (content.length <= 50) return content;
 
-  // Truncate at word boundary
+  // For short messages, use as-is
+  if (content.length <= 40) return content;
+
+  try {
+    // Use local Ollama qwen2.5:3b to generate a concise title
+    const response = await createCompletion(
+      'ollama',
+      config.ollama.chatModel,
+      [
+        {
+          role: 'system',
+          content: 'Generate a short chat title (3-6 words max) summarizing the user message. Reply with ONLY the title, nothing else.'
+        },
+        { role: 'user', content: content },
+      ],
+      { temperature: 0.3, maxTokens: 100 }
+    );
+
+    const title = (response.content || '').trim().replace(/^["']|["']$/g, '');
+    if (title && title.length > 0 && title.length <= 60) {
+      return title;
+    }
+  } catch (error) {
+    logger.debug('Failed to generate title with LLM, using fallback', { error: (error as Error).message });
+  }
+
+  // Fallback: truncate at word boundary
   const truncated = content.slice(0, 50);
   const lastSpace = truncated.lastIndexOf(' ');
   return (lastSpace > 20 ? truncated.slice(0, lastSpace) : truncated) + '...';

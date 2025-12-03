@@ -6,6 +6,7 @@ import { authenticate } from './auth.middleware.js';
 import logger from '../utils/logger.js';
 import { config } from '../config/index.js';
 import type { AuthTokens } from '../types/index.js';
+import * as fail2banService from '../security/fail2ban.service.js';
 
 const router = Router();
 
@@ -91,11 +92,30 @@ function getCookie(req: Request, name: string): string | undefined {
 
 // Registration disabled - users are created manually
 
+// Helper to get client IP
+function getClientIP(req: Request): string {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (forwarded) {
+    const ips = (Array.isArray(forwarded) ? forwarded[0] : forwarded).split(',');
+    return ips[0].trim();
+  }
+  const realIP = req.headers['x-real-ip'];
+  if (realIP) {
+    return Array.isArray(realIP) ? realIP[0] : realIP;
+  }
+  return req.ip || req.socket.remoteAddress || 'unknown';
+}
+
 // POST /api/auth/login
 router.post('/login', loginLimiter, async (req: Request, res: Response) => {
+  const clientIP = getClientIP(req);
+
   try {
     const data = loginSchema.parse(req.body);
     const result = await authService.login(data.email, data.password);
+
+    // SECURITY: Clear fail2ban attempts on successful login
+    await fail2banService.clearAttempts(clientIP);
 
     setAuthCookies(res, result.tokens);
 
@@ -104,7 +124,9 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
         id: result.user.id,
         email: result.user.email,
         displayName: result.user.displayName,
+        avatarUrl: result.user.avatarUrl,
         settings: result.user.settings,
+        createdAt: result.user.createdAt,
       },
       ...result.tokens,
     });
@@ -116,6 +138,15 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
 
     const message = (error as Error).message;
     if (message === 'Invalid credentials') {
+      // SECURITY: Record failed login attempt for fail2ban
+      const wasBanned = await fail2banService.recordFailedAttempt(clientIP);
+      if (wasBanned) {
+        res.status(403).json({
+          error: 'Access denied',
+          message: 'Your IP has been banned due to too many failed login attempts.'
+        });
+        return;
+      }
       res.status(401).json({ error: message });
       return;
     }

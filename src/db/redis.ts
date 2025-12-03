@@ -54,6 +54,15 @@ export async function incrementRateLimit(userId: string): Promise<number> {
   return count;
 }
 
+export async function incrementRateLimitCustom(key: string, windowSeconds: number): Promise<number> {
+  const fullKey = `${RATE_LIMIT_PREFIX}${key}`;
+  const count = await redis.incr(fullKey);
+  if (count === 1) {
+    await redis.expire(fullKey, windowSeconds);
+  }
+  return count;
+}
+
 export async function getRateLimitCount(userId: string): Promise<number> {
   const count = await redis.get(`${RATE_LIMIT_PREFIX}${userId}`);
   return count ? parseInt(count, 10) : 0;

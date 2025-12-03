@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { authenticate } from '../auth/auth.middleware.js';
 import * as sessionService from './session.service.js';
 import * as chatService from './chat.service.js';
-import { incrementRateLimit } from '../db/redis.js';
+import * as ttsService from '../llm/tts.service.js';
+import { incrementRateLimit, incrementRateLimitCustom } from '../db/redis.js';
 import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
 
@@ -178,7 +179,12 @@ router.post('/sessions/:id/send', rateLimit, async (req: Request, res: Response)
         } else if (chunk.type === 'content') {
           res.write(`data: ${JSON.stringify({ type: 'content', content: chunk.content })}\n\n`);
         } else if (chunk.type === 'done') {
-          res.write(`data: ${JSON.stringify({ type: 'done', messageId: chunk.messageId, tokensUsed: chunk.tokensUsed })}\n\n`);
+          res.write(`data: ${JSON.stringify({
+            type: 'done',
+            messageId: chunk.messageId,
+            tokensUsed: chunk.tokensUsed,
+            metrics: chunk.metrics,
+          })}\n\n`);
         }
       }
 
@@ -201,7 +207,189 @@ router.post('/sessions/:id/send', rateLimit, async (req: Request, res: Response)
       return;
     }
     logger.error('Send message failed', { error: (error as Error).message });
-    res.status(500).json({ error: 'Failed to send message' });
+    if (res.headersSent) {
+      // Streaming was started, send error via SSE and end
+      res.write(`data: ${JSON.stringify({ type: 'error', error: (error as Error).message })}\n\n`);
+      res.end();
+    } else {
+      res.status(500).json({ error: 'Failed to send message' });
+    }
+  }
+});
+
+// TTS rate limiting - 10 requests per minute
+async function ttsRateLimit(req: Request, res: Response, next: () => void) {
+  const userId = req.user!.userId;
+  const count = await incrementRateLimitCustom(`tts:${userId}`, 60); // 1 minute window
+
+  res.setHeader('X-RateLimit-Limit', '10');
+  res.setHeader('X-RateLimit-Remaining', Math.max(0, 10 - count).toString());
+
+  if (count > 10) {
+    res.status(429).json({
+      error: 'TTS rate limit exceeded',
+      retryAfter: 60,
+    });
+    return;
+  }
+
+  next();
+}
+
+const ttsSchema = z.object({
+  text: z.string().min(1).max(4096),
+  voice: z.enum(['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer']).optional(),
+  speed: z.number().min(0.25).max(4.0).optional(),
+});
+
+// POST /api/chat/tts - Text to speech
+router.post('/tts', ttsRateLimit, async (req: Request, res: Response) => {
+  try {
+    const data = ttsSchema.parse(req.body);
+
+    const audioBuffer = await ttsService.synthesizeSpeech({
+      text: data.text,
+      voice: data.voice,
+      speed: data.speed,
+    });
+
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Length', audioBuffer.length.toString());
+    res.send(audioBuffer);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: 'Validation error', details: error.errors });
+      return;
+    }
+    logger.error('TTS failed', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to synthesize speech' });
+  }
+});
+
+const editMessageSchema = z.object({
+  content: z.string().min(1).max(32000),
+});
+
+// PATCH /api/chat/sessions/:sessionId/messages/:messageId - Edit message
+router.patch('/sessions/:sessionId/messages/:messageId', async (req: Request, res: Response) => {
+  try {
+    const data = editMessageSchema.parse(req.body);
+
+    // Verify session ownership
+    const session = await sessionService.getSession(req.params.sessionId, req.user!.userId);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    // Update the message
+    const updated = await sessionService.updateMessage(
+      req.params.messageId,
+      req.params.sessionId,
+      data.content
+    );
+
+    if (!updated) {
+      res.status(404).json({ error: 'Message not found' });
+      return;
+    }
+
+    res.json(updated);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: 'Validation error', details: error.errors });
+      return;
+    }
+    logger.error('Edit message failed', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to edit message' });
+  }
+});
+
+// POST /api/chat/sessions/:sessionId/messages/:messageId/regenerate - Regenerate response
+router.post('/sessions/:sessionId/messages/:messageId/regenerate', rateLimit, async (req: Request, res: Response) => {
+  try {
+    // Verify session ownership
+    const session = await sessionService.getSession(req.params.sessionId, req.user!.userId);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    // Get the message to regenerate from
+    const messages = await sessionService.getSessionMessages(session.id);
+    const messageIndex = messages.findIndex(m => m.id === req.params.messageId);
+
+    if (messageIndex === -1) {
+      res.status(404).json({ error: 'Message not found' });
+      return;
+    }
+
+    const targetMessage = messages[messageIndex];
+
+    // Find the user message to regenerate from
+    let userMessageContent: string;
+    let deleteFromIndex: number;
+
+    if (targetMessage.role === 'assistant') {
+      // Find the preceding user message
+      const userMessage = messages.slice(0, messageIndex).reverse().find(m => m.role === 'user');
+      if (!userMessage) {
+        res.status(400).json({ error: 'No user message found to regenerate from' });
+        return;
+      }
+      userMessageContent = userMessage.content;
+      deleteFromIndex = messages.findIndex(m => m.id === userMessage.id);
+    } else if (targetMessage.role === 'user') {
+      userMessageContent = targetMessage.content;
+      deleteFromIndex = messageIndex;
+    } else {
+      res.status(400).json({ error: 'Cannot regenerate from system messages' });
+      return;
+    }
+
+    // Delete messages from the target onwards
+    const messagesToDelete = messages.slice(deleteFromIndex);
+    for (const msg of messagesToDelete) {
+      await sessionService.deleteMessage(msg.id, session.id);
+    }
+
+    // Streaming response for regeneration
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    const stream = chatService.streamMessage({
+      sessionId: session.id,
+      userId: req.user!.userId,
+      message: userMessageContent,
+      mode: session.mode,
+    });
+
+    for await (const chunk of stream) {
+      if (chunk.type === 'status') {
+        res.write(`data: ${JSON.stringify({ type: 'status', status: chunk.status })}\n\n`);
+      } else if (chunk.type === 'content') {
+        res.write(`data: ${JSON.stringify({ type: 'content', content: chunk.content })}\n\n`);
+      } else if (chunk.type === 'done') {
+        res.write(`data: ${JSON.stringify({
+          type: 'done',
+          messageId: chunk.messageId,
+          tokensUsed: chunk.tokensUsed,
+          metrics: chunk.metrics,
+        })}\n\n`);
+      }
+    }
+
+    res.write('data: [DONE]\n\n');
+    res.end();
+  } catch (error) {
+    logger.error('Regenerate message failed', { error: (error as Error).message });
+    if (res.headersSent) {
+      res.write(`data: ${JSON.stringify({ type: 'error', error: (error as Error).message })}\n\n`);
+      res.end();
+    } else {
+      res.status(500).json({ error: 'Failed to regenerate message' });
+    }
   }
 });
 

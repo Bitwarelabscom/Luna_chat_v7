@@ -16,7 +16,17 @@ FROM node:20-alpine AS runner
 WORKDIR /app
 
 # Add docker-cli for sandbox proxy access (via docker-socket-proxy)
-RUN apk add --no-cache wget docker-cli
+# Add git for Claude CLI (required dependency)
+RUN apk add --no-cache wget docker-cli git
+
+# Install Claude CLI globally for coder agent
+RUN npm install -g @anthropic-ai/claude-code
+
+# Create .claude directory for credentials (will be mounted)
+RUN mkdir -p /home/node/.claude && chown node:node /home/node/.claude
+
+# Create workspace and documents directories with proper ownership
+RUN mkdir -p /app/workspace /app/documents && chown -R node:node /app/workspace /app/documents
 
 COPY package*.json ./
 RUN npm ci --only=production

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { authApi, chatApi, type Session, type Message } from './api';
+import { authApi, chatApi, type Session, type Message, type MessageMetrics } from './api';
 
 interface User {
   id: string;
@@ -66,12 +66,14 @@ interface ChatState {
   deleteSession: (id: string) => Promise<void>;
   renameSession: (id: string, title: string) => Promise<void>;
   addUserMessage: (content: string) => void;
-  addAssistantMessage: (content: string, id: string) => void;
+  addAssistantMessage: (content: string, id: string, metrics?: MessageMetrics) => void;
+  updateMessage: (id: string, content: string) => void;
   setStreamingContent: (content: string) => void;
   appendStreamingContent: (content: string) => void;
   setIsSending: (isSending: boolean) => void;
   setStatusMessage: (status: string) => void;
   clearCurrentSession: () => void;
+  removeMessagesFrom: (messageId: string) => void;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -144,14 +146,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }));
   },
 
-  addAssistantMessage: (content, id) => {
+  addAssistantMessage: (content, id, metrics) => {
     const message: Message = {
       id,
       sessionId: get().currentSession?.id || '',
       role: 'assistant',
       content,
-      tokensUsed: 0,
+      tokensUsed: metrics?.promptTokens && metrics?.completionTokens
+        ? metrics.promptTokens + metrics.completionTokens
+        : 0,
       createdAt: new Date().toISOString(),
+      metrics,
     };
     set((state) => ({
       currentSession: state.currentSession
@@ -159,6 +164,33 @@ export const useChatStore = create<ChatState>((set, get) => ({
         : null,
       streamingContent: '',
     }));
+  },
+
+  updateMessage: (id, content) => {
+    set((state) => ({
+      currentSession: state.currentSession
+        ? {
+            ...state.currentSession,
+            messages: state.currentSession.messages.map((m) =>
+              m.id === id ? { ...m, content } : m
+            ),
+          }
+        : null,
+    }));
+  },
+
+  removeMessagesFrom: (messageId) => {
+    set((state) => {
+      if (!state.currentSession) return state;
+      const idx = state.currentSession.messages.findIndex((m) => m.id === messageId);
+      if (idx === -1) return state;
+      return {
+        currentSession: {
+          ...state.currentSession,
+          messages: state.currentSession.messages.slice(0, idx),
+        },
+      };
+    });
   },
 
   setStreamingContent: (content) => set({ streamingContent: content }),

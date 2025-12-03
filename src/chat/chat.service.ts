@@ -1,22 +1,29 @@
 import {
   createChatCompletion,
-  streamChatCompletion,
   searchTool,
   delegateToAgentTool,
   workspaceWriteTool,
   workspaceExecuteTool,
   workspaceListTool,
   workspaceReadTool,
+  sendEmailTool,
+  checkEmailTool,
+  searchDocumentsTool,
+  suggestGoalTool,
   formatSearchResultsForContext,
   formatAgentResultForContext,
   type ChatMessage,
 } from '../llm/openai.client.js';
+import * as questionsService from '../autonomous/questions.service.js';
 import { getUserModelConfig } from '../llm/model-config.service.js';
 import * as searxng from '../search/searxng.client.js';
 import * as agents from '../abilities/agents.service.js';
 import * as workspace from '../abilities/workspace.service.js';
 import * as sandbox from '../abilities/sandbox.service.js';
+import * as emailService from '../abilities/email.service.js';
+import * as documents from '../abilities/documents.service.js';
 import * as memoryService from '../memory/memory.service.js';
+import * as preferencesService from '../memory/preferences.service.js';
 import * as abilities from '../abilities/orchestrator.js';
 import { buildContextualPrompt } from '../persona/luna.persona.js';
 import * as sessionService from './session.service.js';
@@ -41,23 +48,43 @@ export interface ChatOutput {
 export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   const { sessionId, userId, message, mode } = input;
 
-  // Get user's model configuration for main chat
-  const modelConfig = await getUserModelConfig(userId, 'main_chat');
+  // INTENT GATING: Detect if this is smalltalk FIRST
+  const isSmallTalkMessage = abilities.isSmallTalk(message);
+  const contextOptions = abilities.getContextOptions(message);
 
-  // Get user profile for personalization
-  const user = await authService.getUserById(userId);
+  // OPTIMIZED: Run context loading in parallel, but skip heavy loads for smalltalk
+  const [
+    modelConfig,
+    user,
+    history,
+    memoryContext,
+    abilityContext,
+    prefGuidelines,
+  ] = await Promise.all([
+    // Get user's model configuration for main chat
+    getUserModelConfig(userId, 'main_chat'),
+    // Get user profile for personalization
+    authService.getUserById(userId),
+    // Get conversation history
+    sessionService.getSessionMessages(sessionId, { limit: 20 }),
+    // Build memory context - skip for pure smalltalk
+    isSmallTalkMessage ? Promise.resolve({ facts: '', relevantHistory: '', conversationContext: '', learnings: '' }) : memoryService.buildMemoryContext(userId, message, sessionId),
+    // Build ability context - uses contextOptions for selective loading
+    abilities.buildAbilityContext(userId, message, sessionId, contextOptions),
+    // Get personalization preferences - lightweight, always load
+    preferencesService.getResponseGuidelines(userId),
+  ]);
+
   const userName = user?.displayName || undefined;
-
-  // Get conversation history
-  const history = await sessionService.getSessionMessages(sessionId, { limit: 20 });
-
-  // Build memory context (facts + semantic search)
-  const memoryContext = await memoryService.buildMemoryContext(userId, message, sessionId);
   const memoryPrompt = memoryService.formatMemoryForPrompt(memoryContext);
-
-  // Build ability context (tasks, calendar, knowledge, mood, etc.)
-  const abilityContext = await abilities.buildAbilityContext(userId, message, sessionId);
   const abilityPrompt = abilities.formatAbilityContextForPrompt(abilityContext);
+  const prefPrompt = preferencesService.formatGuidelinesForPrompt(prefGuidelines);
+
+  // Detect and learn from feedback signals
+  const feedbackSignal = preferencesService.detectFeedbackSignals(message);
+  if (feedbackSignal.type && feedbackSignal.confidence >= 0.6) {
+    preferencesService.learnFromFeedback(userId, sessionId, feedbackSignal.type, message).catch(() => {});
+  }
 
   // Detect ability intent and execute if confident
   const intent = abilities.detectAbilityIntent(message);
@@ -70,7 +97,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   }
 
   // Combine all context
-  const fullContext = [memoryPrompt, abilityPrompt, abilityActionResult].filter(Boolean).join('\n\n');
+  const fullContext = [memoryPrompt, abilityPrompt, prefPrompt, abilityActionResult].filter(Boolean).join('\n\n');
 
   // Build messages array
   const messages: ChatMessage[] = [
@@ -95,20 +122,25 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   // Store user message embedding (async)
   memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user');
 
-  // First completion - check if tools are needed
-  const availableTools = [searchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool];
+  // TOOL GATING: For smalltalk, don't expose tools at all to prevent eager tool calling
+  const allTools = [searchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, searchDocumentsTool, suggestGoalTool];
+  const availableTools = isSmallTalkMessage ? [] : allTools;
   let searchResults: SearchResult[] | undefined;
   let agentResults: Array<{ agent: string; result: string; success: boolean }> = [];
 
   let completion = await createChatCompletion({
     messages,
-    tools: availableTools,
+    tools: availableTools.length > 0 ? availableTools : undefined,
     provider: modelConfig.provider,
     model: modelConfig.model,
   });
 
   // Handle tool calls using proper tool calling flow
   if (completion.toolCalls && completion.toolCalls.length > 0) {
+    // Log what tools were called
+    const toolNames = completion.toolCalls.map(tc => tc.function.name);
+    logger.info('Tool calls received from LLM', { toolNames, count: toolNames.length });
+
     // Add assistant message with tool calls to conversation
     messages.push({
       role: 'assistant',
@@ -152,14 +184,17 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
         } as ChatMessage);
       } else if (toolCall.function.name === 'workspace_write') {
         const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Workspace write tool called', { userId, filename: args.filename, contentLength: args.content?.length });
         try {
           const file = await workspace.writeFile(userId, args.filename, args.content);
+          logger.info('Workspace file written successfully', { userId, filename: args.filename, size: file.size });
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
             content: `File "${args.filename}" saved successfully (${file.size} bytes)`,
           } as ChatMessage);
         } catch (error) {
+          logger.error('Workspace write failed', { userId, filename: args.filename, error: (error as Error).message });
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
@@ -202,6 +237,87 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
             content: `Error reading file: ${(error as Error).message}`,
           } as ChatMessage);
         }
+      } else if (toolCall.function.name === 'send_email') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Luna sending email', { to: args.to, subject: args.subject });
+        const result = await emailService.sendLunaEmail(
+          [args.to],
+          args.subject,
+          args.body
+        );
+        if (result.success) {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Email sent successfully to ${args.to}. Message ID: ${result.messageId}`,
+          } as ChatMessage);
+        } else {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to send email: ${result.error}${result.blockedRecipients ? ` (blocked: ${result.blockedRecipients.join(', ')})` : ''}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'check_email') {
+        const args = JSON.parse(toolCall.function.arguments);
+        const unreadOnly = args.unreadOnly !== false;
+        logger.info('Luna checking email', { unreadOnly });
+        const emails = unreadOnly
+          ? await emailService.getLunaUnreadEmails()
+          : await emailService.checkLunaInbox(10);
+        if (emails.length > 0) {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Found ${emails.length} email(s):\n${emailService.formatLunaInboxForPrompt(emails)}`,
+          } as ChatMessage);
+        } else {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: 'No emails found in inbox.',
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'search_documents') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Luna searching documents', { query: args.query });
+        const chunks = await documents.searchDocuments(userId, args.query);
+        if (chunks.length > 0) {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Found ${chunks.length} relevant document section(s):\n${documents.formatDocumentsForPrompt(chunks)}`,
+          } as ChatMessage);
+        } else {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: 'No matching content found in uploaded documents.',
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'suggest_goal') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Luna suggesting goal', { title: args.title, goalType: args.goalType });
+
+        // Store the pending goal suggestion
+        await questionsService.storePendingGoalSuggestion(userId, {
+          title: args.title,
+          description: args.description,
+          goalType: args.goalType,
+        });
+
+        // Create a question for the user to confirm
+        await questionsService.askQuestion(userId, sessionId, {
+          question: `Would you like me to create a goal: "${args.title}"?${args.description ? ` (${args.description})` : ''}`,
+          context: `Goal type: ${args.goalType}`,
+          priority: 5,
+        });
+
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: `Goal suggestion "${args.title}" created. The user will see a notification to confirm or decline.`,
+        } as ChatMessage);
       }
     }
 
@@ -241,6 +357,8 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
       { id: assistantMessage.id, role: 'assistant', content: completion.content },
     ];
     memoryService.processConversationMemory(userId, sessionId, allMessages).catch(() => {});
+    // Also learn preferences from conversation
+    preferencesService.learnFromConversation(userId, sessionId, allMessages).catch(() => {});
   }
 
   // Update session title if this is the first message
@@ -259,15 +377,32 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   };
 }
 
+export interface StreamMetrics {
+  promptTokens: number;
+  completionTokens: number;
+  processingTimeMs: number;
+  tokensPerSecond: number;
+  toolsUsed: string[];
+  model: string;
+}
+
 export async function* streamMessage(
   input: ChatInput
-): AsyncGenerator<{ type: 'content' | 'done' | 'status'; content?: string; status?: string; messageId?: string; tokensUsed?: number }> {
+): AsyncGenerator<{ type: 'content' | 'done' | 'status'; content?: string; status?: string; messageId?: string; tokensUsed?: number; metrics?: StreamMetrics }> {
   const { sessionId, userId, message, mode } = input;
+  const startTime = Date.now();
+  const toolsUsed: string[] = [];
 
-  yield { type: 'status', status: 'Loading context...' };
+  // INTENT GATING: Detect if this is smalltalk FIRST
+  const isSmallTalkMessage = abilities.isSmallTalk(message);
+  const contextOptions = abilities.getContextOptions(message);
 
-  // Check if this task needs multi-agent orchestration
-  if (agents.needsOrchestration(message)) {
+  if (!isSmallTalkMessage) {
+    yield { type: 'status', status: 'Loading context...' };
+  }
+
+  // Check if this task needs multi-agent orchestration (never for smalltalk)
+  if (!isSmallTalkMessage && agents.needsOrchestration(message)) {
     logger.info('Detected orchestration-worthy task', { message: message.substring(0, 100) });
 
     // Save user message first
@@ -337,34 +472,76 @@ export async function* streamMessage(
       await sessionService.updateSession(sessionId, userId, { title });
     }
 
-    yield { type: 'done', messageId: assistantMessage.id, tokensUsed: 0 };
+    const processingTimeMs = Date.now() - startTime;
+    yield {
+      type: 'done',
+      messageId: assistantMessage.id,
+      tokensUsed: 0,
+      metrics: {
+        promptTokens: 0,
+        completionTokens: 0,
+        processingTimeMs,
+        tokensPerSecond: 0,
+        toolsUsed: ['orchestration'],
+        model: 'claude-cli',
+      },
+    };
     return;
   }
 
-  // Get user's model configuration for main chat
-  const modelConfig = await getUserModelConfig(userId, 'main_chat');
+  // OPTIMIZED: Run context loading in parallel, but skip heavy loads for smalltalk
+  const [
+    modelConfig,
+    user,
+    history,
+    memoryContext,
+    abilityContext,
+    prefGuidelines,
+  ] = await Promise.all([
+    // Get user's model configuration for main chat
+    getUserModelConfig(userId, 'main_chat'),
+    // Get user profile for personalization
+    authService.getUserById(userId),
+    // Get conversation history
+    sessionService.getSessionMessages(sessionId, { limit: 20 }),
+    // Build memory context - skip for pure smalltalk
+    isSmallTalkMessage ? Promise.resolve({ facts: '', relevantHistory: '', conversationContext: '', learnings: '' }) : memoryService.buildMemoryContext(userId, message, sessionId),
+    // Build ability context - uses contextOptions for selective loading
+    abilities.buildAbilityContext(userId, message, sessionId, contextOptions),
+    // Get personalization preferences - lightweight, always load
+    preferencesService.getResponseGuidelines(userId),
+  ]);
 
-  // Get user profile for personalization
-  const user = await authService.getUserById(userId);
+  if (!isSmallTalkMessage) {
+    yield { type: 'status', status: 'Recalling memories...' };
+  }
+
   const userName = user?.displayName || undefined;
-
-  // Get conversation history
-  const history = await sessionService.getSessionMessages(sessionId, { limit: 20 });
-
-  yield { type: 'status', status: 'Recalling memories...' };
-
-  // Build memory context (facts + semantic search)
-  const memoryContext = await memoryService.buildMemoryContext(userId, message, sessionId);
   const memoryPrompt = memoryService.formatMemoryForPrompt(memoryContext);
-
-  // Build ability context (tasks, calendar, knowledge, mood, etc.)
-  const abilityContext = await abilities.buildAbilityContext(userId, message, sessionId);
   const abilityPrompt = abilities.formatAbilityContextForPrompt(abilityContext);
+  const prefPrompt = preferencesService.formatGuidelinesForPrompt(prefGuidelines);
+
+  // Detect and learn from feedback signals
+  const feedbackSignal = preferencesService.detectFeedbackSignals(message);
+  if (feedbackSignal.type && feedbackSignal.confidence >= 0.6) {
+    preferencesService.learnFromFeedback(userId, sessionId, feedbackSignal.type, message).catch(() => {});
+  }
+
+  // Detect ability intent and execute if confident
+  const intent = abilities.detectAbilityIntent(message);
+  let abilityActionResult: string | undefined;
+  if (intent.confidence >= 0.8) {
+    yield { type: 'status', status: `Executing ${intent.type} action...` };
+    const result = await abilities.executeAbilityAction(userId, sessionId, intent, message);
+    if (result.handled && result.result) {
+      abilityActionResult = `[Action Taken: ${intent.type}]\n${result.result}`;
+    }
+  }
 
   yield { type: 'status', status: 'Thinking...' };
 
   // Combine all context
-  const fullContext = [memoryPrompt, abilityPrompt].filter(Boolean).join('\n\n');
+  const fullContext = [memoryPrompt, abilityPrompt, prefPrompt, abilityActionResult].filter(Boolean).join('\n\n');
 
   // Build messages array
   const messages: ChatMessage[] = [
@@ -387,13 +564,21 @@ export async function* streamMessage(
   // Store user message embedding (async)
   memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user');
 
-  // First, check if tools are needed (non-streaming call with tools)
-  const availableTools = [searchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool];
+  // TOOL GATING: For smalltalk, don't expose tools at all to prevent eager tool calling
+  // For other messages, provide relevant tools
+  const allTools = [searchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, searchDocumentsTool, suggestGoalTool];
+  const availableTools = isSmallTalkMessage ? [] : allTools;
   let searchResults: SearchResult[] | undefined;
+
+  logger.debug('Tool availability', {
+    isSmallTalk: isSmallTalkMessage,
+    toolsProvided: availableTools.length,
+    message: message.slice(0, 50),
+  });
 
   const initialCompletion = await createChatCompletion({
     messages,
-    tools: availableTools,
+    tools: availableTools.length > 0 ? availableTools : undefined,
     provider: modelConfig.provider,
     model: modelConfig.model,
   });
@@ -406,6 +591,11 @@ export async function* streamMessage(
 
   // Handle tool calls using proper tool calling flow
   if (initialCompletion.toolCalls && initialCompletion.toolCalls.length > 0) {
+    // Log what tools were called and track them
+    const toolNames = initialCompletion.toolCalls.map(tc => tc.function.name);
+    toolsUsed.push(...toolNames);
+    logger.info('Tool calls received from LLM (stream)', { toolNames, count: toolNames.length });
+
     // Add assistant message with tool calls to conversation
     messages.push({
       role: 'assistant',
@@ -451,15 +641,18 @@ export async function* streamMessage(
         } as ChatMessage);
       } else if (toolCall.function.name === 'workspace_write') {
         const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Workspace write tool called (stream)', { userId, filename: args.filename, contentLength: args.content?.length });
         yield { type: 'status', status: `Saving ${args.filename}...` };
         try {
           const file = await workspace.writeFile(userId, args.filename, args.content);
+          logger.info('Workspace file written successfully (stream)', { userId, filename: args.filename, size: file.size });
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
             content: `File "${args.filename}" saved successfully (${file.size} bytes)`,
           } as ChatMessage);
         } catch (error) {
+          logger.error('Workspace write failed (stream)', { userId, filename: args.filename, error: (error as Error).message });
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
@@ -505,27 +698,244 @@ export async function* streamMessage(
             content: `Error reading file: ${(error as Error).message}`,
           } as ChatMessage);
         }
+      } else if (toolCall.function.name === 'send_email') {
+        const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'status', status: `Sending email to ${args.to}...` };
+        logger.info('Luna sending email', { to: args.to, subject: args.subject });
+        const result = await emailService.sendLunaEmail(
+          [args.to],
+          args.subject,
+          args.body
+        );
+        if (result.success) {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Email sent successfully to ${args.to}. Message ID: ${result.messageId}`,
+          } as ChatMessage);
+        } else {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to send email: ${result.error}${result.blockedRecipients ? ` (blocked: ${result.blockedRecipients.join(', ')})` : ''}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'check_email') {
+        const args = JSON.parse(toolCall.function.arguments);
+        const unreadOnly = args.unreadOnly !== false;
+        yield { type: 'status', status: 'Checking inbox...' };
+        logger.info('Luna checking email', { unreadOnly });
+        const emails = unreadOnly
+          ? await emailService.getLunaUnreadEmails()
+          : await emailService.checkLunaInbox(10);
+        if (emails.length > 0) {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Found ${emails.length} email(s):\n${emailService.formatLunaInboxForPrompt(emails)}`,
+          } as ChatMessage);
+        } else {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: 'No emails found in inbox.',
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'search_documents') {
+        const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'status', status: 'Searching documents...' };
+        logger.info('Luna searching documents', { query: args.query });
+        const chunks = await documents.searchDocuments(userId, args.query);
+        if (chunks.length > 0) {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Found ${chunks.length} relevant document section(s):\n${documents.formatDocumentsForPrompt(chunks)}`,
+          } as ChatMessage);
+        } else {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: 'No matching content found in uploaded documents.',
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'suggest_goal') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Luna suggesting goal', { title: args.title, goalType: args.goalType });
+
+        // Store the pending goal suggestion
+        await questionsService.storePendingGoalSuggestion(userId, {
+          title: args.title,
+          description: args.description,
+          goalType: args.goalType,
+        });
+
+        // Create a question for the user to confirm
+        await questionsService.askQuestion(userId, sessionId, {
+          question: `Would you like me to create a goal: "${args.title}"?${args.description ? ` (${args.description})` : ''}`,
+          context: `Goal type: ${args.goalType}`,
+          priority: 5,
+        });
+
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: `Goal suggestion "${args.title}" created. The user will see a notification to confirm or decline.`,
+        } as ChatMessage);
       }
     }
   }
 
   yield { type: 'status', status: 'Composing response...' };
 
-  // Stream completion (with search results if any)
+  // OPTIMIZED: Only make second LLM call if tools were used
+  // If no tools were called, reuse the initial completion content
   let fullContent = '';
   let tokensUsed = 0;
+  let promptTokens = initialCompletion.promptTokens || 0;
+  let completionTokens = initialCompletion.completionTokens || 0;
 
-  for await (const chunk of streamChatCompletion({
-    messages,
-    provider: modelConfig.provider,
-    model: modelConfig.model,
-  })) {
-    if (chunk.content) {
-      fullContent += chunk.content;
-      yield { type: 'content', content: chunk.content };
+  const toolsWereUsed = initialCompletion.toolCalls && initialCompletion.toolCalls.length > 0;
+
+  if (toolsWereUsed) {
+    // Tools were used - need to continue with tool results
+    // Use a loop to handle multi-turn tool calling (e.g., search -> email -> agent -> memory)
+    const MAX_TOOL_ROUNDS = 15;
+    let toolRound = 0;
+
+    while (toolRound < MAX_TOOL_ROUNDS) {
+      toolRound++;
+
+      // Make a non-streaming call with tools to check if more tool calls are needed
+      const followUpCompletion = await createChatCompletion({
+        messages,
+        tools: availableTools.length > 0 ? availableTools : undefined,
+        provider: modelConfig.provider,
+        model: modelConfig.model,
+      });
+
+      // If no more tool calls, stream the final response
+      if (!followUpCompletion.toolCalls || followUpCompletion.toolCalls.length === 0) {
+        // Stream the final content
+        const finalContent = followUpCompletion.content || '';
+        tokensUsed = followUpCompletion.tokensUsed || 0;
+        promptTokens += followUpCompletion.promptTokens || 0;
+        completionTokens += followUpCompletion.completionTokens || 0;
+
+        const chunkSize = 20;
+        for (let i = 0; i < finalContent.length; i += chunkSize) {
+          fullContent += finalContent.slice(i, i + chunkSize);
+          yield { type: 'content', content: finalContent.slice(i, i + chunkSize) };
+        }
+        break;
+      }
+
+      // More tool calls needed - execute them
+      const additionalToolNames = followUpCompletion.toolCalls.map(tc => tc.function.name);
+      toolsUsed.push(...additionalToolNames);
+      logger.info('Additional tool calls in round', { round: toolRound, count: followUpCompletion.toolCalls.length });
+
+      // Add assistant message with tool calls
+      messages.push({
+        role: 'assistant',
+        content: followUpCompletion.content || '',
+        tool_calls: followUpCompletion.toolCalls,
+      } as ChatMessage);
+
+      // Execute each tool call
+      for (const toolCall of followUpCompletion.toolCalls) {
+        if (toolCall.function.name === 'delegate_to_agent') {
+          const args = JSON.parse(toolCall.function.arguments);
+          yield { type: 'status', status: `Invoking ${args.agent} agent...` };
+          logger.info('Delegating to agent in follow-up', { agent: args.agent, task: args.task?.substring(0, 100) });
+
+          const result = await agents.executeAgentTask(userId, {
+            agentName: args.agent,
+            task: args.task,
+            context: args.context,
+          });
+
+          yield { type: 'status', status: `${args.agent} agent completed` };
+          logger.info('Agent completed in follow-up', { agent: args.agent, success: result.success });
+
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: formatAgentResultForContext(args.agent, result.result, result.success),
+          } as ChatMessage);
+        } else if (toolCall.function.name === 'web_search') {
+          const args = JSON.parse(toolCall.function.arguments);
+          yield { type: 'status', status: `Searching: ${args.query}` };
+          const results = await searxng.search(args.query);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: results && results.length > 0 ? formatSearchResultsForContext(results) : 'No search results found.',
+          } as ChatMessage);
+        } else if (toolCall.function.name === 'send_email') {
+          const args = JSON.parse(toolCall.function.arguments);
+          yield { type: 'status', status: `Sending email to ${args.to}...` };
+          const result = await emailService.sendLunaEmail(args.to, args.subject, args.body);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: result.success ? `Email sent successfully. Message ID: ${result.messageId}` : `Failed: ${result.error}`,
+          } as ChatMessage);
+        } else if (toolCall.function.name === 'check_email') {
+          const args = JSON.parse(toolCall.function.arguments);
+          yield { type: 'status', status: 'Checking inbox...' };
+          const emails = args.unreadOnly !== false
+            ? await emailService.getLunaUnreadEmails()
+            : await emailService.checkLunaInbox(10);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: emails.length > 0 ? `Found ${emails.length} email(s):\n${emailService.formatLunaInboxForPrompt(emails)}` : 'No emails found.',
+          } as ChatMessage);
+        } else if (toolCall.function.name === 'suggest_goal') {
+          const args = JSON.parse(toolCall.function.arguments);
+          logger.info('Luna suggesting goal (follow-up)', { title: args.title, goalType: args.goalType });
+
+          await questionsService.storePendingGoalSuggestion(userId, {
+            title: args.title,
+            description: args.description,
+            goalType: args.goalType,
+          });
+
+          await questionsService.askQuestion(userId, sessionId, {
+            question: `Would you like me to create a goal: "${args.title}"?${args.description ? ` (${args.description})` : ''}`,
+            context: `Goal type: ${args.goalType}`,
+            priority: 5,
+          });
+
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Goal suggestion "${args.title}" created. The user will see a notification to confirm or decline.`,
+          } as ChatMessage);
+        } else {
+          // Generic handler for other tools
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Tool ${toolCall.function.name} executed.`,
+          } as ChatMessage);
+        }
+      }
     }
-    if (chunk.done) {
-      tokensUsed = chunk.tokensUsed || 0;
+
+    if (toolRound >= MAX_TOOL_ROUNDS) {
+      logger.warn('Max tool rounds reached', { rounds: toolRound });
+    }
+  } else {
+    // No tools - reuse initial completion (simulate streaming for smooth UX)
+    fullContent = initialCompletion.content || '';
+    tokensUsed = initialCompletion.tokensUsed;
+
+    // Stream the content in chunks for smooth display
+    const chunkSize = 20;
+    for (let i = 0; i < fullContent.length; i += chunkSize) {
+      yield { type: 'content', content: fullContent.slice(i, i + chunkSize) };
     }
   }
 
@@ -550,6 +960,8 @@ export async function* streamMessage(
       { id: assistantMessage.id, role: 'assistant', content: fullContent },
     ];
     memoryService.processConversationMemory(userId, sessionId, allMessages).catch(() => {});
+    // Also learn preferences from conversation
+    preferencesService.learnFromConversation(userId, sessionId, allMessages).catch(() => {});
   }
 
   // Update session title if first message
@@ -560,7 +972,22 @@ export async function* streamMessage(
     await sessionService.updateSession(sessionId, userId, { title });
   }
 
-  yield { type: 'done', messageId: assistantMessage.id, tokensUsed };
+  const processingTimeMs = Date.now() - startTime;
+  const tokensPerSecond = processingTimeMs > 0 ? (completionTokens / (processingTimeMs / 1000)) : 0;
+
+  yield {
+    type: 'done',
+    messageId: assistantMessage.id,
+    tokensUsed,
+    metrics: {
+      promptTokens,
+      completionTokens,
+      processingTimeMs,
+      tokensPerSecond: Math.round(tokensPerSecond * 10) / 10,
+      toolsUsed: [...new Set(toolsUsed)], // dedupe
+      model: modelConfig.model,
+    },
+  };
 }
 
 export default { processMessage, streamMessage };

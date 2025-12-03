@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
+import os from 'os';
 import { authenticate } from '../auth/auth.middleware.js';
 import * as settingsService from './settings.service.js';
 import * as authService from '../auth/auth.service.js';
@@ -7,6 +8,43 @@ import * as modelConfigService from '../llm/model-config.service.js';
 import { PROVIDERS, CONFIGURABLE_TASKS } from '../llm/types.js';
 import { LUNA_BASE_PROMPT, ASSISTANT_MODE_PROMPT, COMPANION_MODE_PROMPT } from '../persona/luna.persona.js';
 import logger from '../utils/logger.js';
+
+// Track CPU usage over time
+let lastCpuInfo = os.cpus();
+
+function getCpuUsage(): number {
+  const cpus = os.cpus();
+
+  let totalIdle = 0;
+  let totalTick = 0;
+  let lastTotalIdle = 0;
+  let lastTotalTick = 0;
+
+  for (let i = 0; i < cpus.length; i++) {
+    const cpu = cpus[i];
+    const lastCpu = lastCpuInfo[i];
+
+    for (const type in cpu.times) {
+      totalTick += cpu.times[type as keyof typeof cpu.times];
+    }
+    totalIdle += cpu.times.idle;
+
+    if (lastCpu) {
+      for (const type in lastCpu.times) {
+        lastTotalTick += lastCpu.times[type as keyof typeof lastCpu.times];
+      }
+      lastTotalIdle += lastCpu.times.idle;
+    }
+  }
+
+  const idleDiff = totalIdle - lastTotalIdle;
+  const totalDiff = totalTick - lastTotalTick;
+
+  lastCpuInfo = cpus;
+
+  if (totalDiff === 0) return 0;
+  return Math.round((1 - idleDiff / totalDiff) * 100 * 10) / 10;
+}
 
 const router = Router();
 
@@ -17,7 +55,7 @@ router.use(authenticate);
 
 // Update user settings (theme, preferences)
 const updateUserSettingsSchema = z.object({
-  theme: z.enum(['dark', 'retro']).optional(),
+  theme: z.enum(['dark', 'retro', 'light', 'cyberpunk', 'nord', 'solarized']).optional(),
   crtFlicker: z.boolean().optional(),
   language: z.string().optional(),
   notifications: z.boolean().optional(),
@@ -187,6 +225,73 @@ router.get('/stats', async (req: Request, res: Response) => {
   }
 });
 
+// === SYSTEM METRICS ===
+
+router.get('/system', (_req: Request, res: Response) => {
+  try {
+    const totalMem = os.totalmem();
+    const freeMem = os.freemem();
+    const usedMem = totalMem - freeMem;
+    const memoryPercent = Math.round((usedMem / totalMem) * 100 * 10) / 10;
+
+    const cpuPercent = getCpuUsage();
+    const uptime = Math.floor(os.uptime());
+    const loadAvg = os.loadavg();
+
+    // Network stats
+    let networkInfo = { rx: 0, tx: 0 };
+
+    // Try to read network stats from /proc/net/dev (Linux)
+    try {
+      const fs = require('fs');
+      const netDev = fs.readFileSync('/proc/net/dev', 'utf8');
+      const lines = netDev.split('\n');
+      let totalRx = 0;
+      let totalTx = 0;
+
+      for (const line of lines) {
+        if (line.includes(':') && !line.includes('lo:')) {
+          const parts = line.trim().split(/\s+/);
+          if (parts.length >= 10) {
+            totalRx += parseInt(parts[1], 10) || 0;
+            totalTx += parseInt(parts[9], 10) || 0;
+          }
+        }
+      }
+
+      // Convert to MB
+      networkInfo = {
+        rx: Math.round(totalRx / (1024 * 1024) * 100) / 100,
+        tx: Math.round(totalTx / (1024 * 1024) * 100) / 100,
+      };
+    } catch {
+      // Fallback if /proc/net/dev is not available
+    }
+
+    res.json({
+      cpu: {
+        percent: cpuPercent,
+        cores: os.cpus().length,
+        model: os.cpus()[0]?.model || 'Unknown',
+        loadAvg: loadAvg,
+      },
+      memory: {
+        percent: memoryPercent,
+        total: Math.round(totalMem / (1024 * 1024 * 1024) * 100) / 100,
+        used: Math.round(usedMem / (1024 * 1024 * 1024) * 100) / 100,
+        free: Math.round(freeMem / (1024 * 1024 * 1024) * 100) / 100,
+      },
+      network: networkInfo,
+      uptime,
+      platform: os.platform(),
+      hostname: os.hostname(),
+    });
+  } catch (error) {
+    logger.error('Failed to get system metrics', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get system metrics' });
+  }
+});
+
 // === BACKUP & RESTORE ===
 
 // Export user data
@@ -298,7 +403,7 @@ router.get('/models', async (req: Request, res: Response) => {
 // Update model configuration for a task
 const updateModelConfigSchema = z.object({
   taskType: z.string().min(1),
-  provider: z.enum(['openai', 'groq', 'anthropic', 'xai']),
+  provider: z.enum(['openai', 'groq', 'anthropic', 'xai', 'openrouter', 'ollama', 'google']),
   model: z.string().min(1),
 });
 

@@ -1,5 +1,6 @@
 import { pool } from '../db/index.js';
 import { createCompletion } from '../llm/router.js';
+import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
 
 export interface UserFact {
@@ -59,10 +60,10 @@ export async function extractFactsFromMessages(
   if (!userMessages.trim()) return [];
 
   try {
-    // Use gpt-5-nano for fast fact extraction
+    // Use local Ollama qwen2.5:3b for fast fact extraction
     const response = await createCompletion(
-      'openai',
-      'gpt-5-nano',
+      'ollama',
+      config.ollama.chatModel,
       [
         { role: 'system', content: EXTRACTION_PROMPT },
         { role: 'user', content: `Extract facts from:\n\n${userMessages}` },
@@ -250,21 +251,21 @@ export async function generateConversationSummary(
       .map(m => `${m.role === 'user' ? 'User' : 'Luna'}: ${m.content}`)
       .join('\n\n');
 
-    // Use gpt-5-mini for summaries
+    // Use local Ollama qwen2.5:3b for summaries
     const response = await createCompletion(
-      'openai',
-      'gpt-5-mini',
+      'ollama',
+      config.ollama.chatModel,
       [
         {
           role: 'system',
-          content: `Summarize this conversation concisely. Output JSON:
+          content: `Summarize this conversation concisely. Output JSON only:
 {
   "summary": "Brief 1-2 sentence summary",
   "topics": ["topic1", "topic2"],
   "keyPoints": ["key point 1", "key point 2"],
   "sentiment": "positive|neutral|negative"
 }
-Only return JSON.`
+Only return the JSON object, no other text.`
         },
         { role: 'user', content: conversation },
       ],
@@ -284,6 +285,307 @@ Only return JSON.`
   }
 }
 
+/**
+ * Get a specific fact by ID
+ */
+export async function getFactById(
+  userId: string,
+  factId: string
+): Promise<UserFact | null> {
+  try {
+    const result = await pool.query(
+      `SELECT id, category, fact_key, fact_value, confidence, last_mentioned, mention_count
+       FROM user_facts
+       WHERE id = $1 AND user_id = $2 AND is_active = true`,
+      [factId, userId]
+    );
+
+    if (result.rows.length === 0) return null;
+
+    const row = result.rows[0];
+    return {
+      id: row.id,
+      category: row.category,
+      factKey: row.fact_key,
+      factValue: row.fact_value,
+      confidence: parseFloat(row.confidence),
+      lastMentioned: row.last_mentioned,
+      mentionCount: row.mention_count,
+    };
+  } catch (error) {
+    logger.error('Failed to get fact by ID', {
+      error: (error as Error).message,
+      userId,
+      factId
+    });
+    return null;
+  }
+}
+
+/**
+ * Get a specific fact by key and optional category
+ */
+export async function getFactByKey(
+  userId: string,
+  factKey: string,
+  category?: string
+): Promise<UserFact | null> {
+  try {
+    let query = `
+      SELECT id, category, fact_key, fact_value, confidence, last_mentioned, mention_count
+      FROM user_facts
+      WHERE user_id = $1 AND fact_key = $2 AND is_active = true
+    `;
+    const params: string[] = [userId, factKey];
+
+    if (category) {
+      query += ` AND category = $3`;
+      params.push(category);
+    }
+
+    query += ` LIMIT 1`;
+
+    const result = await pool.query(query, params);
+
+    if (result.rows.length === 0) return null;
+
+    const row = result.rows[0];
+    return {
+      id: row.id,
+      category: row.category,
+      factKey: row.fact_key,
+      factValue: row.fact_value,
+      confidence: parseFloat(row.confidence),
+      lastMentioned: row.last_mentioned,
+      mentionCount: row.mention_count,
+    };
+  } catch (error) {
+    logger.error('Failed to get fact by key', {
+      error: (error as Error).message,
+      userId,
+      factKey
+    });
+    return null;
+  }
+}
+
+/**
+ * Update an existing fact's value
+ */
+export async function updateFact(
+  userId: string,
+  factId: string,
+  newValue: string,
+  reason?: string
+): Promise<{ success: boolean; oldValue?: string }> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Get the current fact
+    const currentResult = await client.query(
+      `SELECT fact_key, fact_value, category FROM user_facts
+       WHERE id = $1 AND user_id = $2 AND is_active = true`,
+      [factId, userId]
+    );
+
+    if (currentResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return { success: false };
+    }
+
+    const oldFact = currentResult.rows[0];
+
+    // Record the correction in history
+    await client.query(
+      `INSERT INTO fact_corrections
+        (user_id, fact_key, old_value, new_value, correction_type, reason)
+       VALUES ($1, $2, $3, $4, 'update', $5)`,
+      [userId, oldFact.fact_key, oldFact.fact_value, newValue, reason || null]
+    );
+
+    // Update the fact
+    await client.query(
+      `UPDATE user_facts
+       SET fact_value = $1, updated_at = NOW(), last_mentioned = NOW()
+       WHERE id = $2 AND user_id = $3`,
+      [newValue, factId, userId]
+    );
+
+    await client.query('COMMIT');
+
+    logger.info('Updated user fact', {
+      userId,
+      factId,
+      factKey: oldFact.fact_key,
+      oldValue: oldFact.fact_value,
+      newValue
+    });
+
+    return { success: true, oldValue: oldFact.fact_value };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    logger.error('Failed to update fact', {
+      error: (error as Error).message,
+      userId,
+      factId
+    });
+    return { success: false };
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Delete (soft) a fact - marks as inactive
+ */
+export async function deleteFact(
+  userId: string,
+  factId: string,
+  reason?: string
+): Promise<{ success: boolean; deletedFact?: { factKey: string; factValue: string } }> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Get the current fact
+    const currentResult = await client.query(
+      `SELECT fact_key, fact_value, category FROM user_facts
+       WHERE id = $1 AND user_id = $2 AND is_active = true`,
+      [factId, userId]
+    );
+
+    if (currentResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return { success: false };
+    }
+
+    const fact = currentResult.rows[0];
+
+    // Record the deletion in history
+    await client.query(
+      `INSERT INTO fact_corrections
+        (user_id, fact_key, old_value, new_value, correction_type, reason)
+       VALUES ($1, $2, $3, NULL, 'delete', $4)`,
+      [userId, fact.fact_key, fact.fact_value, reason || null]
+    );
+
+    // Soft delete the fact
+    await client.query(
+      `UPDATE user_facts
+       SET is_active = false, updated_at = NOW()
+       WHERE id = $1 AND user_id = $2`,
+      [factId, userId]
+    );
+
+    await client.query('COMMIT');
+
+    logger.info('Deleted user fact', {
+      userId,
+      factId,
+      factKey: fact.fact_key,
+      factValue: fact.fact_value
+    });
+
+    return {
+      success: true,
+      deletedFact: { factKey: fact.fact_key, factValue: fact.fact_value }
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    logger.error('Failed to delete fact', {
+      error: (error as Error).message,
+      userId,
+      factId
+    });
+    return { success: false };
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Get fact correction history for a user
+ */
+export async function getFactCorrectionHistory(
+  userId: string,
+  options: { limit?: number; offset?: number } = {}
+): Promise<Array<{
+  id: string;
+  factKey: string;
+  oldValue: string | null;
+  newValue: string | null;
+  correctionType: string;
+  reason: string | null;
+  createdAt: Date;
+}>> {
+  const { limit = 50, offset = 0 } = options;
+
+  try {
+    const result = await pool.query(
+      `SELECT id, fact_key, old_value, new_value, correction_type, reason, created_at
+       FROM fact_corrections
+       WHERE user_id = $1
+       ORDER BY created_at DESC
+       LIMIT $2 OFFSET $3`,
+      [userId, limit, offset]
+    );
+
+    return result.rows.map((row: Record<string, unknown>) => ({
+      id: row.id as string,
+      factKey: row.fact_key as string,
+      oldValue: row.old_value as string | null,
+      newValue: row.new_value as string | null,
+      correctionType: row.correction_type as string,
+      reason: row.reason as string | null,
+      createdAt: row.created_at as Date,
+    }));
+  } catch (error) {
+    logger.error('Failed to get fact correction history', {
+      error: (error as Error).message,
+      userId
+    });
+    return [];
+  }
+}
+
+/**
+ * Search facts by matching against key or value (for LLM to find relevant fact)
+ */
+export async function searchFacts(
+  userId: string,
+  searchTerm: string
+): Promise<UserFact[]> {
+  try {
+    const result = await pool.query(
+      `SELECT id, category, fact_key, fact_value, confidence, last_mentioned, mention_count
+       FROM user_facts
+       WHERE user_id = $1 AND is_active = true
+         AND (fact_key ILIKE $2 OR fact_value ILIKE $2)
+       ORDER BY mention_count DESC, last_mentioned DESC
+       LIMIT 10`,
+      [userId, `%${searchTerm}%`]
+    );
+
+    return result.rows.map((row: Record<string, unknown>) => ({
+      id: row.id as string,
+      category: row.category as string,
+      factKey: row.fact_key as string,
+      factValue: row.fact_value as string,
+      confidence: parseFloat(row.confidence as string),
+      lastMentioned: row.last_mentioned as Date,
+      mentionCount: row.mention_count as number,
+    }));
+  } catch (error) {
+    logger.error('Failed to search facts', {
+      error: (error as Error).message,
+      userId,
+      searchTerm
+    });
+    return [];
+  }
+}
+
 export default {
   extractFactsFromMessages,
   storeFact,
@@ -291,4 +593,10 @@ export default {
   formatFactsForPrompt,
   processConversationFacts,
   generateConversationSummary,
+  getFactById,
+  getFactByKey,
+  updateFact,
+  deleteFact,
+  getFactCorrectionHistory,
+  searchFacts,
 };

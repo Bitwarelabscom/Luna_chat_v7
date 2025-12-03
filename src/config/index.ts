@@ -13,7 +13,14 @@ const secrets = {
   groqApiKey: getOptionalSecret('groq_api_key', 'GROQ_API_KEY'),
   anthropicApiKey: getOptionalSecret('anthropic_api_key', 'ANTHROPIC_API_KEY'),
   xaiApiKey: getOptionalSecret('xai_api_key', 'XAI_API_KEY'),
+  openrouterApiKey: getOptionalSecret('openrouter_api_key', 'OPENROUTER_API_KEY'),
   encryptionKey: getOptionalSecret('encryption_key', 'ENCRYPTION_KEY'),
+  googleClientId: getOptionalSecret('google_client_id', 'GOOGLE_CLIENT_ID'),
+  googleClientSecret: getOptionalSecret('google_client_secret', 'GOOGLE_CLIENT_SECRET'),
+  microsoftClientId: getOptionalSecret('microsoft_client_id', 'MICROSOFT_CLIENT_ID'),
+  microsoftClientSecret: getOptionalSecret('microsoft_client_secret', 'MICROSOFT_CLIENT_SECRET'),
+  emailPassword: getOptionalSecret('email_password', 'EMAIL_PASSWORD'),
+  googleApiKey: getOptionalSecret('google_api_key', 'GOOGLE_API_KEY'),
 };
 
 const configSchema = z.object({
@@ -64,6 +71,16 @@ const configSchema = z.object({
     enabled: z.coerce.boolean().default(true),
   }).optional(),
 
+  openrouter: z.object({
+    apiKey: z.string().optional(),
+    enabled: z.coerce.boolean().default(true),
+  }).optional(),
+
+  google: z.object({
+    apiKey: z.string().optional(),
+    enabled: z.coerce.boolean().default(true),
+  }).optional(),
+
   memorycore: z.object({
     url: z.string().url(),
     enabled: z.coerce.boolean().default(true),
@@ -84,6 +101,52 @@ const configSchema = z.object({
   }),
 
   encryptionKey: z.string().min(64, 'Encryption key must be a 64 character hex string'),
+
+  oauth: z.object({
+    google: z.object({
+      clientId: z.string().optional(),
+      clientSecret: z.string().optional(),
+      enabled: z.coerce.boolean().default(false),
+    }),
+    microsoft: z.object({
+      clientId: z.string().optional(),
+      clientSecret: z.string().optional(),
+      tenantId: z.string().default('common'),
+      enabled: z.coerce.boolean().default(false),
+    }),
+    callbackBaseUrl: z.string().default('http://localhost:3003'),
+  }),
+
+  email: z.object({
+    smtp: z.object({
+      host: z.string().default('localhost'),
+      port: z.coerce.number().default(587),
+      secure: z.coerce.boolean().default(false),
+      user: z.string().default('luna@bitwarelabs.com'),
+      password: z.string().optional(),
+    }),
+    imap: z.object({
+      host: z.string().default('localhost'),
+      port: z.coerce.number().default(143),
+      secure: z.coerce.boolean().default(false),
+      user: z.string().default('luna@bitwarelabs.com'),
+      password: z.string().optional(),
+    }),
+    from: z.string().default('Luna <luna@bitwarelabs.com>'),
+    approvedRecipients: z.array(z.string()).default([]),
+    enabled: z.coerce.boolean().default(true),
+  }),
+
+  ollama: z.object({
+    url: z.string().url().default('http://localhost:11434'),
+    embeddingModel: z.string().default('bge-m3'),
+    chatModel: z.string().default('qwen2.5:3b'),
+  }),
+
+  radicale: z.object({
+    url: z.string().url().default('http://localhost:5232'),
+    enabled: z.coerce.boolean().default(true),
+  }),
 });
 
 const rawConfig = {
@@ -134,6 +197,16 @@ const rawConfig = {
     enabled: process.env.XAI_ENABLED,
   },
 
+  openrouter: {
+    apiKey: secrets.openrouterApiKey,
+    enabled: process.env.OPENROUTER_ENABLED,
+  },
+
+  google: {
+    apiKey: secrets.googleApiKey,
+    enabled: process.env.GOOGLE_ENABLED,
+  },
+
   memorycore: {
     url: process.env.MEMORYCORE_URL,
     enabled: process.env.MEMORYCORE_ENABLED,
@@ -154,6 +227,52 @@ const rawConfig = {
   },
 
   encryptionKey: secrets.encryptionKey,
+
+  oauth: {
+    google: {
+      clientId: secrets.googleClientId,
+      clientSecret: secrets.googleClientSecret,
+      enabled: process.env.GOOGLE_OAUTH_ENABLED,
+    },
+    microsoft: {
+      clientId: secrets.microsoftClientId,
+      clientSecret: secrets.microsoftClientSecret,
+      tenantId: process.env.MICROSOFT_TENANT_ID,
+      enabled: process.env.MICROSOFT_OAUTH_ENABLED,
+    },
+    callbackBaseUrl: process.env.OAUTH_CALLBACK_BASE_URL,
+  },
+
+  email: {
+    smtp: {
+      host: process.env.EMAIL_SMTP_HOST,
+      port: process.env.EMAIL_SMTP_PORT,
+      secure: process.env.EMAIL_SMTP_SECURE,
+      user: process.env.EMAIL_SMTP_USER,
+      password: secrets.emailPassword,
+    },
+    imap: {
+      host: process.env.EMAIL_IMAP_HOST,
+      port: process.env.EMAIL_IMAP_PORT,
+      secure: process.env.EMAIL_IMAP_SECURE,
+      user: process.env.EMAIL_IMAP_USER,
+      password: secrets.emailPassword,
+    },
+    from: process.env.EMAIL_FROM,
+    approvedRecipients: process.env.EMAIL_APPROVED_RECIPIENTS?.split(',').map(e => e.trim()).filter(Boolean) || [],
+    enabled: process.env.EMAIL_ENABLED,
+  },
+
+  ollama: {
+    url: process.env.OLLAMA_URL,
+    embeddingModel: process.env.OLLAMA_EMBEDDING_MODEL,
+    chatModel: process.env.OLLAMA_CHAT_MODEL,
+  },
+
+  radicale: {
+    url: process.env.RADICALE_URL,
+    enabled: process.env.RADICALE_ENABLED,
+  },
 };
 
 export const config = configSchema.parse(rawConfig);

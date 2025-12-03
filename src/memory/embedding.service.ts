@@ -1,11 +1,6 @@
-import OpenAI from 'openai';
 import { pool } from '../db/index.js';
 import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
-
-const openai = new OpenAI({ apiKey: config.openai.apiKey });
-
-const EMBEDDING_MODEL = 'text-embedding-3-small';
 
 export interface EmbeddingResult {
   embedding: number[];
@@ -21,24 +16,136 @@ export interface SimilarMessage {
   createdAt: Date;
 }
 
+// ============================================
+// Embedding Cache with TTL
+// OPTIMIZATION: Prevents duplicate embedding generation for the same text
+// ============================================
+
+interface CacheEntry {
+  embedding: number[];
+  timestamp: number;
+}
+
+const EMBEDDING_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const EMBEDDING_CACHE_MAX_SIZE = 100;
+const embeddingCache = new Map<string, CacheEntry>();
+
+// In-flight requests to prevent duplicate concurrent calls
+const inFlightRequests = new Map<string, Promise<EmbeddingResult>>();
+
 /**
- * Generate embedding for text using OpenAI
+ * Create a cache key from text (hash first 1000 chars for efficiency)
+ */
+function getCacheKey(text: string): string {
+  // Use first 1000 chars as key (most queries are short)
+  return text.slice(0, 1000);
+}
+
+/**
+ * Clean expired cache entries
+ */
+function cleanExpiredCache(): void {
+  const now = Date.now();
+  for (const [key, entry] of embeddingCache.entries()) {
+    if (now - entry.timestamp > EMBEDDING_CACHE_TTL_MS) {
+      embeddingCache.delete(key);
+    }
+  }
+  // Also enforce max size (LRU-ish: remove oldest entries)
+  if (embeddingCache.size > EMBEDDING_CACHE_MAX_SIZE) {
+    const entries = Array.from(embeddingCache.entries())
+      .sort((a, b) => a[1].timestamp - b[1].timestamp);
+    const toRemove = entries.slice(0, embeddingCache.size - EMBEDDING_CACHE_MAX_SIZE);
+    for (const [key] of toRemove) {
+      embeddingCache.delete(key);
+    }
+  }
+}
+
+/**
+ * Generate embedding for text using Ollama
+ * OPTIMIZED: Uses cache to prevent duplicate embedding generation
  */
 export async function generateEmbedding(text: string): Promise<EmbeddingResult> {
+  const cacheKey = getCacheKey(text);
+  const now = Date.now();
+
+  // Check cache first
+  const cached = embeddingCache.get(cacheKey);
+  if (cached && (now - cached.timestamp) < EMBEDDING_CACHE_TTL_MS) {
+    logger.debug('Embedding cache hit', { keyLength: cacheKey.length });
+    return { embedding: cached.embedding, tokensUsed: 0 };
+  }
+
+  // Check for in-flight request to prevent duplicate concurrent calls
+  const inFlight = inFlightRequests.get(cacheKey);
+  if (inFlight) {
+    logger.debug('Embedding request coalesced', { keyLength: cacheKey.length });
+    return inFlight;
+  }
+
+  // Create the request promise
+  const requestPromise = generateEmbeddingFromOllama(text, cacheKey);
+  inFlightRequests.set(cacheKey, requestPromise);
+
   try {
-    const response = await openai.embeddings.create({
-      model: EMBEDDING_MODEL,
-      input: text.slice(0, 8000), // Limit to ~8k chars to stay within token limits
+    return await requestPromise;
+  } finally {
+    inFlightRequests.delete(cacheKey);
+  }
+}
+
+/**
+ * Actually generate embedding from Ollama (internal function)
+ */
+async function generateEmbeddingFromOllama(text: string, cacheKey: string): Promise<EmbeddingResult> {
+  try {
+    const response = await fetch(`${config.ollama.url}/api/embed`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: config.ollama.embeddingModel,
+        input: text.slice(0, 8000), // Limit to ~8k chars
+      }),
     });
 
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Ollama embedding failed: ${response.status} ${errorText}`);
+    }
+
+    const data = await response.json() as { embeddings: number[][] };
+    const embedding = data.embeddings[0];
+
+    // Store in cache
+    embeddingCache.set(cacheKey, { embedding, timestamp: Date.now() });
+
+    // Clean expired entries periodically
+    if (embeddingCache.size > EMBEDDING_CACHE_MAX_SIZE / 2) {
+      cleanExpiredCache();
+    }
+
     return {
-      embedding: response.data[0].embedding,
-      tokensUsed: response.usage?.total_tokens || 0,
+      embedding,
+      tokensUsed: 0, // Ollama doesn't report token usage for embeddings
     };
   } catch (error) {
     logger.error('Failed to generate embedding', { error: (error as Error).message });
     throw error;
   }
+}
+
+/**
+ * Get embedding cache stats (for monitoring)
+ */
+export function getEmbeddingCacheStats(): { size: number; maxSize: number; ttlMs: number } {
+  return {
+    size: embeddingCache.size,
+    maxSize: EMBEDDING_CACHE_MAX_SIZE,
+    ttlMs: EMBEDDING_CACHE_TTL_MS,
+  };
 }
 
 /**
@@ -226,4 +333,5 @@ export default {
   searchSimilarMessages,
   storeConversationSummary,
   searchSimilarConversations,
+  getEmbeddingCacheStats,
 };

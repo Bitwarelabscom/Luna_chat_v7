@@ -1,0 +1,24 @@
+# Radicale CalDAV/CardDAV Server Configuration
+# Luna Chat Calendar Integration
+
+[server]
+hosts = 0.0.0.0:5232
+max_connections = 20
+max_content_length = 100000000
+timeout = 30
+
+[auth]
+# No authentication - Luna handles auth at the API level
+type = none
+
+[rights]
+# Allow all access for internal use
+type = owner_only
+
+[storage]
+type = multifilesystem
+filesystem_folder = /data
+
+[logging]
+level = info
+mask_passwords = True

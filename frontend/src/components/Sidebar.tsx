@@ -104,7 +104,7 @@ export default function Sidebar() {
             </div>
             <div>
               <h1 className="font-semibold text-theme-text-primary">Luna</h1>
-              <p className="text-xs text-theme-text-muted">AI Assistant</p>
+              <p className="text-xs text-theme-text-muted">AI Assistant - Beta 0.8</p>
             </div>
           </div>
 

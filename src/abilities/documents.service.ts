@@ -5,13 +5,18 @@ import { randomUUID } from 'crypto';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { fileTypeFromBuffer } from 'file-type';
+import * as vision from './vision.service.js';
 
 const DOCUMENTS_DIR = process.env.DOCUMENTS_DIR || '/app/documents';
 const MAX_CHUNK_SIZE = 1000; // characters per chunk
 const CHUNK_OVERLAP = 200;
 
 // SECURITY: Allowed file types whitelist
-const ALLOWED_EXTENSIONS = new Set(['.txt', '.md', '.json', '.csv', '.js', '.ts', '.html', '.xml', '.pdf']);
+const ALLOWED_EXTENSIONS = new Set([
+  '.txt', '.md', '.json', '.csv', '.js', '.ts', '.html', '.xml', '.pdf',
+  // Image extensions
+  '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'
+]);
 const ALLOWED_MIME_TYPES = new Set([
   'text/plain',
   'text/markdown',
@@ -22,6 +27,12 @@ const ALLOWED_MIME_TYPES = new Set([
   'application/javascript',
   'application/typescript',
   'application/pdf',
+  // Image MIME types
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+  'image/bmp',
 ]);
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
@@ -50,7 +61,8 @@ async function validateFile(
 
   // For text files, file-type may not detect MIME, so we trust the extension
   const isTextFile = ['.txt', '.md', '.json', '.csv', '.js', '.ts', '.html', '.xml'].includes(ext);
-  if (!isTextFile && detectedType) {
+  const isImageFile = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'].includes(ext);
+  if (!isTextFile && !isImageFile && detectedType) {
     // For binary files, verify the detected MIME type is allowed
     if (!ALLOWED_MIME_TYPES.has(detectedType.mime)) {
       return { isValid: false, error: `Detected file type "${detectedType.mime}" not allowed` };
@@ -157,8 +169,30 @@ async function processDocument(
     const content = await fs.readFile(storagePath);
     let text = '';
 
-    // Extract text based on mime type
-    if (mimeType === 'text/plain' || mimeType === 'text/markdown') {
+    // Check if this is an image - use vision AI for analysis
+    if (vision.isImageMimeType(mimeType)) {
+      logger.info('Processing image with vision AI', { docId, mimeType });
+      try {
+        const analysis = await vision.analyzeImage(content, mimeType, {
+          prompt: `Analyze this image thoroughly. Describe:
+1. What is shown in the image (objects, people, scenes, text)
+2. Colors, composition, and visual style
+3. Any text visible in the image (transcribe it)
+4. Context and meaning if apparent
+5. Any notable details or elements
+
+Be detailed and specific so this description can be used for search and reference.`,
+          preferFree: true, // Use free OpenRouter models first
+        });
+        text = `[Image Analysis by ${analysis.model}]\n\n${analysis.description}`;
+        logger.info('Image analyzed successfully', { docId, provider: analysis.provider, model: analysis.model });
+      } catch (visionError) {
+        logger.error('Vision analysis failed', { docId, error: (visionError as Error).message });
+        throw new Error(`Image analysis failed: ${(visionError as Error).message}`);
+      }
+    }
+    // Extract text based on mime type for non-images
+    else if (mimeType === 'text/plain' || mimeType === 'text/markdown') {
       text = content.toString('utf-8');
     } else if (mimeType === 'application/json') {
       const json = JSON.parse(content.toString('utf-8'));
@@ -305,7 +339,7 @@ export async function searchDocuments(
       FROM document_chunks dc
       JOIN documents d ON d.id = dc.document_id
       WHERE d.user_id = $2 AND d.status = 'ready'
-        AND 1 - (dc.embedding <=> $1::vector) > 0.5
+        AND 1 - (dc.embedding <=> $1::vector) > 0.3
     `;
     const params: (string | number)[] = [vectorString, userId];
 

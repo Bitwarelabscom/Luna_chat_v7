@@ -25,3 +25,31 @@ This project has been hardened with the following security measures:
 ## Secrets Management
 
 Secrets are stored in `/secrets/*.txt` files and mounted as Docker secrets. Never commit actual secrets to version control.
+
+## Docker Deployment
+
+Both backend (luna-api) and frontend (luna-frontend) run as built Docker images with code baked in at build time (NOT volume-mounted). This affects how you deploy changes:
+
+### Backend Changes
+```bash
+npm run build:prod                    # Build backend locally
+docker compose build luna-api         # Rebuild Docker image
+docker compose up -d luna-api         # Start new container
+```
+
+### Frontend Changes
+```bash
+cd frontend && npm run build              # Build frontend locally
+cd .. && docker compose build luna-frontend  # Rebuild Docker image
+docker compose up -d luna-frontend           # Start new container
+```
+
+### Full Rebuild (Backend + Frontend)
+```bash
+npm run build:prod                      # Build backend
+cd frontend && npm run build && cd ..   # Build frontend
+docker compose build                    # Rebuild all images
+docker compose up -d                    # Restart all containers
+```
+
+**Important:** `docker restart` does NOT apply code changes - you must rebuild the Docker image with `docker compose build`.

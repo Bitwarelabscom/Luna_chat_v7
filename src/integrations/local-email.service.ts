@@ -1,0 +1,575 @@
+import nodemailer from 'nodemailer';
+import Imap from 'imap';
+import { simpleParser, ParsedMail, Source } from 'mailparser';
+import { config } from '../config/index.js';
+import { pool } from '../db/index.js';
+import logger from '../utils/logger.js';
+
+// ============================================
+// Types
+// ============================================
+
+export interface EmailMessage {
+  id?: string;
+  from: string;
+  to: string[];
+  cc?: string[];
+  subject: string;
+  body: string;
+  html?: string;
+  date?: Date;
+  messageId?: string;
+  inReplyTo?: string;
+  attachments?: Array<{
+    filename: string;
+    contentType: string;
+    size: number;
+  }>;
+}
+
+export interface SendResult {
+  success: boolean;
+  messageId?: string;
+  error?: string;
+  blockedRecipients?: string[];
+}
+
+// ============================================
+// SMTP Transport (Sending)
+// ============================================
+
+let smtpTransport: nodemailer.Transporter | null = null;
+
+function getSmtpTransport(): nodemailer.Transporter {
+  if (!smtpTransport) {
+    const transportConfig = {
+      host: config.email.smtp.host,
+      port: config.email.smtp.port,
+      secure: false, // Explicit: never use implicit TLS (port 465 style)
+      requireTLS: true, // Use STARTTLS after greeting
+      auth: config.email.smtp.password ? {
+        user: config.email.smtp.user,
+        pass: config.email.smtp.password,
+      } : undefined,
+      tls: {
+        rejectUnauthorized: false,
+        minVersion: 'TLSv1.2' as const,
+      },
+      logger: true,
+      debug: true,
+    };
+    logger.info('Creating SMTP transport', {
+      host: transportConfig.host,
+      port: transportConfig.port,
+      secure: transportConfig.secure,
+      requireTLS: transportConfig.requireTLS,
+    });
+    smtpTransport = nodemailer.createTransport(transportConfig);
+  }
+  return smtpTransport;
+}
+
+// ============================================
+// Recipient Validation
+// ============================================
+
+/**
+ * Get list of approved recipients
+ */
+export function getApprovedRecipients(): string[] {
+  return config.email.approvedRecipients;
+}
+
+/**
+ * Check if an email address is approved for sending
+ */
+export function isRecipientApproved(email: string): boolean {
+  const normalizedEmail = email.toLowerCase().trim();
+  const approved = config.email.approvedRecipients;
+
+  // If no approved list is configured, block all
+  if (approved.length === 0) {
+    logger.warn('No approved recipients configured - blocking all sends');
+    return false;
+  }
+
+  return approved.some(approvedEmail => {
+    const normalized = approvedEmail.toLowerCase().trim();
+    // Support wildcards like *@domain.com
+    if (normalized.startsWith('*@')) {
+      const domain = normalized.slice(2);
+      return normalizedEmail.endsWith(`@${domain}`);
+    }
+    return normalizedEmail === normalized;
+  });
+}
+
+/**
+ * Filter recipients to only approved ones
+ */
+export function filterApprovedRecipients(recipients: string[]): {
+  approved: string[];
+  blocked: string[];
+} {
+  const approved: string[] = [];
+  const blocked: string[] = [];
+
+  for (const recipient of recipients) {
+    if (isRecipientApproved(recipient)) {
+      approved.push(recipient);
+    } else {
+      blocked.push(recipient);
+    }
+  }
+
+  return { approved, blocked };
+}
+
+// ============================================
+// Send Email
+// ============================================
+
+/**
+ * Send an email (only to approved recipients)
+ */
+export async function sendEmail(message: EmailMessage): Promise<SendResult> {
+  if (!config.email.enabled) {
+    return { success: false, error: 'Email is disabled' };
+  }
+
+  // Filter recipients
+  const { approved, blocked } = filterApprovedRecipients(message.to);
+
+  if (approved.length === 0) {
+    logger.warn('All recipients blocked', {
+      attempted: message.to,
+      blocked,
+    });
+    return {
+      success: false,
+      error: 'All recipients are not in the approved list',
+      blockedRecipients: blocked,
+    };
+  }
+
+  if (blocked.length > 0) {
+    logger.warn('Some recipients blocked', {
+      approved,
+      blocked,
+    });
+  }
+
+  try {
+    const transport = getSmtpTransport();
+
+    const result = await transport.sendMail({
+      from: config.email.from,
+      to: approved.join(', '),
+      cc: message.cc?.filter(cc => isRecipientApproved(cc)),
+      subject: message.subject,
+      text: message.body,
+      html: message.html,
+      inReplyTo: message.inReplyTo,
+    });
+
+    logger.info('Email sent', {
+      messageId: result.messageId,
+      to: approved,
+      subject: message.subject,
+    });
+
+    // Log to database
+    await logEmailEvent('sent', {
+      messageId: result.messageId,
+      to: approved,
+      subject: message.subject,
+      blockedRecipients: blocked.length > 0 ? blocked : undefined,
+    });
+
+    return {
+      success: true,
+      messageId: result.messageId,
+      blockedRecipients: blocked.length > 0 ? blocked : undefined,
+    };
+  } catch (error) {
+    logger.error('Failed to send email', {
+      error: (error as Error).message,
+      to: approved,
+    });
+    return {
+      success: false,
+      error: (error as Error).message,
+      blockedRecipients: blocked,
+    };
+  }
+}
+
+// ============================================
+// IMAP (Receiving)
+// ============================================
+
+/**
+ * Fetch recent emails from inbox with timeout
+ */
+async function fetchRecentEmailsInternal(limit: number): Promise<EmailMessage[]> {
+  const imapConfig: Imap.Config = {
+    user: config.email.imap.user,
+    password: config.email.imap.password || '',
+    host: config.email.imap.host,
+    port: config.email.imap.port,
+    tls: config.email.imap.secure,
+    tlsOptions: { rejectUnauthorized: false },
+    connTimeout: 10000,
+    authTimeout: 10000,
+  };
+
+  const imap = new Imap(imapConfig);
+  const emails: EmailMessage[] = [];
+
+  return new Promise((resolve, reject) => {
+    let resolved = false;
+    const done = () => {
+      if (!resolved) {
+        resolved = true;
+        logger.info('IMAP fetch complete', { emailCount: emails.length });
+        try { imap.end(); } catch (_e) { /* ignore */ }
+        resolve(emails);
+      }
+    };
+
+    imap.once('ready', () => {
+      imap.openBox('INBOX', true, (err, _box) => {
+        if (err) {
+          if (!resolved) { resolved = true; reject(err); }
+          try { imap.end(); } catch (_e) { /* ignore */ }
+          return;
+        }
+
+        imap.search(['ALL'], (err, results) => {
+          if (err) {
+            if (!resolved) { resolved = true; reject(err); }
+            try { imap.end(); } catch (_e) { /* ignore */ }
+            return;
+          }
+
+          if (results.length === 0) {
+            done();
+            return;
+          }
+
+          const toFetch = results.slice(-limit);
+          let pending = toFetch.length;
+          const fetch = imap.fetch(toFetch, { bodies: '' });
+
+          fetch.on('message', (msg) => {
+            msg.on('body', (stream) => {
+              simpleParser(stream as unknown as Source, (err, parsed) => {
+                if (!err) {
+                  emails.push(parsedMailToEmailMessage(parsed));
+                }
+                pending--;
+                if (pending === 0) {
+                  done();
+                }
+              });
+            });
+          });
+
+          fetch.once('error', (err) => {
+            logger.error('Fetch error', { error: err.message });
+            done();
+          });
+
+          fetch.once('end', () => {
+            // If no bodies received, done
+            if (pending === 0) {
+              done();
+            }
+          });
+        });
+      });
+    });
+
+    imap.once('error', (err: Error) => {
+      logger.error('IMAP error', { error: err.message });
+      if (!resolved) { resolved = true; reject(err); }
+    });
+
+    imap.connect();
+  });
+}
+
+export async function fetchRecentEmails(limit: number = 10): Promise<EmailMessage[]> {
+  if (!config.email.enabled) {
+    return [];
+  }
+
+  // Race between fetch and timeout
+  const timeoutPromise = new Promise<EmailMessage[]>((resolve) => {
+    setTimeout(() => {
+      logger.warn('IMAP fetch timeout after 15 seconds');
+      resolve([]);
+    }, 15000);
+  });
+
+  try {
+    return await Promise.race([
+      fetchRecentEmailsInternal(limit),
+      timeoutPromise
+    ]);
+  } catch (error) {
+    logger.error('fetchRecentEmails failed', { error: (error as Error).message });
+    return [];
+  }
+}
+
+/**
+ * Fetch unread emails with timeout
+ */
+async function fetchUnreadEmailsInternal(): Promise<EmailMessage[]> {
+  const imapConfig: Imap.Config = {
+    user: config.email.imap.user,
+    password: config.email.imap.password || '',
+    host: config.email.imap.host,
+    port: config.email.imap.port,
+    tls: config.email.imap.secure,
+    tlsOptions: { rejectUnauthorized: false },
+    connTimeout: 10000,
+    authTimeout: 10000,
+  };
+
+  const imap = new Imap(imapConfig);
+  const emails: EmailMessage[] = [];
+
+  return new Promise((resolve, reject) => {
+    let resolved = false;
+    const done = () => {
+      if (!resolved) {
+        resolved = true;
+        logger.info('IMAP unread fetch complete', { emailCount: emails.length });
+        try { imap.end(); } catch (_e) { /* ignore */ }
+        resolve(emails);
+      }
+    };
+
+    imap.once('ready', () => {
+      imap.openBox('INBOX', false, (err, _box) => {
+        if (err) {
+          if (!resolved) { resolved = true; reject(err); }
+          try { imap.end(); } catch (_e) { /* ignore */ }
+          return;
+        }
+
+        imap.search(['UNSEEN'], (err, results) => {
+          if (err) {
+            if (!resolved) { resolved = true; reject(err); }
+            try { imap.end(); } catch (_e) { /* ignore */ }
+            return;
+          }
+
+          if (results.length === 0) {
+            done();
+            return;
+          }
+
+          let pending = results.length;
+          const fetch = imap.fetch(results, { bodies: '', markSeen: false });
+
+          fetch.on('message', (msg) => {
+            msg.on('body', (stream) => {
+              simpleParser(stream as unknown as Source, (err, parsed) => {
+                if (!err) {
+                  emails.push(parsedMailToEmailMessage(parsed));
+                }
+                pending--;
+                if (pending === 0) {
+                  done();
+                }
+              });
+            });
+          });
+
+          fetch.once('error', (err) => {
+            logger.error('Fetch error', { error: err.message });
+            done();
+          });
+
+          fetch.once('end', () => {
+            if (pending === 0) {
+              done();
+            }
+          });
+        });
+      });
+    });
+
+    imap.once('error', (err: Error) => {
+      logger.error('IMAP error', { error: err.message });
+      if (!resolved) { resolved = true; reject(err); }
+    });
+
+    imap.connect();
+  });
+}
+
+export async function fetchUnreadEmails(): Promise<EmailMessage[]> {
+  if (!config.email.enabled) {
+    return [];
+  }
+
+  const timeoutPromise = new Promise<EmailMessage[]>((resolve) => {
+    setTimeout(() => {
+      logger.warn('IMAP unread fetch timeout after 15 seconds');
+      resolve([]);
+    }, 15000);
+  });
+
+  try {
+    return await Promise.race([
+      fetchUnreadEmailsInternal(),
+      timeoutPromise
+    ]);
+  } catch (error) {
+    logger.error('fetchUnreadEmails failed', { error: (error as Error).message });
+    return [];
+  }
+}
+
+/**
+ * Convert parsed mail to our EmailMessage format
+ */
+function parsedMailToEmailMessage(parsed: ParsedMail): EmailMessage {
+  return {
+    messageId: parsed.messageId,
+    from: parsed.from?.text || 'unknown',
+    to: parsed.to ? (Array.isArray(parsed.to) ? parsed.to.map(t => t.text) : [parsed.to.text]) : [],
+    cc: parsed.cc ? (Array.isArray(parsed.cc) ? parsed.cc.map(c => c.text) : [parsed.cc.text]) : undefined,
+    subject: parsed.subject || '(no subject)',
+    body: parsed.text || '',
+    html: parsed.html || undefined,
+    date: parsed.date,
+    inReplyTo: parsed.inReplyTo,
+    attachments: parsed.attachments?.map(att => ({
+      filename: att.filename || 'unnamed',
+      contentType: att.contentType,
+      size: att.size,
+    })),
+  };
+}
+
+// ============================================
+// Email Health Check
+// ============================================
+
+/**
+ * Test SMTP connection
+ */
+export async function testSmtpConnection(): Promise<boolean> {
+  if (!config.email.enabled) {
+    return false;
+  }
+
+  try {
+    const transport = getSmtpTransport();
+    await transport.verify();
+    return true;
+  } catch (error) {
+    logger.error('SMTP connection test failed', {
+      error: (error as Error).message,
+    });
+    return false;
+  }
+}
+
+/**
+ * Test IMAP connection
+ */
+export async function testImapConnection(): Promise<boolean> {
+  if (!config.email.enabled) {
+    return false;
+  }
+
+  return new Promise((resolve) => {
+    const imapConfig: Imap.Config = {
+      user: config.email.imap.user,
+      password: config.email.imap.password || '',
+      host: config.email.imap.host,
+      port: config.email.imap.port,
+      tls: config.email.imap.secure,
+      tlsOptions: { rejectUnauthorized: false },
+    };
+
+    const imap = new Imap(imapConfig);
+
+    imap.once('ready', () => {
+      imap.end();
+      resolve(true);
+    });
+
+    imap.once('error', (err: Error) => {
+      logger.error('IMAP connection test failed', { error: err.message });
+      resolve(false);
+    });
+
+    imap.connect();
+  });
+}
+
+// ============================================
+// Email Logging
+// ============================================
+
+async function logEmailEvent(
+  eventType: 'sent' | 'received' | 'failed',
+  details: Record<string, unknown>
+): Promise<void> {
+  try {
+    await pool.query(`
+      INSERT INTO integration_events (provider, event_type, event_data)
+      VALUES ('local_email', $1, $2)
+    `, [eventType, JSON.stringify(details)]);
+  } catch (error) {
+    logger.error('Failed to log email event', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+// ============================================
+// Email Status
+// ============================================
+
+export async function getEmailStatus(): Promise<{
+  enabled: boolean;
+  smtp: { configured: boolean; connected: boolean };
+  imap: { configured: boolean; connected: boolean };
+  approvedRecipients: string[];
+}> {
+  const smtpConnected = await testSmtpConnection();
+  const imapConnected = await testImapConnection();
+
+  return {
+    enabled: config.email.enabled,
+    smtp: {
+      configured: !!config.email.smtp.host,
+      connected: smtpConnected,
+    },
+    imap: {
+      configured: !!config.email.imap.host,
+      connected: imapConnected,
+    },
+    approvedRecipients: config.email.approvedRecipients,
+  };
+}
+
+export default {
+  sendEmail,
+  fetchRecentEmails,
+  fetchUnreadEmails,
+  getApprovedRecipients,
+  isRecipientApproved,
+  filterApprovedRecipients,
+  testSmtpConnection,
+  testImapConnection,
+  getEmailStatus,
+};

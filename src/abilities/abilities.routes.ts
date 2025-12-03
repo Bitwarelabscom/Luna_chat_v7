@@ -12,6 +12,8 @@ import * as calendar from './calendar.service.js';
 import * as emailService from './email.service.js';
 import * as checkins from './checkins.service.js';
 import * as mood from './mood.service.js';
+import * as lunaMedia from './luna-media.service.js';
+import * as facts from '../memory/facts.service.js';
 import { getAbilitySummary } from './orchestrator.js';
 import logger from '../utils/logger.js';
 
@@ -282,6 +284,52 @@ router.post('/workspace', async (req: Request, res: Response) => {
   }
 });
 
+// Upload file to workspace (multipart form)
+router.post('/workspace/upload', upload.single('file'), async (req: Request, res: Response) => {
+  try {
+    if (!req.file) {
+      res.status(400).json({ error: 'No file uploaded' });
+      return;
+    }
+
+    // Use original filename
+    const filename = req.file.originalname;
+    const content = req.file.buffer.toString('utf-8');
+
+    const file = await workspace.writeFile(getUserId(req), filename, content);
+    res.status(201).json(file);
+  } catch (error) {
+    const message = (error as Error).message;
+    logger.error('Failed to upload workspace file', { error: message });
+    res.status(400).json({ error: message });
+  }
+});
+
+// Update existing workspace file
+router.put('/workspace/file/:filename', async (req: Request, res: Response) => {
+  try {
+    const { content } = req.body;
+    if (content === undefined) {
+      res.status(400).json({ error: 'content is required' });
+      return;
+    }
+
+    // Verify file exists
+    const exists = await workspace.fileExists(getUserId(req), req.params.filename);
+    if (!exists) {
+      res.status(404).json({ error: `File not found: ${req.params.filename}` });
+      return;
+    }
+
+    const file = await workspace.writeFile(getUserId(req), req.params.filename, content);
+    res.json(file);
+  } catch (error) {
+    const message = (error as Error).message;
+    logger.error('Failed to update workspace file', { error: message });
+    res.status(400).json({ error: message });
+  }
+});
+
 router.delete('/workspace/file/:filename', async (req: Request, res: Response) => {
   try {
     const deleted = await workspace.deleteFile(getUserId(req), req.params.filename);
@@ -331,7 +379,7 @@ router.get('/documents', async (req: Request, res: Response) => {
       status: status as string,
       limit: limit ? parseInt(limit as string, 10) : undefined,
     });
-    res.json(docs);
+    res.json({ documents: docs });
   } catch (error) {
     logger.error('Failed to get documents', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to get documents' });
@@ -545,6 +593,73 @@ router.get('/mood/trends', async (req: Request, res: Response) => {
 });
 
 // ============================================
+// LUNA MEDIA (Videos + Generated Images)
+// ============================================
+
+router.get('/luna/media', async (req: Request, res: Response) => {
+  try {
+    const { response, mood: moodParam } = req.query;
+
+    if (!response || !moodParam) {
+      res.status(400).json({ error: 'Both response and mood parameters are required' });
+      return;
+    }
+
+    const media = await lunaMedia.selectMedia(
+      response as string,
+      moodParam as string
+    );
+    res.json(media);
+  } catch (error) {
+    logger.error('Failed to select Luna media', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to select Luna media' });
+  }
+});
+
+router.get('/luna/videos', async (_req: Request, res: Response) => {
+  try {
+    const videos = lunaMedia.getAvailableVideos();
+    res.json({ videos });
+  } catch (error) {
+    logger.error('Failed to get Luna videos', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get Luna videos' });
+  }
+});
+
+router.get('/luna/cached-images', async (_req: Request, res: Response) => {
+  try {
+    const images = lunaMedia.getCachedMoodImages();
+    res.json({ images });
+  } catch (error) {
+    logger.error('Failed to get cached mood images', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get cached mood images' });
+  }
+});
+
+router.post('/luna/generate-image', async (req: Request, res: Response) => {
+  try {
+    const { mood: moodParam } = req.body;
+
+    if (!moodParam) {
+      res.status(400).json({ error: 'mood parameter is required' });
+      return;
+    }
+
+    const cached = lunaMedia.isMoodImageCached(moodParam);
+    const url = await lunaMedia.generateMoodImage(moodParam);
+
+    res.json({
+      url,
+      cached,
+      generated_at: new Date().toISOString(),
+    });
+  } catch (error) {
+    logger.error('Failed to generate mood image', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to generate mood image' });
+  }
+});
+
+// ============================================
 // CHECK-INS
 // ============================================
 
@@ -697,6 +812,101 @@ router.get('/email/summary', async (req: Request, res: Response) => {
     res.json(summary);
   } catch (error) {
     res.status(500).json({ error: 'Failed to get email summary' });
+  }
+});
+
+// ============================================
+// FACTS / MEMORY
+// ============================================
+
+router.get('/facts', async (req: Request, res: Response) => {
+  try {
+    const { category, limit } = req.query;
+    const userFacts = await facts.getUserFacts(getUserId(req), {
+      category: category as string,
+      limit: limit ? parseInt(limit as string, 10) : undefined,
+    });
+    res.json(userFacts);
+  } catch (error) {
+    logger.error('Failed to get facts', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get facts' });
+  }
+});
+
+router.get('/facts/search', async (req: Request, res: Response) => {
+  try {
+    const { q } = req.query;
+    if (!q) {
+      res.status(400).json({ error: 'Query parameter q is required' });
+      return;
+    }
+    const results = await facts.searchFacts(getUserId(req), q as string);
+    res.json(results);
+  } catch (error) {
+    logger.error('Failed to search facts', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to search facts' });
+  }
+});
+
+router.get('/facts/history', async (req: Request, res: Response) => {
+  try {
+    const { limit, offset } = req.query;
+    const history = await facts.getFactCorrectionHistory(getUserId(req), {
+      limit: limit ? parseInt(limit as string, 10) : undefined,
+      offset: offset ? parseInt(offset as string, 10) : undefined,
+    });
+    res.json(history);
+  } catch (error) {
+    logger.error('Failed to get fact history', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get fact correction history' });
+  }
+});
+
+router.get('/facts/:id', async (req: Request, res: Response) => {
+  try {
+    const fact = await facts.getFactById(getUserId(req), req.params.id);
+    if (!fact) {
+      res.status(404).json({ error: 'Fact not found' });
+      return;
+    }
+    res.json(fact);
+  } catch (error) {
+    logger.error('Failed to get fact', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get fact' });
+  }
+});
+
+router.put('/facts/:id', async (req: Request, res: Response) => {
+  try {
+    const { value, reason } = req.body;
+    if (!value) {
+      res.status(400).json({ error: 'value is required' });
+      return;
+    }
+    const result = await facts.updateFact(getUserId(req), req.params.id, value, reason);
+    if (!result.success) {
+      res.status(404).json({ error: 'Fact not found' });
+      return;
+    }
+    res.json({ success: true, oldValue: result.oldValue, newValue: value });
+  } catch (error) {
+    logger.error('Failed to update fact', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to update fact' });
+  }
+});
+
+router.delete('/facts/:id', async (req: Request, res: Response) => {
+  try {
+    const { reason } = req.body;
+    const result = await facts.deleteFact(getUserId(req), req.params.id, reason);
+    if (!result.success) {
+      res.status(404).json({ error: 'Fact not found' });
+      return;
+    }
+    res.status(204).send();
+  } catch (error) {
+    logger.error('Failed to delete fact', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to delete fact' });
   }
 });
 

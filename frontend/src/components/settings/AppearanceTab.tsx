@@ -1,6 +1,6 @@
 'use client';
 
-import { Monitor, Terminal } from 'lucide-react';
+import { Monitor, Terminal, Sun, Zap, Snowflake, Palette } from 'lucide-react';
 import { useThemeStore, type ThemeType } from '@/lib/theme-store';
 
 const themes: { id: ThemeType; name: string; description: string; icon: typeof Monitor }[] = [
@@ -9,6 +9,30 @@ const themes: { id: ThemeType; name: string; description: string; icon: typeof M
     name: 'Modern Dark',
     description: 'Clean, modern interface with purple accents',
     icon: Monitor,
+  },
+  {
+    id: 'light',
+    name: 'Light',
+    description: 'Clean light interface for daytime use',
+    icon: Sun,
+  },
+  {
+    id: 'cyberpunk',
+    name: 'Cyberpunk',
+    description: 'Neon pink and cyan synthwave vibes',
+    icon: Zap,
+  },
+  {
+    id: 'nord',
+    name: 'Nord',
+    description: 'Arctic bluish color palette',
+    icon: Snowflake,
+  },
+  {
+    id: 'solarized',
+    name: 'Solarized',
+    description: 'Low contrast teal accents, easy on eyes',
+    icon: Palette,
   },
   {
     id: 'retro',

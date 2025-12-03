@@ -2,6 +2,7 @@ import { pool } from '../db/index.js';
 import { generateEmbedding } from '../memory/embedding.service.js';
 import logger from '../utils/logger.js';
 import { encryptToken, isEncryptionAvailable } from '../utils/encryption.js';
+import * as localEmail from '../integrations/local-email.service.js';
 
 export interface EmailConnection {
   id: string;
@@ -353,6 +354,89 @@ function mapRowToEmail(row: Record<string, unknown>): Email {
   };
 }
 
+// ============================================
+// Luna's Local Email (luna@bitwarelabs.com)
+// ============================================
+
+/**
+ * Send an email from Luna's account
+ * Only sends to approved recipients
+ */
+export async function sendLunaEmail(
+  to: string[],
+  subject: string,
+  body: string,
+  options?: { cc?: string[]; html?: string; inReplyTo?: string }
+): Promise<{
+  success: boolean;
+  messageId?: string;
+  error?: string;
+  blockedRecipients?: string[];
+}> {
+  return localEmail.sendEmail({
+    to,
+    subject,
+    body,
+    cc: options?.cc,
+    html: options?.html,
+    inReplyTo: options?.inReplyTo,
+    from: '', // Uses config default
+  });
+}
+
+/**
+ * Check Luna's inbox for new messages
+ */
+export async function checkLunaInbox(limit: number = 10): Promise<localEmail.EmailMessage[]> {
+  return localEmail.fetchRecentEmails(limit);
+}
+
+/**
+ * Get unread emails in Luna's inbox
+ */
+export async function getLunaUnreadEmails(): Promise<localEmail.EmailMessage[]> {
+  return localEmail.fetchUnreadEmails();
+}
+
+/**
+ * Check if a recipient is approved for Luna to email
+ */
+export function canLunaEmailRecipient(email: string): boolean {
+  return localEmail.isRecipientApproved(email);
+}
+
+/**
+ * Get Luna's email status
+ */
+export async function getLunaEmailStatus(): Promise<{
+  enabled: boolean;
+  smtp: { configured: boolean; connected: boolean };
+  imap: { configured: boolean; connected: boolean };
+  approvedRecipients: string[];
+}> {
+  return localEmail.getEmailStatus();
+}
+
+/**
+ * Format Luna's inbox for prompt
+ */
+export function formatLunaInboxForPrompt(emails: localEmail.EmailMessage[]): string {
+  if (emails.length === 0) return '';
+
+  const formatted = emails.slice(0, 5).map(email => {
+    const date = email.date ? new Date(email.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'unknown';
+    let entry = `- ${email.subject}`;
+    entry += `\n  From: ${email.from} - ${date}`;
+    if (email.body) {
+      const preview = email.body.slice(0, 150).replace(/\n/g, ' ');
+      entry += `\n  "${preview}${email.body.length > 150 ? '...' : ''}"`;
+    }
+    return entry;
+  }).join('\n\n');
+
+  return `[Luna's Inbox - luna@bitwarelabs.com]\n${formatted}`;
+}
+
 export default {
   storeEmailConnection,
   getEmailConnections,
@@ -363,4 +447,11 @@ export default {
   disconnectEmail,
   getEmailSummary,
   formatEmailsForPrompt,
+  // Luna's local email
+  sendLunaEmail,
+  checkLunaInbox,
+  getLunaUnreadEmails,
+  canLunaEmailRecipient,
+  getLunaEmailStatus,
+  formatLunaInboxForPrompt,
 };

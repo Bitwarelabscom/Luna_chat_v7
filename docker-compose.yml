@@ -13,8 +13,16 @@ secrets:
     file: ./secrets/anthropic_api_key.txt
   xai_api_key:
     file: ./secrets/xai_api_key.txt
+  openrouter_api_key:
+    file: ./secrets/openrouter_api_key.txt
   encryption_key:
     file: ./secrets/encryption_key.txt
+  email_password:
+    file: ./secrets/email_password.txt
+  google_api_key:
+    file: ./secrets/google_api_key.txt
+  allowed_ips:
+    file: ./secrets/allowed_ips.txt
 
 services:
   luna-frontend:
@@ -24,7 +32,7 @@ services:
     container_name: luna-frontend
     restart: unless-stopped
     ports:
-      - "3004:3000"
+      - "127.0.0.1:3004:3000"
     environment:
       - NEXT_PUBLIC_API_URL=
     depends_on:
@@ -52,7 +60,7 @@ services:
     container_name: luna-api
     restart: unless-stopped
     ports:
-      - "3005:3003"
+      - "127.0.0.1:3005:3003"
     environment:
       - NODE_ENV=production
       - PORT=3003
@@ -68,6 +76,7 @@ services:
       - GROQ_ENABLED=${GROQ_ENABLED:-true}
       - ANTHROPIC_ENABLED=${ANTHROPIC_ENABLED:-true}
       - XAI_ENABLED=${XAI_ENABLED:-true}
+      - GOOGLE_ENABLED=${GOOGLE_ENABLED:-true}
       - MEMORYCORE_URL=http://memorycore-api:3002
       - MEMORYCORE_ENABLED=${MEMORYCORE_ENABLED:-true}
       - SEARXNG_URL=http://searxng:8080
@@ -78,6 +87,21 @@ services:
       - SANDBOX_CONTAINER=luna-sandbox
       - DOCKER_HOST=${DOCKER_HOST:-http://docker-proxy:2375}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      # Luna's local email
+      - EMAIL_SMTP_HOST=${EMAIL_SMTP_HOST:-mail.bitwarelabs.com}
+      - EMAIL_SMTP_PORT=${EMAIL_SMTP_PORT:-587}
+      - EMAIL_SMTP_SECURE=${EMAIL_SMTP_SECURE:-false}
+      - EMAIL_SMTP_USER=${EMAIL_SMTP_USER:-luna@bitwarelabs.com}
+      - EMAIL_IMAP_HOST=${EMAIL_IMAP_HOST:-mail.bitwarelabs.com}
+      - EMAIL_IMAP_PORT=${EMAIL_IMAP_PORT:-993}
+      - EMAIL_IMAP_SECURE=${EMAIL_IMAP_SECURE:-true}
+      - EMAIL_IMAP_USER=${EMAIL_IMAP_USER:-luna@bitwarelabs.com}
+      - EMAIL_FROM=${EMAIL_FROM:-Luna <luna@bitwarelabs.com>}
+      - EMAIL_APPROVED_RECIPIENTS=${EMAIL_APPROVED_RECIPIENTS:-*@bitwarelabs.com}
+      - EMAIL_ENABLED=${EMAIL_ENABLED:-true}
+      - OLLAMA_URL=http://luna-ollama:11434
+      - OLLAMA_EMBEDDING_MODEL=${OLLAMA_EMBEDDING_MODEL:-bge-m3}
+      - RADICALE_URL=http://luna-radicale:5232
     secrets:
       - postgres_password
       - jwt_secret
@@ -86,11 +110,17 @@ services:
       - groq_api_key
       - anthropic_api_key
       - xai_api_key
+      - openrouter_api_key
+      - google_api_key
       - encryption_key
+      - email_password
+      - allowed_ips
     volumes:
       - luna-documents:/app/documents
       - luna-workspace:/app/workspace  # Shared workspace for scripts and data
+      - ./images:/app/images  # Luna media (videos and generated images)
       - /home/luna/.claude/.credentials.json:/claude-credentials.json:ro
+      - /home/luna/.claude/.credentials.json:/home/node/.claude/.credentials.json:ro
     depends_on:
       luna-postgres:
         condition: service_healthy
@@ -98,6 +128,10 @@ services:
         condition: service_healthy
       docker-proxy:
         condition: service_started
+      luna-ollama:
+        condition: service_healthy
+      luna-radicale:
+        condition: service_healthy
     networks:
       - luna-network
       - searxng_default
@@ -133,6 +167,7 @@ services:
       - ./src/db/migrations/003_abilities.sql:/docker-entrypoint-initdb.d/003_abilities.sql
       - ./src/db/migrations/005_workspace.sql:/docker-entrypoint-initdb.d/005_workspace.sql
       - ./src/db/migrations/006_clear_refresh_tokens.sql:/docker-entrypoint-initdb.d/006_clear_refresh_tokens.sql
+      - ./src/db/migrations/012_fail2ban.sql:/docker-entrypoint-initdb.d/012_fail2ban.sql
     networks:
       - luna-network
     # SECURITY: Container hardening
@@ -202,11 +237,54 @@ services:
     networks:
       - docker-proxy
 
+  luna-ollama:
+    image: ollama/ollama:latest
+    container_name: luna-ollama
+    restart: unless-stopped
+    volumes:
+      - luna-ollama-data:/root/.ollama
+    networks:
+      - luna-network
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  luna-radicale:
+    image: python:3.12-slim
+    container_name: luna-radicale
+    restart: unless-stopped
+    # SECURITY: Internal only - NO ports exposed to host/internet
+    # Only accessible via luna-network from other containers
+    expose:
+      - "5232"  # Internal only - not mapped to host
+    command: >
+      sh -c "pip install --quiet radicale &&
+             python -m radicale --config /config/config"
+    volumes:
+      - ./radicale/config:/config:ro
+      - luna-radicale-data:/data
+    networks:
+      - luna-network
+    # SECURITY: Container hardening - no-new-privileges only
+    # (cap_drop causes permission issues with data volume)
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5232/.well-known/caldav')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
 volumes:
   luna-postgres-data:
   luna-redis-data:
   luna-documents:
   luna-workspace:
+  luna-ollama-data:
+  luna-radicale-data:
 
 networks:
   luna-network:

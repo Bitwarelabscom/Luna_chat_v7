@@ -3,6 +3,9 @@ import * as openaiProvider from './providers/openai.provider.js';
 import * as groqProvider from './providers/groq.provider.js';
 import * as anthropicProvider from './providers/anthropic.provider.js';
 import * as xaiProvider from './providers/xai.provider.js';
+import * as openrouterProvider from './providers/openrouter.provider.js';
+import * as ollamaProvider from './providers/ollama.provider.js';
+import * as googleProvider from './providers/google.provider.js';
 import logger from '../utils/logger.js';
 
 interface ProviderModule {
@@ -24,6 +27,9 @@ const providers: Record<ProviderId, ProviderModule> = {
   groq: groqProvider,
   anthropic: anthropicProvider,
   xai: xaiProvider,
+  openrouter: openrouterProvider,
+  ollama: ollamaProvider,
+  google: googleProvider,
 };
 
 function getProvider(providerId: ProviderId): ProviderModule {

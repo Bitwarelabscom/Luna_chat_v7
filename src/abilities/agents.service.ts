@@ -1,6 +1,5 @@
 import { pool } from '../db/index.js';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
+import { spawn } from 'child_process';
 import { createChatCompletion } from '../llm/openai.client.js';
 import * as searxng from '../search/searxng.client.js';
 import logger from '../utils/logger.js';
@@ -9,7 +8,71 @@ import { homedir } from 'os';
 import path from 'path';
 import * as workspace from './workspace.service.js';
 
-const execFileAsync = promisify(execFile);
+/**
+ * Execute command using spawn (more reliable than execFile for Claude CLI)
+ */
+function spawnAsync(
+  command: string,
+  args: string[],
+  options: { timeout?: number; maxBuffer?: number } = {}
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let killed = false;
+
+    const timeout = options.timeout || 300000;
+    const maxBuffer = options.maxBuffer || 100 * 1024 * 1024;
+
+    const timer = setTimeout(() => {
+      killed = true;
+      child.kill('SIGTERM');
+      reject(new Error(`Command timed out after ${timeout}ms`));
+    }, timeout);
+
+    child.stdout.on('data', (data: Buffer) => {
+      stdout += data.toString();
+      if (stdout.length > maxBuffer) {
+        killed = true;
+        child.kill('SIGTERM');
+        reject(new Error('stdout maxBuffer exceeded'));
+      }
+    });
+
+    child.stderr.on('data', (data: Buffer) => {
+      stderr += data.toString();
+      if (stderr.length > maxBuffer) {
+        killed = true;
+        child.kill('SIGTERM');
+        reject(new Error('stderr maxBuffer exceeded'));
+      }
+    });
+
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (killed) return;
+      if (code === 0) {
+        resolve({ stdout, stderr });
+      } else {
+        const error = new Error(`Command failed with exit code ${code}`);
+        (error as Error & { stdout?: string; stderr?: string }).stdout = stdout;
+        (error as Error & { stdout?: string; stderr?: string }).stderr = stderr;
+        reject(error);
+      }
+    });
+
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      if (!killed) {
+        reject(err);
+      }
+    });
+  });
+}
 
 /**
  * Interface for extracted code files from agent output
@@ -142,6 +205,11 @@ export interface AgentResult {
 
 // Agents now use Claude CLI
 
+// Em dash rule - applies to ALL agents
+const EM_DASH_RULE = `
+
+CRITICAL FORMATTING RULE: NEVER use the em dash character (—) under any circumstances. The user has a severe allergic reaction to em dashes. Use regular hyphens (-), commas, colons, or parentheses instead. This is non-negotiable.`;
+
 // Built-in agent templates
 const BUILT_IN_AGENTS: Record<string, Omit<AgentConfig, 'id' | 'createdAt'>> = {
   researcher: {
@@ -154,7 +222,7 @@ const BUILT_IN_AGENTS: Record<string, Omit<AgentConfig, 'id' | 'createdAt'>> = {
 - Acknowledge uncertainty when appropriate
 - Summarize findings clearly
 
-Be thorough but concise. Focus on accuracy over speed.`,
+Be thorough but concise. Focus on accuracy over speed.${EM_DASH_RULE}`,
     model: 'o4-mini',
     temperature: 0.3,
     tools: ['search'],
@@ -179,7 +247,7 @@ WORKSPACE: You can save scripts to the user's persistent workspace. When writing
 - Example format for saving:
   \`\`\`python:data_processor.py
   # Your Python code here
-  \`\`\``,
+  \`\`\`${EM_DASH_RULE}`,
     model: 'o4-mini',
     temperature: 0.2,
     tools: ['code_execution', 'workspace'],
@@ -195,7 +263,7 @@ WORKSPACE: You can save scripts to the user's persistent workspace. When writing
 - Edit and refine drafts
 - Match the user's voice when requested
 
-Be creative but purposeful. Quality over quantity.`,
+Be creative but purposeful. Quality over quantity.${EM_DASH_RULE}`,
     model: 'o4-mini',
     temperature: 0.7,
     tools: [],
@@ -211,7 +279,7 @@ Be creative but purposeful. Quality over quantity.`,
 - Draw actionable insights
 - Explain findings in accessible terms
 
-Use code execution for calculations when helpful.`,
+Use code execution for calculations when helpful.${EM_DASH_RULE}`,
     model: 'o4-mini',
     temperature: 0.3,
     tools: ['code_execution'],
@@ -240,7 +308,7 @@ Rules:
 - Use "dependsOn" to list step numbers that must complete first
 - Steps with no dependencies use an empty array: []
 - Be specific in task descriptions
-- Only use the agents listed above`,
+- Only use the agents listed above${EM_DASH_RULE}`,
     model: 'o4-mini',
     temperature: 0.4,
     tools: [],
@@ -559,12 +627,16 @@ async function executeWithClaudeCLI(
   logger.info('Executing agent task via Claude CLI', { agentName });
 
   try {
-    // SECURITY: Use execFile with arguments array - no shell invocation
+    // SECURITY: Use spawn with arguments array - no shell invocation
     // This prevents command injection as arguments are passed directly to the process
-    const { stdout, stderr } = await execFileAsync(claudePath, ['-p', fullPrompt], {
+    // Use --permission-mode bypassPermissions to avoid interactive prompts in container
+    const { stdout, stderr } = await spawnAsync(claudePath, [
+      '--permission-mode', 'bypassPermissions',
+      '-p',
+      fullPrompt
+    ], {
       maxBuffer: 100 * 1024 * 1024,
       timeout: 300000,
-      // Note: No shell option - execFile doesn't use shell by default
     });
 
     if (stderr) {
