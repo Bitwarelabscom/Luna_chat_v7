@@ -84,9 +84,12 @@ export interface Document {
   originalName: string;
   mimeType: string;
   fileSize: number;
+  size: number;  // Alias for frontend compatibility
   status: 'processing' | 'ready' | 'error';
   errorMessage?: string;
   createdAt: Date;
+  uploadedAt: string;  // ISO string for frontend compatibility
+  chunksCount: number;
 }
 
 export interface DocumentChunk {
@@ -297,18 +300,24 @@ export async function getDocuments(
 
   try {
     let query = `
-      SELECT id, filename, original_name, mime_type, file_size, status, error_message, created_at
-      FROM documents
-      WHERE user_id = $1
+      SELECT d.id, d.filename, d.original_name, d.mime_type, d.file_size, d.status, d.error_message, d.created_at,
+             COALESCE(c.chunk_count, 0) as chunk_count
+      FROM documents d
+      LEFT JOIN (
+        SELECT document_id, COUNT(*) as chunk_count
+        FROM document_chunks
+        GROUP BY document_id
+      ) c ON c.document_id = d.id
+      WHERE d.user_id = $1
     `;
     const params: (string | number)[] = [userId];
 
     if (status) {
-      query += ` AND status = $2`;
+      query += ` AND d.status = $2`;
       params.push(status);
     }
 
-    query += ` ORDER BY created_at DESC LIMIT $${params.length + 1}`;
+    query += ` ORDER BY d.created_at DESC LIMIT $${params.length + 1}`;
     params.push(limit);
 
     const result = await pool.query(query, params);
@@ -410,15 +419,20 @@ export function formatDocumentsForPrompt(chunks: DocumentChunk[]): string {
 }
 
 function mapRowToDocument(row: Record<string, unknown>): Document {
+  const fileSize = row.file_size as number;
+  const createdAt = row.created_at as Date;
   return {
     id: row.id as string,
     filename: row.filename as string,
     originalName: row.original_name as string,
     mimeType: row.mime_type as string,
-    fileSize: row.file_size as number,
+    fileSize,
+    size: fileSize,  // Alias for frontend compatibility
     status: row.status as 'processing' | 'ready' | 'error',
     errorMessage: row.error_message as string | undefined,
-    createdAt: row.created_at as Date,
+    createdAt,
+    uploadedAt: createdAt instanceof Date ? createdAt.toISOString() : String(createdAt),  // ISO string for frontend
+    chunksCount: Number(row.chunk_count) || 0,
   };
 }
 
