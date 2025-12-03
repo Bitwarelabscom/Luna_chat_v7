@@ -10,6 +10,7 @@ import {
   checkEmailTool,
   searchDocumentsTool,
   suggestGoalTool,
+  fetchUrlTool,
   formatSearchResultsForContext,
   formatAgentResultForContext,
   type ChatMessage,
@@ -17,6 +18,7 @@ import {
 import * as questionsService from '../autonomous/questions.service.js';
 import { getUserModelConfig } from '../llm/model-config.service.js';
 import * as searxng from '../search/searxng.client.js';
+import * as webfetch from '../search/webfetch.service.js';
 import * as agents from '../abilities/agents.service.js';
 import * as workspace from '../abilities/workspace.service.js';
 import * as sandbox from '../abilities/sandbox.service.js';
@@ -123,7 +125,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user');
 
   // TOOL GATING: For smalltalk, don't expose tools at all to prevent eager tool calling
-  const allTools = [searchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, searchDocumentsTool, suggestGoalTool];
+  const allTools = [searchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, searchDocumentsTool, suggestGoalTool, fetchUrlTool];
   const availableTools = isSmallTalkMessage ? [] : allTools;
   let searchResults: SearchResult[] | undefined;
   let agentResults: Array<{ agent: string; result: string; success: boolean }> = [];
@@ -318,6 +320,25 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
           tool_call_id: toolCall.id,
           content: `Goal suggestion "${args.title}" created. The user will see a notification to confirm or decline.`,
         } as ChatMessage);
+      } else if (toolCall.function.name === 'fetch_url') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Luna fetching URL', { url: args.url });
+        try {
+          const page = await webfetch.fetchPage(args.url);
+          const formattedContent = webfetch.formatPageForContext(page, 6000);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Successfully fetched URL:\n${formattedContent}`,
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('URL fetch failed', { url: args.url, error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to fetch URL: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
       }
     }
 
@@ -566,7 +587,7 @@ export async function* streamMessage(
 
   // TOOL GATING: For smalltalk, don't expose tools at all to prevent eager tool calling
   // For other messages, provide relevant tools
-  const allTools = [searchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, searchDocumentsTool, suggestGoalTool];
+  const allTools = [searchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, searchDocumentsTool, suggestGoalTool, fetchUrlTool];
   const availableTools = isSmallTalkMessage ? [] : allTools;
   let searchResults: SearchResult[] | undefined;
 
@@ -782,6 +803,25 @@ export async function* streamMessage(
           tool_call_id: toolCall.id,
           content: `Goal suggestion "${args.title}" created. The user will see a notification to confirm or decline.`,
         } as ChatMessage);
+      } else if (toolCall.function.name === 'fetch_url') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Luna fetching URL', { url: args.url });
+        try {
+          const page = await webfetch.fetchPage(args.url);
+          const formattedContent = webfetch.formatPageForContext(page, 6000);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Successfully fetched URL:\n${formattedContent}`,
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('URL fetch failed', { url: args.url, error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to fetch URL: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
       }
     }
   }

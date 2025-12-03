@@ -440,6 +440,24 @@ This will create a confirmation prompt for the user to approve.`,
   },
 };
 
+export const fetchUrlTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'fetch_url',
+    description: `Fetch and read the content of a specific URL/webpage. Use when the user asks you to read, fetch, or get content from a specific URL. This retrieves the text content of the page for analysis.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'The full URL to fetch (must start with http:// or https://)',
+        },
+      },
+      required: ['url'],
+    },
+  },
+};
+
 export function formatSearchResultsForContext(results: SearchResult[]): string {
   if (results.length === 0) return '';
 
