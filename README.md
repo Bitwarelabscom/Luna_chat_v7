@@ -183,6 +183,35 @@ Luna can operate autonomously with several self-directed capabilities:
 | **OpenRouter** | Various (model aggregation) | Flexibility, fallback |
 | **Ollama** | Local models, BGE-M3 embeddings | Local/private, embeddings |
 
+### Model Configuration
+
+Luna lets you pick **any provider and model** for different purposes. Configure models independently for:
+
+| Purpose | Requirement | Example |
+|---------|-------------|---------|
+| **Main Chat** | Must support tool/function calling | GPT-4.1, Claude Sonnet 4, Llama 3.3 70B |
+| **Council/Friends** | Any chat model | Mixtral, Gemma, local Ollama models |
+| **Embeddings** | Embedding model | BGE-M3 (Ollama), text-embedding-3 |
+| **TTS** | Text-to-speech model | OpenAI TTS, local Piper |
+
+### 100% Local Mode
+
+Want complete privacy with no external API calls? Run Luna entirely on local hardware:
+
+1. **Main Chat**: Use Ollama with a tool-capable model (Llama 3.3 70B, Qwen 2.5, Mistral Large)
+2. **Embeddings**: BGE-M3 via Ollama (included in Docker setup)
+3. **Council/Friends**: Any Ollama model
+4. **Search**: Self-hosted SearXNG (optional)
+
+```bash
+# Pull recommended local models
+docker exec luna-ollama ollama pull llama3.3:70b
+docker exec luna-ollama ollama pull bge-m3
+docker exec luna-ollama ollama pull mistral:7b  # For friends/council
+```
+
+Configure in Settings > Models to point all services to Ollama. Your conversations, memories, and insights never leave your machine.
+
 ## Prerequisites
 
 - Node.js >= 18.0.0
