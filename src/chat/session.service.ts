@@ -8,7 +8,7 @@ interface DbSession {
   id: string;
   user_id: string;
   title: string;
-  mode: 'assistant' | 'companion';
+  mode: 'assistant' | 'companion' | 'voice';
   is_archived: boolean;
   created_at: Date;
   updated_at: Date;
@@ -100,7 +100,7 @@ export async function getUserSessions(
 export async function updateSession(
   sessionId: string,
   userId: string,
-  updates: { title?: string; mode?: 'assistant' | 'companion'; isArchived?: boolean }
+  updates: { title?: string; mode?: 'assistant' | 'companion' | 'voice'; isArchived?: boolean }
 ): Promise<Session | null> {
   const setClauses: string[] = [];
   const values: unknown[] = [];

@@ -59,10 +59,13 @@ interface ChatState {
   isSending: boolean;
   streamingContent: string;
   statusMessage: string;
+  // Startup state
+  startupSuggestions: string[];
+  isLoadingStartup: boolean;
 
   loadSessions: () => Promise<void>;
   loadSession: (id: string) => Promise<void>;
-  createSession: (mode?: 'assistant' | 'companion') => Promise<Session>;
+  createSession: (mode?: 'assistant' | 'companion' | 'voice') => Promise<Session>;
   deleteSession: (id: string) => Promise<void>;
   renameSession: (id: string, title: string) => Promise<void>;
   addUserMessage: (content: string) => void;
@@ -74,6 +77,10 @@ interface ChatState {
   setStatusMessage: (status: string) => void;
   clearCurrentSession: () => void;
   removeMessagesFrom: (messageId: string) => void;
+  // Startup actions
+  setStartupSuggestions: (suggestions: string[]) => void;
+  clearStartupSuggestions: () => void;
+  setIsLoadingStartup: (loading: boolean) => void;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -84,6 +91,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   isSending: false,
   streamingContent: '',
   statusMessage: '',
+  startupSuggestions: [],
+  isLoadingStartup: false,
 
   loadSessions: async () => {
     set({ isLoadingSessions: true });
@@ -198,5 +207,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((state) => ({ streamingContent: state.streamingContent + content })),
   setIsSending: (isSending) => set({ isSending }),
   setStatusMessage: (status) => set({ statusMessage: status }),
-  clearCurrentSession: () => set({ currentSession: null, streamingContent: '', statusMessage: '' }),
+  clearCurrentSession: () => set({ currentSession: null, streamingContent: '', statusMessage: '', startupSuggestions: [] }),
+  // Startup actions
+  setStartupSuggestions: (suggestions) => set({ startupSuggestions: suggestions }),
+  clearStartupSuggestions: () => set({ startupSuggestions: [] }),
+  setIsLoadingStartup: (loading) => set({ isLoadingStartup: loading }),
 }));

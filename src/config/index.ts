@@ -21,6 +21,7 @@ const secrets = {
   microsoftClientSecret: getOptionalSecret('microsoft_client_secret', 'MICROSOFT_CLIENT_SECRET'),
   emailPassword: getOptionalSecret('email_password', 'EMAIL_PASSWORD'),
   googleApiKey: getOptionalSecret('google_api_key', 'GOOGLE_API_KEY'),
+  elevenlabsApiKey: getOptionalSecret('elevenlabs_api_key', 'ELEVENLABS_API_KEY'),
 };
 
 const configSchema = z.object({
@@ -78,6 +79,13 @@ const configSchema = z.object({
 
   google: z.object({
     apiKey: z.string().optional(),
+    enabled: z.coerce.boolean().default(true),
+  }).optional(),
+
+  elevenlabs: z.object({
+    apiKey: z.string().optional(),
+    voiceId: z.string().default('21m00Tcm4TlvDq8ikWAM'),  // Rachel - warm, calm voice
+    model: z.string().default('eleven_v3'),  // v3 for best emotion tag support
     enabled: z.coerce.boolean().default(true),
   }).optional(),
 
@@ -205,6 +213,13 @@ const rawConfig = {
   google: {
     apiKey: secrets.googleApiKey,
     enabled: process.env.GOOGLE_ENABLED,
+  },
+
+  elevenlabs: {
+    apiKey: secrets.elevenlabsApiKey,
+    voiceId: process.env.ELEVENLABS_VOICE_ID,
+    model: process.env.ELEVENLABS_MODEL,
+    enabled: process.env.ELEVENLABS_ENABLED,
   },
 
   memorycore: {

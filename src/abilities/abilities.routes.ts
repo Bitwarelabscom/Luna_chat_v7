@@ -131,7 +131,7 @@ router.get('/tasks', async (req: Request, res: Response) => {
       upcoming: upcoming === 'true',
       limit: limit ? parseInt(limit as string, 10) : undefined,
     });
-    res.json(taskList);
+    res.json({ tasks: taskList });
   } catch (error) {
     logger.error('Failed to get tasks', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to get tasks' });
@@ -141,7 +141,7 @@ router.get('/tasks', async (req: Request, res: Response) => {
 router.post('/tasks', async (req: Request, res: Response) => {
   try {
     const task = await tasks.createTask(getUserId(req), req.body);
-    res.status(201).json(task);
+    res.status(201).json({ task });
   } catch (error) {
     logger.error('Failed to create task', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to create task' });
@@ -165,7 +165,7 @@ router.put('/tasks/:id', async (req: Request, res: Response) => {
       res.status(404).json({ error: 'Task not found' });
       return;
     }
-    res.json(task);
+    res.json({ task });
   } catch (error) {
     logger.error('Failed to update task', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to update task' });
@@ -180,7 +180,7 @@ router.put('/tasks/:id/status', async (req: Request, res: Response) => {
       res.status(404).json({ error: 'Task not found' });
       return;
     }
-    res.json(task);
+    res.json({ task });
   } catch (error) {
     logger.error('Failed to update task status', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to update task status' });

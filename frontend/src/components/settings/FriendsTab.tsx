@@ -34,6 +34,9 @@ export default function FriendsTab() {
   const [theaterComplete, setTheaterComplete] = useState(false);
   const theaterEndRef = useRef<HTMLDivElement>(null);
 
+  // Topic input state
+  const [discussionTopic, setDiscussionTopic] = useState('');
+
   useEffect(() => {
     loadData();
   }, []);
@@ -62,21 +65,24 @@ export default function FriendsTab() {
   };
 
   const startTheaterDiscussion = async (friendId?: string) => {
+    const topic = discussionTopic.trim() || undefined;
+
     // Reset theater state
     setTheaterMode(true);
     setTheaterMessages([]);
     setTheaterFriend(null);
     setTheaterTopic('');
-    setTheaterStatus('Finding an interesting topic...');
+    setTheaterStatus(topic ? 'Starting discussion...' : 'Finding an interesting topic...');
     setTheaterRound(0);
     setTheaterTotalRounds(5);
     setTheaterSummary(null);
     setTheaterFacts([]);
     setTheaterComplete(false);
     setError(null);
+    setDiscussionTopic('');
 
     try {
-      for await (const event of streamFriendDiscussion({ friendId })) {
+      for await (const event of streamFriendDiscussion({ friendId, topic })) {
         handleTheaterEvent(event);
       }
     } catch (err) {
@@ -332,13 +338,23 @@ export default function FriendsTab() {
           <Users className="w-5 h-5 text-theme-accent-primary" />
           <h2 className="text-lg font-semibold text-theme-text-primary">Luna&apos;s Friends</h2>
         </div>
-        <button
-          onClick={() => startTheaterDiscussion()}
-          className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-500 rounded-lg text-sm font-medium text-white transition"
-        >
-          <Theater className="w-4 h-4" />
-          Start Discussion (Theater)
-        </button>
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={discussionTopic}
+            onChange={(e) => setDiscussionTopic(e.target.value)}
+            placeholder="Topic (optional)..."
+            className="px-3 py-2 bg-theme-bg-primary border border-theme-border rounded-lg text-sm text-theme-text-primary placeholder:text-theme-text-muted w-48"
+            onKeyDown={(e) => e.key === 'Enter' && startTheaterDiscussion()}
+          />
+          <button
+            onClick={() => startTheaterDiscussion()}
+            className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-500 rounded-lg text-sm font-medium text-white transition"
+          >
+            <Theater className="w-4 h-4" />
+            Start Discussion
+          </button>
+        </div>
       </div>
 
       {error && (

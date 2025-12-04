@@ -99,7 +99,7 @@ export interface Session {
   id: string;
   userId: string;
   title: string;
-  mode: 'assistant' | 'companion';
+  mode: 'assistant' | 'companion' | 'voice';
   isArchived: boolean;
   createdAt: string;
   updatedAt: string;
@@ -124,6 +124,11 @@ export interface Message {
   metrics?: MessageMetrics;
 }
 
+export interface StartupResponse {
+  message: Message;
+  suggestions: string[];
+}
+
 export const chatApi = {
   getSessions: (params?: { limit?: number; offset?: number; archived?: boolean }) => {
     const searchParams = new URLSearchParams();
@@ -137,10 +142,10 @@ export const chatApi = {
   getSession: (id: string) =>
     api<Session & { messages: Message[] }>(`/api/chat/sessions/${id}`),
 
-  createSession: (data?: { title?: string; mode?: 'assistant' | 'companion' }) =>
+  createSession: (data?: { title?: string; mode?: 'assistant' | 'companion' | 'voice' }) =>
     api<Session>('/api/chat/sessions', { method: 'POST', body: data || {} }),
 
-  updateSession: (id: string, data: { title?: string; mode?: 'assistant' | 'companion'; isArchived?: boolean }) =>
+  updateSession: (id: string, data: { title?: string; mode?: 'assistant' | 'companion' | 'voice'; isArchived?: boolean }) =>
     api<Session>(`/api/chat/sessions/${id}`, { method: 'PATCH', body: data }),
 
   deleteSession: (id: string) =>
@@ -157,6 +162,9 @@ export const chatApi = {
       method: 'PATCH',
       body: { content },
     }),
+
+  getSessionStartup: (sessionId: string) =>
+    api<StartupResponse>(`/api/chat/sessions/${sessionId}/startup`, { method: 'POST' }),
 };
 
 // Streaming helper
@@ -380,7 +388,7 @@ export interface UserSettings {
   crtFlicker?: boolean;
   language?: string;
   notifications?: boolean;
-  defaultMode?: 'assistant' | 'companion';
+  defaultMode?: 'assistant' | 'companion' | 'voice';
 }
 
 // System Metrics Types
@@ -833,8 +841,8 @@ export const autonomousApi = {
   getStatus: () =>
     api<AutonomousStatus>('/api/autonomous/status'),
 
-  start: () =>
-    api<{ success: boolean; session: AutonomousSession }>('/api/autonomous/start', { method: 'POST' }),
+  start: (data?: { taskDescription?: string }) =>
+    api<{ success: boolean; session: AutonomousSession }>('/api/autonomous/start', { method: 'POST', body: data || {} }),
 
   stop: () =>
     api<{ success: boolean; session: AutonomousSession | null }>('/api/autonomous/stop', { method: 'POST' }),

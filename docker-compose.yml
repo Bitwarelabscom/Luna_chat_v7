@@ -21,6 +21,8 @@ secrets:
     file: ./secrets/email_password.txt
   google_api_key:
     file: ./secrets/google_api_key.txt
+  elevenlabs_api_key:
+    file: ./secrets/elevenlabs_api_key.txt
   allowed_ips:
     file: ./secrets/allowed_ips.txt
 
@@ -102,6 +104,10 @@ services:
       - OLLAMA_URL=http://luna-ollama:11434
       - OLLAMA_EMBEDDING_MODEL=${OLLAMA_EMBEDDING_MODEL:-bge-m3}
       - RADICALE_URL=http://luna-radicale:5232
+      # ElevenLabs TTS - eleven_v3 required for audio tags like [laughs]
+      - ELEVENLABS_ENABLED=${ELEVENLABS_ENABLED:-true}
+      - ELEVENLABS_VOICE_ID=${ELEVENLABS_VOICE_ID:-exsUS4vynmxd379XN4yO}
+      - ELEVENLABS_MODEL=${ELEVENLABS_MODEL:-eleven_v3}
     secrets:
       - postgres_password
       - jwt_secret
@@ -112,6 +118,7 @@ services:
       - xai_api_key
       - openrouter_api_key
       - google_api_key
+      - elevenlabs_api_key
       - encryption_key
       - email_password
       - allowed_ips

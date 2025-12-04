@@ -39,6 +39,7 @@ export default function AutonomousTab() {
   const [pendingQuestions, setPendingQuestions] = useState<AutonomousQuestion[]>([]);
   const [answeringQuestion, setAnsweringQuestion] = useState<string | null>(null);
   const [questionResponse, setQuestionResponse] = useState('');
+  const [councilTopic, setCouncilTopic] = useState('');
 
   const loadData = useCallback(async () => {
     try {
@@ -75,7 +76,8 @@ export default function AutonomousTab() {
 
   const handleStart = async () => {
     try {
-      await autonomousApi.start();
+      await autonomousApi.start(councilTopic.trim() ? { taskDescription: councilTopic.trim() } : undefined);
+      setCouncilTopic('');
       await loadData();
       setShowTheater(true);
     } catch (error) {
@@ -409,9 +411,25 @@ export default function AutonomousTab() {
             )}
 
             {!isActive && (
-              <p className="text-theme-text-secondary text-sm">
-                Start autonomous mode to let Luna consult her council, set goals, and discover insights.
-              </p>
+              <div className="space-y-3">
+                <p className="text-theme-text-secondary text-sm">
+                  Start autonomous mode to let Luna consult her council, set goals, and discover insights.
+                </p>
+                <div>
+                  <label className="block text-sm text-theme-text-muted mb-1">Topic to discuss (optional)</label>
+                  <input
+                    type="text"
+                    value={councilTopic}
+                    onChange={(e) => setCouncilTopic(e.target.value)}
+                    placeholder="Leave empty for auto topic selection..."
+                    className="w-full px-3 py-2 bg-theme-bg-primary border border-theme-border rounded-lg text-sm text-theme-text-primary placeholder:text-theme-text-muted"
+                    onKeyDown={(e) => e.key === 'Enter' && handleStart()}
+                  />
+                  <p className="text-xs text-theme-text-muted mt-1">
+                    Specify a topic or leave empty to let the council choose based on your goals and patterns.
+                  </p>
+                </div>
+              </div>
             )}
           </div>
 

@@ -8,15 +8,35 @@ import ReactMarkdown from 'react-markdown';
 import clsx from 'clsx';
 import MessageActions from './MessageActions';
 import MessageMetrics from './MessageMetrics';
+import SuggestionChips from './SuggestionChips';
 import { useAudioPlayer } from './useAudioPlayer';
+import dynamic from 'next/dynamic';
+
+const VoiceChatArea = dynamic(() => import('./VoiceChatArea'), {
+  ssr: false,
+  loading: () => <div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-theme-accent-primary" /></div>
+});
 
 export default function ChatArea() {
+  const { currentSession } = useChatStore();
+
+  // Render VoiceChatArea for voice mode sessions
+  if (currentSession?.mode === 'voice') {
+    return <VoiceChatArea />;
+  }
+
+  return <StandardChatArea />;
+}
+
+function StandardChatArea() {
   const {
     currentSession,
     isLoadingMessages,
     isSending,
     streamingContent,
     statusMessage,
+    startupSuggestions,
+    isLoadingStartup,
     loadSessions,
     createSession,
     loadSession,
@@ -28,6 +48,9 @@ export default function ChatArea() {
     setIsSending,
     setStreamingContent,
     setStatusMessage,
+    setStartupSuggestions,
+    clearStartupSuggestions,
+    setIsLoadingStartup,
   } = useChatStore();
 
   const audioPlayer = useAudioPlayer();
@@ -66,6 +89,49 @@ export default function ChatArea() {
     textareaRef.current?.focus();
   }, [currentSession?.id]);
 
+  // Trigger startup message for empty sessions
+  const startupTriggeredRef = useRef<string | null>(null);
+  useEffect(() => {
+    const sessionId = currentSession?.id;
+    const messages = currentSession?.messages || [];
+
+    // Only trigger startup if:
+    // - Session exists and has no messages
+    // - Not already loading messages
+    // - Not already loading startup
+    // - Haven't already triggered for this session
+    if (
+      sessionId &&
+      messages.length === 0 &&
+      !isLoadingMessages &&
+      !isLoadingStartup &&
+      startupTriggeredRef.current !== sessionId
+    ) {
+      startupTriggeredRef.current = sessionId;
+      triggerStartup(sessionId);
+    }
+  }, [currentSession?.id, currentSession?.messages?.length, isLoadingMessages, isLoadingStartup]);
+
+  const triggerStartup = async (sessionId: string) => {
+    setIsLoadingStartup(true);
+    try {
+      const { message, suggestions } = await chatApi.getSessionStartup(sessionId);
+      addAssistantMessage(message.content, message.id);
+      setStartupSuggestions(suggestions);
+    } catch (error) {
+      console.error('Failed to generate startup message:', error);
+      // Silently fail - user will see static welcome screen
+    } finally {
+      setIsLoadingStartup(false);
+    }
+  };
+
+  const handleSuggestionSelect = (suggestion: string) => {
+    setInput(suggestion);
+    clearStartupSuggestions();
+    textareaRef.current?.focus();
+  };
+
   const handleSend = async () => {
     if (!input.trim() || isSending) return;
 
@@ -83,6 +149,7 @@ export default function ChatArea() {
 
     // Add user message to UI
     addUserMessage(message);
+    clearStartupSuggestions(); // Clear suggestions when sending
     setIsSending(true);
     setStreamingContent('');
     setStatusMessage('');
@@ -194,13 +261,27 @@ export default function ChatArea() {
           </div>
         ) : !hasMessages ? (
           <div className="flex flex-col items-center justify-center h-full px-4">
-            <div className="w-20 h-20 rounded-full bg-theme-accent-primary/20 flex items-center justify-center mb-6">
-              <Moon className="w-10 h-10 text-theme-accent-primary" />
-            </div>
-            <h2 className="text-2xl font-semibold text-theme-text-primary mb-2">Hello! I&apos;m Luna</h2>
-            <p className="text-theme-text-muted text-center max-w-md">
-              Your AI personal assistant and conversation companion. How can I help you today?
-            </p>
+            {isLoadingStartup ? (
+              <>
+                <div className="w-20 h-20 rounded-full bg-theme-accent-primary/20 flex items-center justify-center mb-6">
+                  <Loader2 className="w-10 h-10 text-theme-accent-primary animate-spin" />
+                </div>
+                <h2 className="text-2xl font-semibold text-theme-text-primary mb-2">Luna is getting ready...</h2>
+                <p className="text-theme-text-muted text-center max-w-md">
+                  Preparing a personalized greeting for you.
+                </p>
+              </>
+            ) : (
+              <>
+                <div className="w-20 h-20 rounded-full bg-theme-accent-primary/20 flex items-center justify-center mb-6">
+                  <Moon className="w-10 h-10 text-theme-accent-primary" />
+                </div>
+                <h2 className="text-2xl font-semibold text-theme-text-primary mb-2">Hello! I&apos;m Luna</h2>
+                <p className="text-theme-text-muted text-center max-w-md">
+                  Your AI personal assistant and conversation companion. How can I help you today?
+                </p>
+              </>
+            )}
           </div>
         ) : (
           <div className="max-w-3xl mx-auto py-8 px-4">
@@ -278,6 +359,14 @@ export default function ChatArea() {
                   </div>
                 </div>
               </div>
+            )}
+
+            {/* Suggestion chips */}
+            {startupSuggestions.length > 0 && !isSending && (
+              <SuggestionChips
+                suggestions={startupSuggestions}
+                onSelect={handleSuggestionSelect}
+              />
             )}
 
             <div ref={messagesEndRef} />

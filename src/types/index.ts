@@ -14,7 +14,7 @@ export const userSchema = z.object({
     theme: z.enum(['light', 'dark']).default('dark'),
     language: z.string().default('en'),
     notifications: z.boolean().default(true),
-    defaultMode: z.enum(['assistant', 'companion']).default('assistant'),
+    defaultMode: z.enum(['assistant', 'companion', 'voice']).default('assistant'),
   }),
 });
 
@@ -31,7 +31,7 @@ export const sessionSchema = z.object({
   id: z.string().uuid(),
   userId: z.string().uuid(),
   title: z.string(),
-  mode: z.enum(['assistant', 'companion']),
+  mode: z.enum(['assistant', 'companion', 'voice']),
   isArchived: z.boolean(),
   createdAt: z.date(),
   updatedAt: z.date(),
@@ -43,7 +43,7 @@ export type Session = z.infer<typeof sessionSchema>;
 export interface SessionCreate {
   userId: string;
   title?: string;
-  mode?: 'assistant' | 'companion';
+  mode?: 'assistant' | 'companion' | 'voice';
 }
 
 // Message types
@@ -88,7 +88,7 @@ export interface AuthTokens {
 export interface ChatRequest {
   sessionId: string;
   message: string;
-  mode?: 'assistant' | 'companion';
+  mode?: 'assistant' | 'companion' | 'voice';
 }
 
 export interface ChatResponse {

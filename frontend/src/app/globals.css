@@ -393,3 +393,147 @@ body {
 [data-theme="retro"] textarea::placeholder {
   color: var(--theme-text-muted);
 }
+
+/* === MOBILE LAYOUT STYLES === */
+
+/* Mobile-specific CSS variables */
+:root {
+  --mobile-nav-height: 60px;
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Pulse animation for Luna logo */
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.8;
+    transform: scale(1.1);
+  }
+}
+
+/* Mobile viewport height fix for mobile browsers */
+@supports (height: 100dvh) {
+  .mobile-full-height {
+    height: 100dvh;
+  }
+}
+
+/* Mobile touch interactions */
+@media (max-width: 1023px) {
+  /* Ensure proper touch target sizes */
+  button, a, [role="button"] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* Prevent text selection on touch */
+  .no-select {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* Smooth scrolling for mobile */
+  .mobile-scroll {
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+  }
+
+  /* Hide scrollbars on mobile for cleaner look */
+  .hide-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .hide-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+/* Slide-in animations */
+@keyframes slideInLeft {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes slideOutLeft {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes slideOutRight {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+.slide-in-left {
+  animation: slideInLeft 0.25s ease forwards;
+}
+
+.slide-in-right {
+  animation: slideInRight 0.25s ease forwards;
+}
+
+.slide-out-left {
+  animation: slideOutLeft 0.25s ease forwards;
+}
+
+.slide-out-right {
+  animation: slideOutRight 0.25s ease forwards;
+}
+
+/* Fade animations for overlays */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.fade-in {
+  animation: fadeIn 0.2s ease forwards;
+}
+
+.fade-out {
+  animation: fadeOut 0.2s ease forwards;
+}
+
+/* Safe area support for iOS */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  .safe-area-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}

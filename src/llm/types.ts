@@ -311,7 +311,26 @@ export const PROVIDERS: LLMProvider[] = [
     name: 'xAI (Grok)',
     enabled: true,
     models: [
-      // Grok 4 Series (Latest)
+      // Grok 4.1 Fast Series
+      {
+        id: 'grok-4-1-fast',
+        name: 'Grok 4.1 Fast',
+        contextWindow: 256000,
+        maxOutputTokens: 32768,
+        capabilities: ['chat', 'code', 'analysis', 'creative', 'fast'],
+        costPer1kInput: 0.0002,
+        costPer1kOutput: 0.0005,
+      },
+      {
+        id: 'grok-4-1-fast-non-reasoning-latest',
+        name: 'Grok 4.1 Fast Non-Reasoning',
+        contextWindow: 256000,
+        maxOutputTokens: 32768,
+        capabilities: ['chat', 'code', 'analysis', 'fast'],
+        costPer1kInput: 0.0002,
+        costPer1kOutput: 0.0005,
+      },
+      // Grok 4 Series
       {
         id: 'grok-4',
         name: 'Grok 4',

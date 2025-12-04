@@ -8,6 +8,16 @@ import ReactMarkdown from 'react-markdown';
 import MessageActions from './MessageActions';
 import MessageMetrics from './MessageMetrics';
 import { useAudioPlayer } from './useAudioPlayer';
+import dynamic from 'next/dynamic';
+import { useIsMobile } from '@/hooks/useIsMobile';
+import MobileBottomNav from './MobileBottomNav';
+import MobileSessionsOverlay from './MobileSessionsOverlay';
+
+const VoiceChatArea = dynamic(() => import('./VoiceChatArea'), {
+  ssr: false,
+  loading: () => <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}><div style={{ color: '#00ff9f' }}>Loading voice mode...</div></div>
+});
+
 import AppearanceTab from './settings/AppearanceTab';
 import PromptsTab from './settings/PromptsTab';
 import ModelsTab from './settings/ModelsTab';
@@ -27,7 +37,7 @@ interface ActivityLog {
   type: 'info' | 'success' | 'warn' | 'error';
 }
 
-type MainTab = 'chat' | 'autonomous' | 'friends' | 'tasks' | 'workspace' | 'email' | 'calendar' | 'settings';
+type MainTab = 'chat' | 'autonomous' | 'friends' | 'tasks' | 'workspace' | 'email' | 'calendar' | 'settings' | 'activity';
 type SettingsTab = 'appearance' | 'prompts' | 'models' | 'integrations' | 'workspace' | 'tasks' | 'memory' | 'autonomous' | 'stats' | 'data';
 
 const CommandCenter = () => {
@@ -52,7 +62,6 @@ const CommandCenter = () => {
     setIsSending,
     setStreamingContent,
     setStatusMessage,
-    clearCurrentSession,
   } = useChatStore();
 
   const audioPlayer = useAudioPlayer();
@@ -76,6 +85,11 @@ const CommandCenter = () => {
   const [showActivity, setShowActivity] = useState(true);
   const [lunaMedia, setLunaMedia] = useState<LunaMediaSelection | null>(null);
   const [lunaMediaLoading, setLunaMediaLoading] = useState(false);
+  const [showModeSelector, setShowModeSelector] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  // Mobile detection
+  const isMobile = useIsMobile();
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -204,7 +218,7 @@ const CommandCenter = () => {
       const session = await createSession('assistant');
       sessionId = session.id;
       await loadSession(sessionId);
-      addLog('New session created', 'success');
+      addLog('New assistant session created', 'success');
     }
 
     // Add user message
@@ -260,11 +274,6 @@ const CommandCenter = () => {
       e.preventDefault();
       handleSend();
     }
-  };
-
-  const handleNewChat = async () => {
-    clearCurrentSession();
-    addLog('New chat initialized', 'info');
   };
 
   const handleSelectSession = (id: string) => {
@@ -460,111 +469,295 @@ const CommandCenter = () => {
         zIndex: 1000,
       }} />
 
-      {/* Header */}
-      <header style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: '20px',
-        padding: '12px 20px',
-        background: 'linear-gradient(180deg, #151d28 0%, #0d1520 100%)',
-        border: '1px solid #2a3545',
-        borderRadius: '4px',
-        gap: '16px',
-      }}>
-        {/* Left - Logo */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
-          <div style={{
-            width: '10px',
-            height: '10px',
-            borderRadius: '50%',
-            background: '#00ff9f',
-            boxShadow: '0 0 10px #00ff9f, 0 0 20px #00ff9f50',
-            animation: 'pulse 2s ease-in-out infinite',
-          }} />
-          <span style={{
-            fontSize: '14px',
-            fontWeight: 600,
-            color: '#00ff9f',
-            textShadow: '0 0 10px #00ff9f40',
-            letterSpacing: '2px',
-          }}>
-            LUNA
-          </span>
-          <span style={{
-            fontSize: '9px',
-            color: '#607080',
-            marginLeft: '4px',
-          }}>
-            Beta 0.8
-          </span>
-        </div>
+      {/* Header - Mobile */}
+      {isMobile ? (
+        <header style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: '10px',
+          padding: '12px 16px',
+          background: 'linear-gradient(180deg, #151d28 0%, #0d1520 100%)',
+          border: '1px solid #2a3545',
+          borderRadius: '4px',
+        }}>
+          {/* Left - Logo */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{
+              width: '10px',
+              height: '10px',
+              borderRadius: '50%',
+              background: '#00ff9f',
+              boxShadow: '0 0 10px #00ff9f, 0 0 20px #00ff9f50',
+              animation: 'pulse 2s ease-in-out infinite',
+            }} />
+            <span style={{
+              fontSize: '14px',
+              fontWeight: 600,
+              color: '#00ff9f',
+              textShadow: '0 0 10px #00ff9f40',
+              letterSpacing: '2px',
+            }}>
+              LUNA
+            </span>
+          </div>
 
-        {/* Center - Main Tabs */}
-        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', justifyContent: 'center', flex: 1 }}>
-          {mainTabs.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              style={{
-                background: activeTab === tab.id ? '#00ff9f20' : 'transparent',
-                border: activeTab === tab.id ? '1px solid #00ff9f50' : '1px solid transparent',
-                color: activeTab === tab.id ? '#00ff9f' : '#607080',
-                padding: '6px 12px',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontSize: '10px',
-                fontFamily: 'inherit',
-                letterSpacing: '1px',
-                transition: 'all 0.2s ease',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {tab.id === 'email' && unreadCount > 0 ? `${tab.label} (${unreadCount})` : tab.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Right - Metrics and User */}
-        <div style={{ display: 'flex', gap: '12px', fontSize: '11px', alignItems: 'center', flexShrink: 0 }}>
-          <CompactMetrics />
-          <span style={{ color: '#607080' }}>TOKENS <span style={{ color: '#00b8ff' }}>{(stats?.tokens.total || 0).toLocaleString()}</span></span>
+          {/* Right - Hamburger Menu */}
           <button
-            onClick={handleLogout}
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
             style={{
               background: 'transparent',
-              border: '1px solid #ff6b6b50',
-              color: '#ff6b6b',
-              padding: '4px 12px',
+              border: '1px solid #2a3545',
+              color: '#607080',
+              padding: '8px 12px',
               borderRadius: '4px',
               cursor: 'pointer',
-              fontSize: '11px',
+              fontSize: '16px',
               fontFamily: 'inherit',
+              minWidth: '44px',
+              minHeight: '44px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
             }}
           >
-            LOGOUT
+            {mobileMenuOpen ? '\u2715' : '\u2630'}
           </button>
-        </div>
-      </header>
+        </header>
+      ) : (
+        /* Header - Desktop */
+        <header style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: '20px',
+          padding: '12px 20px',
+          background: 'linear-gradient(180deg, #151d28 0%, #0d1520 100%)',
+          border: '1px solid #2a3545',
+          borderRadius: '4px',
+          gap: '16px',
+        }}>
+          {/* Left - Logo */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
+            <div style={{
+              width: '10px',
+              height: '10px',
+              borderRadius: '50%',
+              background: '#00ff9f',
+              boxShadow: '0 0 10px #00ff9f, 0 0 20px #00ff9f50',
+              animation: 'pulse 2s ease-in-out infinite',
+            }} />
+            <span style={{
+              fontSize: '14px',
+              fontWeight: 600,
+              color: '#00ff9f',
+              textShadow: '0 0 10px #00ff9f40',
+              letterSpacing: '2px',
+            }}>
+              LUNA
+            </span>
+            <span style={{
+              fontSize: '9px',
+              color: '#607080',
+              marginLeft: '4px',
+            }}>
+              Beta 0.8.1
+            </span>
+          </div>
+
+          {/* Center - Main Tabs */}
+          <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', justifyContent: 'center', flex: 1 }}>
+            {mainTabs.map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                style={{
+                  background: activeTab === tab.id ? '#00ff9f20' : 'transparent',
+                  border: activeTab === tab.id ? '1px solid #00ff9f50' : '1px solid transparent',
+                  color: activeTab === tab.id ? '#00ff9f' : '#607080',
+                  padding: '6px 12px',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '10px',
+                  fontFamily: 'inherit',
+                  letterSpacing: '1px',
+                  transition: 'all 0.2s ease',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {tab.id === 'email' && unreadCount > 0 ? `${tab.label} (${unreadCount})` : tab.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Right - Metrics and User */}
+          <div style={{ display: 'flex', gap: '12px', fontSize: '11px', alignItems: 'center', flexShrink: 0 }}>
+            <CompactMetrics />
+            <span style={{ color: '#607080' }}>TOKENS <span style={{ color: '#00b8ff' }}>{(stats?.tokens.total || 0).toLocaleString()}</span></span>
+            <button
+              onClick={handleLogout}
+              style={{
+                background: 'transparent',
+                border: '1px solid #ff6b6b50',
+                color: '#ff6b6b',
+                padding: '4px 12px',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '11px',
+                fontFamily: 'inherit',
+              }}
+            >
+              LOGOUT
+            </button>
+          </div>
+        </header>
+      )}
+
+      {/* Mobile Sessions Overlay */}
+      {isMobile && (
+        <MobileSessionsOverlay
+          sessions={sessions}
+          currentSession={currentSession}
+          isLoading={isLoadingSessions}
+          isOpen={mobileMenuOpen}
+          onSelect={handleSelectSession}
+          onDelete={handleDeleteSession}
+          onCreate={async (mode) => {
+            const session = await createSession(mode);
+            await loadSession(session.id);
+            addLog(`${mode} session created`, 'success');
+          }}
+          onClose={() => setMobileMenuOpen(false)}
+        />
+      )}
 
       {/* Main Content Area */}
       <main style={{
         background: 'linear-gradient(180deg, #151d28 0%, #0d1520 100%)',
         border: '1px solid #2a3545',
         borderRadius: '4px',
-        height: 'calc(100vh - 120px)',
+        height: isMobile ? 'calc(100vh - 130px)' : 'calc(100vh - 120px)',
+        marginBottom: isMobile ? '60px' : '0',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
       }}>
+        {/* Activity Tab (Mobile only) */}
+        {activeTab === 'activity' && isMobile && (
+          <div style={{ flex: 1, overflowY: 'auto', padding: '16px' }}>
+            {/* Activity Log Header */}
+            <div style={{ marginBottom: '16px' }}>
+              <span style={{ color: '#607080', fontSize: '12px', letterSpacing: '2px' }}>ACTIVITY LOG</span>
+            </div>
+
+            {/* Activity Log Entries */}
+            <div style={{ marginBottom: '24px', fontSize: '12px', lineHeight: '1.8' }}>
+              {activityLogs.length === 0 ? (
+                <div style={{ color: '#607080', textAlign: 'center', padding: '20px' }}>No activity yet</div>
+              ) : (
+                activityLogs.map((log, i) => (
+                  <div key={i} style={{
+                    display: 'flex',
+                    gap: '12px',
+                    padding: '8px 0',
+                    borderBottom: '1px solid #1a2030',
+                  }}>
+                    <span style={{ color: '#607080', flexShrink: 0 }}>{log.time}</span>
+                    <span style={{
+                      color: log.type === 'success' ? '#00ff9f' : log.type === 'warn' ? '#ffb800' : log.type === 'error' ? '#ff6b6b' : '#808890',
+                    }}>
+                      {log.event}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Luna Media Section */}
+            <div style={{ marginBottom: '16px' }}>
+              <span style={{ color: '#607080', fontSize: '12px', letterSpacing: '2px' }}>LUNA</span>
+            </div>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '16px',
+              background: '#080c12',
+              borderRadius: '8px',
+              minHeight: '200px',
+            }}>
+              {lunaMediaLoading ? (
+                <div style={{ color: '#607080', fontSize: '12px' }}>Loading...</div>
+              ) : lunaMedia ? (
+                lunaMedia.type === 'video' ? (
+                  <video
+                    key={lunaMedia.url}
+                    src={getMediaUrl(lunaMedia.url)}
+                    autoPlay
+                    loop
+                    muted
+                    playsInline
+                    style={{
+                      maxWidth: '100%',
+                      maxHeight: '300px',
+                      objectFit: 'contain',
+                      borderRadius: '8px',
+                    }}
+                  />
+                ) : (
+                  <img
+                    src={getMediaUrl(lunaMedia.url)}
+                    alt="Luna"
+                    style={{
+                      maxWidth: '100%',
+                      maxHeight: '300px',
+                      objectFit: 'contain',
+                      borderRadius: '8px',
+                    }}
+                  />
+                )
+              ) : (
+                <div style={{ color: '#404550', fontSize: '12px', textAlign: 'center' }}>
+                  Luna will appear here<br />based on her mood
+                </div>
+              )}
+            </div>
+
+            {/* Quick Commands */}
+            <div style={{ marginTop: '24px' }}>
+              <div style={{ fontSize: '12px', color: '#607080', marginBottom: '12px', letterSpacing: '2px' }}>QUICK COMMANDS</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                {['/status', '/memory', '/email', '/clear'].map((cmd) => (
+                  <button
+                    key={cmd}
+                    onClick={() => { setInput(cmd); setActiveTab('chat'); }}
+                    style={{
+                      background: '#1a2535',
+                      border: '1px solid #2a3545',
+                      color: '#00b8ff',
+                      padding: '8px 12px',
+                      cursor: 'pointer',
+                      fontFamily: 'inherit',
+                      fontSize: '11px',
+                      borderRadius: '4px',
+                    }}
+                  >
+                    {cmd}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Chat Tab */}
         {activeTab === 'chat' && (
           <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
             {/* Question Notification - floating component */}
             <QuestionNotification onOpenTheater={() => setActiveTab('autonomous')} />
 
-            {/* Sessions Panel (collapsible) */}
-            {showSessions && (
+            {/* Sessions Panel (collapsible) - Desktop only */}
+            {!isMobile && showSessions && (
               <div style={{
                 width: '200px',
                 borderRight: '1px solid #2a3545',
@@ -594,22 +787,113 @@ const CommandCenter = () => {
                     &laquo;
                   </button>
                 </div>
-                <button
-                  onClick={handleNewChat}
-                  style={{
-                    margin: '10px',
-                    background: 'linear-gradient(135deg, #00ff9f20, #00ff9f10)',
-                    border: '1px solid #00ff9f50',
-                    color: '#00ff9f',
-                    padding: '8px',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    fontSize: '11px',
-                    fontFamily: 'inherit',
-                  }}
-                >
-                  + NEW SESSION
-                </button>
+                <div style={{ position: 'relative', margin: '10px' }}>
+                  <button
+                    onClick={() => setShowModeSelector(!showModeSelector)}
+                    style={{
+                      width: '100%',
+                      background: 'linear-gradient(135deg, #00ff9f20, #00ff9f10)',
+                      border: '1px solid #00ff9f50',
+                      color: '#00ff9f',
+                      padding: '8px',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      fontSize: '11px',
+                      fontFamily: 'inherit',
+                    }}
+                  >
+                    + NEW SESSION
+                  </button>
+                  {showModeSelector && (
+                    <div style={{
+                      position: 'absolute',
+                      top: '100%',
+                      left: 0,
+                      right: 0,
+                      background: '#1a2535',
+                      border: '1px solid #00ff9f30',
+                      borderRadius: '4px',
+                      marginTop: '4px',
+                      zIndex: 100,
+                      overflow: 'hidden',
+                    }}>
+                      <button
+                        onClick={async () => {
+                          const session = await createSession('assistant');
+                          await loadSession(session.id);
+                          setShowModeSelector(false);
+                          addLog('Assistant session created', 'success');
+                        }}
+                        style={{
+                          width: '100%',
+                          background: 'transparent',
+                          border: 'none',
+                          color: '#a0c0ff',
+                          padding: '10px',
+                          textAlign: 'left',
+                          cursor: 'pointer',
+                          fontSize: '11px',
+                          fontFamily: 'inherit',
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.background = '#2a3545'}
+                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                      >
+                        <strong style={{ display: 'block', marginBottom: '2px' }}>Assistant</strong>
+                        <span style={{ color: '#607080', fontSize: '10px' }}>Task-focused help</span>
+                      </button>
+                      <button
+                        onClick={async () => {
+                          const session = await createSession('companion');
+                          await loadSession(session.id);
+                          setShowModeSelector(false);
+                          addLog('Companion session created', 'success');
+                        }}
+                        style={{
+                          width: '100%',
+                          background: 'transparent',
+                          border: 'none',
+                          borderTop: '1px solid #2a3545',
+                          color: '#ff80c0',
+                          padding: '10px',
+                          textAlign: 'left',
+                          cursor: 'pointer',
+                          fontSize: '11px',
+                          fontFamily: 'inherit',
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.background = '#2a3545'}
+                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                      >
+                        <strong style={{ display: 'block', marginBottom: '2px' }}>Companion</strong>
+                        <span style={{ color: '#607080', fontSize: '10px' }}>Friendly conversation</span>
+                      </button>
+                      <button
+                        onClick={async () => {
+                          const session = await createSession('voice');
+                          await loadSession(session.id);
+                          setShowModeSelector(false);
+                          addLog('Voice session created', 'success');
+                        }}
+                        style={{
+                          width: '100%',
+                          background: 'transparent',
+                          border: 'none',
+                          borderTop: '1px solid #2a3545',
+                          color: '#00ff9f',
+                          padding: '10px',
+                          textAlign: 'left',
+                          cursor: 'pointer',
+                          fontSize: '11px',
+                          fontFamily: 'inherit',
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.background = '#2a3545'}
+                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                      >
+                        <strong style={{ display: 'block', marginBottom: '2px' }}>Voice</strong>
+                        <span style={{ color: '#607080', fontSize: '10px' }}>Talk with Luna</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <div style={{ flex: 1, overflowY: 'auto', padding: '0 10px' }}>
                   {isLoadingSessions ? (
                     <div style={{ color: '#607080', textAlign: 'center', padding: '20px', fontSize: '11px' }}>Loading...</div>
@@ -655,52 +939,57 @@ const CommandCenter = () => {
 
             {/* Chat Area */}
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-              {/* Toggle buttons bar */}
-              <div style={{
-                padding: '8px 15px',
-                borderBottom: '1px solid #2a3545',
-                display: 'flex',
-                justifyContent: 'space-between',
-                background: '#0a0e14',
-              }}>
-                {!showSessions && (
-                  <button
-                    onClick={() => setShowSessions(true)}
-                    style={{
-                      background: 'transparent',
-                      border: '1px solid #2a3545',
-                      color: '#607080',
-                      cursor: 'pointer',
-                      fontSize: '11px',
-                      padding: '4px 10px',
-                      borderRadius: '4px',
-                      fontFamily: 'inherit',
-                    }}
-                  >
-                    SESSIONS &raquo;
-                  </button>
-                )}
-                {showSessions && <div />}
-                {!showActivity && (
-                  <button
-                    onClick={() => setShowActivity(true)}
-                    style={{
-                      background: 'transparent',
-                      border: '1px solid #2a3545',
-                      color: '#607080',
-                      cursor: 'pointer',
-                      fontSize: '11px',
-                      padding: '4px 10px',
-                      borderRadius: '4px',
-                      fontFamily: 'inherit',
-                    }}
-                  >
-                    &laquo; ACTIVITY
-                  </button>
-                )}
-              </div>
+              {/* Toggle buttons bar - Desktop only */}
+              {!isMobile && (
+                <div style={{
+                  padding: '8px 15px',
+                  borderBottom: '1px solid #2a3545',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  background: '#0a0e14',
+                }}>
+                  {!showSessions && (
+                    <button
+                      onClick={() => setShowSessions(true)}
+                      style={{
+                        background: 'transparent',
+                        border: '1px solid #2a3545',
+                        color: '#607080',
+                        cursor: 'pointer',
+                        fontSize: '11px',
+                        padding: '4px 10px',
+                        borderRadius: '4px',
+                        fontFamily: 'inherit',
+                      }}
+                    >
+                      SESSIONS &raquo;
+                    </button>
+                  )}
+                  {showSessions && <div />}
+                  {!showActivity && (
+                    <button
+                      onClick={() => setShowActivity(true)}
+                      style={{
+                        background: 'transparent',
+                        border: '1px solid #2a3545',
+                        color: '#607080',
+                        cursor: 'pointer',
+                        fontSize: '11px',
+                        padding: '4px 10px',
+                        borderRadius: '4px',
+                        fontFamily: 'inherit',
+                      }}
+                    >
+                      &laquo; ACTIVITY
+                    </button>
+                  )}
+                </div>
+              )}
 
-              {/* Messages */}
+              {/* Messages / Voice Chat */}
+              {currentSession?.mode === 'voice' ? (
+                <VoiceChatArea />
+              ) : (
               <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
                 {messages.length === 0 && !streamingContent ? (
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#607080' }}>
@@ -837,6 +1126,7 @@ const CommandCenter = () => {
                 )}
                 <div ref={messagesEndRef} />
               </div>
+              )}
 
               {/* Input */}
               <div style={{
@@ -894,8 +1184,8 @@ const CommandCenter = () => {
               </div>
             </div>
 
-            {/* Activity Log Panel (collapsible) */}
-            {showActivity && (
+            {/* Activity Log Panel (collapsible) - Desktop only */}
+            {!isMobile && showActivity && (
               <div style={{
                 width: '280px',
                 borderLeft: '1px solid #2a3545',
@@ -1419,6 +1709,15 @@ const CommandCenter = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Mobile Bottom Navigation */}
+      {isMobile && (
+        <MobileBottomNav
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          unreadCount={unreadCount}
+        />
       )}
     </div>
   );

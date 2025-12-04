@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { authenticate } from '../auth/auth.middleware.js';
 import * as sessionService from './session.service.js';
 import * as chatService from './chat.service.js';
+import * as startupService from './startup.service.js';
 import * as ttsService from '../llm/tts.service.js';
 import { incrementRateLimit, incrementRateLimitCustom } from '../db/redis.js';
 import { config } from '../config/index.js';
@@ -34,7 +35,7 @@ async function rateLimit(req: Request, res: Response, next: () => void) {
 
 const createSessionSchema = z.object({
   title: z.string().min(1).max(255).optional(),
-  mode: z.enum(['assistant', 'companion']).optional(),
+  mode: z.enum(['assistant', 'companion', 'voice']).optional(),
 });
 
 const sendMessageSchema = z.object({
@@ -44,7 +45,7 @@ const sendMessageSchema = z.object({
 
 const updateSessionSchema = z.object({
   title: z.string().min(1).max(255).optional(),
-  mode: z.enum(['assistant', 'companion']).optional(),
+  mode: z.enum(['assistant', 'companion', 'voice']).optional(),
   isArchived: z.boolean().optional(),
 });
 
@@ -148,6 +149,36 @@ router.delete('/sessions/:id', async (req: Request, res: Response) => {
   }
 });
 
+// POST /api/chat/sessions/:id/startup - Generate dynamic startup greeting
+router.post('/sessions/:id/startup', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const sessionId = req.params.id;
+
+    // Verify session ownership
+    const session = await sessionService.getSession(sessionId, userId);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    // Check if session already has messages (prevent duplicate startup)
+    const existingMessages = await sessionService.getSessionMessages(sessionId, { limit: 1 });
+    if (existingMessages.length > 0) {
+      res.status(400).json({ error: 'Session already has messages' });
+      return;
+    }
+
+    // Generate startup message
+    const result = await startupService.generateStartupMessage(userId, sessionId, session.mode);
+
+    res.json(result);
+  } catch (error) {
+    logger.error('Startup generation failed', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to generate startup message' });
+  }
+});
+
 // POST /api/chat/sessions/:id/send - Send message
 router.post('/sessions/:id/send', rateLimit, async (req: Request, res: Response) => {
   try {
@@ -237,25 +268,61 @@ async function ttsRateLimit(req: Request, res: Response, next: () => void) {
 }
 
 const ttsSchema = z.object({
-  text: z.string().min(1).max(4096),
-  voice: z.enum(['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer']).optional(),
-  speed: z.number().min(0.25).max(4.0).optional(),
+  text: z.string().min(1).max(5000),   // ElevenLabs v3 allows 5k chars
+  voiceId: z.string().optional(),       // Override default voice
+  stream: z.boolean().optional(),       // Request streaming response
+  voiceSettings: z.object({
+    stability: z.number().min(0).max(1).optional(),
+    similarity_boost: z.number().min(0).max(1).optional(),
+    style: z.number().min(0).max(1).optional(),
+    use_speaker_boost: z.boolean().optional(),
+  }).optional(),
 });
 
-// POST /api/chat/tts - Text to speech
+// POST /api/chat/tts - Text to speech (ElevenLabs)
 router.post('/tts', ttsRateLimit, async (req: Request, res: Response) => {
   try {
+    // Check if ElevenLabs is enabled
+    if (!ttsService.isEnabled()) {
+      res.status(503).json({ error: 'TTS service not configured' });
+      return;
+    }
+
     const data = ttsSchema.parse(req.body);
 
-    const audioBuffer = await ttsService.synthesizeSpeech({
-      text: data.text,
-      voice: data.voice,
-      speed: data.speed,
-    });
+    if (data.stream) {
+      // Streaming response
+      res.setHeader('Content-Type', 'audio/mpeg');
+      res.setHeader('Transfer-Encoding', 'chunked');
+      res.setHeader('Cache-Control', 'no-cache');
 
-    res.setHeader('Content-Type', 'audio/mpeg');
-    res.setHeader('Content-Length', audioBuffer.length.toString());
-    res.send(audioBuffer);
+      const audioStream = await ttsService.streamSpeech({
+        text: data.text,
+        voiceId: data.voiceId,
+        voiceSettings: data.voiceSettings,
+      });
+
+      // Pipe the audio stream to the response
+      audioStream.pipe(res);
+
+      audioStream.on('error', (error) => {
+        logger.error('TTS stream error', { error: error.message });
+        if (!res.headersSent) {
+          res.status(500).json({ error: 'Stream failed' });
+        }
+      });
+    } else {
+      // Buffered response
+      const audioBuffer = await ttsService.synthesizeSpeech({
+        text: data.text,
+        voiceId: data.voiceId,
+        voiceSettings: data.voiceSettings,
+      });
+
+      res.setHeader('Content-Type', 'audio/mpeg');
+      res.setHeader('Content-Length', audioBuffer.length.toString());
+      res.send(audioBuffer);
+    }
   } catch (error) {
     if (error instanceof z.ZodError) {
       res.status(400).json({ error: 'Validation error', details: error.errors });

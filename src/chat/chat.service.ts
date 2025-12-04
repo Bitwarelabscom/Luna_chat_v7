@@ -15,6 +15,26 @@ import {
   formatAgentResultForContext,
   type ChatMessage,
 } from '../llm/openai.client.js';
+
+/**
+ * Decode HTML entities in a string
+ * LLMs sometimes encode HTML when generating tool calls
+ */
+function decodeHtmlEntities(text: string): string {
+  const entities: Record<string, string> = {
+    '&lt;': '<',
+    '&gt;': '>',
+    '&amp;': '&',
+    '&quot;': '"',
+    '&#39;': "'",
+    '&apos;': "'",
+    '&#x27;': "'",
+    '&#x2F;': '/',
+    '&#47;': '/',
+    '&nbsp;': ' ',
+  };
+  return text.replace(/&(?:lt|gt|amp|quot|apos|nbsp|#39|#x27|#x2F|#47);/gi, (match) => entities[match.toLowerCase()] || match);
+}
 import * as questionsService from '../autonomous/questions.service.js';
 import { getUserModelConfig } from '../llm/model-config.service.js';
 import * as searxng from '../search/searxng.client.js';
@@ -37,7 +57,7 @@ export interface ChatInput {
   sessionId: string;
   userId: string;
   message: string;
-  mode: 'assistant' | 'companion';
+  mode: 'assistant' | 'companion' | 'voice';
 }
 
 export interface ChatOutput {
@@ -188,7 +208,9 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
         const args = JSON.parse(toolCall.function.arguments);
         logger.info('Workspace write tool called', { userId, filename: args.filename, contentLength: args.content?.length });
         try {
-          const file = await workspace.writeFile(userId, args.filename, args.content);
+          // Decode HTML entities - LLMs sometimes encode HTML when generating tool calls
+          const decodedContent = decodeHtmlEntities(args.content);
+          const file = await workspace.writeFile(userId, args.filename, decodedContent);
           logger.info('Workspace file written successfully', { userId, filename: args.filename, size: file.size });
           messages.push({
             role: 'tool',

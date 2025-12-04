@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore, useChatStore } from '@/lib/store';
 import {
@@ -12,6 +12,8 @@ import {
   X,
   Pencil,
   Check,
+  Heart,
+  Mic,
 } from 'lucide-react';
 import clsx from 'clsx';
 import UserMenu from './UserMenu';
@@ -34,10 +36,32 @@ export default function Sidebar() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [showModeSelector, setShowModeSelector] = useState(false);
+  const modeSelectorRef = useRef<HTMLDivElement>(null);
 
-  const handleNewChat = async () => {
-    const session = await createSession('assistant');
+  // Close mode selector when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (modeSelectorRef.current && !modeSelectorRef.current.contains(event.target as Node)) {
+        setShowModeSelector(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const getModeIcon = (mode: 'assistant' | 'companion' | 'voice') => {
+    switch (mode) {
+      case 'voice': return <Mic className="w-4 h-4 flex-shrink-0 text-green-400" />;
+      case 'companion': return <Heart className="w-4 h-4 flex-shrink-0 text-pink-400" />;
+      default: return <MessageSquare className="w-4 h-4 flex-shrink-0" />;
+    }
+  };
+
+  const handleNewChat = async (mode: 'assistant' | 'companion' | 'voice') => {
+    const session = await createSession(mode);
     loadSession(session.id);
+    setShowModeSelector(false);
   };
 
   const handleSelectSession = (id: string) => {
@@ -104,17 +128,54 @@ export default function Sidebar() {
             </div>
             <div>
               <h1 className="font-semibold text-theme-text-primary">Luna</h1>
-              <p className="text-xs text-theme-text-muted">AI Assistant - Beta 0.8</p>
+              <p className="text-xs text-theme-text-muted">AI Assistant - Beta 0.8.1</p>
             </div>
           </div>
 
-          <button
-            onClick={handleNewChat}
-            className="w-full py-2.5 px-4 bg-theme-accent-primary hover:bg-theme-accent-hover rounded-lg font-medium transition flex items-center justify-center gap-2 text-theme-text-primary"
-          >
-            <Plus className="w-4 h-4" />
-            New Chat
-          </button>
+          <div className="relative" ref={modeSelectorRef}>
+            <button
+              onClick={() => setShowModeSelector(!showModeSelector)}
+              className="w-full py-2.5 px-4 bg-theme-accent-primary hover:bg-theme-accent-hover rounded-lg font-medium transition flex items-center justify-center gap-2 text-theme-text-primary"
+            >
+              <Plus className="w-4 h-4" />
+              New Chat
+            </button>
+
+            {showModeSelector && (
+              <div className="absolute top-full left-0 right-0 mt-2 bg-theme-bg-tertiary rounded-lg border border-theme-border shadow-lg overflow-hidden z-50">
+                <button
+                  onClick={() => handleNewChat('assistant')}
+                  className="w-full px-4 py-3 flex items-center gap-3 hover:bg-theme-bg-primary transition text-left"
+                >
+                  <MessageSquare className="w-5 h-5 text-blue-400" />
+                  <div>
+                    <div className="text-sm font-medium text-theme-text-primary">Assistant</div>
+                    <div className="text-xs text-theme-text-muted">Task-focused help</div>
+                  </div>
+                </button>
+                <button
+                  onClick={() => handleNewChat('companion')}
+                  className="w-full px-4 py-3 flex items-center gap-3 hover:bg-theme-bg-primary transition text-left border-t border-theme-border"
+                >
+                  <Heart className="w-5 h-5 text-pink-400" />
+                  <div>
+                    <div className="text-sm font-medium text-theme-text-primary">Companion</div>
+                    <div className="text-xs text-theme-text-muted">Friendly conversation</div>
+                  </div>
+                </button>
+                <button
+                  onClick={() => handleNewChat('voice')}
+                  className="w-full px-4 py-3 flex items-center gap-3 hover:bg-theme-bg-primary transition text-left border-t border-theme-border"
+                >
+                  <Mic className="w-5 h-5 text-green-400" />
+                  <div>
+                    <div className="text-sm font-medium text-theme-text-primary">Voice</div>
+                    <div className="text-xs text-theme-text-muted">Talk with Luna</div>
+                  </div>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Sessions list */}
@@ -140,7 +201,7 @@ export default function Sidebar() {
                       : 'text-theme-text-muted hover:bg-theme-bg-tertiary/50 hover:text-theme-text-secondary'
                   )}
                 >
-                  <MessageSquare className="w-4 h-4 flex-shrink-0" />
+                  {getModeIcon(session.mode)}
 
                   {editingId === session.id ? (
                     <input

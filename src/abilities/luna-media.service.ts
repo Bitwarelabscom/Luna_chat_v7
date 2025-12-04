@@ -23,23 +23,29 @@ const LUNA_REFERENCE = path.join(IMAGES_DIR, 'luna2.jpg');
 
 // Video-to-mood mapping
 const MOOD_TO_VIDEOS: Record<MoodEmotion, string[]> = {
-  joy: ['laughing', 'smile', 'happily_approve', 'ok_let_go'],
-  sadness: ['cry', 'sad_offended'],
-  anger: ['you_are_stupid', 'that_is_stupid', 'intruder_detected'],
-  fear: ['intruder_detected'],
-  surprise: ['did_you_just_say_that', 'perfect_idea'],
-  disgust: ['that_is_stupid', 'no_neutral'],
-  trust: ['all_systems_are_fine', 'happily_approve'],
-  anticipation: ['ok_let_go', 'evil_grin', 'world_domination'],
+  joy: ['laughing', 'smile', 'smile3', 'ssmile6', 'happily_approve', 'ok_let_go', 'laugh2', 'laugh4', 'ofc', 'i_agree', 'hmmm_yes'],
+  sadness: ['cry', 'sad_offended', 'rain', 'rain2', 'oh_no'],
+  anger: ['you_are_stupid', 'that_is_stupid', 'intruder_detected', 'no_not_like', 'not_approve'],
+  fear: ['intruder_detected', 'oh_no'],
+  surprise: ['did_you_just_say_that', 'perfect_idea', 'what', 'are_you_sure', 'hallucinate'],
+  disgust: ['that_is_stupid', 'no_neutral', 'no_not_like', 'not_approve', 'ehhh_ok'],
+  trust: ['all_systems_are_fine', 'happily_approve', 'i_agree', 'ofc', 'hmmm_yes'],
+  anticipation: ['ok_let_go', 'evil_grin', 'world_domination', 'letsachiveworlddomination', 'breath_in_deep'],
 };
+
+// Neutral video variations for fallback
+const NEUTRAL_VIDEOS = ['neutral', 'neutral2', 'neutral3', 'neutral4'];
 
 // Context triggers - patterns in Luna's response that trigger specific videos
 const CONTEXT_TRIGGERS: Record<string, string[]> = {
   'laughing': ['haha', 'lol', 'funny', 'hilarious', 'laugh', 'hehe', 'amusing'],
+  'laugh2': ['hahaha', 'rofl', 'lmao', 'cracking up'],
+  'laugh4': ['dying of laughter', 'so funny', 'comedy gold'],
   'perfect_idea': ['idea', 'suggestion', 'how about', 'what if', 'we could', 'let me suggest'],
   'no_neutral': ['no,', "i don't think", 'i disagree', 'actually,', "that's not", 'incorrect'],
   'all_systems_are_fine': ['status', 'everything is', 'systems', 'operational', 'working properly'],
   'world_domination': ['power', 'domination', 'control', 'rule the', 'take over'],
+  'letsachiveworlddomination': ['conquer', 'supreme', 'unstoppable', 'reign'],
   'evil_grin': ['mischief', 'scheme', 'plan', 'devious', 'nefarious', 'plotting'],
   'give_me_more_vram': ['memory', 'resources', 'vram', 'gpu', 'processing power', 'compute'],
   'cry': ['sorry to hear', 'sad news', 'unfortunate', 'regret', 'condolences', 'heartbreaking'],
@@ -47,11 +53,30 @@ const CONTEXT_TRIGGERS: Record<string, string[]> = {
   'did_you_just_say_that': ['what?', 'excuse me', 'really?', 'seriously?', 'pardon?'],
   'intruder_detected': ['security', 'warning', 'alert', 'unauthorized', 'breach', 'threat'],
   'smile': ['happy to help', 'glad', 'pleased', 'delighted', 'nice to'],
+  'smile3': ['lovely', 'sweet', 'charming', 'adorable'],
+  'ssmile6': ['thrilled', 'overjoyed', 'ecstatic'],
   'ok_let_go': ["let's do", "let's get started", "ready to", "here we go", "shall we"],
   'sad_offended': ['offended', 'hurt', 'disappointed', 'let down'],
   'you_are_stupid': ['frustrating', 'annoying', 'irritating', 'exasperated'],
   'that_is_stupid': ['ridiculous', 'absurd', 'nonsense', 'preposterous'],
   'neutral': [],  // Default fallback, no triggers
+  // New video triggers
+  'are_you_sure': ['are you sure', 'certain?', 'positive?', 'confident?'],
+  'breath_in_deep': ['calm down', 'relax', 'breathe', 'take a breath', 'deep breath', 'patience'],
+  'ehhh_ok': ['i guess', 'if you say so', 'alright then', 'i suppose', 'reluctantly'],
+  'hallucinate': ['hallucinating', 'making things up', 'imagining', 'ai moment', 'glitch'],
+  'hmm_ok': ['hmm,', 'i see', 'understood', 'got it', 'acknowledged'],
+  'hmmm_i_dont_know': ["i don't know", "not sure", "uncertain", "maybe", "perhaps", "hard to say"],
+  'hmmm_yes': ['indeed', 'correct', 'right', 'exactly', 'precisely'],
+  'i_agree': ['i agree', 'agreed', 'same here', 'concur', 'seconded'],
+  'no_not_like': ["don't like", 'dislike', 'not a fan', 'against it'],
+  'not_approve': ['disapprove', 'cannot approve', 'reject', 'denied'],
+  'ofc': ['of course', 'naturally', 'obviously', 'certainly', 'definitely'],
+  'oh_no': ['oh no', 'terrible', 'awful', 'disaster', 'catastrophe', 'uh oh'],
+  'rain': ['gloomy', 'melancholy', 'feeling down', 'blue mood'],
+  'rain2': ['stormy', 'troubled', 'dark times'],
+  'snow': ['cold', 'winter', 'peaceful', 'serene', 'tranquil', 'chill'],
+  'what': ['huh?', 'come again', "don't understand", 'confused', 'wait what'],
 };
 
 // Available videos (from filesystem)
@@ -248,10 +273,12 @@ export async function selectMedia(response: string, mood: string): Promise<Media
     };
   } catch {
     // Fallback to neutral video if image generation fails
-    if (availableVideos.includes('neutral')) {
+    const availableNeutrals = NEUTRAL_VIDEOS.filter(v => availableVideos.includes(v));
+    if (availableNeutrals.length > 0) {
+      const randomNeutral = availableNeutrals[Math.floor(Math.random() * availableNeutrals.length)];
       return {
         type: 'video',
-        url: '/api/images/mp4/neutral.mp4',
+        url: `/api/images/mp4/${randomNeutral}.mp4`,
         mood: moodLower,
         trigger: 'fallback:neutral',
       };

@@ -7,6 +7,7 @@ export interface Task {
   title: string;
   description?: string;
   dueAt?: Date;
+  dueDate?: string | null;
   remindAt?: Date;
   recurrence?: string;
   priority: 'low' | 'medium' | 'high' | 'urgent';
@@ -414,6 +415,7 @@ function mapRowToTask(row: Record<string, unknown>): Task {
     title: row.title as string,
     description: row.description as string | undefined,
     dueAt: row.due_at as Date | undefined,
+    dueDate: row.due_at ? (row.due_at as Date).toISOString() : null,
     remindAt: row.remind_at as Date | undefined,
     recurrence: row.recurrence as string | undefined,
     priority: row.priority as 'low' | 'medium' | 'high' | 'urgent',
