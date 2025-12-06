@@ -17,7 +17,8 @@ import {
   Globe,
   Zap,
 } from 'lucide-react';
-import { mcpApi, McpServerWithTools, McpTool, McpPreset } from '../../lib/api';
+import { mcpApi } from '@/lib/api';
+import type { McpServerWithTools, McpTool, McpPreset } from '@/lib/api';
 
 export default function McpTab() {
   const [servers, setServers] = useState<McpServerWithTools[]>([]);

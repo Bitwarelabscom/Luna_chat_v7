@@ -20,26 +20,25 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
-type TabId = 'appearance' | 'prompts' | 'models' | 'integrations' | 'mcp' | 'workspace' | 'tasks' | 'memory' | 'autonomous' | 'triggers' | 'stats' | 'data';
+type TabId = 'appearance' | 'prompts' | 'models' | 'integrations' | 'mcpconfig' | 'workspace' | 'tasks' | 'memory' | 'autonomous' | 'triggers' | 'stats' | 'data';
+
+const SETTINGS_TABS: Array<{ id: TabId; label: string; icon: typeof MessageSquare }> = [
+  { id: 'appearance', label: 'Appearance', icon: Palette },
+  { id: 'prompts', label: 'Prompts', icon: MessageSquare },
+  { id: 'models', label: 'Models', icon: Cpu },
+  { id: 'integrations', label: 'Integrations', icon: Link2 },
+  { id: 'mcpconfig', label: 'MCP Servers', icon: Plug },
+  { id: 'workspace', label: 'Workspace', icon: FolderOpen },
+  { id: 'tasks', label: 'Tasks', icon: CheckSquare },
+  { id: 'memory', label: 'Memory', icon: Sparkles },
+  { id: 'autonomous', label: 'Autonomous', icon: Brain },
+  { id: 'triggers', label: 'Triggers', icon: Bell },
+  { id: 'stats', label: 'Stats', icon: BarChart3 },
+  { id: 'data', label: 'Data', icon: Database },
+];
 
 export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<TabId>('appearance');
-
-  // Define tabs inside component to prevent tree-shaking issues
-  const tabs: { id: TabId; label: string; icon: typeof MessageSquare }[] = [
-    { id: 'appearance', label: 'Appearance', icon: Palette },
-    { id: 'prompts', label: 'Prompts', icon: MessageSquare },
-    { id: 'models', label: 'Models', icon: Cpu },
-    { id: 'integrations', label: 'Integrations', icon: Link2 },
-    { id: 'mcp', label: 'MCP Servers', icon: Plug },
-    { id: 'workspace', label: 'Workspace', icon: FolderOpen },
-    { id: 'tasks', label: 'Tasks', icon: CheckSquare },
-    { id: 'memory', label: 'Memory', icon: Sparkles },
-    { id: 'autonomous', label: 'Autonomous', icon: Brain },
-    { id: 'triggers', label: 'Triggers', icon: Bell },
-    { id: 'stats', label: 'Stats', icon: BarChart3 },
-    { id: 'data', label: 'Data', icon: Database },
-  ];
 
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
@@ -82,7 +81,7 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
         {/* Tabs */}
         <div className="flex border-b border-theme-border overflow-x-auto">
-          {tabs.map((tab) => {
+          {SETTINGS_TABS.map((tab) => {
             const Icon = tab.icon;
             return (
               <button
@@ -107,7 +106,7 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           {activeTab === 'prompts' && <PromptsTab />}
           {activeTab === 'models' && <ModelsTab />}
           {activeTab === 'integrations' && <IntegrationsTab />}
-          {activeTab === 'mcp' && <McpTab />}
+          {activeTab === 'mcpconfig' && <McpTab />}
           {activeTab === 'workspace' && <WorkspaceTab />}
           {activeTab === 'tasks' && <TasksTab />}
           {activeTab === 'memory' && <MemoryTab />}

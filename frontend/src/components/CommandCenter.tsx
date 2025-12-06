@@ -39,7 +39,7 @@ interface ActivityLog {
 }
 
 type MainTab = 'chat' | 'autonomous' | 'friends' | 'tasks' | 'workspace' | 'email' | 'calendar' | 'settings' | 'activity';
-type SettingsTab = 'appearance' | 'prompts' | 'models' | 'integrations' | 'workspace' | 'tasks' | 'memory' | 'autonomous' | 'triggers' | 'stats' | 'data';
+type SettingsTab = 'appearance' | 'prompts' | 'models' | 'integrations' | 'mcpconfig' | 'workspace' | 'tasks' | 'memory' | 'autonomous' | 'triggers' | 'stats' | 'data';
 
 const CommandCenter = () => {
   const router = useRouter();
@@ -483,6 +483,7 @@ const CommandCenter = () => {
     { id: 'prompts', label: 'Prompts' },
     { id: 'models', label: 'Models' },
     { id: 'integrations', label: 'Integrations' },
+    { id: 'mcpconfig', label: 'MCP Servers' },
     { id: 'workspace', label: 'Workspace' },
     { id: 'tasks', label: 'Tasks' },
     { id: 'memory', label: 'Memory' },
