@@ -23,6 +23,7 @@ Built with a **Local-First** ethos, Luna integrates deeply with your digital lif
 - [Key Features](#key-features)
 - [Chat Modes](#chat-modes)
 - [Luna's Abilities](#lunas-abilities)
+- [Triggers System](#triggers-system)
 - [The Council & Friends](#the-council--friends)
 - [Autonomous Mode](#autonomous-mode)
 - [Memory System](#memory-system)
@@ -70,6 +71,7 @@ Most AI assistants are stateless query engines. Luna is a **stateful companion**
 ### Integrations
 - **Calendar**: CalDAV integration (Google, Outlook, self-hosted Radicale)
 - **Email**: SMTP/IMAP support for sending and receiving
+- **Telegram**: Two-way messaging and notifications via Telegram bot
 - **Code Sandbox**: Execute Python, JavaScript, and Shell scripts safely
 - **Document Processing**: Upload and search PDFs, text files, and more
 - **Web Search**: SearXNG integration for web research
@@ -194,6 +196,53 @@ Create your own integrations:
 - API endpoints with custom parameters
 - Webhooks for external services
 - Safe expression evaluation
+
+---
+
+## Triggers System
+
+Luna can proactively reach out to you through a sophisticated triggers system:
+
+### Trigger Sources
+
+| Source | Description |
+|--------|-------------|
+| **Time-Based** | Cron schedules for recurring triggers |
+| **Pattern-Based** | Detect mood, absence, productivity patterns |
+| **Event-Based** | Task completion, goal milestones, system events |
+| **Webhooks** | External services can trigger Luna |
+
+### Delivery Methods
+
+| Method | Description |
+|--------|-------------|
+| **In-App Chat** | Messages appear in a dedicated session |
+| **Telegram** | Two-way messaging via Telegram bot |
+| **SSE Broadcast** | Real-time notifications in the web app |
+| **Push Notifications** | Browser push notifications (Web Push API) |
+
+### Telegram Integration
+
+Connect Luna to Telegram for mobile notifications and chat:
+
+1. Configure your Telegram bot token in Settings > Integrations
+2. Generate a link code and send it to your bot
+3. Chat with Luna directly from Telegram
+
+Features:
+- Receive proactive messages and reminders
+- Send messages to Luna from anywhere
+- Get notifications for important events
+- Two-way conversation support
+
+### Built-in Schedules
+
+| Schedule | Description |
+|----------|-------------|
+| Morning Check-in | Daily wellness check |
+| Weekly Goals | Monday goal review |
+| Absence Support | Reach out after 3+ days away |
+| Mood Support | Proactive support when mood is low |
 
 ---
 
@@ -362,6 +411,11 @@ luna-chat/
 |   |-- persona/            # Personality
 |   |-- search/             # Web search
 |   |-- security/           # Security middleware
+|   |-- triggers/           # Proactive triggers system
+|   |   |-- trigger.service.ts        # Core trigger engine
+|   |   |-- delivery.service.ts       # Delivery methods (SSE, chat)
+|   |   |-- telegram.service.ts       # Telegram bot integration
+|   |   |-- triggers.routes.ts        # Trigger API endpoints
 |-- frontend/               # Next.js web UI
 |   |-- src/
 |   |   |-- components/
@@ -370,6 +424,7 @@ luna-chat/
 |   |   |   |-- MobileBottomNav.tsx
 |   |   |   |-- MobileSessionsOverlay.tsx
 |   |   |   |-- settings/
+|   |   |   |   |-- TriggersTab.tsx       # Trigger configuration UI
 |   |   |-- hooks/
 |   |   |   |-- useIsMobile.ts
 |-- android/                # Native Android app
@@ -493,6 +548,23 @@ npm start
 | GET | `/api/autonomous/insights` | Generated insights |
 | GET | `/api/autonomous/friends` | Friend conversations |
 
+### Triggers Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/triggers/live` | SSE stream for real-time notifications |
+| GET | `/api/triggers/preferences` | Get trigger preferences |
+| PUT | `/api/triggers/preferences` | Update trigger preferences |
+| GET | `/api/triggers/schedules` | List user schedules |
+| POST | `/api/triggers/schedules` | Create schedule |
+| GET | `/api/triggers/schedules/builtin` | List built-in schedules |
+| PUT | `/api/triggers/schedules/:id` | Update schedule |
+| DELETE | `/api/triggers/schedules/:id` | Delete schedule |
+| GET | `/api/triggers/telegram/status` | Telegram connection status |
+| POST | `/api/triggers/telegram/link` | Generate Telegram link code |
+| DELETE | `/api/triggers/telegram/unlink` | Disconnect Telegram |
+| POST | `/api/triggers/telegram/webhook` | Telegram bot webhook |
+
 ### Auth Endpoints
 
 | Method | Endpoint | Description |
@@ -528,6 +600,8 @@ npm start
 | `OLLAMA_HOST` | Ollama URL | http://luna-ollama:11434 |
 | `SEARXNG_URL` | Search engine URL | - |
 | `ELEVENLABS_API_KEY` | TTS API key | - |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token | - |
+| `TELEGRAM_WEBHOOK_URL` | Public URL for Telegram webhook | - |
 
 ### Model Configuration
 
