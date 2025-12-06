@@ -4,6 +4,8 @@ import * as taskPatterns from '../abilities/task-patterns.service.js';
 import * as oauthService from '../integrations/oauth.service.js';
 import * as rssService from '../autonomous/rss.service.js';
 import * as insightsService from '../autonomous/insights.service.js';
+import * as triggerService from '../triggers/trigger.service.js';
+import * as deliveryService from '../triggers/delivery.service.js';
 import logger from '../utils/logger.js';
 
 // ============================================
@@ -83,6 +85,21 @@ const jobs: Job[] = [
     enabled: true,
     running: false,
     handler: consolidateSessionLearnings,
+  },
+  // Proactive trigger jobs
+  {
+    name: 'triggerProcessor',
+    intervalMs: 60 * 1000, // Every minute
+    enabled: true,
+    running: false,
+    handler: processTriggers,
+  },
+  {
+    name: 'triggerCleanup',
+    intervalMs: 60 * 60 * 1000, // Hourly
+    enabled: true,
+    running: false,
+    handler: cleanupOldTriggers,
   },
 ];
 
@@ -301,7 +318,7 @@ async function fetchRssFeeds(): Promise<void> {
       FROM rss_feeds rf
       JOIN autonomous_config ac ON rf.user_id = ac.user_id
       WHERE rf.is_active = true
-        AND ac.is_enabled = true
+        AND ac.enabled = true
     `);
 
     for (const row of result.rows) {
@@ -390,6 +407,67 @@ async function consolidateSessionLearnings(): Promise<void> {
   } catch (error) {
     logger.error('Session learning consolidation job failed', {
       error: (error as Error).message
+    });
+  }
+}
+
+// ============================================
+// Proactive Trigger Job Handlers
+// ============================================
+
+/**
+ * Process all trigger types and deliver pending triggers
+ */
+async function processTriggers(): Promise<void> {
+  try {
+    // 1. Check time-based triggers (cron schedules)
+    const timeBasedCount = await triggerService.processTimeBasedTriggers();
+
+    // 2. Check pattern-based triggers
+    const patternCount = await triggerService.processPatternTriggers();
+
+    // 3. Check insight-based triggers
+    const insightCount = await triggerService.processInsightTriggers();
+
+    // 4. Process pending trigger queue (deliver messages)
+    const deliveredCount = await deliveryService.processTriggerQueue();
+
+    const totalEnqueued = timeBasedCount + patternCount + insightCount;
+
+    if (totalEnqueued > 0 || deliveredCount > 0) {
+      logger.info('Trigger processor job completed', {
+        enqueued: {
+          timeBased: timeBasedCount,
+          pattern: patternCount,
+          insight: insightCount,
+          total: totalEnqueued,
+        },
+        delivered: deliveredCount,
+      });
+    } else {
+      logger.debug('Trigger processor job completed - no triggers to process');
+    }
+  } catch (error) {
+    logger.error('Trigger processor job failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+/**
+ * Clean up old delivered/failed triggers
+ */
+async function cleanupOldTriggers(): Promise<void> {
+  try {
+    const result = await pool.query(`SELECT cleanup_old_pending_triggers() as deleted_count`);
+    const deletedCount = result.rows[0]?.deleted_count || 0;
+
+    if (deletedCount > 0) {
+      logger.info('Cleaned up old triggers', { count: deletedCount });
+    }
+  } catch (error) {
+    logger.error('Trigger cleanup job failed', {
+      error: (error as Error).message,
     });
   }
 }

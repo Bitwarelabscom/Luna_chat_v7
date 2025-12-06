@@ -29,6 +29,7 @@ import WorkspaceTab from './settings/WorkspaceTab';
 import AutonomousTab from './settings/AutonomousTab';
 import FriendsTab from './settings/FriendsTab';
 import MemoryTab from './settings/MemoryTab';
+import TriggersTab from './settings/TriggersTab';
 import QuestionNotification from './QuestionNotification';
 
 interface ActivityLog {
@@ -38,7 +39,7 @@ interface ActivityLog {
 }
 
 type MainTab = 'chat' | 'autonomous' | 'friends' | 'tasks' | 'workspace' | 'email' | 'calendar' | 'settings' | 'activity';
-type SettingsTab = 'appearance' | 'prompts' | 'models' | 'integrations' | 'workspace' | 'tasks' | 'memory' | 'autonomous' | 'stats' | 'data';
+type SettingsTab = 'appearance' | 'prompts' | 'models' | 'integrations' | 'workspace' | 'tasks' | 'memory' | 'autonomous' | 'triggers' | 'stats' | 'data';
 
 const CommandCenter = () => {
   const router = useRouter();
@@ -47,9 +48,12 @@ const CommandCenter = () => {
     sessions,
     currentSession,
     isLoadingSessions,
+    isLoadingMessages,
     isSending,
     streamingContent,
     statusMessage,
+    startupSuggestions,
+    isLoadingStartup,
     loadSessions,
     loadSession,
     createSession,
@@ -62,6 +66,9 @@ const CommandCenter = () => {
     setIsSending,
     setStreamingContent,
     setStatusMessage,
+    setStartupSuggestions,
+    clearStartupSuggestions,
+    setIsLoadingStartup,
   } = useChatStore();
 
   const audioPlayer = useAudioPlayer();
@@ -93,6 +100,44 @@ const CommandCenter = () => {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const startupTriggeredRef = useRef<string | null>(null);
+
+  // Trigger startup greeting for new sessions
+  useEffect(() => {
+    const sessionId = currentSession?.id;
+    const messages = currentSession?.messages || [];
+
+    if (
+      sessionId &&
+      messages.length === 0 &&
+      !isLoadingMessages &&
+      !isLoadingStartup &&
+      startupTriggeredRef.current !== sessionId
+    ) {
+      startupTriggeredRef.current = sessionId;
+      triggerStartup(sessionId);
+    }
+  }, [currentSession?.id, currentSession?.messages?.length, isLoadingMessages, isLoadingStartup]);
+
+  const triggerStartup = async (sessionId: string) => {
+    setIsLoadingStartup(true);
+    try {
+      const { message, suggestions } = await chatApi.getSessionStartup(sessionId);
+      addAssistantMessage(message.content, message.id);
+      setStartupSuggestions(suggestions);
+      addLog('Luna initialized session', 'success');
+    } catch (error) {
+      console.error('Failed to generate startup message:', error);
+    } finally {
+      setIsLoadingStartup(false);
+    }
+  };
+
+  const handleSuggestionSelect = (suggestion: string) => {
+    setInput(suggestion);
+    clearStartupSuggestions();
+    inputRef.current?.focus();
+  };
 
   // Add activity log
   const addLog = useCallback((event: string, type: ActivityLog['type'] = 'info') => {
@@ -442,6 +487,7 @@ const CommandCenter = () => {
     { id: 'tasks', label: 'Tasks' },
     { id: 'memory', label: 'Memory' },
     { id: 'autonomous', label: 'Autonomous' },
+    { id: 'triggers', label: 'Triggers' },
     { id: 'stats', label: 'Stats' },
     { id: 'data', label: 'Data' },
   ];
@@ -1007,7 +1053,9 @@ const CommandCenter = () => {
                       <span style={{ fontSize: '32px', color: '#00ff9f' }}>L</span>
                     </div>
                     <div style={{ fontSize: '14px', marginBottom: '10px', color: '#c0c8d0' }}>LUNA NEURAL CORE</div>
-                    <div style={{ fontSize: '12px' }}>Systems nominal. Awaiting input...</div>
+                    <div style={{ fontSize: '12px' }}>
+                      {isLoadingStartup ? 'Initializing...' : 'Systems nominal. Awaiting input...'}
+                    </div>
                   </div>
                 ) : (
                   <>
@@ -1126,6 +1174,47 @@ const CommandCenter = () => {
                 )}
                 <div ref={messagesEndRef} />
               </div>
+              )}
+
+              {/* Suggestion Chips */}
+              {startupSuggestions.length > 0 && !isSending && (
+                <div style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: '8px',
+                  padding: '12px 20px',
+                  justifyContent: 'center',
+                  borderTop: '1px solid #2a3545',
+                }}>
+                  {startupSuggestions.map((suggestion, index) => (
+                    <button
+                      key={index}
+                      onClick={() => handleSuggestionSelect(suggestion)}
+                      style={{
+                        padding: '8px 16px',
+                        borderRadius: '20px',
+                        background: '#1a2535',
+                        border: '1px solid #2a3545',
+                        color: '#c0c8d0',
+                        fontSize: '13px',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease',
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = '#00ff9f20';
+                        e.currentTarget.style.borderColor = '#00ff9f50';
+                        e.currentTarget.style.color = '#00ff9f';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = '#1a2535';
+                        e.currentTarget.style.borderColor = '#2a3545';
+                        e.currentTarget.style.color = '#c0c8d0';
+                      }}
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
+                </div>
               )}
 
               {/* Input */}
@@ -1554,6 +1643,7 @@ const CommandCenter = () => {
                 {settingsTab === 'tasks' && <TasksTab />}
                 {settingsTab === 'memory' && <MemoryTab />}
                 {settingsTab === 'autonomous' && <AutonomousTab />}
+                {settingsTab === 'triggers' && <TriggersTab />}
                 {settingsTab === 'stats' && <StatsTab />}
                 {settingsTab === 'data' && <DataTab />}
               </div>

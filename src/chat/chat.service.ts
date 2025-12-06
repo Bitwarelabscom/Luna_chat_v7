@@ -11,6 +11,10 @@ import {
   searchDocumentsTool,
   suggestGoalTool,
   fetchUrlTool,
+  listTodosTool,
+  createTodoTool,
+  completeTodoTool,
+  updateTodoTool,
   formatSearchResultsForContext,
   formatAgentResultForContext,
   type ChatMessage,
@@ -44,6 +48,7 @@ import * as workspace from '../abilities/workspace.service.js';
 import * as sandbox from '../abilities/sandbox.service.js';
 import * as emailService from '../abilities/email.service.js';
 import * as documents from '../abilities/documents.service.js';
+import * as tasksService from '../abilities/tasks.service.js';
 import * as memoryService from '../memory/memory.service.js';
 import * as preferencesService from '../memory/preferences.service.js';
 import * as abilities from '../abilities/orchestrator.js';
@@ -51,6 +56,7 @@ import { buildContextualPrompt } from '../persona/luna.persona.js';
 import * as sessionService from './session.service.js';
 import * as authService from '../auth/auth.service.js';
 import logger from '../utils/logger.js';
+import { sysmonTools, executeSysmonTool } from '../abilities/sysmon.service.js';
 import type { Message, SearchResult } from '../types/index.js';
 
 export interface ChatInput {
@@ -145,7 +151,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user');
 
   // TOOL GATING: For smalltalk, don't expose tools at all to prevent eager tool calling
-  const allTools = [searchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, searchDocumentsTool, suggestGoalTool, fetchUrlTool];
+  const allTools = [searchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, searchDocumentsTool, suggestGoalTool, fetchUrlTool, listTodosTool, createTodoTool, completeTodoTool, updateTodoTool, ...sysmonTools];
   const availableTools = isSmallTalkMessage ? [] : allTools;
   let searchResults: SearchResult[] | undefined;
   let agentResults: Array<{ agent: string; result: string; success: boolean }> = [];
@@ -361,6 +367,153 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
             content: `Failed to fetch URL: ${(error as Error).message}`,
           } as ChatMessage);
         }
+      } else if (toolCall.function.name === 'list_todos') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Luna listing todos', { includeCompleted: args.includeCompleted });
+        const todos = await tasksService.getTasks(userId, {
+          status: args.includeCompleted ? undefined : 'pending',
+          limit: 20,
+        });
+        const todoList = todos.length > 0
+          ? todos.map(t => {
+              let entry = `- [${t.id.slice(0, 8)}] ${t.title} (${t.status}, ${t.priority})`;
+              if (t.dueAt) entry += ` - due: ${new Date(t.dueAt).toLocaleDateString()}`;
+              if (t.description) entry += `\n  Notes: ${t.description}`;
+              return entry;
+            }).join('\n')
+          : 'No todos found.';
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: `Found ${todos.length} todo(s):\n${todoList}`,
+        } as ChatMessage);
+      } else if (toolCall.function.name === 'create_todo') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Luna creating todo', { title: args.title });
+        const parsed = tasksService.parseTaskFromText(args.dueDate || '');
+        const todo = await tasksService.createTask(userId, {
+          title: args.title,
+          description: args.notes,
+          priority: args.priority || 'medium',
+          dueAt: parsed.dueAt,
+          sourceSessionId: sessionId,
+        });
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: `Created todo: "${todo.title}" [${todo.id.slice(0, 8)}]${todo.dueAt ? ` - due: ${new Date(todo.dueAt).toLocaleDateString()}` : ''}`,
+        } as ChatMessage);
+      } else if (toolCall.function.name === 'complete_todo') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Luna completing todo', { todoId: args.todoId, title: args.title });
+        let todoId = args.todoId;
+
+        // Support partial UUID matching (we show 8-char IDs in list_todos)
+        const todos = await tasksService.getTasks(userId, { limit: 50 });
+        if (todoId && todoId.length < 36) {
+          const match = todos.find(t => t.id.startsWith(todoId));
+          if (match) todoId = match.id;
+        }
+        if (!todoId && args.title) {
+          const match = todos.find(t => t.title.toLowerCase().includes(args.title.toLowerCase()));
+          if (match) todoId = match.id;
+        }
+        if (todoId) {
+          const todo = await tasksService.updateTaskStatus(userId, todoId, 'completed');
+          if (todo) {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Marked todo "${todo.title}" as completed.`,
+            } as ChatMessage);
+          } else {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: 'Todo not found.',
+            } as ChatMessage);
+          }
+        } else {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: 'Could not find a matching todo. Use list_todos to see available todos.',
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'update_todo') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Luna updating todo', { todoId: args.todoId, title: args.title });
+        let todoId = args.todoId;
+
+        // Support partial UUID matching
+        const allTodos = await tasksService.getTasks(userId, { limit: 50 });
+        if (todoId && todoId.length < 36) {
+          const match = allTodos.find(t => t.id.startsWith(todoId));
+          if (match) todoId = match.id;
+        }
+        if (!todoId && args.title) {
+          const match = allTodos.find(t => t.title.toLowerCase().includes(args.title.toLowerCase()));
+          if (match) todoId = match.id;
+        }
+        if (todoId) {
+          const updates: Partial<tasksService.CreateTaskInput> = {};
+          if (args.notes !== undefined) updates.description = args.notes;
+          if (args.priority) updates.priority = args.priority;
+          if (args.dueDate) {
+            const parsed = tasksService.parseTaskFromText(args.dueDate);
+            if (parsed.dueAt) updates.dueAt = parsed.dueAt;
+          }
+          if (args.status) {
+            await tasksService.updateTaskStatus(userId, todoId, args.status);
+          }
+          const todo = Object.keys(updates).length > 0
+            ? await tasksService.updateTask(userId, todoId, updates)
+            : await tasksService.getTasks(userId, { limit: 1 }).then(t => t.find(x => x.id === todoId));
+          if (todo) {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Updated todo "${todo.title}".${args.notes ? ` Notes: ${args.notes}` : ''}`,
+            } as ChatMessage);
+          } else {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: 'Todo not found.',
+            } as ChatMessage);
+          }
+        } else {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: 'Could not find a matching todo. Use list_todos to see available todos.',
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name.startsWith('system_') ||
+                 toolCall.function.name.startsWith('network_') ||
+                 toolCall.function.name.startsWith('process_') ||
+                 toolCall.function.name.startsWith('docker_') ||
+                 toolCall.function.name.startsWith('service_') ||
+                 toolCall.function.name.startsWith('logs_') ||
+                 toolCall.function.name.startsWith('maintenance_')) {
+        // System monitoring tools
+        const args = JSON.parse(toolCall.function.arguments || '{}');
+        logger.info('Sysmon tool called', { tool: toolCall.function.name, args });
+        try {
+          const result = await executeSysmonTool(toolCall.function.name, args);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: JSON.stringify(result, null, 2),
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Sysmon tool failed', { tool: toolCall.function.name, error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
       }
     }
 
@@ -458,10 +611,45 @@ export async function* streamMessage(
     // Store user message embedding (async)
     memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user');
 
+    // Check if message relates to a pending todo - if so, include full todo context
+    // This prevents context loss when Luna decides to work on a todo
+    let orchestrationContext: string | undefined;
+    let relatedTodoId: string | undefined;
+    let relatedTodoTitle: string | undefined;
+    try {
+      const pendingTodos = await tasksService.getTasks(userId, { status: 'pending', limit: 20 });
+      const lowerMessage = message.toLowerCase();
+
+      // Find todos that match the message (title or description overlap)
+      const relatedTodo = pendingTodos.find(todo => {
+        const titleWords = todo.title.toLowerCase().split(/\s+/);
+        const descWords = (todo.description || '').toLowerCase().split(/\s+/);
+        // Check if significant words from message appear in todo
+        const messageWords = lowerMessage.split(/\s+/).filter(w => w.length > 3);
+        const matchCount = messageWords.filter(w =>
+          titleWords.some(tw => tw.includes(w) || w.includes(tw)) ||
+          descWords.some(dw => dw.includes(w) || w.includes(dw))
+        ).length;
+        return matchCount >= 2; // At least 2 significant word matches
+      });
+
+      if (relatedTodo) {
+        orchestrationContext = `This task is from a todo item:\n\nTitle: ${relatedTodo.title}\nDescription: ${relatedTodo.description || 'No description'}\nPriority: ${relatedTodo.priority}`;
+        relatedTodoId = relatedTodo.id;
+        relatedTodoTitle = relatedTodo.title;
+        logger.info('Found related todo for orchestration', {
+          todoId: relatedTodo.id,
+          todoTitle: relatedTodo.title
+        });
+      }
+    } catch (err) {
+      logger.warn('Failed to check for related todos', { error: (err as Error).message });
+    }
+
     // Execute orchestration with streaming status updates
     let orchestrationResult: agents.OrchestrationResult | null = null;
 
-    for await (const event of agents.orchestrateTaskStream(userId, message)) {
+    for await (const event of agents.orchestrateTaskStream(userId, message, orchestrationContext)) {
       if (event.type === 'status') {
         yield { type: 'status', status: event.status };
       } else if (event.type === 'done') {
@@ -477,6 +665,28 @@ export async function* streamMessage(
     let responseContent: string;
     if (orchestrationResult.success) {
       responseContent = orchestrationResult.synthesis;
+
+      // If this was related to a todo, add notes and offer to mark complete
+      if (relatedTodoId) {
+        try {
+          // Create a summary of what was done (first 500 chars of synthesis)
+          const summaryNote = `[Orchestration completed ${new Date().toISOString().split('T')[0]}]\n${orchestrationResult.synthesis.substring(0, 500)}${orchestrationResult.synthesis.length > 500 ? '...' : ''}`;
+
+          await tasksService.updateTask(userId, relatedTodoId, {
+            description: summaryNote,
+          });
+
+          // Add a note to the response about the todo
+          responseContent += `\n\n---\n**Todo Updated:** I've added notes to "${relatedTodoTitle}". Would you like me to mark it as complete, or is there more work to do on this task?`;
+
+          logger.info('Updated related todo with orchestration results', {
+            todoId: relatedTodoId,
+            todoTitle: relatedTodoTitle
+          });
+        } catch (err) {
+          logger.warn('Failed to update related todo', { error: (err as Error).message, todoId: relatedTodoId });
+        }
+      }
     } else {
       responseContent = `I encountered an issue while processing your request:\n\n${orchestrationResult.error || 'Unknown error'}\n\n`;
       if (orchestrationResult.results.length > 0) {
@@ -609,7 +819,7 @@ export async function* streamMessage(
 
   // TOOL GATING: For smalltalk, don't expose tools at all to prevent eager tool calling
   // For other messages, provide relevant tools
-  const allTools = [searchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, searchDocumentsTool, suggestGoalTool, fetchUrlTool];
+  const allTools = [searchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, searchDocumentsTool, suggestGoalTool, fetchUrlTool, listTodosTool, createTodoTool, completeTodoTool, updateTodoTool, ...sysmonTools];
   const availableTools = isSmallTalkMessage ? [] : allTools;
   let searchResults: SearchResult[] | undefined;
 
@@ -844,6 +1054,159 @@ export async function* streamMessage(
             content: `Failed to fetch URL: ${(error as Error).message}`,
           } as ChatMessage);
         }
+      } else if (toolCall.function.name === 'list_todos') {
+        const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'status', status: 'Checking your todos...' };
+        logger.info('Luna listing todos (stream)', { includeCompleted: args.includeCompleted });
+        const todos = await tasksService.getTasks(userId, {
+          status: args.includeCompleted ? undefined : 'pending',
+          limit: 20,
+        });
+        const todoList = todos.length > 0
+          ? todos.map(t => {
+              let entry = `- [${t.id.slice(0, 8)}] ${t.title} (${t.status}, ${t.priority})`;
+              if (t.dueAt) entry += ` - due: ${new Date(t.dueAt).toLocaleDateString()}`;
+              if (t.description) entry += `\n  Notes: ${t.description}`;
+              return entry;
+            }).join('\n')
+          : 'No todos found.';
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: `Found ${todos.length} todo(s):\n${todoList}`,
+        } as ChatMessage);
+      } else if (toolCall.function.name === 'create_todo') {
+        const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'status', status: 'Creating todo...' };
+        logger.info('Luna creating todo (stream)', { title: args.title });
+        const parsed = tasksService.parseTaskFromText(args.dueDate || '');
+        const todo = await tasksService.createTask(userId, {
+          title: args.title,
+          description: args.notes,
+          priority: args.priority || 'medium',
+          dueAt: parsed.dueAt,
+          sourceSessionId: sessionId,
+        });
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: `Created todo: "${todo.title}" [${todo.id.slice(0, 8)}]${todo.dueAt ? ` - due: ${new Date(todo.dueAt).toLocaleDateString()}` : ''}`,
+        } as ChatMessage);
+      } else if (toolCall.function.name === 'complete_todo') {
+        const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'status', status: 'Completing todo...' };
+        logger.info('Luna completing todo (stream)', { todoId: args.todoId, title: args.title });
+        let todoId = args.todoId;
+
+        // Support partial UUID matching (we show 8-char IDs in list_todos)
+        const todos = await tasksService.getTasks(userId, { limit: 50 });
+        if (todoId && todoId.length < 36) {
+          // Partial ID - find matching todo
+          const match = todos.find(t => t.id.startsWith(todoId));
+          if (match) todoId = match.id;
+        }
+        if (!todoId && args.title) {
+          const match = todos.find(t => t.title.toLowerCase().includes(args.title.toLowerCase()));
+          if (match) todoId = match.id;
+        }
+        if (todoId) {
+          const todo = await tasksService.updateTaskStatus(userId, todoId, 'completed');
+          if (todo) {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Marked todo "${todo.title}" as completed.`,
+            } as ChatMessage);
+          } else {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: 'Todo not found.',
+            } as ChatMessage);
+          }
+        } else {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: 'Could not find a matching todo. Use list_todos to see available todos.',
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'update_todo') {
+        const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'status', status: 'Updating todo...' };
+        logger.info('Luna updating todo (stream)', { todoId: args.todoId, title: args.title });
+        let todoId = args.todoId;
+
+        // Support partial UUID matching
+        const allTodos = await tasksService.getTasks(userId, { limit: 50 });
+        if (todoId && todoId.length < 36) {
+          const match = allTodos.find(t => t.id.startsWith(todoId));
+          if (match) todoId = match.id;
+        }
+        if (!todoId && args.title) {
+          const match = allTodos.find(t => t.title.toLowerCase().includes(args.title.toLowerCase()));
+          if (match) todoId = match.id;
+        }
+        if (todoId) {
+          const updates: Partial<tasksService.CreateTaskInput> = {};
+          if (args.notes !== undefined) updates.description = args.notes;
+          if (args.priority) updates.priority = args.priority;
+          if (args.dueDate) {
+            const parsed = tasksService.parseTaskFromText(args.dueDate);
+            if (parsed.dueAt) updates.dueAt = parsed.dueAt;
+          }
+          if (args.status) {
+            await tasksService.updateTaskStatus(userId, todoId, args.status);
+          }
+          const todo = Object.keys(updates).length > 0
+            ? await tasksService.updateTask(userId, todoId, updates)
+            : await tasksService.getTasks(userId, { limit: 1 }).then(t => t.find(x => x.id === todoId));
+          if (todo) {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Updated todo "${todo.title}".${args.notes ? ` Notes: ${args.notes}` : ''}`,
+            } as ChatMessage);
+          } else {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: 'Todo not found.',
+            } as ChatMessage);
+          }
+        } else {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: 'Could not find a matching todo. Use list_todos to see available todos.',
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name.startsWith('system_') ||
+                 toolCall.function.name.startsWith('network_') ||
+                 toolCall.function.name.startsWith('process_') ||
+                 toolCall.function.name.startsWith('docker_') ||
+                 toolCall.function.name.startsWith('service_') ||
+                 toolCall.function.name.startsWith('logs_') ||
+                 toolCall.function.name.startsWith('maintenance_')) {
+        // System monitoring tools
+        const args = JSON.parse(toolCall.function.arguments || '{}');
+        yield { type: 'status', status: `Checking ${toolCall.function.name.replace(/_/g, ' ')}...` };
+        logger.info('Sysmon tool called (stream)', { tool: toolCall.function.name, args });
+        try {
+          const result = await executeSysmonTool(toolCall.function.name, args);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: JSON.stringify(result, null, 2),
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Sysmon tool failed (stream)', { tool: toolCall.function.name, error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
       }
     }
   }
@@ -975,6 +1338,32 @@ export async function* streamMessage(
             tool_call_id: toolCall.id,
             content: `Goal suggestion "${args.title}" created. The user will see a notification to confirm or decline.`,
           } as ChatMessage);
+        } else if (toolCall.function.name.startsWith('system_') ||
+                   toolCall.function.name.startsWith('network_') ||
+                   toolCall.function.name.startsWith('process_') ||
+                   toolCall.function.name.startsWith('docker_') ||
+                   toolCall.function.name.startsWith('service_') ||
+                   toolCall.function.name.startsWith('logs_') ||
+                   toolCall.function.name.startsWith('maintenance_')) {
+          // System monitoring tools in follow-up
+          const args = JSON.parse(toolCall.function.arguments || '{}');
+          yield { type: 'status', status: `Checking ${toolCall.function.name.replace(/_/g, ' ')}...` };
+          logger.info('Sysmon tool called (follow-up)', { tool: toolCall.function.name, args });
+          try {
+            const result = await executeSysmonTool(toolCall.function.name, args);
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: JSON.stringify(result, null, 2),
+            } as ChatMessage);
+          } catch (error) {
+            logger.error('Sysmon tool failed (follow-up)', { tool: toolCall.function.name, error: (error as Error).message });
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Error: ${(error as Error).message}`,
+            } as ChatMessage);
+          }
         } else {
           // Generic handler for other tools
           messages.push({

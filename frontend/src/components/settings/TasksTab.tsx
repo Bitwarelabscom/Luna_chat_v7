@@ -3,15 +3,15 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   CheckSquare, Square, Trash2, RefreshCw,
-  Plus, Calendar, Flag, CheckCircle, XCircle, Play
+  Plus, Calendar, Flag, CheckCircle, PauseCircle, Play, Pencil, X
 } from 'lucide-react';
 import { tasksApi, Task } from '../../lib/api';
 
 const statusConfig = {
-  pending: { icon: Square, color: 'text-gray-400', bg: 'bg-gray-400/10', label: 'Pending' },
+  pending: { icon: Square, color: 'text-gray-400', bg: 'bg-gray-400/10', label: 'Not Started' },
   in_progress: { icon: Play, color: 'text-blue-400', bg: 'bg-blue-400/10', label: 'In Progress' },
-  completed: { icon: CheckCircle, color: 'text-green-400', bg: 'bg-green-400/10', label: 'Completed' },
-  cancelled: { icon: XCircle, color: 'text-red-400', bg: 'bg-red-400/10', label: 'Cancelled' },
+  completed: { icon: CheckCircle, color: 'text-green-400', bg: 'bg-green-400/10', label: 'Complete' },
+  cancelled: { icon: PauseCircle, color: 'text-orange-400', bg: 'bg-orange-400/10', label: 'Paused' },
 };
 
 const priorityConfig = {
@@ -26,6 +26,8 @@ export default function TasksTab() {
   const [filter, setFilter] = useState<'all' | 'active' | 'completed'>('active');
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newTask, setNewTask] = useState({ title: '', description: '', priority: 'medium', dueDate: '' });
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [editForm, setEditForm] = useState({ title: '', description: '', priority: 'medium', status: 'pending', dueDate: '' });
 
   const loadTasks = useCallback(async () => {
     try {
@@ -82,6 +84,41 @@ export default function TasksTab() {
     }
   };
 
+  const startEditing = (task: Task) => {
+    setEditingTask(task);
+    setEditForm({
+      title: task.title,
+      description: task.description || '',
+      priority: task.priority,
+      status: task.status,
+      dueDate: task.dueDate ? new Date(task.dueDate).toISOString().split('T')[0] : '',
+    });
+  };
+
+  const handleUpdateTask = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingTask || !editForm.title.trim()) return;
+
+    try {
+      // Update task details
+      await tasksApi.update(editingTask.id, {
+        title: editForm.title,
+        description: editForm.description || undefined,
+        priority: editForm.priority,
+        dueDate: editForm.dueDate || undefined,
+      });
+      // Update status separately if changed
+      if (editForm.status !== editingTask.status) {
+        await tasksApi.updateStatus(editingTask.id, editForm.status);
+      }
+      setEditingTask(null);
+      await loadTasks();
+    } catch (error) {
+      console.error('Failed to update task:', error);
+      alert('Failed to update task');
+    }
+  };
+
   const filteredTasks = tasks.filter((task) => {
     if (filter === 'active') return task.status !== 'completed' && task.status !== 'cancelled';
     if (filter === 'completed') return task.status === 'completed';
@@ -118,14 +155,14 @@ export default function TasksTab() {
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-medium text-theme-text-primary flex items-center gap-2">
           <CheckSquare className="w-5 h-5" />
-          Tasks
+          Todo
         </h3>
         <button
           onClick={() => setShowCreateForm(true)}
           className="px-3 py-1.5 text-sm bg-theme-accent-primary/10 text-theme-accent-primary rounded-lg hover:bg-theme-accent-primary/20 transition flex items-center gap-1"
         >
           <Plus className="w-4 h-4" />
-          New Task
+          New Todo
         </button>
       </div>
 
@@ -150,7 +187,7 @@ export default function TasksTab() {
         ))}
       </div>
 
-      {/* Create Task Form */}
+      {/* Create Todo Form */}
       {showCreateForm && (
         <form onSubmit={handleCreateTask} className="p-4 bg-theme-bg-tertiary rounded-lg border border-theme-border space-y-4">
           <div>
@@ -158,7 +195,7 @@ export default function TasksTab() {
               type="text"
               value={newTask.title}
               onChange={(e) => setNewTask({ ...newTask, title: e.target.value })}
-              placeholder="Task title..."
+              placeholder="What needs to be done..."
               className="w-full px-3 py-2 bg-theme-bg-secondary border border-theme-border rounded-lg text-theme-text-primary placeholder-theme-text-muted focus:outline-none focus:border-theme-accent-primary"
               autoFocus
             />
@@ -167,7 +204,7 @@ export default function TasksTab() {
             <textarea
               value={newTask.description}
               onChange={(e) => setNewTask({ ...newTask, description: e.target.value })}
-              placeholder="Description (optional)..."
+              placeholder="Notes (optional)..."
               rows={2}
               className="w-full px-3 py-2 bg-theme-bg-secondary border border-theme-border rounded-lg text-theme-text-primary placeholder-theme-text-muted focus:outline-none focus:border-theme-accent-primary resize-none"
             />
@@ -207,18 +244,107 @@ export default function TasksTab() {
               type="submit"
               className="px-4 py-2 text-sm bg-theme-accent-primary text-white rounded-lg hover:bg-theme-accent-primary/90 transition"
             >
-              Create Task
+              Create Todo
             </button>
           </div>
         </form>
       )}
 
-      {/* Task List */}
+      {/* Edit Modal */}
+      {editingTask && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-theme-bg-secondary rounded-lg border border-theme-border w-full max-w-md">
+            <div className="flex items-center justify-between p-4 border-b border-theme-border">
+              <h3 className="text-lg font-medium text-theme-text-primary">Edit Todo</h3>
+              <button
+                onClick={() => setEditingTask(null)}
+                className="text-theme-text-muted hover:text-theme-text-primary transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={handleUpdateTask} className="p-4 space-y-4">
+              <div>
+                <label className="block text-sm text-theme-text-muted mb-1">Title</label>
+                <input
+                  type="text"
+                  value={editForm.title}
+                  onChange={(e) => setEditForm({ ...editForm, title: e.target.value })}
+                  className="w-full px-3 py-2 bg-theme-bg-tertiary border border-theme-border rounded-lg text-theme-text-primary focus:outline-none focus:border-theme-accent-primary"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-theme-text-muted mb-1">Notes</label>
+                <textarea
+                  value={editForm.description}
+                  onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+                  rows={3}
+                  className="w-full px-3 py-2 bg-theme-bg-tertiary border border-theme-border rounded-lg text-theme-text-primary focus:outline-none focus:border-theme-accent-primary resize-none"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm text-theme-text-muted mb-1">Status</label>
+                  <select
+                    value={editForm.status}
+                    onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}
+                    className="w-full px-3 py-2 bg-theme-bg-tertiary border border-theme-border rounded-lg text-theme-text-primary focus:outline-none focus:border-theme-accent-primary"
+                  >
+                    <option value="pending">Not Started</option>
+                    <option value="in_progress">In Progress</option>
+                    <option value="cancelled">Paused</option>
+                    <option value="completed">Complete</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm text-theme-text-muted mb-1">Priority</label>
+                  <select
+                    value={editForm.priority}
+                    onChange={(e) => setEditForm({ ...editForm, priority: e.target.value })}
+                    className="w-full px-3 py-2 bg-theme-bg-tertiary border border-theme-border rounded-lg text-theme-text-primary focus:outline-none focus:border-theme-accent-primary"
+                  >
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm text-theme-text-muted mb-1">Due Date</label>
+                <input
+                  type="date"
+                  value={editForm.dueDate}
+                  onChange={(e) => setEditForm({ ...editForm, dueDate: e.target.value })}
+                  className="w-full px-3 py-2 bg-theme-bg-tertiary border border-theme-border rounded-lg text-theme-text-primary focus:outline-none focus:border-theme-accent-primary"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingTask(null)}
+                  className="px-4 py-2 text-sm text-theme-text-muted hover:text-theme-text-primary transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 text-sm bg-theme-accent-primary text-white rounded-lg hover:bg-theme-accent-primary/90 transition"
+                >
+                  Save Changes
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Todo List */}
       {filteredTasks.length === 0 ? (
         <div className="text-center py-8 text-theme-text-muted">
           <CheckSquare className="w-12 h-12 mx-auto mb-2 opacity-50" />
-          <p>No {filter === 'all' ? '' : filter} tasks</p>
-          <p className="text-sm">Create a task or ask Luna to add one</p>
+          <p>No {filter === 'all' ? '' : filter} todos</p>
+          <p className="text-sm">Create a todo or ask Luna to add one</p>
         </div>
       ) : (
         <div className="space-y-2">
@@ -253,11 +379,15 @@ export default function TasksTab() {
                         {task.title}
                       </div>
                       {task.description && (
-                        <div className="text-sm text-theme-text-muted mt-1 truncate">
+                        <div className="text-sm text-theme-text-muted mt-1">
                           {task.description}
                         </div>
                       )}
-                      <div className="flex items-center gap-3 mt-2">
+                      <div className="flex items-center gap-3 mt-2 flex-wrap">
+                        {/* Status Badge */}
+                        <span className={`text-xs px-2 py-0.5 rounded ${status.bg} ${status.color}`}>
+                          {status.label}
+                        </span>
                         {/* Priority Badge */}
                         <span className={`text-xs px-2 py-0.5 rounded ${priority.bg} ${priority.color}`}>
                           <Flag className="w-3 h-3 inline mr-1" />
@@ -285,6 +415,13 @@ export default function TasksTab() {
                         <Play className="w-4 h-4" />
                       </button>
                     )}
+                    <button
+                      onClick={() => startEditing(task)}
+                      className="p-1.5 text-theme-text-muted hover:text-theme-accent-primary transition"
+                      title="Edit"
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
                     <button
                       onClick={() => handleDeleteTask(task.id)}
                       className="p-1.5 text-theme-text-muted hover:text-red-400 transition"

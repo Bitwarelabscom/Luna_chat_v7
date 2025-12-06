@@ -887,6 +887,58 @@ export function formatCalendarForPrompt(events: CalendarEvent[]): string {
   return `[Upcoming Calendar]\n${formatted}`;
 }
 
+/**
+ * Get calendar status for displaying in UI
+ */
+export async function getCalendarStatus(userId: string): Promise<{
+  enabled: boolean;
+  connected: boolean;
+  eventCount: number;
+  lastSync: Date | null;
+}> {
+  const enabled = config.radicale.enabled;
+
+  if (!enabled) {
+    return { enabled: false, connected: false, eventCount: 0, lastSync: null };
+  }
+
+  // Check if Radicale is reachable
+  let connected = false;
+  try {
+    const response = await fetch(`${config.radicale.url}/.well-known/caldav`);
+    connected = response.ok || response.status === 301 || response.status === 302;
+  } catch {
+    connected = false;
+  }
+
+  // Get event count and last sync from the internal caldav connection
+  try {
+    const result = await pool.query(
+      `SELECT
+        cc.last_sync_at,
+        COUNT(ce.id) as event_count
+       FROM calendar_connections cc
+       LEFT JOIN calendar_events_cache ce ON ce.connection_id = cc.id
+       WHERE cc.user_id = $1 AND cc.provider = 'caldav' AND cc.calendar_id = 'internal'
+       GROUP BY cc.id`,
+      [userId]
+    );
+
+    if (result.rows.length > 0) {
+      return {
+        enabled,
+        connected,
+        eventCount: parseInt(result.rows[0].event_count, 10) || 0,
+        lastSync: result.rows[0].last_sync_at || null,
+      };
+    }
+  } catch (error) {
+    logger.error('Failed to get calendar status', { error: (error as Error).message, userId });
+  }
+
+  return { enabled, connected, eventCount: 0, lastSync: null };
+}
+
 function mapRowToConnection(row: Record<string, unknown>): CalendarConnection {
   return {
     id: row.id as string,
@@ -913,4 +965,5 @@ export default {
   cacheEvents,
   disconnectCalendar,
   formatCalendarForPrompt,
+  getCalendarStatus,
 };

@@ -8,7 +8,6 @@ import ReactMarkdown from 'react-markdown';
 import clsx from 'clsx';
 import MessageActions from './MessageActions';
 import MessageMetrics from './MessageMetrics';
-import SuggestionChips from './SuggestionChips';
 import { useAudioPlayer } from './useAudioPlayer';
 import dynamic from 'next/dynamic';
 
@@ -35,7 +34,6 @@ function StandardChatArea() {
     isSending,
     streamingContent,
     statusMessage,
-    startupSuggestions,
     isLoadingStartup,
     loadSessions,
     createSession,
@@ -48,8 +46,6 @@ function StandardChatArea() {
     setIsSending,
     setStreamingContent,
     setStatusMessage,
-    setStartupSuggestions,
-    clearStartupSuggestions,
     setIsLoadingStartup,
   } = useChatStore();
 
@@ -115,21 +111,14 @@ function StandardChatArea() {
   const triggerStartup = async (sessionId: string) => {
     setIsLoadingStartup(true);
     try {
-      const { message, suggestions } = await chatApi.getSessionStartup(sessionId);
+      const { message } = await chatApi.getSessionStartup(sessionId);
       addAssistantMessage(message.content, message.id);
-      setStartupSuggestions(suggestions);
     } catch (error) {
       console.error('Failed to generate startup message:', error);
       // Silently fail - user will see static welcome screen
     } finally {
       setIsLoadingStartup(false);
     }
-  };
-
-  const handleSuggestionSelect = (suggestion: string) => {
-    setInput(suggestion);
-    clearStartupSuggestions();
-    textareaRef.current?.focus();
   };
 
   const handleSend = async () => {
@@ -149,7 +138,6 @@ function StandardChatArea() {
 
     // Add user message to UI
     addUserMessage(message);
-    clearStartupSuggestions(); // Clear suggestions when sending
     setIsSending(true);
     setStreamingContent('');
     setStatusMessage('');
@@ -359,14 +347,6 @@ function StandardChatArea() {
                   </div>
                 </div>
               </div>
-            )}
-
-            {/* Suggestion chips */}
-            {startupSuggestions.length > 0 && !isSending && (
-              <SuggestionChips
-                suggestions={startupSuggestions}
-                onSelect={handleSuggestionSelect}
-              />
             )}
 
             <div ref={messagesEndRef} />

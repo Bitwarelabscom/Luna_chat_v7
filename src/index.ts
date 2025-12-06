@@ -14,6 +14,7 @@ import settingsRoutes from './settings/settings.routes.js';
 import oauthRoutes from './integrations/oauth.routes.js';
 import localEmailRoutes from './integrations/local-email.routes.js';
 import autonomousRoutes from './autonomous/autonomous.routes.js';
+import triggersRoutes, { telegramWebhookRouter } from './triggers/triggers.routes.js';
 import { startJobs, stopJobs } from './jobs/job-runner.js';
 import { ipWhitelistMiddleware } from './security/ip-whitelist.middleware.js';
 import { fail2banMiddleware } from './security/fail2ban.middleware.js';
@@ -29,11 +30,11 @@ app.use(ipWhitelistMiddleware);
 // SECURITY: Fail2ban - block IPs with too many failed login attempts
 app.use(fail2banMiddleware);
 
-// SECURITY: HTTPS enforcement in production (skip for health checks)
+// SECURITY: HTTPS enforcement in production (skip for health checks and webhooks)
 if (config.nodeEnv === 'production') {
   app.use((req, res, next) => {
-    // Skip HTTPS redirect for health check endpoint (used by Docker)
-    if (req.path === '/api/health') {
+    // Skip HTTPS redirect for health check and Telegram webhook
+    if (req.path === '/api/health' || req.path === '/api/triggers/telegram/webhook') {
       return next();
     }
     if (req.header('x-forwarded-proto') !== 'https') {
@@ -127,6 +128,9 @@ app.use('/api/settings', settingsRoutes);
 app.use('/api/integrations/oauth', oauthRoutes);
 app.use('/api/email', localEmailRoutes);
 app.use('/api/autonomous', autonomousRoutes);
+// Telegram webhook - no auth required (comes from Telegram) - MUST be before authenticated routes
+app.use('/api/triggers', telegramWebhookRouter);
+app.use('/api/triggers', triggersRoutes);
 
 // 404 handler
 app.use((_req, res) => {

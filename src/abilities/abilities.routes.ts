@@ -761,6 +761,15 @@ router.get('/calendar/today', async (req: Request, res: Response) => {
   }
 });
 
+router.get('/calendar/status', async (req: Request, res: Response) => {
+  try {
+    const status = await calendar.getCalendarStatus(getUserId(req));
+    res.json(status);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get calendar status' });
+  }
+});
+
 // ============================================
 // EMAIL (placeholder - needs OAuth setup)
 // ============================================

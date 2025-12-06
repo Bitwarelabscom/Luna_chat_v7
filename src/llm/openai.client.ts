@@ -458,6 +458,118 @@ export const fetchUrlTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   },
 };
 
+// Todo management tools
+export const listTodosTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'list_todos',
+    description: `List the user's todo items. Shows pending, in-progress, and optionally completed todos with their status, priority, due dates, and notes.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        includeCompleted: {
+          type: 'boolean',
+          description: 'If true, include completed todos. Default: false (only active todos)',
+        },
+      },
+      required: [],
+    },
+  },
+};
+
+export const createTodoTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'create_todo',
+    description: `Create a new todo item for the user. Use when the user asks you to add something to their todo list, remind them about something, or when they mention a task they need to do.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        title: {
+          type: 'string',
+          description: 'The todo title - what needs to be done',
+        },
+        notes: {
+          type: 'string',
+          description: 'Optional notes or additional details about the todo',
+        },
+        priority: {
+          type: 'string',
+          enum: ['low', 'medium', 'high', 'urgent'],
+          description: 'Priority level. Default: medium',
+        },
+        dueDate: {
+          type: 'string',
+          description: 'Optional due date in ISO format (YYYY-MM-DD) or natural language like "tomorrow", "next week"',
+        },
+      },
+      required: ['title'],
+    },
+  },
+};
+
+export const completeTodoTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'complete_todo',
+    description: `Mark a todo item as completed. Use when the user says they finished a task, completed something, or asks you to check off an item.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        todoId: {
+          type: 'string',
+          description: 'The ID of the todo to complete. Get this from list_todos first.',
+        },
+        title: {
+          type: 'string',
+          description: 'Alternative: the title/text of the todo to complete (will match partially)',
+        },
+      },
+      required: [],
+    },
+  },
+};
+
+export const updateTodoTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'update_todo',
+    description: `Update a todo item - add or modify notes, change priority, update due date, or change status. Use when the user wants to add details to a todo or modify it.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        todoId: {
+          type: 'string',
+          description: 'The ID of the todo to update. Get this from list_todos first.',
+        },
+        title: {
+          type: 'string',
+          description: 'Alternative: the title/text of the todo to update (will match partially)',
+        },
+        notes: {
+          type: 'string',
+          description: 'New notes to set (replaces existing notes)',
+        },
+        priority: {
+          type: 'string',
+          enum: ['low', 'medium', 'high', 'urgent'],
+          description: 'New priority level',
+        },
+        status: {
+          type: 'string',
+          enum: ['pending', 'in_progress', 'completed', 'cancelled'],
+          description: 'New status',
+        },
+        dueDate: {
+          type: 'string',
+          description: 'New due date in ISO format or natural language',
+        },
+      },
+      required: [],
+    },
+  },
+};
+
 export function formatSearchResultsForContext(results: SearchResult[]): string {
   if (results.length === 0) return '';
 
@@ -489,6 +601,11 @@ export default {
   checkEmailTool,
   searchDocumentsTool,
   suggestGoalTool,
+  fetchUrlTool,
+  listTodosTool,
+  createTodoTool,
+  completeTodoTool,
+  updateTodoTool,
   formatSearchResultsForContext,
   formatAgentResultForContext,
 };

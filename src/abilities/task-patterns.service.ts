@@ -171,8 +171,8 @@ async function updateCategoryStats(
 async function categorizeTask(title: string): Promise<string | null> {
   try {
     const response = await createCompletion(
-      'openai',
-      'gpt-5-nano',
+      'ollama',
+      'qwen2.5:1.5b',
       [
         {
           role: 'system',

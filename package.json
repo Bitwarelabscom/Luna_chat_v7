@@ -28,9 +28,11 @@
   "license": "MIT",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.0",
+    "@types/dockerode": "^3.3.47",
     "@types/multer": "^2.0.0",
     "bcrypt": "^5.1.1",
     "cors": "^2.8.5",
+    "dockerode": "^4.0.9",
     "dotenv": "^16.4.5",
     "expr-eval": "^2.0.2",
     "express": "^4.18.2",
@@ -48,6 +50,7 @@
     "pg": "^8.11.3",
     "rate-limit-redis": "^4.2.0",
     "socket.io": "^4.7.5",
+    "systeminformation": "^5.27.11",
     "uuid": "^10.0.0",
     "winston": "^3.14.2",
     "zod": "^3.23.8"

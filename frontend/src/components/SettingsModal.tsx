@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { X, MessageSquare, BarChart3, Database, Cpu, Palette, Link2, FolderOpen, CheckSquare, Brain, Sparkles } from 'lucide-react';
+import { X, MessageSquare, BarChart3, Database, Cpu, Palette, Link2, FolderOpen, CheckSquare, Brain, Sparkles, Bell } from 'lucide-react';
 import AppearanceTab from './settings/AppearanceTab';
 import PromptsTab from './settings/PromptsTab';
 import StatsTab from './settings/StatsTab';
@@ -12,13 +12,14 @@ import WorkspaceTab from './settings/WorkspaceTab';
 import TasksTab from './settings/TasksTab';
 import AutonomousTab from './settings/AutonomousTab';
 import MemoryTab from './settings/MemoryTab';
+import TriggersTab from './settings/TriggersTab';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-type TabId = 'appearance' | 'prompts' | 'models' | 'integrations' | 'workspace' | 'tasks' | 'memory' | 'autonomous' | 'stats' | 'data';
+type TabId = 'appearance' | 'prompts' | 'models' | 'integrations' | 'workspace' | 'tasks' | 'memory' | 'autonomous' | 'triggers' | 'stats' | 'data';
 
 export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<TabId>('appearance');
@@ -33,6 +34,7 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     { id: 'tasks', label: 'Tasks', icon: CheckSquare },
     { id: 'memory', label: 'Memory', icon: Sparkles },
     { id: 'autonomous', label: 'Autonomous', icon: Brain },
+    { id: 'triggers', label: 'Triggers', icon: Bell },
     { id: 'stats', label: 'Stats', icon: BarChart3 },
     { id: 'data', label: 'Data', icon: Database },
   ];
@@ -107,6 +109,7 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           {activeTab === 'tasks' && <TasksTab />}
           {activeTab === 'memory' && <MemoryTab />}
           {activeTab === 'autonomous' && <AutonomousTab />}
+          {activeTab === 'triggers' && <TriggersTab />}
           {activeTab === 'stats' && <StatsTab />}
           {activeTab === 'data' && <DataTab />}
         </div>

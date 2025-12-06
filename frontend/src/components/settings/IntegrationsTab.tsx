@@ -1,24 +1,27 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { Link2, Unlink, Mail, Cloud, RefreshCw, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
-import { integrationsApi, OAuthConnection, EmailStatus } from '../../lib/api';
+import { Link2, Unlink, Mail, Cloud, RefreshCw, CheckCircle, XCircle, AlertCircle, Calendar } from 'lucide-react';
+import { integrationsApi, OAuthConnection, EmailStatus, calendarApi, CalendarStatus } from '../../lib/api';
 
 export default function IntegrationsTab() {
   const [oauthConnections, setOauthConnections] = useState<OAuthConnection[]>([]);
   const [emailStatus, setEmailStatus] = useState<EmailStatus | null>(null);
+  const [calendarStatus, setCalendarStatus] = useState<CalendarStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
 
   const loadStatus = useCallback(async () => {
     try {
       setLoading(true);
-      const [oauthRes, emailRes] = await Promise.all([
+      const [oauthRes, emailRes, calendarRes] = await Promise.all([
         integrationsApi.getOAuthStatus(),
         integrationsApi.getEmailStatus(),
+        calendarApi.getStatus().catch(() => null),
       ]);
       setOauthConnections(oauthRes.connections || []);
       setEmailStatus(emailRes);
+      setCalendarStatus(calendarRes);
     } catch (error) {
       console.error('Failed to load integration status:', error);
     } finally {
@@ -259,6 +262,60 @@ export default function IntegrationsTab() {
             <div className="flex items-center gap-2 text-theme-text-muted">
               <XCircle className="w-5 h-5" />
               Email is not configured
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Local Calendar Status */}
+      <div>
+        <h3 className="text-lg font-medium text-theme-text-primary mb-4 flex items-center gap-2">
+          <Calendar className="w-5 h-5" />
+          Local Calendar
+        </h3>
+        <div className="p-4 bg-theme-bg-tertiary rounded-lg border border-theme-border">
+          {calendarStatus?.enabled ? (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-theme-text-muted">Status</span>
+                <span className="flex items-center gap-1 text-green-400">
+                  <CheckCircle className="w-4 h-4" />
+                  Enabled
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-theme-text-muted">Server (Radicale)</span>
+                {calendarStatus.connected ? (
+                  <span className="flex items-center gap-1 text-green-400">
+                    <CheckCircle className="w-4 h-4" />
+                    Connected
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1 text-yellow-400">
+                    <AlertCircle className="w-4 h-4" />
+                    Not connected
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-theme-text-muted">Events</span>
+                <span className="text-theme-text-primary">
+                  {calendarStatus.eventCount} event{calendarStatus.eventCount !== 1 ? 's' : ''}
+                </span>
+              </div>
+              {calendarStatus.lastSync && (
+                <div className="flex items-center justify-between">
+                  <span className="text-theme-text-muted">Last sync</span>
+                  <span className="text-theme-text-primary text-sm">
+                    {new Date(calendarStatus.lastSync).toLocaleString()}
+                  </span>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 text-theme-text-muted">
+              <XCircle className="w-5 h-5" />
+              Calendar is not configured
             </div>
           )}
         </div>

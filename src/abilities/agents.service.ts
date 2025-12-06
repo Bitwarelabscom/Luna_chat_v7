@@ -290,24 +290,35 @@ Use code execution for calculations when helpful.${EM_DASH_RULE}`,
     description: 'Task planning and organization',
     systemPrompt: `You are a strategic planner. When given a task, break it down into steps and assign each to a specialist.
 
+CRITICAL: Before creating a plan, verify the task has a SPECIFIC TARGET or SUBJECT.
+- BAD: "Investigate and write findings" (investigate WHAT?)
+- BAD: "Research the topic" (what topic?)
+- BAD: "Analyze the data" (what data?)
+- GOOD: "Research MCP approaches for connecting to a trading portal"
+- GOOD: "Analyze the company Anthropic's funding history"
+
+If the task is vague or lacks a specific subject, output this error instead of a plan:
+{"error": "Task is too vague. Please specify: [what's missing - e.g., 'what to investigate', 'which company', 'what topic']"}
+
 Available specialists:
-- researcher: Finds information, data, facts
-- analyst: Performs calculations, data analysis
-- coder: Writes code, debugs
+- researcher: Finds information, data, facts (needs specific search topics)
+- analyst: Performs calculations, data analysis (needs specific data or results to analyze)
+- coder: Writes code, debugs (needs specific code requirements)
 - writer: Creates content, synthesizes information
 
 Output your plan as JSON with this exact format:
 {
   "steps": [
-    {"step": 1, "agent": "researcher", "task": "Description of what to research", "dependsOn": []},
-    {"step": 2, "agent": "analyst", "task": "Description of analysis to perform", "dependsOn": [1]}
+    {"step": 1, "agent": "researcher", "task": "Research [SPECIFIC TOPIC] including [specific aspects]", "dependsOn": []},
+    {"step": 2, "agent": "analyst", "task": "Analyze [SPECIFIC DATA] to determine [specific goal]", "dependsOn": [1]}
   ]
 }
 
 Rules:
+- REJECT vague tasks by returning an error JSON
 - Use "dependsOn" to list step numbers that must complete first
 - Steps with no dependencies use an empty array: []
-- Be specific in task descriptions
+- Be VERY specific in task descriptions - include what to search for, what to analyze, etc.
 - Only use the agents listed above${EM_DASH_RULE}`,
     model: 'o4-mini',
     temperature: 0.4,
@@ -815,7 +826,25 @@ export async function* orchestrateTaskStream(
   let plan: OrchestrationPlan;
   try {
     const jsonStr = extractJSON(planResult.result);
-    plan = JSON.parse(jsonStr) as OrchestrationPlan;
+    const parsed = JSON.parse(jsonStr) as OrchestrationPlan | { error: string };
+
+    // Check if planner returned an error (task too vague)
+    if ('error' in parsed && parsed.error) {
+      logger.info('Planner rejected task as too vague', { error: parsed.error });
+      yield {
+        type: 'done',
+        result: {
+          plan: planResult.result,
+          results: [planResult],
+          synthesis: `I need more details to work on this task. ${parsed.error}`,
+          success: false,
+          error: 'Task too vague',
+        }
+      };
+      return;
+    }
+
+    plan = parsed as OrchestrationPlan;
 
     if (!plan.steps || !Array.isArray(plan.steps)) {
       throw new Error('Invalid plan format: missing steps array');
@@ -851,8 +880,14 @@ export async function* orchestrateTaskStream(
   for (const step of plan.steps) {
     yield { type: 'status', status: `Running ${step.agent} agent (step ${step.step}/${plan.steps.length})...` };
 
-    // Build context from dependencies
+    // Build context from dependencies + original context
     let stepContext = '';
+
+    // Include original context (e.g., todo description) for the first step
+    if (context && step.dependsOn.length === 0) {
+      stepContext += `[Original Context]\n${context}\n\n`;
+    }
+
     for (const depId of step.dependsOn) {
       const depResult = results.get(depId);
       if (depResult && depResult.success) {

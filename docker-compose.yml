@@ -106,8 +106,10 @@ services:
       - RADICALE_URL=http://luna-radicale:5232
       # ElevenLabs TTS - eleven_v3 required for audio tags like [laughs]
       - ELEVENLABS_ENABLED=${ELEVENLABS_ENABLED:-true}
-      - ELEVENLABS_VOICE_ID=${ELEVENLABS_VOICE_ID:-exsUS4vynmxd379XN4yO}
+      - ELEVENLABS_VOICE_ID=${ELEVENLABS_VOICE_ID:-l4Coq6695JDX9xtLqXDE}
       - ELEVENLABS_MODEL=${ELEVENLABS_MODEL:-eleven_v3}
+      # Telegram Bot
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
     secrets:
       - postgres_password
       - jwt_secret
