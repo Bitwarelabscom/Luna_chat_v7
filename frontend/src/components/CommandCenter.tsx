@@ -607,7 +607,7 @@ const CommandCenter = () => {
               color: '#607080',
               marginLeft: '4px',
             }}>
-              Beta 0.8.5
+              Beta 0.8.6
             </span>
           </div>
 
