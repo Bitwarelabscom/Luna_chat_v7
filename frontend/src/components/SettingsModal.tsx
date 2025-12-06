@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { X, MessageSquare, BarChart3, Database, Cpu, Palette, Link2, FolderOpen, CheckSquare, Brain, Sparkles, Bell } from 'lucide-react';
+import { X, MessageSquare, BarChart3, Database, Cpu, Palette, Link2, FolderOpen, CheckSquare, Brain, Sparkles, Bell, Plug } from 'lucide-react';
 import AppearanceTab from './settings/AppearanceTab';
 import PromptsTab from './settings/PromptsTab';
 import StatsTab from './settings/StatsTab';
@@ -13,13 +13,14 @@ import TasksTab from './settings/TasksTab';
 import AutonomousTab from './settings/AutonomousTab';
 import MemoryTab from './settings/MemoryTab';
 import TriggersTab from './settings/TriggersTab';
+import McpTab from './settings/McpTab';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-type TabId = 'appearance' | 'prompts' | 'models' | 'integrations' | 'workspace' | 'tasks' | 'memory' | 'autonomous' | 'triggers' | 'stats' | 'data';
+type TabId = 'appearance' | 'prompts' | 'models' | 'integrations' | 'mcp' | 'workspace' | 'tasks' | 'memory' | 'autonomous' | 'triggers' | 'stats' | 'data';
 
 export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<TabId>('appearance');
@@ -30,6 +31,7 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     { id: 'prompts', label: 'Prompts', icon: MessageSquare },
     { id: 'models', label: 'Models', icon: Cpu },
     { id: 'integrations', label: 'Integrations', icon: Link2 },
+    { id: 'mcp', label: 'MCP Servers', icon: Plug },
     { id: 'workspace', label: 'Workspace', icon: FolderOpen },
     { id: 'tasks', label: 'Tasks', icon: CheckSquare },
     { id: 'memory', label: 'Memory', icon: Sparkles },
@@ -105,6 +107,7 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           {activeTab === 'prompts' && <PromptsTab />}
           {activeTab === 'models' && <ModelsTab />}
           {activeTab === 'integrations' && <IntegrationsTab />}
+          {activeTab === 'mcp' && <McpTab />}
           {activeTab === 'workspace' && <WorkspaceTab />}
           {activeTab === 'tasks' && <TasksTab />}
           {activeTab === 'memory' && <MemoryTab />}

@@ -57,6 +57,7 @@ import * as sessionService from './session.service.js';
 import * as authService from '../auth/auth.service.js';
 import logger from '../utils/logger.js';
 import { sysmonTools, executeSysmonTool } from '../abilities/sysmon.service.js';
+import * as mcpService from '../mcp/mcp.service.js';
 import type { Message, SearchResult } from '../types/index.js';
 
 export interface ChatInput {
@@ -151,7 +152,10 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user');
 
   // TOOL GATING: For smalltalk, don't expose tools at all to prevent eager tool calling
-  const allTools = [searchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, searchDocumentsTool, suggestGoalTool, fetchUrlTool, listTodosTool, createTodoTool, completeTodoTool, updateTodoTool, ...sysmonTools];
+  // Load MCP tools dynamically for this user
+  const mcpUserTools = await mcpService.getAllUserTools(userId);
+  const mcpToolsForLLM = mcpService.formatMcpToolsForLLM(mcpUserTools.map(t => ({ ...t, serverId: t.serverId })));
+  const allTools = [searchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, searchDocumentsTool, suggestGoalTool, fetchUrlTool, listTodosTool, createTodoTool, completeTodoTool, updateTodoTool, ...sysmonTools, ...mcpToolsForLLM];
   const availableTools = isSmallTalkMessage ? [] : allTools;
   let searchResults: SearchResult[] | undefined;
   let agentResults: Array<{ agent: string; result: string; success: boolean }> = [];
@@ -514,6 +518,36 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
             content: `Error: ${(error as Error).message}`,
           } as ChatMessage);
         }
+      } else if (toolCall.function.name.startsWith('mcp_')) {
+        // MCP (Model Context Protocol) tools
+        const parsed = mcpService.parseMcpToolName(toolCall.function.name);
+        if (parsed) {
+          const args = JSON.parse(toolCall.function.arguments || '{}');
+          logger.info('MCP tool called', { tool: toolCall.function.name, serverId: parsed.serverId, toolName: parsed.toolName, args });
+
+          // Find the full server ID from loaded tools
+          const mcpTool = mcpUserTools.find(t => t.serverId.startsWith(parsed.serverId) && t.name === parsed.toolName);
+          if (mcpTool) {
+            const result = await mcpService.executeTool(userId, mcpTool.serverId, parsed.toolName, args);
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: result.content,
+            } as ChatMessage);
+          } else {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: 'MCP tool not found or no longer available',
+            } as ChatMessage);
+          }
+        } else {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: 'Invalid MCP tool name format',
+          } as ChatMessage);
+        }
       }
     }
 
@@ -819,7 +853,10 @@ export async function* streamMessage(
 
   // TOOL GATING: For smalltalk, don't expose tools at all to prevent eager tool calling
   // For other messages, provide relevant tools
-  const allTools = [searchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, searchDocumentsTool, suggestGoalTool, fetchUrlTool, listTodosTool, createTodoTool, completeTodoTool, updateTodoTool, ...sysmonTools];
+  // Load MCP tools dynamically for this user
+  const mcpUserTools = await mcpService.getAllUserTools(userId);
+  const mcpToolsForLLM = mcpService.formatMcpToolsForLLM(mcpUserTools.map(t => ({ ...t, serverId: t.serverId })));
+  const allTools = [searchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, searchDocumentsTool, suggestGoalTool, fetchUrlTool, listTodosTool, createTodoTool, completeTodoTool, updateTodoTool, ...sysmonTools, ...mcpToolsForLLM];
   const availableTools = isSmallTalkMessage ? [] : allTools;
   let searchResults: SearchResult[] | undefined;
 
@@ -1207,6 +1244,36 @@ export async function* streamMessage(
             content: `Error: ${(error as Error).message}`,
           } as ChatMessage);
         }
+      } else if (toolCall.function.name.startsWith('mcp_')) {
+        // MCP (Model Context Protocol) tools
+        const parsed = mcpService.parseMcpToolName(toolCall.function.name);
+        if (parsed) {
+          const args = JSON.parse(toolCall.function.arguments || '{}');
+          yield { type: 'status', status: `Calling MCP tool ${parsed.toolName}...` };
+          logger.info('MCP tool called (stream)', { tool: toolCall.function.name, serverId: parsed.serverId, toolName: parsed.toolName, args });
+
+          const mcpTool = mcpUserTools.find(t => t.serverId.startsWith(parsed.serverId) && t.name === parsed.toolName);
+          if (mcpTool) {
+            const result = await mcpService.executeTool(userId, mcpTool.serverId, parsed.toolName, args);
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: result.content,
+            } as ChatMessage);
+          } else {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: 'MCP tool not found or no longer available',
+            } as ChatMessage);
+          }
+        } else {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: 'Invalid MCP tool name format',
+          } as ChatMessage);
+        }
       }
     }
   }
@@ -1362,6 +1429,36 @@ export async function* streamMessage(
               role: 'tool',
               tool_call_id: toolCall.id,
               content: `Error: ${(error as Error).message}`,
+            } as ChatMessage);
+          }
+        } else if (toolCall.function.name.startsWith('mcp_')) {
+          // MCP (Model Context Protocol) tools in follow-up
+          const parsed = mcpService.parseMcpToolName(toolCall.function.name);
+          if (parsed) {
+            const args = JSON.parse(toolCall.function.arguments || '{}');
+            yield { type: 'status', status: `Calling MCP tool ${parsed.toolName}...` };
+            logger.info('MCP tool called (follow-up)', { tool: toolCall.function.name, serverId: parsed.serverId, toolName: parsed.toolName, args });
+
+            const mcpTool = mcpUserTools.find(t => t.serverId.startsWith(parsed.serverId) && t.name === parsed.toolName);
+            if (mcpTool) {
+              const result = await mcpService.executeTool(userId, mcpTool.serverId, parsed.toolName, args);
+              messages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: result.content,
+              } as ChatMessage);
+            } else {
+              messages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: 'MCP tool not found or no longer available',
+              } as ChatMessage);
+            }
+          } else {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: 'Invalid MCP tool name format',
             } as ChatMessage);
           }
         } else {

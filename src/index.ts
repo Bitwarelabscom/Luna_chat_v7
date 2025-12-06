@@ -15,6 +15,7 @@ import oauthRoutes from './integrations/oauth.routes.js';
 import localEmailRoutes from './integrations/local-email.routes.js';
 import autonomousRoutes from './autonomous/autonomous.routes.js';
 import triggersRoutes, { telegramWebhookRouter } from './triggers/triggers.routes.js';
+import mcpRoutes from './mcp/mcp.routes.js';
 import { startJobs, stopJobs } from './jobs/job-runner.js';
 import { ipWhitelistMiddleware } from './security/ip-whitelist.middleware.js';
 import { fail2banMiddleware } from './security/fail2ban.middleware.js';
@@ -131,6 +132,7 @@ app.use('/api/autonomous', autonomousRoutes);
 // Telegram webhook - no auth required (comes from Telegram) - MUST be before authenticated routes
 app.use('/api/triggers', telegramWebhookRouter);
 app.use('/api/triggers', triggersRoutes);
+app.use('/api/mcp', mcpRoutes);
 
 // 404 handler
 app.use((_req, res) => {

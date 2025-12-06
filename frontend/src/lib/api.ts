@@ -1434,4 +1434,94 @@ export const triggersApi = {
     api<{ success: boolean; message: string }>('/api/triggers/telegram/test', { method: 'POST' }),
 };
 
+// MCP (Model Context Protocol) API
+export interface McpServer {
+  id: string;
+  name: string;
+  description: string | null;
+  url: string;
+  headers: Record<string, string>;
+  isEnabled: boolean;
+  isConnected: boolean;
+  lastConnectedAt: string | null;
+  lastError: string | null;
+  errorCount: number;
+  toolCount?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface McpTool {
+  id: string;
+  serverId: string;
+  name: string;
+  title: string | null;
+  description: string;
+  inputSchema: object;
+  isEnabled: boolean;
+  usageCount: number;
+  lastUsedAt: string | null;
+  discoveredAt: string;
+}
+
+export interface McpServerWithTools extends McpServer {
+  tools: McpTool[];
+}
+
+export interface McpPreset {
+  id: string;
+  name: string;
+  description: string;
+  url: string;
+  headers: Record<string, string>;
+  category: string;
+  icon?: string;
+}
+
+export interface McpTestResult {
+  success: boolean;
+  serverInfo?: { name: string; version: string };
+  toolCount?: number;
+  error?: string;
+}
+
+export const mcpApi = {
+  // Servers
+  getServers: () =>
+    api<{ servers: McpServerWithTools[] }>('/api/mcp/servers'),
+
+  createServer: (data: { name: string; url: string; description?: string; headers?: Record<string, string> }) =>
+    api<{ server: McpServerWithTools }>('/api/mcp/servers', { method: 'POST', body: data }),
+
+  getServer: (id: string) =>
+    api<{ server: McpServerWithTools }>(`/api/mcp/servers/${id}`),
+
+  updateServer: (id: string, data: Partial<{ name: string; url: string; description: string; headers: Record<string, string>; isEnabled: boolean }>) =>
+    api<{ server: McpServer }>(`/api/mcp/servers/${id}`, { method: 'PUT', body: data }),
+
+  deleteServer: (id: string) =>
+    api<{ success: boolean }>(`/api/mcp/servers/${id}`, { method: 'DELETE' }),
+
+  // Tools
+  discoverTools: (serverId: string) =>
+    api<{ tools: McpTool[] }>(`/api/mcp/servers/${serverId}/discover`, { method: 'POST' }),
+
+  getServerTools: (serverId: string) =>
+    api<{ tools: McpTool[] }>(`/api/mcp/servers/${serverId}/tools`),
+
+  updateTool: (toolId: string, data: { isEnabled: boolean }) =>
+    api<{ tool: McpTool }>(`/api/mcp/tools/${toolId}`, { method: 'PUT', body: data }),
+
+  // Test
+  testConnection: (url: string, headers?: Record<string, string>) =>
+    api<McpTestResult>('/api/mcp/test', { method: 'POST', body: { url, headers } }),
+
+  // Presets
+  getPresets: () =>
+    api<{ presets: McpPreset[] }>('/api/mcp/presets'),
+
+  addPreset: (presetId: string) =>
+    api<{ server: McpServerWithTools }>('/api/mcp/presets/add', { method: 'POST', body: { presetId } }),
+};
+
 export { ApiError };
