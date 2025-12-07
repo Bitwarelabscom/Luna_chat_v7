@@ -72,6 +72,7 @@ Most AI assistants are stateless query engines. Luna is a **stateful companion**
 - **Calendar**: CalDAV integration (Google, Outlook, self-hosted Radicale)
 - **Email**: SMTP/IMAP support for sending and receiving
 - **Telegram**: Two-way messaging and notifications via Telegram bot
+- **MCP Servers**: Model Context Protocol for external tool integration
 - **Code Sandbox**: Execute Python, JavaScript, and Shell scripts safely
 - **Document Processing**: Upload and search PDFs, text files, and more
 - **Web Search**: SearXNG integration for web research
@@ -197,6 +198,22 @@ Create your own integrations:
 - Webhooks for external services
 - Safe expression evaluation
 
+### MCP (Model Context Protocol)
+Connect external MCP servers to extend Luna's capabilities:
+
+| Feature | Description |
+|---------|-------------|
+| HTTP Transport | Connect to MCP servers via HTTP/HTTPS |
+| Stdio Transport | Run local MCP servers as processes |
+| Tool Discovery | Automatically discover available tools |
+| Dynamic Integration | Tools appear in Luna's tool palette |
+| Per-Tool Control | Enable/disable individual tools |
+
+Configure MCP servers in Settings > MCP Servers:
+- Add server name, URL, and optional headers
+- Or configure stdio command with arguments and environment variables
+- Luna automatically discovers and uses available tools during chat
+
 ---
 
 ## Triggers System
@@ -234,6 +251,7 @@ Features:
 - Send messages to Luna from anywhere
 - Get notifications for important events
 - Two-way conversation support
+- **Web Chat Integration**: Luna can send you Telegram messages during web chats (reminders, follow-ups, important info)
 
 ### Built-in Schedules
 
@@ -416,6 +434,10 @@ luna-chat/
 |   |   |-- delivery.service.ts       # Delivery methods (SSE, chat)
 |   |   |-- telegram.service.ts       # Telegram bot integration
 |   |   |-- triggers.routes.ts        # Trigger API endpoints
+|   |-- mcp/                # Model Context Protocol
+|   |   |-- mcp.service.ts            # MCP client logic
+|   |   |-- mcp.routes.ts             # MCP API endpoints
+|   |   |-- transports.ts             # HTTP and stdio transports
 |-- frontend/               # Next.js web UI
 |   |-- src/
 |   |   |-- components/
@@ -425,6 +447,7 @@ luna-chat/
 |   |   |   |-- MobileSessionsOverlay.tsx
 |   |   |   |-- settings/
 |   |   |   |   |-- TriggersTab.tsx       # Trigger configuration UI
+|   |   |   |   |-- McpTab.tsx            # MCP servers configuration UI
 |   |   |-- hooks/
 |   |   |   |-- useIsMobile.ts
 |-- android/                # Native Android app
@@ -564,6 +587,20 @@ npm start
 | POST | `/api/triggers/telegram/link` | Generate Telegram link code |
 | DELETE | `/api/triggers/telegram/unlink` | Disconnect Telegram |
 | POST | `/api/triggers/telegram/webhook` | Telegram bot webhook |
+
+### MCP Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/mcp/servers` | List configured MCP servers |
+| POST | `/api/mcp/servers` | Add new MCP server |
+| PUT | `/api/mcp/servers/:id` | Update MCP server |
+| DELETE | `/api/mcp/servers/:id` | Remove MCP server |
+| POST | `/api/mcp/servers/:id/connect` | Connect to server and discover tools |
+| POST | `/api/mcp/servers/:id/disconnect` | Disconnect from server |
+| GET | `/api/mcp/servers/:id/tools` | List tools from a server |
+| PUT | `/api/mcp/servers/:serverId/tools/:toolId` | Update tool settings |
+| POST | `/api/mcp/execute` | Execute an MCP tool |
 
 ### Auth Endpoints
 
