@@ -4,7 +4,7 @@
 
 **A local-first, privacy-focused autonomous AI companion with a "Council" of sub-agents, long-term memory, and full system integration.**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Node.js](https://img.shields.io/badge/Node.js-18+-green.svg)](https://nodejs.org/)
 [![Docker](https://img.shields.io/badge/Docker-Compose-blue.svg)](https://docs.docker.com/compose/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/)
@@ -773,7 +773,7 @@ Luna expresses emotions through media:
 
 ## License
 
-MIT License - see [LICENSE](LICENSE)
+AGPL-3.0 License - see [LICENSE](LICENSE)
 
 ## Author
 

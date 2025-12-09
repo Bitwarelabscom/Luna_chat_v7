@@ -25,6 +25,10 @@ secrets:
     file: ./secrets/elevenlabs_api_key.txt
   allowed_ips:
     file: ./secrets/allowed_ips.txt
+  spotify_client_id:
+    file: ./secrets/spotify_client_id.txt
+  spotify_client_secret:
+    file: ./secrets/spotify_client_secret.txt
 
 services:
   luna-frontend:
@@ -87,7 +91,7 @@ services:
       - RATE_LIMIT_MAX_REQUESTS=${RATE_LIMIT_MAX_REQUESTS:-40}
       - CORS_ORIGIN=${CORS_ORIGIN:-https://bitwarelabs.com}
       - SANDBOX_CONTAINER=luna-sandbox
-      - DOCKER_HOST=${DOCKER_HOST:-http://docker-proxy:2375}
+      - DOCKER_HOST=${DOCKER_HOST:-tcp://docker-proxy:2375}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       # Luna's local email
       - EMAIL_SMTP_HOST=${EMAIL_SMTP_HOST:-mail.bitwarelabs.com}
@@ -110,6 +114,9 @@ services:
       - ELEVENLABS_MODEL=${ELEVENLABS_MODEL:-eleven_v3}
       # Telegram Bot
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      # OAuth callback URLs
+      - OAUTH_CALLBACK_BASE_URL=https://luna.bitwarelabs.com
+      - FRONTEND_URL=https://luna.bitwarelabs.com
     secrets:
       - postgres_password
       - jwt_secret
@@ -124,12 +131,15 @@ services:
       - encryption_key
       - email_password
       - allowed_ips
+      - spotify_client_id
+      - spotify_client_secret
     volumes:
       - luna-documents:/app/documents
       - luna-workspace:/app/workspace  # Shared workspace for scripts and data
       - ./images:/app/images  # Luna media (videos and generated images)
       - /home/luna/.claude/.credentials.json:/claude-credentials.json:ro
       - /home/luna/.claude/.credentials.json:/home/node/.claude/.credentials.json:ro
+      - /root/ultraAPI:/mcp-servers/ultraAPI:ro  # MCP servers
     depends_on:
       luna-postgres:
         condition: service_healthy
@@ -207,25 +217,33 @@ services:
       retries: 5
 
   luna-sandbox:
-    image: python:3.12-slim
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.sandbox
     container_name: luna-sandbox
     restart: unless-stopped
     command: sleep infinity
     networks:
       - luna-network
-    mem_limit: 256m
-    cpus: 0.5
+    mem_limit: 8g
+    cpus: 1.0
+    shm_size: '2gb'
     security_opt:
       - no-new-privileges:true
-    read_only: true
     volumes:
-      - luna-workspace:/workspace  # Shared workspace for scripts and data
-    tmpfs:
-      - /tmp:size=64m
+      - luna-workspace:/workspace
+      - luna-packages:/packages
+      - luna-sandbox-data:/data
+    environment:
+      - PIP_CACHE_DIR=/packages/pip
+      - NPM_CONFIG_CACHE=/packages/npm
+    dns:
+      - 1.1.1.2
+      - 1.0.0.2
     healthcheck:
       test: ["CMD", "python3", "-c", "print('ok')"]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 3
 
   docker-proxy:
@@ -235,6 +253,7 @@ services:
     environment:
       - CONTAINERS=1
       - POST=1
+      - EXEC=1
       - SERVICES=0
       - SWARM=0
       - IMAGES=0
@@ -294,6 +313,8 @@ volumes:
   luna-workspace:
   luna-ollama-data:
   luna-radicale-data:
+  luna-packages:
+  luna-sandbox-data:
 
 networks:
   luna-network:

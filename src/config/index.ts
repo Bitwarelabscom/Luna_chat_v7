@@ -22,6 +22,8 @@ const secrets = {
   emailPassword: getOptionalSecret('email_password', 'EMAIL_PASSWORD'),
   googleApiKey: getOptionalSecret('google_api_key', 'GOOGLE_API_KEY'),
   elevenlabsApiKey: getOptionalSecret('elevenlabs_api_key', 'ELEVENLABS_API_KEY'),
+  spotifyClientId: getOptionalSecret('spotify_client_id', 'SPOTIFY_CLIENT_ID'),
+  spotifyClientSecret: getOptionalSecret('spotify_client_secret', 'SPOTIFY_CLIENT_SECRET'),
 };
 
 const configSchema = z.object({
@@ -155,6 +157,12 @@ const configSchema = z.object({
     url: z.string().url().default('http://localhost:5232'),
     enabled: z.coerce.boolean().default(true),
   }),
+
+  spotify: z.object({
+    clientId: z.string().optional(),
+    clientSecret: z.string().optional(),
+    enabled: z.coerce.boolean().default(true),
+  }).optional(),
 });
 
 const rawConfig = {
@@ -287,6 +295,12 @@ const rawConfig = {
   radicale: {
     url: process.env.RADICALE_URL,
     enabled: process.env.RADICALE_ENABLED,
+  },
+
+  spotify: {
+    clientId: secrets.spotifyClientId,
+    clientSecret: secrets.spotifyClientSecret,
+    enabled: process.env.SPOTIFY_ENABLED,
   },
 };
 

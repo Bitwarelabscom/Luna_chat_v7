@@ -14,12 +14,40 @@ import * as checkins from './checkins.service.js';
 import * as mood from './mood.service.js';
 import * as lunaMedia from './luna-media.service.js';
 import * as facts from '../memory/facts.service.js';
+import * as spotify from './spotify.service.js';
+import * as spotifyOAuth from './spotify-oauth.js';
 import { getAbilitySummary } from './orchestrator.js';
 import logger from '../utils/logger.js';
 
 // Helper to get userId from authenticated request
 function getUserId(req: Request): string {
   return req.user!.userId;
+}
+
+// Parse date string as Swedish time (Europe/Stockholm) and return UTC Date
+function parseSwedishTime(dateStr: string): Date {
+  // dateStr format: "2025-12-08T12:30" or "2025-12-08T12:30:00"
+  // Parse as Swedish timezone and convert to UTC
+
+  // Get the offset for Swedish timezone at the given date
+  const testDate = new Date(dateStr + 'Z'); // Parse as UTC first to get approximate date
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Stockholm',
+    timeZoneName: 'shortOffset',
+  });
+
+  // Get the offset string (like "GMT+1" or "GMT+2")
+  const parts = formatter.formatToParts(testDate);
+  const tzPart = parts.find(p => p.type === 'timeZoneName');
+  const offsetStr = tzPart?.value || 'GMT+1';
+
+  // Parse offset (GMT+1 -> 1, GMT+2 -> 2)
+  const match = offsetStr.match(/GMT([+-])(\d+)/);
+  const offsetHours = match ? parseInt(match[2]) * (match[1] === '+' ? 1 : -1) : 1;
+
+  // Parse the date string and subtract the offset to get UTC
+  const localDate = new Date(dateStr);
+  return new Date(localDate.getTime() - offsetHours * 60 * 60 * 1000);
 }
 
 const router = Router();
@@ -660,6 +688,109 @@ router.post('/luna/generate-image', async (req: Request, res: Response) => {
 });
 
 // ============================================
+// LUNA AVATAR (Loop-based video system)
+// ============================================
+
+// Get current avatar state for user
+router.get('/luna/avatar/state', async (req: Request, res: Response) => {
+  try {
+    const state = lunaMedia.getAvatarStateForUser(getUserId(req));
+    res.json({ state });
+  } catch (error) {
+    logger.error('Failed to get avatar state', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get avatar state' });
+  }
+});
+
+// Get next video in current loop set
+router.get('/luna/avatar/next', async (req: Request, res: Response) => {
+  try {
+    const { set } = req.query;
+    const video = lunaMedia.getNextLoopVideo(getUserId(req), set as string | undefined);
+    if (video) {
+      res.json(video);
+    } else {
+      res.status(404).json({ error: 'No loop videos available' });
+    }
+  } catch (error) {
+    logger.error('Failed to get next loop video', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get next loop video' });
+  }
+});
+
+// Get info about available loop sets
+router.get('/luna/avatar/loop-sets', async (_req: Request, res: Response) => {
+  try {
+    const loopSets = lunaMedia.getLoopSetsInfo();
+    res.json({ loopSets });
+  } catch (error) {
+    logger.error('Failed to get loop sets info', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get loop sets info' });
+  }
+});
+
+// Get available special gestures
+router.get('/luna/avatar/specials', async (_req: Request, res: Response) => {
+  try {
+    const specials = lunaMedia.getAvailableSpecialGestures();
+    res.json({ specials });
+  } catch (error) {
+    logger.error('Failed to get special gestures', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get special gestures' });
+  }
+});
+
+// Queue a special gesture to play
+router.post('/luna/avatar/special', async (req: Request, res: Response) => {
+  try {
+    const { gesture } = req.body;
+    if (!gesture) {
+      res.status(400).json({ error: 'gesture parameter is required' });
+      return;
+    }
+
+    const queued = lunaMedia.queueSpecialGesture(getUserId(req), gesture);
+    if (queued) {
+      const next = lunaMedia.getNextSpecialGesture(getUserId(req));
+      res.json({ queued: true, video: next });
+    } else {
+      res.status(404).json({ error: 'Gesture not available', gesture });
+    }
+  } catch (error) {
+    logger.error('Failed to queue special gesture', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to queue special gesture' });
+  }
+});
+
+// Mark special gesture as finished
+router.post('/luna/avatar/special/finish', async (req: Request, res: Response) => {
+  try {
+    lunaMedia.finishSpecialGesture(getUserId(req));
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Failed to finish special gesture', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to finish special gesture' });
+  }
+});
+
+// Set loop set based on mood
+router.post('/luna/avatar/mood', async (req: Request, res: Response) => {
+  try {
+    const { mood } = req.body;
+    if (!mood) {
+      res.status(400).json({ error: 'mood parameter is required' });
+      return;
+    }
+
+    const newSet = lunaMedia.setLoopSetForMood(getUserId(req), mood);
+    res.json({ loopSet: newSet });
+  } catch (error) {
+    logger.error('Failed to set mood loop set', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to set mood loop set' });
+  }
+});
+
+// ============================================
 // CHECK-INS
 // ============================================
 
@@ -746,7 +877,7 @@ router.get('/calendar/events', async (req: Request, res: Response) => {
       days: days ? parseInt(days as string, 10) : undefined,
       limit: limit ? parseInt(limit as string, 10) : undefined,
     });
-    res.json(events);
+    res.json({ events });
   } catch (error) {
     res.status(500).json({ error: 'Failed to get calendar events' });
   }
@@ -755,7 +886,7 @@ router.get('/calendar/events', async (req: Request, res: Response) => {
 router.get('/calendar/today', async (req: Request, res: Response) => {
   try {
     const events = await calendar.getTodayEvents(getUserId(req));
-    res.json(events);
+    res.json({ events });
   } catch (error) {
     res.status(500).json({ error: 'Failed to get today events' });
   }
@@ -767,6 +898,77 @@ router.get('/calendar/status', async (req: Request, res: Response) => {
     res.json(status);
   } catch (error) {
     res.status(500).json({ error: 'Failed to get calendar status' });
+  }
+});
+
+router.post('/calendar/events', async (req: Request, res: Response) => {
+  try {
+    const { title, description, startAt, endAt, location, isAllDay, reminderMinutes } = req.body;
+    if (!title || !startAt || !endAt) {
+      res.status(400).json({ error: 'title, startAt, and endAt are required' });
+      return;
+    }
+    const event = await calendar.createEvent(getUserId(req), {
+      title,
+      description,
+      startAt: parseSwedishTime(startAt),
+      endAt: parseSwedishTime(endAt),
+      location,
+      isAllDay: isAllDay || false,
+      reminderMinutes: reminderMinutes !== undefined ? reminderMinutes : null,
+    });
+    res.status(201).json(event);
+  } catch (error) {
+    logger.error('Failed to create calendar event', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to create calendar event' });
+  }
+});
+
+router.get('/calendar/events/:id', async (req: Request, res: Response) => {
+  try {
+    const event = await calendar.getEvent(getUserId(req), req.params.id);
+    if (!event) {
+      res.status(404).json({ error: 'Event not found' });
+      return;
+    }
+    res.json(event);
+  } catch (error) {
+    logger.error('Failed to get calendar event', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get calendar event' });
+  }
+});
+
+router.put('/calendar/events/:id', async (req: Request, res: Response) => {
+  try {
+    const { title, description, startAt, endAt, location, isAllDay, reminderMinutes } = req.body;
+    const event = await calendar.updateEvent(getUserId(req), req.params.id, {
+      title,
+      description,
+      startAt: startAt ? parseSwedishTime(startAt) : undefined,
+      endAt: endAt ? parseSwedishTime(endAt) : undefined,
+      location,
+      isAllDay,
+      reminderMinutes: reminderMinutes !== undefined ? reminderMinutes : undefined,
+    });
+    res.json(event);
+  } catch (error) {
+    const message = (error as Error).message;
+    if (message === 'Event not found') {
+      res.status(404).json({ error: 'Event not found' });
+      return;
+    }
+    logger.error('Failed to update calendar event', { error: message });
+    res.status(500).json({ error: 'Failed to update calendar event' });
+  }
+});
+
+router.delete('/calendar/events/:id', async (req: Request, res: Response) => {
+  try {
+    await calendar.deleteEvent(getUserId(req), req.params.id);
+    res.status(204).send();
+  } catch (error) {
+    logger.error('Failed to delete calendar event', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to delete calendar event' });
   }
 });
 
@@ -916,6 +1118,264 @@ router.delete('/facts/:id', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to delete fact', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to delete fact' });
+  }
+});
+
+// ============================================
+// SPOTIFY MUSIC CONTROL
+// ============================================
+
+// Get Spotify connection status
+router.get('/spotify/status', async (req: Request, res: Response) => {
+  try {
+    const status = await spotify.getConnectionStatus(getUserId(req));
+    res.json(status);
+  } catch (error) {
+    logger.error('Failed to get Spotify status', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get Spotify status' });
+  }
+});
+
+// Start Spotify OAuth flow - get authorization URL
+router.get('/spotify/authorize', async (req: Request, res: Response) => {
+  try {
+    const { url, stateToken } = await spotifyOAuth.generateSpotifyAuthUrl(getUserId(req));
+    res.json({ url, stateToken });
+  } catch (error) {
+    logger.error('Failed to generate Spotify auth URL', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to start Spotify authorization' });
+  }
+});
+
+// Spotify OAuth callback (handles redirect from Spotify)
+router.get('/spotify/callback', async (req: Request, res: Response) => {
+  try {
+    const { code, state, error } = req.query;
+
+    if (error) {
+      logger.warn(`Spotify auth denied: ${error}`);
+      // Redirect to frontend with error
+      res.redirect(`${process.env.FRONTEND_URL || 'https://luna.bitwarelabs.com'}/settings?spotify_error=${error}`);
+      return;
+    }
+
+    if (!code || !state) {
+      res.status(400).json({ error: 'Missing code or state parameter' });
+      return;
+    }
+
+    const { userId, profile } = await spotifyOAuth.handleSpotifyCallback(
+      code as string,
+      state as string
+    );
+
+    logger.info(`Spotify connected for user ${userId}: ${profile.displayName} (${profile.id})`);
+
+    // Redirect to frontend settings with success
+    res.redirect(`${process.env.FRONTEND_URL || 'https://luna.bitwarelabs.com'}/settings?spotify_connected=true`);
+  } catch (error) {
+    logger.error('Spotify OAuth callback failed', { error: (error as Error).message });
+    res.redirect(`${process.env.FRONTEND_URL || 'https://luna.bitwarelabs.com'}/settings?spotify_error=auth_failed`);
+  }
+});
+
+// Disconnect Spotify
+router.delete('/spotify/disconnect', async (req: Request, res: Response) => {
+  try {
+    await spotifyOAuth.disconnectSpotify(getUserId(req));
+    res.json({ success: true, message: 'Spotify disconnected' });
+  } catch (error) {
+    logger.error('Failed to disconnect Spotify', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to disconnect Spotify' });
+  }
+});
+
+// Get current playback state
+router.get('/spotify/playback', async (req: Request, res: Response) => {
+  try {
+    const state = await spotify.getPlaybackStatus(getUserId(req));
+    res.json({ state });
+  } catch (error) {
+    logger.error('Failed to get playback state', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get playback state' });
+  }
+});
+
+// Play music
+router.post('/spotify/play', async (req: Request, res: Response) => {
+  try {
+    const { query, type, uri, uris, contextUri, shuffle, deviceId } = req.body;
+    const result = await spotify.playMusic(getUserId(req), {
+      query,
+      type,
+      uri,
+      uris,
+      contextUri,
+      shuffle,
+      deviceId,
+    });
+    res.json(result);
+  } catch (error) {
+    logger.error('Failed to play music', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to play music' });
+  }
+});
+
+// Pause playback
+router.post('/spotify/pause', async (req: Request, res: Response) => {
+  try {
+    const result = await spotify.pauseMusic(getUserId(req));
+    res.json(result);
+  } catch (error) {
+    logger.error('Failed to pause music', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to pause music' });
+  }
+});
+
+// Skip to next track
+router.post('/spotify/next', async (req: Request, res: Response) => {
+  try {
+    const result = await spotify.skipTrack(getUserId(req), 'next');
+    res.json(result);
+  } catch (error) {
+    logger.error('Failed to skip track', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to skip track' });
+  }
+});
+
+// Go to previous track
+router.post('/spotify/previous', async (req: Request, res: Response) => {
+  try {
+    const result = await spotify.skipTrack(getUserId(req), 'previous');
+    res.json(result);
+  } catch (error) {
+    logger.error('Failed to go to previous track', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to go to previous track' });
+  }
+});
+
+// Set volume
+router.post('/spotify/volume', async (req: Request, res: Response) => {
+  try {
+    const { volume } = req.body;
+    if (typeof volume !== 'number' || volume < 0 || volume > 100) {
+      res.status(400).json({ error: 'volume must be a number between 0 and 100' });
+      return;
+    }
+    const result = await spotify.setVolume(getUserId(req), volume);
+    res.json(result);
+  } catch (error) {
+    logger.error('Failed to set volume', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to set volume' });
+  }
+});
+
+// Add to queue
+router.post('/spotify/queue', async (req: Request, res: Response) => {
+  try {
+    const { query } = req.body;
+    if (!query) {
+      res.status(400).json({ error: 'query is required' });
+      return;
+    }
+    const result = await spotify.addToQueue(getUserId(req), query);
+    res.json(result);
+  } catch (error) {
+    logger.error('Failed to add to queue', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to add to queue' });
+  }
+});
+
+// Get available devices
+router.get('/spotify/devices', async (req: Request, res: Response) => {
+  try {
+    const devices = await spotify.getAvailableDevices(getUserId(req));
+    res.json({ devices });
+  } catch (error) {
+    logger.error('Failed to get devices', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get devices' });
+  }
+});
+
+// Transfer playback to device
+router.post('/spotify/devices/transfer', async (req: Request, res: Response) => {
+  try {
+    const { deviceId, play } = req.body;
+    if (!deviceId) {
+      res.status(400).json({ error: 'deviceId is required' });
+      return;
+    }
+    const result = await spotify.transferPlayback(getUserId(req), deviceId, play);
+    res.json(result);
+  } catch (error) {
+    logger.error('Failed to transfer playback', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to transfer playback' });
+  }
+});
+
+// Set preferred device
+router.put('/spotify/devices/preferred', async (req: Request, res: Response) => {
+  try {
+    const { deviceId, deviceName } = req.body;
+    if (!deviceId || !deviceName) {
+      res.status(400).json({ error: 'deviceId and deviceName are required' });
+      return;
+    }
+    await spotify.setPreferredDevice(getUserId(req), deviceId, deviceName);
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Failed to set preferred device', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to set preferred device' });
+  }
+});
+
+// Search Spotify
+router.get('/spotify/search', async (req: Request, res: Response) => {
+  try {
+    const { q, type, limit } = req.query;
+    if (!q) {
+      res.status(400).json({ error: 'Query parameter q is required' });
+      return;
+    }
+    const results = await spotify.search(
+      getUserId(req),
+      q as string,
+      (type as 'track' | 'artist' | 'album' | 'playlist') || 'track',
+      limit ? parseInt(limit as string, 10) : 10
+    );
+    res.json(results);
+  } catch (error) {
+    logger.error('Failed to search Spotify', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to search Spotify' });
+  }
+});
+
+// Get recommendations
+router.get('/spotify/recommendations', async (req: Request, res: Response) => {
+  try {
+    const { mood, seedTracks, seedArtists, seedGenres, limit } = req.query;
+    const tracks = await spotify.getRecommendations(getUserId(req), {
+      mood: mood as string,
+      seedTracks: seedTracks ? (seedTracks as string).split(',') : undefined,
+      seedArtists: seedArtists ? (seedArtists as string).split(',') : undefined,
+      seedGenres: seedGenres ? (seedGenres as string).split(',') : undefined,
+      limit: limit ? parseInt(limit as string, 10) : 20,
+    });
+    res.json({ tracks });
+  } catch (error) {
+    logger.error('Failed to get recommendations', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get recommendations' });
+  }
+});
+
+// Get Spotify preferences
+router.get('/spotify/preferences', async (req: Request, res: Response) => {
+  try {
+    const prefs = await spotify.getSpotifyPreferences(getUserId(req));
+    res.json(prefs);
+  } catch (error) {
+    logger.error('Failed to get Spotify preferences', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get Spotify preferences' });
   }
 });
 

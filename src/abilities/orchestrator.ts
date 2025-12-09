@@ -7,6 +7,7 @@ import * as mood from './mood.service.js';
 import * as agents from './agents.service.js';
 import * as calendar from './calendar.service.js';
 import * as email from './email.service.js';
+import * as spotify from './spotify.service.js';
 import * as facts from '../memory/facts.service.js';
 import { createCompletion } from '../llm/router.js';
 import { config } from '../config/index.js';
@@ -18,11 +19,12 @@ export interface AbilityContext {
   calendar: string;
   email: string;
   mood: string;
+  spotify: string;
   tools: string[];
 }
 
 export interface AbilityIntent {
-  type: 'task' | 'knowledge' | 'code' | 'document' | 'calendar' | 'email' | 'agent' | 'tool' | 'smalltalk' | 'weather' | 'status' | 'fact_correction' | 'none';
+  type: 'task' | 'knowledge' | 'code' | 'document' | 'calendar' | 'email' | 'agent' | 'tool' | 'smalltalk' | 'weather' | 'status' | 'fact_correction' | 'spotify' | 'none';
   action?: string;
   params?: Record<string, unknown>;
   confidence: number;
@@ -73,6 +75,8 @@ function hasActionKeywords(message: string): boolean {
     'create', 'make', 'add', 'delete', 'remove', 'update', 'change',
     'document', 'file', 'upload', 'download',
     'code', 'script', 'run', 'execute', 'calculate',
+    // Spotify/Music keywords
+    'play', 'pause', 'music', 'song', 'spotify', 'track', 'artist', 'album', 'playlist', 'skip', 'next', 'previous', 'volume', 'queue',
   ];
 
   return actionKeywords.some(k => message.includes(k));
@@ -333,6 +337,7 @@ export interface ContextBuildOptions {
   loadEmail?: boolean;     // Load recent emails
   loadMood?: boolean;      // Process mood
   loadTools?: boolean;     // Load available tools
+  loadSpotify?: boolean;   // Load Spotify playback state
 }
 
 /**
@@ -355,6 +360,7 @@ export function getContextOptions(message: string): ContextBuildOptions {
     loadEmail: /\b(email|mail|inbox|unread)\b/i.test(lower),
     loadMood: true, // Mood is lightweight
     loadTools: /\b(tool|search|execute|run|calculate|weather|document)\b/i.test(lower) || lower.includes('?'),
+    loadSpotify: /\b(play|pause|music|song|spotify|track|artist|album|playlist|skip|next|previous|volume|queue|listen|what.*playing)\b/i.test(lower),
   };
 
   return options;
@@ -381,6 +387,7 @@ export async function buildAbilityContext(
       calendar: '',
       email: '',
       mood: '',
+      spotify: '',
       tools: [],
     };
   }
@@ -388,7 +395,7 @@ export async function buildAbilityContext(
   try {
     // Selective fetches based on options
     const promises: Promise<unknown>[] = [];
-    const indices: { knowledge?: number; tasks?: number; calendar?: number; email?: number; mood?: number; moodTrends?: number; tools?: number } = {};
+    const indices: { knowledge?: number; tasks?: number; calendar?: number; email?: number; mood?: number; moodTrends?: number; tools?: number; spotify?: number } = {};
 
     if (opts.loadKnowledge !== false) {
       indices.knowledge = promises.length;
@@ -422,6 +429,11 @@ export async function buildAbilityContext(
       promises.push(tools.getTools(userId, true).catch(() => []));
     }
 
+    if (opts.loadSpotify) {
+      indices.spotify = promises.length;
+      promises.push(spotify.getPlaybackStatus(userId).catch(() => null));
+    }
+
     const results = await Promise.all(promises);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -437,6 +449,7 @@ export async function buildAbilityContext(
     const currentMood = getResult<Awaited<ReturnType<typeof mood.processMoodFromMessage>>>('mood');
     const moodTrends = getResult<Awaited<ReturnType<typeof mood.getMoodTrends>>>('moodTrends') || { averageSentiment: 0, dominantEmotions: [], moodTrend: 'stable' as const, topTopics: [] };
     const userTools = getResult<Awaited<ReturnType<typeof tools.getTools>>>('tools') || [];
+    const spotifyState = getResult<Awaited<ReturnType<typeof spotify.getPlaybackStatus>>>('spotify');
 
     return {
       knowledge: knowledge.formatKnowledgeForPrompt(relevantKnowledge),
@@ -444,6 +457,7 @@ export async function buildAbilityContext(
       calendar: calendar.formatCalendarForPrompt(upcomingEvents),
       email: email.formatEmailsForPrompt(recentEmails),
       mood: mood.formatMoodForPrompt(currentMood, moodTrends),
+      spotify: spotify.formatSpotifyForPrompt(spotifyState),
       tools: userTools.map(t => t.name),
     };
   } catch (error) {
@@ -454,6 +468,7 @@ export async function buildAbilityContext(
       calendar: '',
       email: '',
       mood: '',
+      spotify: '',
       tools: [],
     };
   }
@@ -470,6 +485,7 @@ export function formatAbilityContextForPrompt(context: AbilityContext): string {
   if (context.calendar) sections.push(context.calendar);
   if (context.email) sections.push(context.email);
   if (context.mood) sections.push(context.mood);
+  if (context.spotify) sections.push(context.spotify);
 
   if (context.tools.length > 0) {
     sections.push(`[Available Tools]\n${context.tools.join(', ')}`);
@@ -601,6 +617,28 @@ export function detectAbilityIntent(message: string): AbilityIntent {
         confidence: 0.85,
       };
     }
+  }
+
+  // Spotify/Music intents
+  if (/\b(play|pause|stop|skip|next|previous|volume|music|song|spotify|track|artist|album|playlist|queue|shuffle|repeat|listen|what.*playing|now playing)\b/i.test(lower)) {
+    const isPlay = /\b(play|put on|start|listen|throw on)\b/i.test(lower);
+    const isPause = /\b(pause|stop)\b/i.test(lower);
+    const isSkip = /\b(skip|next)\b/i.test(lower);
+    const isPrevious = /\b(previous|back|go back)\b/i.test(lower);
+    const isVolume = /\b(volume|louder|quieter|turn up|turn down)\b/i.test(lower);
+    const isQueue = /\b(queue|add to queue|play next)\b/i.test(lower);
+    const isStatus = /\b(what.*playing|now playing|current song|what song)\b/i.test(lower);
+    const isDevice = /\b(device|speaker|phone|computer|transfer)\b/i.test(lower);
+    const isSearch = /\b(find|search|look for)\b/i.test(lower) && /\b(song|track|music|artist)\b/i.test(lower);
+    const isRecommend = /\b(recommend|suggestion|something|mood|chill|energetic|calm|happy|sad)\b/i.test(lower) && /\b(music|play|listen)\b/i.test(lower);
+
+    return {
+      type: 'spotify',
+      action: isPlay ? 'play' : isPause ? 'pause' : isSkip ? 'next' : isPrevious ? 'previous' :
+              isVolume ? 'volume' : isQueue ? 'queue' : isStatus ? 'status' : isDevice ? 'device' :
+              isSearch ? 'search' : isRecommend ? 'recommend' : 'query',
+      confidence: 0.85,
+    };
   }
 
   // Multi-agent intents
@@ -1047,6 +1085,188 @@ export async function executeAbilityAction(
                 oldValue: targetFact.factValue,
                 needsNewValue: true,
               },
+            };
+          }
+        }
+      }
+
+      case 'spotify': {
+        // Handle Spotify music control
+        const isLinked = await spotify.isSpotifyLinked(userId);
+        if (!isLinked) {
+          return {
+            handled: true,
+            result: "You haven't connected your Spotify account yet. Go to Settings > Integrations to connect your Spotify account.",
+            data: { needsAuth: true },
+          };
+        }
+
+        switch (intent.action) {
+          case 'play': {
+            // Extract what to play from the message
+            const playMatch = message.match(/play\s+(?:some\s+)?(?:music\s+)?(?:by\s+)?(.+)/i) ||
+                              message.match(/put\s+on\s+(.+)/i) ||
+                              message.match(/listen\s+to\s+(.+)/i);
+            const query = playMatch?.[1]?.trim();
+
+            // Determine type from message
+            let type: 'track' | 'artist' | 'album' | 'playlist' | undefined;
+            if (/\balbum\b/i.test(message)) type = 'album';
+            else if (/\bartist\b/i.test(message)) type = 'artist';
+            else if (/\bplaylist\b/i.test(message)) type = 'playlist';
+            else type = 'track';
+
+            const result = await spotify.playMusic(userId, {
+              query: query || undefined,
+              type: query ? type : undefined,
+            });
+            return {
+              handled: true,
+              result: result.message,
+              data: { track: result.track, success: result.success },
+            };
+          }
+
+          case 'pause': {
+            const result = await spotify.pauseMusic(userId);
+            return {
+              handled: true,
+              result: result.message,
+              data: { success: result.success },
+            };
+          }
+
+          case 'next': {
+            const result = await spotify.skipTrack(userId, 'next');
+            return {
+              handled: true,
+              result: result.message,
+              data: { track: result.track, success: result.success },
+            };
+          }
+
+          case 'previous': {
+            const result = await spotify.skipTrack(userId, 'previous');
+            return {
+              handled: true,
+              result: result.message,
+              data: { track: result.track, success: result.success },
+            };
+          }
+
+          case 'volume': {
+            const volumeMatch = message.match(/(\d+)\s*%?/);
+            const volume = volumeMatch ? parseInt(volumeMatch[1]) : 50;
+            const result = await spotify.setVolume(userId, volume);
+            return {
+              handled: true,
+              result: result.message,
+              data: { success: result.success },
+            };
+          }
+
+          case 'queue': {
+            const queueMatch = message.match(/(?:queue|add to queue)\s+(.+)/i);
+            const query = queueMatch?.[1]?.trim();
+            if (!query) {
+              return {
+                handled: true,
+                result: "What would you like me to add to the queue?",
+                data: { needsQuery: true },
+              };
+            }
+            const result = await spotify.addToQueue(userId, query);
+            return {
+              handled: true,
+              result: result.message,
+              data: { track: result.track, success: result.success },
+            };
+          }
+
+          case 'status': {
+            const state = await spotify.getPlaybackStatus(userId);
+            if (!state) {
+              return {
+                handled: true,
+                result: "Nothing is currently playing.",
+                data: { playing: false },
+              };
+            }
+            return {
+              handled: true,
+              result: spotify.formatSpotifyForPrompt(state),
+              data: { state },
+            };
+          }
+
+          case 'device': {
+            const devices = await spotify.getAvailableDevices(userId);
+            if (devices.length === 0) {
+              return {
+                handled: true,
+                result: "No Spotify devices found. Open Spotify on a device first.",
+                data: { devices: [] },
+              };
+            }
+
+            // Check if user wants to transfer
+            const transferMatch = message.match(/(?:transfer|move|switch)\s+(?:to\s+)?(.+)/i) ||
+                                  message.match(/(?:on\s+)?(?:my\s+)?(.+?)(?:\s+please)?$/i);
+            const targetDevice = transferMatch?.[1]?.trim();
+
+            if (targetDevice && !/\b(device|list|show)\b/i.test(targetDevice)) {
+              const device = devices.find(d =>
+                d.name.toLowerCase().includes(targetDevice.toLowerCase())
+              );
+              if (device) {
+                const result = await spotify.transferPlayback(userId, device.id, true);
+                return {
+                  handled: true,
+                  result: result.message,
+                  data: { device, success: result.success },
+                };
+              }
+            }
+
+            return {
+              handled: true,
+              result: `Available devices:\n${devices.map(d => `- ${d.name} (${d.type})${d.isActive ? ' [active]' : ''}`).join('\n')}`,
+              data: { devices },
+            };
+          }
+
+          case 'recommend': {
+            // Extract mood from message
+            const moodMatch = message.match(/\b(happy|sad|energetic|calm|focused|workout|sleep|party|chill|romantic)\b/i);
+            const mood = moodMatch?.[1]?.toLowerCase();
+
+            const tracks = await spotify.getRecommendations(userId, { mood, limit: 5 });
+            if (tracks.length === 0) {
+              return {
+                handled: true,
+                result: "I couldn't get recommendations right now. Try playing something specific instead.",
+                data: { tracks: [] },
+              };
+            }
+
+            // Play the first recommendation
+            const firstTrack = tracks[0];
+            const result = await spotify.playMusic(userId, { uri: firstTrack.uri });
+
+            return {
+              handled: true,
+              result: `${mood ? `Based on your ${mood} mood, ` : ''}here's what I recommend:\n${tracks.slice(0, 5).map((t, i) => `${i + 1}. ${t.name} - ${t.artists[0]?.name}`).join('\n')}\n\n${result.success ? `Now playing: ${firstTrack.name}` : result.message}`,
+              data: { tracks, playing: result.track },
+            };
+          }
+
+          default: {
+            // General Spotify query - show status
+            const state = await spotify.getPlaybackStatus(userId);
+            return {
+              handled: true,
+              result: state ? spotify.formatSpotifyForPrompt(state) : "Nothing playing. What would you like to listen to?",
+              data: { state },
             };
           }
         }
