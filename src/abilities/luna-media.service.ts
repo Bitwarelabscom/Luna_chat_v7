@@ -10,34 +10,82 @@ export interface MediaSelection {
   url: string;
   mood: string;
   trigger?: string;
+  isSpecial?: boolean;  // True for one-shot special gestures
+  loopSet?: string;     // Current loop set name
 }
 
-// Valid mood states from mood.service.ts
+export interface VideoSet {
+  name: string;
+  videos: string[];
+  isLoop: boolean;
+}
+
+export interface AvatarState {
+  currentSet: string;
+  lastVideoIndex: number;
+  isPlayingSpecial: boolean;
+  specialQueue: string[];
+}
+
+// Valid mood states
 type MoodEmotion = 'joy' | 'sadness' | 'anger' | 'fear' | 'surprise' | 'disgust' | 'trust' | 'anticipation';
 
 // Paths
 const IMAGES_DIR = path.join(process.cwd(), 'images');
 const MOODS_DIR = path.join(IMAGES_DIR, 'moods');
 const MP4_DIR = path.join(IMAGES_DIR, 'mp4');
+const LOOPS_DIR = path.join(MP4_DIR, 'loops');
+const SPECIALS_DIR = path.join(MP4_DIR, 'specials');
 const LUNA_REFERENCE = path.join(IMAGES_DIR, 'luna2.jpg');
 
-// Video-to-mood mapping
-const MOOD_TO_VIDEOS: Record<MoodEmotion, string[]> = {
-  joy: ['laughing', 'smile', 'smile3', 'ssmile6', 'happily_approve', 'ok_let_go', 'laugh2', 'laugh4', 'ofc', 'i_agree', 'hmmm_yes'],
-  sadness: ['cry', 'sad_offended', 'rain', 'rain2', 'oh_no'],
-  anger: ['you_are_stupid', 'that_is_stupid', 'intruder_detected', 'no_not_like', 'not_approve'],
-  fear: ['intruder_detected', 'oh_no'],
-  surprise: ['did_you_just_say_that', 'perfect_idea', 'what', 'are_you_sure', 'hallucinate'],
-  disgust: ['that_is_stupid', 'no_neutral', 'no_not_like', 'not_approve', 'ehhh_ok'],
-  trust: ['all_systems_are_fine', 'happily_approve', 'i_agree', 'ofc', 'hmmm_yes'],
-  anticipation: ['ok_let_go', 'evil_grin', 'world_domination', 'letsachiveworlddomination', 'breath_in_deep'],
+// Loop set names (emotional states)
+const LOOP_SETS = ['neutral', 'happy', 'sad', 'thinking', 'curious', 'playful'] as const;
+type LoopSetName = typeof LOOP_SETS[number];
+
+// Map mood emotions to loop sets
+const MOOD_TO_LOOP_SET: Record<MoodEmotion, LoopSetName> = {
+  joy: 'happy',
+  sadness: 'sad',
+  anger: 'sad',        // Use sad set for negative emotions
+  fear: 'sad',
+  surprise: 'curious',
+  disgust: 'sad',
+  trust: 'happy',
+  anticipation: 'curious',
 };
 
-// Neutral video variations for fallback
-const NEUTRAL_VIDEOS = ['neutral', 'neutral2', 'neutral3', 'neutral4'];
+// Special gesture triggers - patterns in response that trigger one-shot gestures
+const SPECIAL_GESTURE_TRIGGERS: Record<string, string[]> = {
+  // Affirmative
+  'thumbs_up': ['good job', 'well done', 'nice!', 'nice work', 'approved', 'success', 'nailed it', 'perfect'],
+  'high_five': ['team', 'we did it', 'celebrate', 'awesome!', 'amazing!', 'fantastic'],
+  'ok_sign': ['okay', 'alright', 'sounds good', 'confirmed', 'all set'],
+  'nod_yes': ['yes!', 'absolutely', 'definitely', 'certainly', 'agreed'],
+  'clapping': ['congratulations', 'congrats', 'bravo', 'well played', 'impressive'],
+  'chef_kiss': ['perfect!', 'excellent!', 'magnifique', 'superb', 'exquisite'],
 
-// Context triggers - patterns in Luna's response that trigger specific videos
-const CONTEXT_TRIGGERS: Record<string, string[]> = {
+  // Negative
+  'shake_no': ['no,', 'nope', 'negative', 'denied', 'cannot', "won't work"],
+  'facepalm': ['oh no', 'seriously?', 'ugh', 'facepalm', 'cringe', 'embarrassing'],
+  'eye_roll': ['whatever', 'sure...', 'right...', 'if you say so', 'ugh'],
+  'shrug': ["i don't know", 'not sure', 'maybe', 'hard to say', 'uncertain'],
+  'finger_wag': ['warning', "don't do that", 'careful', 'naughty', 'bad idea'],
+
+  // Expressive
+  'wave_hello': ['hello!', 'hi there', 'hey!', 'greetings', 'welcome'],
+  'wave_bye': ['goodbye', 'bye!', 'see you', 'later!', 'farewell', 'take care'],
+  'wink': ['between us', 'secret', 'hint hint', 'you know', 'wink'],
+  'mind_blown': ['mind blown', 'incredible', 'unbelievable', 'insane', 'wow!'],
+  'heart_hands': ['love it', 'love you', 'adore', 'heart', 'so sweet'],
+  'salute': ['yes sir', 'roger', 'acknowledged', 'understood', 'on it'],
+  'bow': ['thank you', 'grateful', 'honored', 'humbled', 'appreciate'],
+  'pointing': ['look at this', 'check this', 'right here', 'this one', 'notice'],
+  'laugh_hard': ['hahahaha', 'dying', 'so funny', 'hilarious', 'lmao', 'rofl'],
+  'gasp': ['oh my', 'shocking', 'what!?', 'no way!', 'can\'t believe'],
+};
+
+// Legacy context triggers for old flat video structure (backwards compatibility)
+const LEGACY_CONTEXT_TRIGGERS: Record<string, string[]> = {
   'laughing': ['haha', 'lol', 'funny', 'hilarious', 'laugh', 'hehe', 'amusing'],
   'laugh2': ['hahaha', 'rofl', 'lmao', 'cracking up'],
   'laugh4': ['dying of laughter', 'so funny', 'comedy gold'],
@@ -59,8 +107,6 @@ const CONTEXT_TRIGGERS: Record<string, string[]> = {
   'sad_offended': ['offended', 'hurt', 'disappointed', 'let down'],
   'you_are_stupid': ['frustrating', 'annoying', 'irritating', 'exasperated'],
   'that_is_stupid': ['ridiculous', 'absurd', 'nonsense', 'preposterous'],
-  'neutral': [],  // Default fallback, no triggers
-  // New video triggers
   'are_you_sure': ['are you sure', 'certain?', 'positive?', 'confident?'],
   'breath_in_deep': ['calm down', 'relax', 'breathe', 'take a breath', 'deep breath', 'patience'],
   'ehhh_ok': ['i guess', 'if you say so', 'alright then', 'i suppose', 'reluctantly'],
@@ -79,40 +125,239 @@ const CONTEXT_TRIGGERS: Record<string, string[]> = {
   'what': ['huh?', 'come again', "don't understand", 'confused', 'wait what'],
 };
 
-// Available videos (from filesystem)
-let availableVideos: string[] = [];
+// Legacy mood-to-video mapping (backwards compatibility)
+const LEGACY_MOOD_TO_VIDEOS: Record<MoodEmotion, string[]> = {
+  joy: ['laughing', 'smile', 'smile3', 'ssmile6', 'happily_approve', 'ok_let_go', 'laugh2', 'laugh4', 'ofc', 'i_agree', 'hmmm_yes'],
+  sadness: ['cry', 'sad_offended', 'rain', 'rain2', 'oh_no'],
+  anger: ['you_are_stupid', 'that_is_stupid', 'intruder_detected', 'no_not_like', 'not_approve'],
+  fear: ['intruder_detected', 'oh_no'],
+  surprise: ['did_you_just_say_that', 'perfect_idea', 'what', 'are_you_sure', 'hallucinate'],
+  disgust: ['that_is_stupid', 'no_neutral', 'no_not_like', 'not_approve', 'ehhh_ok'],
+  trust: ['all_systems_are_fine', 'happily_approve', 'i_agree', 'ofc', 'hmmm_yes'],
+  anticipation: ['ok_let_go', 'evil_grin', 'world_domination', 'letsachiveworlddomination', 'breath_in_deep'],
+};
+
+const LEGACY_NEUTRAL_VIDEOS = ['neutral', 'neutral2', 'neutral3', 'neutral4'];
+
+// Video storage
+let legacyVideos: string[] = [];           // Old flat structure videos
+let loopSets: Map<string, string[]> = new Map();  // Loop set name -> video filenames
+let specialGestures: string[] = [];        // Available special gesture videos
+
+// Per-user avatar state (in-memory, could be Redis for persistence)
+const userAvatarStates: Map<string, AvatarState> = new Map();
 
 /**
- * Initialize - scan for available videos
+ * Initialize - scan for available videos in both old and new structures
  */
 export function initializeLunaMedia(): void {
   try {
+    // Scan legacy flat structure
     if (fs.existsSync(MP4_DIR)) {
-      availableVideos = fs.readdirSync(MP4_DIR)
+      legacyVideos = fs.readdirSync(MP4_DIR)
+        .filter(f => f.endsWith('.mp4') && !fs.statSync(path.join(MP4_DIR, f)).isDirectory())
+        .map(f => f.replace('.mp4', ''));
+      logger.info(`Luna media: ${legacyVideos.length} legacy videos found`);
+    }
+
+    // Scan new loop sets structure
+    if (fs.existsSync(LOOPS_DIR)) {
+      for (const setName of LOOP_SETS) {
+        const setDir = path.join(LOOPS_DIR, setName);
+        if (fs.existsSync(setDir)) {
+          const videos = fs.readdirSync(setDir)
+            .filter(f => f.endsWith('.mp4'))
+            .map(f => f.replace('.mp4', ''));
+          if (videos.length > 0) {
+            loopSets.set(setName, videos);
+            logger.info(`Luna media: Loop set '${setName}' has ${videos.length} videos`);
+          }
+        }
+      }
+    }
+
+    // Scan special gestures
+    if (fs.existsSync(SPECIALS_DIR)) {
+      specialGestures = fs.readdirSync(SPECIALS_DIR)
         .filter(f => f.endsWith('.mp4'))
         .map(f => f.replace('.mp4', ''));
-      logger.info(`Luna media initialized with ${availableVideos.length} videos`, { videos: availableVideos });
-    } else {
-      logger.warn('MP4 directory not found', { path: MP4_DIR });
+      logger.info(`Luna media: ${specialGestures.length} special gestures found`);
     }
+
+    // Log which system is active
+    const hasNewStructure = loopSets.size > 0;
+    logger.info('Luna media initialized', {
+      mode: hasNewStructure ? 'loop-based' : 'legacy',
+      loopSets: loopSets.size,
+      specialGestures: specialGestures.length,
+      legacyVideos: legacyVideos.length,
+    });
   } catch (error) {
     logger.error('Failed to initialize Luna media', { error: (error as Error).message });
   }
 }
 
 /**
- * Get video for context - check Luna's response for trigger patterns
+ * Check if new loop-based structure is available
  */
-export function getVideoForContext(response: string): string | null {
+function hasLoopStructure(): boolean {
+  return loopSets.size > 0 && loopSets.has('neutral');
+}
+
+/**
+ * Get or create avatar state for a user
+ */
+function getAvatarState(userId: string): AvatarState {
+  let state = userAvatarStates.get(userId);
+  if (!state) {
+    state = {
+      currentSet: 'neutral',
+      lastVideoIndex: -1,
+      isPlayingSpecial: false,
+      specialQueue: [],
+    };
+    userAvatarStates.set(userId, state);
+  }
+  return state;
+}
+
+/**
+ * Get next video in current loop set (random, avoiding repeat)
+ */
+export function getNextLoopVideo(userId: string, setName?: string): MediaSelection | null {
+  if (!hasLoopStructure()) return null;
+
+  const state = getAvatarState(userId);
+  const targetSet = setName || state.currentSet;
+  const videos = loopSets.get(targetSet);
+
+  if (!videos || videos.length === 0) {
+    // Fallback to neutral
+    const neutralVideos = loopSets.get('neutral');
+    if (!neutralVideos || neutralVideos.length === 0) return null;
+
+    const randomIndex = Math.floor(Math.random() * neutralVideos.length);
+    state.lastVideoIndex = randomIndex;
+    state.currentSet = 'neutral';
+
+    return {
+      type: 'video',
+      url: `/api/images/mp4/loops/neutral/${neutralVideos[randomIndex]}.mp4`,
+      mood: 'neutral',
+      loopSet: 'neutral',
+      isSpecial: false,
+    };
+  }
+
+  // Pick random video, avoiding the last one if possible
+  let randomIndex = Math.floor(Math.random() * videos.length);
+  if (videos.length > 1 && randomIndex === state.lastVideoIndex) {
+    randomIndex = (randomIndex + 1) % videos.length;
+  }
+
+  state.lastVideoIndex = randomIndex;
+  state.currentSet = targetSet;
+
+  return {
+    type: 'video',
+    url: `/api/images/mp4/loops/${targetSet}/${videos[randomIndex]}.mp4`,
+    mood: targetSet,
+    loopSet: targetSet,
+    isSpecial: false,
+  };
+}
+
+/**
+ * Check for special gesture trigger in response
+ */
+function getSpecialGestureForResponse(response: string): string | null {
   const lowerResponse = response.toLowerCase();
 
-  for (const [video, triggers] of Object.entries(CONTEXT_TRIGGERS)) {
+  for (const [gesture, triggers] of Object.entries(SPECIAL_GESTURE_TRIGGERS)) {
+    for (const trigger of triggers) {
+      if (lowerResponse.includes(trigger.toLowerCase())) {
+        // Only return if gesture video exists
+        if (specialGestures.includes(gesture)) {
+          return gesture;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Queue a special gesture to play
+ */
+export function queueSpecialGesture(userId: string, gesture: string): boolean {
+  if (!specialGestures.includes(gesture)) {
+    return false;
+  }
+
+  const state = getAvatarState(userId);
+  state.specialQueue.push(gesture);
+  return true;
+}
+
+/**
+ * Get next special gesture from queue (if any)
+ */
+export function getNextSpecialGesture(userId: string): MediaSelection | null {
+  const state = getAvatarState(userId);
+
+  if (state.specialQueue.length === 0) {
+    return null;
+  }
+
+  const gesture = state.specialQueue.shift()!;
+  state.isPlayingSpecial = true;
+
+  return {
+    type: 'video',
+    url: `/api/images/mp4/specials/${gesture}.mp4`,
+    mood: 'special',
+    trigger: `special:${gesture}`,
+    isSpecial: true,
+  };
+}
+
+/**
+ * Mark special gesture as finished playing
+ */
+export function finishSpecialGesture(userId: string): void {
+  const state = getAvatarState(userId);
+  state.isPlayingSpecial = false;
+}
+
+/**
+ * Set the current loop set based on mood
+ */
+export function setLoopSetForMood(userId: string, mood: string): string {
+  const state = getAvatarState(userId);
+  const moodKey = mood.toLowerCase() as MoodEmotion;
+  const loopSet = MOOD_TO_LOOP_SET[moodKey] || 'neutral';
+
+  // Only change if we have videos for this set
+  if (loopSets.has(loopSet)) {
+    state.currentSet = loopSet;
+  }
+
+  return state.currentSet;
+}
+
+/**
+ * Get legacy video for context (old flat structure)
+ */
+function getLegacyVideoForContext(response: string): string | null {
+  const lowerResponse = response.toLowerCase();
+
+  for (const [video, triggers] of Object.entries(LEGACY_CONTEXT_TRIGGERS)) {
     if (triggers.length === 0) continue;
 
     for (const trigger of triggers) {
       if (lowerResponse.includes(trigger.toLowerCase())) {
-        // Only return if video exists
-        if (availableVideos.includes(video)) {
+        if (legacyVideos.includes(video)) {
           return video;
         }
       }
@@ -123,14 +368,12 @@ export function getVideoForContext(response: string): string | null {
 }
 
 /**
- * Get videos for mood
+ * Get legacy videos for mood (old flat structure)
  */
-export function getVideosForMood(mood: string): string[] {
+function getLegacyVideosForMood(mood: string): string[] {
   const moodKey = mood.toLowerCase() as MoodEmotion;
-  const videos = MOOD_TO_VIDEOS[moodKey] || [];
-
-  // Filter to only available videos
-  return videos.filter(v => availableVideos.includes(v));
+  const videos = LEGACY_MOOD_TO_VIDEOS[moodKey] || [];
+  return videos.filter(v => legacyVideos.includes(v));
 }
 
 /**
@@ -148,13 +391,11 @@ export async function generateMoodImage(mood: string): Promise<string> {
   const moodLower = mood.toLowerCase();
   const outputPath = path.join(MOODS_DIR, `${moodLower}.png`);
 
-  // Check cache first
   if (fs.existsSync(outputPath)) {
     logger.info('Mood image already cached', { mood: moodLower });
     return `/api/images/moods/${moodLower}.png`;
   }
 
-  // Ensure directory exists
   if (!fs.existsSync(MOODS_DIR)) {
     fs.mkdirSync(MOODS_DIR, { recursive: true });
   }
@@ -162,8 +403,6 @@ export async function generateMoodImage(mood: string): Promise<string> {
   try {
     const openai = new OpenAI({ apiKey: config.openai.apiKey });
 
-    // Create image using gpt-image-1 with edit endpoint
-    // Note: gpt-image-1 uses 'output_format' not 'response_format'
     const response = await openai.images.edit({
       model: 'gpt-image-1',
       image: fs.createReadStream(LUNA_REFERENCE),
@@ -173,7 +412,6 @@ export async function generateMoodImage(mood: string): Promise<string> {
     } as Parameters<typeof openai.images.edit>[0]);
 
     if (response.data && response.data[0]?.url) {
-      // Download the image from URL
       const imageResponse = await fetch(response.data[0].url);
       const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
       fs.writeFileSync(outputPath, imageBuffer);
@@ -193,7 +431,7 @@ export async function generateMoodImage(mood: string): Promise<string> {
       error: (error as Error).message
     });
 
-    // Fallback: try generate endpoint if edit fails
+    // Fallback to generate endpoint
     try {
       const openai = new OpenAI({ apiKey: config.openai.apiKey });
 
@@ -230,12 +468,36 @@ export async function generateMoodImage(mood: string): Promise<string> {
 
 /**
  * Select media for Luna's response - main entry point
+ * Uses new loop structure if available, falls back to legacy
  */
-export async function selectMedia(response: string, mood: string): Promise<MediaSelection> {
+export async function selectMedia(response: string, mood: string, userId: string = 'default'): Promise<MediaSelection> {
   const moodLower = mood.toLowerCase();
 
-  // Step 1: Check for context triggers in response
-  const contextVideo = getVideoForContext(response);
+  // NEW STRUCTURE: Check for special gesture triggers first
+  if (hasLoopStructure()) {
+    const specialGesture = getSpecialGestureForResponse(response);
+    if (specialGesture) {
+      queueSpecialGesture(userId, specialGesture);
+      const special = getNextSpecialGesture(userId);
+      if (special) {
+        return special;
+      }
+    }
+
+    // Set loop set based on mood
+    setLoopSetForMood(userId, moodLower);
+
+    // Get next video from current loop set
+    const loopVideo = getNextLoopVideo(userId);
+    if (loopVideo) {
+      return loopVideo;
+    }
+  }
+
+  // LEGACY STRUCTURE: Fall back to old behavior
+
+  // Check for context triggers in response
+  const contextVideo = getLegacyVideoForContext(response);
   if (contextVideo) {
     return {
       type: 'video',
@@ -245,14 +507,13 @@ export async function selectMedia(response: string, mood: string): Promise<Media
     };
   }
 
-  // Step 2: Get videos for this mood
-  const moodVideos = getVideosForMood(moodLower);
+  // Get videos for this mood
+  const moodVideos = getLegacyVideosForMood(moodLower);
 
-  // Step 3: Random choice between video and image (50/50)
+  // Random choice between video and image (50/50)
   const useVideo = moodVideos.length > 0 && Math.random() < 0.5;
 
   if (useVideo) {
-    // Pick random video from mood videos
     const randomVideo = moodVideos[Math.floor(Math.random() * moodVideos.length)];
     return {
       type: 'video',
@@ -262,7 +523,7 @@ export async function selectMedia(response: string, mood: string): Promise<Media
     };
   }
 
-  // Step 4: Use image (generate if needed)
+  // Use image (generate if needed)
   try {
     const imageUrl = await generateMoodImage(moodLower);
     return {
@@ -272,8 +533,8 @@ export async function selectMedia(response: string, mood: string): Promise<Media
       trigger: 'mood:image',
     };
   } catch {
-    // Fallback to neutral video if image generation fails
-    const availableNeutrals = NEUTRAL_VIDEOS.filter(v => availableVideos.includes(v));
+    // Fallback to neutral video
+    const availableNeutrals = LEGACY_NEUTRAL_VIDEOS.filter(v => legacyVideos.includes(v));
     if (availableNeutrals.length > 0) {
       const randomNeutral = availableNeutrals[Math.floor(Math.random() * availableNeutrals.length)];
       return {
@@ -285,10 +546,10 @@ export async function selectMedia(response: string, mood: string): Promise<Media
     }
 
     // Last resort - any available video
-    if (availableVideos.length > 0) {
+    if (legacyVideos.length > 0) {
       return {
         type: 'video',
-        url: `/api/images/mp4/${availableVideos[0]}.mp4`,
+        url: `/api/images/mp4/${legacyVideos[0]}.mp4`,
         mood: moodLower,
         trigger: 'fallback:any',
       };
@@ -299,10 +560,35 @@ export async function selectMedia(response: string, mood: string): Promise<Media
 }
 
 /**
- * Get list of available videos
+ * Get list of available videos (both structures)
  */
 export function getAvailableVideos(): string[] {
-  return [...availableVideos];
+  return [...legacyVideos];
+}
+
+/**
+ * Get info about available loop sets
+ */
+export function getLoopSetsInfo(): Record<string, number> {
+  const info: Record<string, number> = {};
+  for (const [name, videos] of loopSets) {
+    info[name] = videos.length;
+  }
+  return info;
+}
+
+/**
+ * Get list of available special gestures
+ */
+export function getAvailableSpecialGestures(): string[] {
+  return [...specialGestures];
+}
+
+/**
+ * Get current avatar state for user
+ */
+export function getAvatarStateForUser(userId: string): AvatarState {
+  return getAvatarState(userId);
 }
 
 /**

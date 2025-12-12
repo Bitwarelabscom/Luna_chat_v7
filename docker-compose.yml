@@ -137,8 +137,11 @@ services:
       - luna-documents:/app/documents
       - luna-workspace:/app/workspace  # Shared workspace for scripts and data
       - ./images:/app/images  # Luna media (videos and generated images)
+      # Claude CLI credentials
       - /home/luna/.claude/.credentials.json:/claude-credentials.json:ro
       - /home/luna/.claude/.credentials.json:/home/node/.claude/.credentials.json:ro
+      # Gemini CLI credentials (rw needed for token refresh)
+      - /home/luna/.gemini:/home/node/.gemini
       - /root/ultraAPI:/mcp-servers/ultraAPI:ro  # MCP servers
     depends_on:
       luna-postgres:

@@ -3,7 +3,7 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/lib/store';
-import CommandCenter from '@/components/CommandCenter';
+import Desktop from '@/components/os/Desktop';
 
 export default function ChatPage() {
   const router = useRouter();
@@ -59,5 +59,5 @@ export default function ChatPage() {
     return null;
   }
 
-  return <CommandCenter />;
+  return <Desktop />;
 }

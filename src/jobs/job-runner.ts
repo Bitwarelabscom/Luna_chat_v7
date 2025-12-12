@@ -6,6 +6,12 @@ import * as rssService from '../autonomous/rss.service.js';
 import * as insightsService from '../autonomous/insights.service.js';
 import * as triggerService from '../triggers/trigger.service.js';
 import * as deliveryService from '../triggers/delivery.service.js';
+import * as sessionLogService from '../chat/session-log.service.js';
+import * as orderMonitorService from '../trading/order-monitor.service.js';
+import * as botExecutorService from '../trading/bot-executor.service.js';
+import * as scalpingService from '../trading/scalping.service.js';
+import * as calendarReminderService from '../abilities/calendar-reminder.service.js';
+import * as reminderService from '../abilities/reminder.service.js';
 import logger from '../utils/logger.js';
 
 // ============================================
@@ -100,6 +106,52 @@ const jobs: Job[] = [
     enabled: true,
     running: false,
     handler: cleanupOldTriggers,
+  },
+  // Calendar reminder job
+  {
+    name: 'calendarReminderProcessor',
+    intervalMs: 60 * 1000, // Every minute
+    enabled: true,
+    running: false,
+    handler: processCalendarReminders,
+  },
+  // Quick reminder job (user-set reminders via chat)
+  {
+    name: 'quickReminderProcessor',
+    intervalMs: 30 * 1000, // Every 30 seconds for faster response
+    enabled: true,
+    running: false,
+    handler: processQuickReminders,
+  },
+  // Session log jobs
+  {
+    name: 'sessionLogFinalizer',
+    intervalMs: 30 * 60 * 1000, // Every 30 minutes
+    enabled: true,
+    running: false,
+    handler: finalizeIdleSessions,
+  },
+  // Trading jobs
+  {
+    name: 'tradingOrderMonitor',
+    intervalMs: 30 * 1000, // Every 30 seconds - fast for real-time order monitoring
+    enabled: true,
+    running: false,
+    handler: monitorTradingOrders,
+  },
+  {
+    name: 'tradingBotExecutor',
+    intervalMs: 60 * 1000, // Every minute - run bot strategies
+    enabled: true,
+    running: false,
+    handler: executeTradingBots,
+  },
+  {
+    name: 'scalpingBot',
+    intervalMs: 30 * 1000, // Every 30 seconds - scan for scalping opportunities
+    enabled: true,
+    running: false,
+    handler: runScalpingBot,
   },
 ];
 
@@ -467,6 +519,189 @@ async function cleanupOldTriggers(): Promise<void> {
     }
   } catch (error) {
     logger.error('Trigger cleanup job failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+// ============================================
+// Calendar Reminder Job Handler
+// ============================================
+
+/**
+ * Process calendar event reminders and send Telegram notifications
+ */
+async function processCalendarReminders(): Promise<void> {
+  try {
+    const enqueued = await calendarReminderService.processCalendarReminders();
+    if (enqueued > 0) {
+      logger.info('Calendar reminders processed', { enqueued });
+    }
+
+    // Also cleanup old reminder records periodically (piggyback on this job)
+    await calendarReminderService.cleanupOldReminderRecords();
+  } catch (error) {
+    logger.error('Calendar reminder processor job failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+/**
+ * Process quick reminders (user-set via chat) and send Telegram notifications
+ */
+async function processQuickReminders(): Promise<void> {
+  try {
+    const delivered = await reminderService.processQuickReminders();
+    if (delivered > 0) {
+      logger.info('Quick reminders processed', { delivered });
+    }
+
+    // Cleanup old delivered reminders periodically
+    await reminderService.cleanupOldReminders();
+  } catch (error) {
+    logger.error('Quick reminder processor job failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+// ============================================
+// Session Log Job Handlers
+// ============================================
+
+/**
+ * Finalize session logs for idle sessions (30+ minutes inactive)
+ * Generates summary, mood, and energy analysis
+ */
+async function finalizeIdleSessions(): Promise<void> {
+  try {
+    // Get sessions idle for 30+ minutes with unfinalized logs
+    const idleLogs = await sessionLogService.getIdleUnfinalizedLogs(0.5);
+
+    if (idleLogs.length === 0) {
+      logger.debug('No idle sessions to finalize');
+      return;
+    }
+
+    let finalized = 0;
+    for (const { sessionId } of idleLogs) {
+      try {
+        // Get session messages for analysis
+        const messagesResult = await pool.query(
+          `SELECT role, content FROM messages WHERE session_id = $1 ORDER BY created_at ASC`,
+          [sessionId]
+        );
+
+        if (messagesResult.rows.length < 2) {
+          // Not enough messages to analyze, just mark as ended
+          await sessionLogService.finalizeSessionLog(sessionId, 'Brief session', 'neutral', 'medium', []);
+          finalized++;
+          continue;
+        }
+
+        // Analyze session for summary, mood, and energy
+        const analysis = await sessionLogService.analyzeSession(messagesResult.rows);
+
+        await sessionLogService.finalizeSessionLog(
+          sessionId,
+          analysis.summary,
+          analysis.mood,
+          analysis.energy,
+          analysis.topics
+        );
+
+        finalized++;
+      } catch (err) {
+        logger.warn('Failed to finalize session log', {
+          sessionId,
+          error: (err as Error).message,
+        });
+      }
+    }
+
+    logger.info('Session log finalizer completed', {
+      found: idleLogs.length,
+      finalized,
+    });
+  } catch (error) {
+    logger.error('Session log finalizer job failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+// ============================================
+// Trading Job Handlers
+// ============================================
+
+/**
+ * Monitor trading orders - TP/SL, trailing stops, pending order fills
+ * Runs frequently (every 30s) without LLM calls
+ */
+async function monitorTradingOrders(): Promise<void> {
+  try {
+    await orderMonitorService.runOrderMonitorJob();
+  } catch (error) {
+    logger.error('Trading order monitor job failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+/**
+ * Execute trading bots - Grid, DCA, RSI, conditional orders
+ * Runs every minute
+ */
+async function executeTradingBots(): Promise<void> {
+  try {
+    const results = await botExecutorService.runAllBots();
+
+    // Only log if there was activity
+    const totalActivity =
+      results.conditional.executed +
+      results.grid.trades +
+      results.dca.purchases +
+      results.rsi.trades;
+
+    if (totalActivity > 0) {
+      logger.info('Trading bot executor completed', { results });
+    } else {
+      logger.debug('Trading bot executor completed - no activity');
+    }
+  } catch (error) {
+    logger.error('Trading bot executor job failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+// ============================================
+// Scalping Bot Job Handlers
+// ============================================
+
+/**
+ * Run scalping bot - scans for rebound opportunities and executes paper/live trades
+ * Runs every 30 seconds
+ */
+async function runScalpingBot(): Promise<void> {
+  try {
+    const results = await scalpingService.runScalpingJob();
+
+    // Only log if there was activity
+    const totalActivity =
+      results.opportunitiesFound +
+      results.paperTrades +
+      results.liveTrades +
+      results.paperTradesClosed;
+
+    if (totalActivity > 0) {
+      logger.info('Scalping bot completed', { results });
+    } else {
+      logger.debug('Scalping bot completed - no activity');
+    }
+  } catch (error) {
+    logger.error('Scalping bot job failed', {
       error: (error as Error).message,
     });
   }

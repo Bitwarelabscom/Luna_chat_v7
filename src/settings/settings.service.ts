@@ -430,6 +430,343 @@ export async function getUserStats(userId: string): Promise<UserStats> {
   };
 }
 
+// === ENHANCED STATS (with model breakdown by time period and costs) ===
+
+export interface ModelPeriodStats {
+  inputTokens: number;
+  outputTokens: number;
+  cacheTokens: number;
+  totalTokens: number;
+  cost: number;
+}
+
+export interface EnhancedStats {
+  tokens: {
+    today: ModelPeriodStats;
+    thisWeek: ModelPeriodStats;
+    thisMonth: ModelPeriodStats;
+    total: ModelPeriodStats;
+  };
+  byModel: Record<string, {
+    today: ModelPeriodStats;
+    thisWeek: ModelPeriodStats;
+    thisMonth: ModelPeriodStats;
+    total: ModelPeriodStats;
+  }>;
+  memory: {
+    totalFacts: number;
+    activeFacts: number;
+    factsByCategory: Record<string, number>;
+    totalEmbeddings: number;
+    totalSummaries: number;
+  };
+  sessions: {
+    total: number;
+    archived: number;
+    totalMessages: number;
+  };
+}
+
+export async function getEnhancedStats(userId: string): Promise<EnhancedStats> {
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfWeek = new Date(startOfToday);
+  startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+  // Get detailed token stats by model and time period (excluding Ollama for cost calculations)
+  const modelStatsQuery = await pool.query(
+    `SELECT
+       m.model,
+       m.provider,
+       COALESCE(SUM(m.input_tokens), 0) as input_tokens,
+       COALESCE(SUM(m.output_tokens), 0) as output_tokens,
+       COALESCE(SUM(m.cache_tokens), 0) as cache_tokens,
+       COALESCE(SUM(m.tokens_used), 0) as total_tokens,
+       COALESCE(SUM(CASE WHEN m.created_at >= $2 THEN m.input_tokens ELSE 0 END), 0) as today_input,
+       COALESCE(SUM(CASE WHEN m.created_at >= $2 THEN m.output_tokens ELSE 0 END), 0) as today_output,
+       COALESCE(SUM(CASE WHEN m.created_at >= $2 THEN m.cache_tokens ELSE 0 END), 0) as today_cache,
+       COALESCE(SUM(CASE WHEN m.created_at >= $2 THEN m.tokens_used ELSE 0 END), 0) as today_total,
+       COALESCE(SUM(CASE WHEN m.created_at >= $3 THEN m.input_tokens ELSE 0 END), 0) as week_input,
+       COALESCE(SUM(CASE WHEN m.created_at >= $3 THEN m.output_tokens ELSE 0 END), 0) as week_output,
+       COALESCE(SUM(CASE WHEN m.created_at >= $3 THEN m.cache_tokens ELSE 0 END), 0) as week_cache,
+       COALESCE(SUM(CASE WHEN m.created_at >= $3 THEN m.tokens_used ELSE 0 END), 0) as week_total,
+       COALESCE(SUM(CASE WHEN m.created_at >= $4 THEN m.input_tokens ELSE 0 END), 0) as month_input,
+       COALESCE(SUM(CASE WHEN m.created_at >= $4 THEN m.output_tokens ELSE 0 END), 0) as month_output,
+       COALESCE(SUM(CASE WHEN m.created_at >= $4 THEN m.cache_tokens ELSE 0 END), 0) as month_cache,
+       COALESCE(SUM(CASE WHEN m.created_at >= $4 THEN m.tokens_used ELSE 0 END), 0) as month_total
+     FROM messages m
+     JOIN sessions s ON m.session_id = s.id
+     WHERE s.user_id = $1 AND m.model IS NOT NULL
+     GROUP BY m.model, m.provider`,
+    [userId, startOfToday, startOfWeek, startOfMonth]
+  );
+
+  // Initialize totals
+  const totals = {
+    today: { inputTokens: 0, outputTokens: 0, cacheTokens: 0, totalTokens: 0, cost: 0 },
+    thisWeek: { inputTokens: 0, outputTokens: 0, cacheTokens: 0, totalTokens: 0, cost: 0 },
+    thisMonth: { inputTokens: 0, outputTokens: 0, cacheTokens: 0, totalTokens: 0, cost: 0 },
+    total: { inputTokens: 0, outputTokens: 0, cacheTokens: 0, totalTokens: 0, cost: 0 },
+  };
+
+  const byModel: EnhancedStats['byModel'] = {};
+
+  for (const row of modelStatsQuery.rows) {
+    const model = row.model;
+    const isOllama = row.provider === 'ollama';
+
+    // Parse values
+    const todayStats = {
+      inputTokens: parseInt(row.today_input) || 0,
+      outputTokens: parseInt(row.today_output) || 0,
+      cacheTokens: parseInt(row.today_cache) || 0,
+      totalTokens: parseInt(row.today_total) || 0,
+      cost: isOllama ? 0 : calculateCost(model, parseInt(row.today_input) || 0, parseInt(row.today_output) || 0),
+    };
+    const weekStats = {
+      inputTokens: parseInt(row.week_input) || 0,
+      outputTokens: parseInt(row.week_output) || 0,
+      cacheTokens: parseInt(row.week_cache) || 0,
+      totalTokens: parseInt(row.week_total) || 0,
+      cost: isOllama ? 0 : calculateCost(model, parseInt(row.week_input) || 0, parseInt(row.week_output) || 0),
+    };
+    const monthStats = {
+      inputTokens: parseInt(row.month_input) || 0,
+      outputTokens: parseInt(row.month_output) || 0,
+      cacheTokens: parseInt(row.month_cache) || 0,
+      totalTokens: parseInt(row.month_total) || 0,
+      cost: isOllama ? 0 : calculateCost(model, parseInt(row.month_input) || 0, parseInt(row.month_output) || 0),
+    };
+    const totalStats = {
+      inputTokens: parseInt(row.input_tokens) || 0,
+      outputTokens: parseInt(row.output_tokens) || 0,
+      cacheTokens: parseInt(row.cache_tokens) || 0,
+      totalTokens: parseInt(row.total_tokens) || 0,
+      cost: isOllama ? 0 : calculateCost(model, parseInt(row.input_tokens) || 0, parseInt(row.output_tokens) || 0),
+    };
+
+    byModel[model] = { today: todayStats, thisWeek: weekStats, thisMonth: monthStats, total: totalStats };
+
+    // Only add to totals if not Ollama (for cost tracking)
+    if (!isOllama) {
+      totals.today.inputTokens += todayStats.inputTokens;
+      totals.today.outputTokens += todayStats.outputTokens;
+      totals.today.cacheTokens += todayStats.cacheTokens;
+      totals.today.totalTokens += todayStats.totalTokens;
+      totals.today.cost += todayStats.cost;
+
+      totals.thisWeek.inputTokens += weekStats.inputTokens;
+      totals.thisWeek.outputTokens += weekStats.outputTokens;
+      totals.thisWeek.cacheTokens += weekStats.cacheTokens;
+      totals.thisWeek.totalTokens += weekStats.totalTokens;
+      totals.thisWeek.cost += weekStats.cost;
+
+      totals.thisMonth.inputTokens += monthStats.inputTokens;
+      totals.thisMonth.outputTokens += monthStats.outputTokens;
+      totals.thisMonth.cacheTokens += monthStats.cacheTokens;
+      totals.thisMonth.totalTokens += monthStats.totalTokens;
+      totals.thisMonth.cost += monthStats.cost;
+
+      totals.total.inputTokens += totalStats.inputTokens;
+      totals.total.outputTokens += totalStats.outputTokens;
+      totals.total.cacheTokens += totalStats.cacheTokens;
+      totals.total.totalTokens += totalStats.totalTokens;
+      totals.total.cost += totalStats.cost;
+    }
+  }
+
+  // Round costs
+  totals.today.cost = Math.round(totals.today.cost * 10000) / 10000;
+  totals.thisWeek.cost = Math.round(totals.thisWeek.cost * 10000) / 10000;
+  totals.thisMonth.cost = Math.round(totals.thisMonth.cost * 10000) / 10000;
+  totals.total.cost = Math.round(totals.total.cost * 10000) / 10000;
+
+  // Get memory stats
+  const factsQuery = await pool.query(
+    `SELECT
+       COUNT(*) as total_facts,
+       COUNT(CASE WHEN is_active THEN 1 END) as active_facts
+     FROM user_facts
+     WHERE user_id = $1`,
+    [userId]
+  );
+
+  const factsByCategoryQuery = await pool.query(
+    `SELECT category, COUNT(*) as count
+     FROM user_facts
+     WHERE user_id = $1 AND is_active = true
+     GROUP BY category`,
+    [userId]
+  );
+
+  const factsByCategory: Record<string, number> = {};
+  for (const row of factsByCategoryQuery.rows) {
+    factsByCategory[row.category] = parseInt(row.count);
+  }
+
+  const embeddingsQuery = await pool.query(
+    'SELECT COUNT(*) as count FROM message_embeddings WHERE user_id = $1',
+    [userId]
+  );
+
+  const summariesQuery = await pool.query(
+    'SELECT COUNT(*) as count FROM conversation_summaries WHERE user_id = $1',
+    [userId]
+  );
+
+  // Get session stats
+  const sessionsQuery = await pool.query(
+    `SELECT
+       COUNT(*) as total,
+       COUNT(CASE WHEN is_archived THEN 1 END) as archived
+     FROM sessions
+     WHERE user_id = $1`,
+    [userId]
+  );
+
+  const messagesQuery = await pool.query(
+    `SELECT COUNT(*) as count
+     FROM messages m
+     JOIN sessions s ON m.session_id = s.id
+     WHERE s.user_id = $1`,
+    [userId]
+  );
+
+  const factsStats = factsQuery.rows[0];
+  const sessionsStats = sessionsQuery.rows[0];
+
+  return {
+    tokens: totals,
+    byModel,
+    memory: {
+      totalFacts: parseInt(factsStats.total_facts),
+      activeFacts: parseInt(factsStats.active_facts),
+      factsByCategory,
+      totalEmbeddings: parseInt(embeddingsQuery.rows[0].count),
+      totalSummaries: parseInt(summariesQuery.rows[0].count),
+    },
+    sessions: {
+      total: parseInt(sessionsStats.total),
+      archived: parseInt(sessionsStats.archived),
+      totalMessages: parseInt(messagesQuery.rows[0].count),
+    },
+  };
+}
+
+// === DAILY TOKEN STATS (for header display) ===
+
+export interface DailyTokenStats {
+  inputTokens: number;
+  outputTokens: number;
+  cacheTokens: number;
+  totalTokens: number;
+  estimatedCost: number;
+  byModel: Record<string, { input: number; output: number; cache: number; total: number; cost: number }>;
+}
+
+// Model cost lookup (per 1k tokens) - matches types.ts PROVIDERS
+const MODEL_COSTS: Record<string, { input: number; output: number }> = {
+  // OpenAI
+  'gpt-5.1-chat-latest': { input: 0.00125, output: 0.01 },
+  'gpt-5.1-codex': { input: 0.00125, output: 0.01 },
+  'gpt-5-mini': { input: 0.00025, output: 0.002 },
+  'gpt-5-nano': { input: 0.00005, output: 0.0004 },
+  'gpt-4.1': { input: 0.002, output: 0.008 },
+  'gpt-4.1-mini': { input: 0.0004, output: 0.0016 },
+  'gpt-4.1-nano': { input: 0.0001, output: 0.0004 },
+  'gpt-4o': { input: 0.0025, output: 0.01 },
+  'gpt-4o-mini': { input: 0.00015, output: 0.0006 },
+  'o3': { input: 0.002, output: 0.008 },
+  'o4-mini': { input: 0.0011, output: 0.0044 },
+  // Groq
+  'openai/gpt-oss-120b': { input: 0.00015, output: 0.0006 },
+  'llama-3.3-70b-versatile': { input: 0.00059, output: 0.00079 },
+  'openai/gpt-oss-20b': { input: 0.000075, output: 0.0003 },
+  'llama-3.1-8b-instant': { input: 0.00005, output: 0.00008 },
+  // Anthropic
+  'claude-opus-4-5-20251101': { input: 0.005, output: 0.025 },
+  'claude-sonnet-4-5-20250929': { input: 0.003, output: 0.015 },
+  'claude-haiku-4-5-20251001': { input: 0.001, output: 0.005 },
+  'claude-sonnet-4-20250514': { input: 0.003, output: 0.015 },
+  'claude-3-5-haiku-20241022': { input: 0.0008, output: 0.004 },
+  // xAI
+  'grok-4-1-fast': { input: 0.0002, output: 0.0005 },
+  'grok-4-1-fast-non-reasoning-latest': { input: 0.0002, output: 0.0005 },
+  'grok-4': { input: 0.003, output: 0.015 },
+  'grok-3': { input: 0.003, output: 0.015 },
+  'grok-3-mini': { input: 0.0003, output: 0.0005 },
+  'grok-2-1212': { input: 0.002, output: 0.01 },
+  // Google
+  'gemini-3-pro-preview': { input: 0.002, output: 0.012 },
+  'gemini-2.5-pro': { input: 0.00125, output: 0.01 },
+  'gemini-2.5-flash': { input: 0.0003, output: 0.0025 },
+  'gemini-2.5-flash-lite': { input: 0.000075, output: 0.0003 },
+  'gemini-2.0-flash': { input: 0.0001, output: 0.0004 },
+  'gemini-2.0-flash-lite': { input: 0.000075, output: 0.0003 },
+};
+
+function calculateCost(model: string, inputTokens: number, outputTokens: number): number {
+  const costs = MODEL_COSTS[model];
+  if (!costs) return 0; // Free tier or unknown model
+  return (inputTokens / 1000) * costs.input + (outputTokens / 1000) * costs.output;
+}
+
+export async function getDailyTokenStats(userId: string): Promise<DailyTokenStats> {
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  // Get token breakdown by model for today, excluding Ollama
+  const result = await pool.query(
+    `SELECT
+       m.model,
+       COALESCE(SUM(m.input_tokens), 0) as input_tokens,
+       COALESCE(SUM(m.output_tokens), 0) as output_tokens,
+       COALESCE(SUM(m.cache_tokens), 0) as cache_tokens,
+       COALESCE(SUM(m.tokens_used), 0) as total_tokens
+     FROM messages m
+     JOIN sessions s ON m.session_id = s.id
+     WHERE s.user_id = $1
+       AND m.created_at >= $2
+       AND m.model IS NOT NULL
+       AND (m.provider IS NULL OR m.provider != 'ollama')
+     GROUP BY m.model`,
+    [userId, startOfToday]
+  );
+
+  let totalInput = 0;
+  let totalOutput = 0;
+  let totalCache = 0;
+  let totalTokens = 0;
+  let totalCost = 0;
+  const byModel: DailyTokenStats['byModel'] = {};
+
+  for (const row of result.rows) {
+    const input = parseInt(row.input_tokens) || 0;
+    const output = parseInt(row.output_tokens) || 0;
+    const cache = parseInt(row.cache_tokens) || 0;
+    const total = parseInt(row.total_tokens) || 0;
+    const cost = calculateCost(row.model, input, output);
+
+    totalInput += input;
+    totalOutput += output;
+    totalCache += cache;
+    totalTokens += total;
+    totalCost += cost;
+
+    byModel[row.model] = { input, output, cache, total, cost };
+  }
+
+  return {
+    inputTokens: totalInput,
+    outputTokens: totalOutput,
+    cacheTokens: totalCache,
+    totalTokens,
+    estimatedCost: Math.round(totalCost * 10000) / 10000, // Round to 4 decimal places
+    byModel,
+  };
+}
+
 // === BACKUP & RESTORE ===
 
 export async function exportUserData(userId: string): Promise<BackupData> {

@@ -3,6 +3,90 @@ import logger from '../utils/logger.js';
 import crypto from 'crypto';
 import * as chatService from '../chat/chat.service.js';
 import * as sessionService from '../chat/session.service.js';
+import * as contextCompression from '../chat/context-compression.service.js';
+
+// ============================================
+// Telegram Idle Timer System
+// ============================================
+
+const telegramIdleTimers: Map<string, NodeJS.Timeout> = new Map();
+const TELEGRAM_IDLE_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+const TELEGRAM_TOKEN_LIMIT = 100000; // Force summarize at 100k tokens
+
+/**
+ * Reset the idle timer for a Telegram user
+ * Timer triggers summarization after 5 minutes of inactivity
+ */
+function resetTelegramIdleTimer(userId: string, sessionId: string): void {
+  // Clear existing timer
+  const existingTimer = telegramIdleTimers.get(userId);
+  if (existingTimer) {
+    clearTimeout(existingTimer);
+  }
+
+  // Set new timer
+  const timer = setTimeout(async () => {
+    await summarizeTelegramSession(userId, sessionId);
+    telegramIdleTimers.delete(userId);
+  }, TELEGRAM_IDLE_TIMEOUT);
+
+  telegramIdleTimers.set(userId, timer);
+  logger.debug('Reset Telegram idle timer', { userId, timeoutMs: TELEGRAM_IDLE_TIMEOUT });
+}
+
+/**
+ * Summarize a Telegram session using Ollama
+ * Uses the existing context compression system
+ */
+async function summarizeTelegramSession(userId: string, sessionId: string): Promise<void> {
+  try {
+    logger.info('Starting Telegram session summarization', { userId, sessionId });
+
+    // Update rolling summary in context compression
+    await contextCompression.updateRollingSummary(sessionId, userId);
+
+    logger.info('Telegram session summarization complete', { userId, sessionId });
+  } catch (error) {
+    logger.error('Failed to summarize Telegram session', {
+      error: (error as Error).message,
+      userId,
+      sessionId,
+    });
+  }
+}
+
+/**
+ * Check if session exceeds token limit and force summarization if needed
+ */
+async function checkTokenLimitAndSummarize(userId: string, sessionId: string): Promise<void> {
+  try {
+    const result = await pool.query(
+      `SELECT COALESCE(SUM(input_tokens), 0) as total_tokens FROM messages WHERE session_id = $1`,
+      [sessionId]
+    );
+    const totalTokens = parseInt(result.rows[0]?.total_tokens || '0', 10);
+
+    if (totalTokens >= TELEGRAM_TOKEN_LIMIT) {
+      logger.warn('Telegram session exceeds token limit, forcing summarization', {
+        userId, sessionId, totalTokens, limit: TELEGRAM_TOKEN_LIMIT
+      });
+      await summarizeTelegramSession(userId, sessionId);
+    }
+  } catch (error) {
+    logger.error('Failed to check token limit', { error: (error as Error).message });
+  }
+}
+
+/**
+ * Clear all Telegram idle timers (for graceful shutdown)
+ */
+export function clearAllTelegramTimers(): void {
+  for (const [userId, timer] of telegramIdleTimers) {
+    clearTimeout(timer);
+    logger.debug('Cleared Telegram idle timer', { userId });
+  }
+  telegramIdleTimers.clear();
+}
 
 // ============================================
 // Types
@@ -27,6 +111,14 @@ export interface TelegramLinkCode {
   usedAt: Date | null;
 }
 
+interface TelegramPhoto {
+  file_id: string;
+  file_unique_id: string;
+  width: number;
+  height: number;
+  file_size?: number;
+}
+
 interface TelegramUpdate {
   update_id: number;
   message?: {
@@ -42,8 +134,55 @@ interface TelegramUpdate {
       type: string;
     };
     text?: string;
+    photo?: TelegramPhoto[];
+    caption?: string;
+  };
+  callback_query?: {
+    id: string;
+    from: {
+      id: number;
+      first_name: string;
+      username?: string;
+    };
+    message?: {
+      message_id: number;
+      chat: {
+        id: number;
+      };
+    };
+    data?: string;
   };
 }
+
+// Quick action categories for inline keyboard
+const QUICK_ACTIONS = {
+  main: [
+    { text: 'Tasks', callback: 'cat:tasks' },
+    { text: 'Calendar', callback: 'cat:calendar' },
+    { text: 'Search', callback: 'cat:search' },
+    { text: 'Fun', callback: 'cat:fun' },
+  ],
+  tasks: [
+    { text: 'Show pending', callback: 'act:tasks:pending' },
+    { text: 'Create task', callback: 'act:tasks:create' },
+    { text: 'Back', callback: 'cat:main' },
+  ],
+  calendar: [
+    { text: 'Today', callback: 'act:calendar:today' },
+    { text: 'This week', callback: 'act:calendar:week' },
+    { text: 'Back', callback: 'cat:main' },
+  ],
+  search: [
+    { text: 'Web search', callback: 'act:search:web' },
+    { text: 'Weather', callback: 'act:search:weather' },
+    { text: 'Back', callback: 'cat:main' },
+  ],
+  fun: [
+    { text: 'Tell a joke', callback: 'act:fun:joke' },
+    { text: 'Random fact', callback: 'act:fun:fact' },
+    { text: 'Back', callback: 'cat:main' },
+  ],
+};
 
 // ============================================
 // Configuration
@@ -91,6 +230,7 @@ async function telegramRequest(method: string, body?: Record<string, unknown>): 
 
 /**
  * Send a message to a Telegram chat
+ * If parseMode is set and fails, automatically retries without formatting
  */
 export async function sendTelegramMessage(
   chatId: number,
@@ -110,8 +250,130 @@ export async function sendTelegramMessage(
 
     return true;
   } catch (error) {
+    const errorMessage = (error as Error).message;
+
+    // If parsing failed and we were using parseMode, retry without it
+    if (options?.parseMode && errorMessage.includes("can't parse entities")) {
+      logger.warn('Telegram markdown parsing failed, retrying as plain text', {
+        chatId,
+        parseMode: options.parseMode,
+      });
+
+      try {
+        await telegramRequest('sendMessage', {
+          chat_id: chatId,
+          text,
+          disable_notification: options?.disableNotification,
+        });
+        return true;
+      } catch (retryError) {
+        logger.error('Failed to send Telegram message (retry)', {
+          chatId,
+          error: (retryError as Error).message,
+        });
+        return false;
+      }
+    }
+
     logger.error('Failed to send Telegram message', {
       chatId,
+      error: errorMessage,
+    });
+    return false;
+  }
+}
+
+/**
+ * Send message with inline keyboard buttons
+ */
+async function sendMessageWithButtons(
+  chatId: number,
+  text: string,
+  buttons: Array<{ text: string; callback: string }>,
+  columns: number = 2
+): Promise<boolean> {
+  try {
+    // Build inline keyboard rows
+    const rows: Array<Array<{ text: string; callback_data: string }>> = [];
+    for (let i = 0; i < buttons.length; i += columns) {
+      const row = buttons.slice(i, i + columns).map(b => ({
+        text: b.text,
+        callback_data: b.callback,
+      }));
+      rows.push(row);
+    }
+
+    await telegramRequest('sendMessage', {
+      chat_id: chatId,
+      text,
+      reply_markup: {
+        inline_keyboard: rows,
+      },
+    });
+    return true;
+  } catch (error) {
+    logger.error('Failed to send Telegram message with buttons', {
+      chatId,
+      error: (error as Error).message,
+    });
+    return false;
+  }
+}
+
+/**
+ * Edit message with inline keyboard (for updating buttons)
+ */
+async function editMessageButtons(
+  chatId: number,
+  messageId: number,
+  text: string,
+  buttons: Array<{ text: string; callback: string }>,
+  columns: number = 2
+): Promise<boolean> {
+  try {
+    const rows: Array<Array<{ text: string; callback_data: string }>> = [];
+    for (let i = 0; i < buttons.length; i += columns) {
+      const row = buttons.slice(i, i + columns).map(b => ({
+        text: b.text,
+        callback_data: b.callback,
+      }));
+      rows.push(row);
+    }
+
+    await telegramRequest('editMessageText', {
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+      reply_markup: {
+        inline_keyboard: rows,
+      },
+    });
+    return true;
+  } catch (error) {
+    logger.error('Failed to edit Telegram message buttons', {
+      chatId,
+      messageId,
+      error: (error as Error).message,
+    });
+    return false;
+  }
+}
+
+/**
+ * Answer callback query (acknowledge button press)
+ */
+async function answerCallbackQuery(
+  callbackQueryId: string,
+  text?: string
+): Promise<boolean> {
+  try {
+    await telegramRequest('answerCallbackQuery', {
+      callback_query_id: callbackQueryId,
+      text,
+    });
+    return true;
+  } catch (error) {
+    logger.error('Failed to answer callback query', {
       error: (error as Error).message,
     });
     return false;
@@ -298,7 +560,7 @@ async function getOrCreateTelegramSession(userId: string): Promise<string> {
   // Check for existing Telegram session
   const result = await pool.query(
     `SELECT id FROM sessions
-     WHERE user_id = $1 AND title = 'Telegram Chat'
+     WHERE user_id = $1 AND title = 'Telegram'
      ORDER BY created_at DESC LIMIT 1`,
     [userId]
   );
@@ -310,11 +572,11 @@ async function getOrCreateTelegramSession(userId: string): Promise<string> {
   // Create new Telegram session
   const session = await sessionService.createSession({
     userId,
-    title: 'Telegram Chat',
+    title: 'Telegram',
     mode: 'companion',
   });
 
-  logger.info('Created Telegram chat session', { userId, sessionId: session.id });
+  logger.info('Created Telegram session', { userId, sessionId: session.id });
 
   return session.id;
 }
@@ -342,6 +604,7 @@ async function handleChatMessage(
       userId: connection.userId,
       message: text,
       mode: 'companion',
+      source: 'telegram',
     });
 
     // Update last message time
@@ -360,6 +623,12 @@ async function handleChatMessage(
         parseMode: 'Markdown',
       });
     }
+
+    // Reset idle timer for 5-minute summarization
+    resetTelegramIdleTimer(connection.userId, sessionId);
+
+    // Check if we've exceeded token limit (async, don't block response)
+    checkTokenLimitAndSummarize(connection.userId, sessionId).catch(() => {});
 
     logger.info('Telegram chat message processed', {
       userId: connection.userId,
@@ -388,6 +657,19 @@ async function handleChatMessage(
  * Process incoming Telegram update (webhook)
  */
 export async function processUpdate(update: TelegramUpdate): Promise<void> {
+  // Handle callback queries (button presses)
+  if (update.callback_query) {
+    await handleCallbackQuery(update.callback_query);
+    return;
+  }
+
+  // Handle photo messages
+  if (update.message?.photo && update.message.photo.length > 0) {
+    await handlePhotoMessage(update.message);
+    return;
+  }
+
+  // Require text for other message handling
   if (!update.message?.text) return;
 
   const message = update.message;
@@ -412,8 +694,13 @@ export async function processUpdate(update: TelegramUpdate): Promise<void> {
   if (text === '/help') {
     await sendTelegramMessage(
       chatId,
-      'Luna Telegram Commands:\n\n/start - Get started\n/status - Check connection status\n/unlink - Disconnect from Luna\n/help - Show this help\n\nOr just send me a message to chat!'
+      'Luna Telegram Commands:\n\n/start - Get started\n/list - Quick actions menu\n/status - Check connection status\n/sum - Summarize conversation\n/unlink - Disconnect from Luna\n/help - Show this help\n\nOr just send me a message to chat!\n\nYou can also send images - I will describe them for you!'
     );
+    return;
+  }
+
+  if (text === '/list') {
+    await handleListCommand(chatId);
     return;
   }
 
@@ -424,6 +711,11 @@ export async function processUpdate(update: TelegramUpdate): Promise<void> {
 
   if (text === '/unlink') {
     await handleUnlinkCommand(chatId);
+    return;
+  }
+
+  if (text === '/sum') {
+    await handleSumCommand(chatId);
     return;
   }
 
@@ -487,6 +779,194 @@ async function handleUnlinkCommand(chatId: number): Promise<void> {
   }
 }
 
+async function handleSumCommand(chatId: number): Promise<void> {
+  const connection = await getConnectionByChatId(chatId);
+
+  if (!connection) {
+    await sendTelegramMessage(chatId, 'Not connected to any Luna account.');
+    return;
+  }
+
+  try {
+    await sendTelegramMessage(chatId, 'Starting conversation summarization... This may take a few minutes.');
+    const sessionId = await getOrCreateTelegramSession(connection.userId);
+    await summarizeTelegramSession(connection.userId, sessionId);
+    await sendTelegramMessage(chatId, 'Summarization complete! Old messages have been compressed.');
+  } catch (error) {
+    logger.error('Failed to handle /sum command', {
+      chatId,
+      error: (error as Error).message,
+    });
+    await sendTelegramMessage(chatId, 'Failed to summarize. Please try again later.');
+  }
+}
+
+async function handleListCommand(chatId: number): Promise<void> {
+  const connection = await getConnectionByChatId(chatId);
+
+  if (!connection) {
+    await sendTelegramMessage(chatId, 'Not connected to any Luna account.');
+    return;
+  }
+
+  await sendMessageWithButtons(
+    chatId,
+    'What would you like to do?',
+    QUICK_ACTIONS.main
+  );
+}
+
+async function handleCallbackQuery(callback: NonNullable<TelegramUpdate['callback_query']>): Promise<void> {
+  const chatId = callback.message?.chat.id;
+  const messageId = callback.message?.message_id;
+  const data = callback.data;
+
+  if (!chatId || !data) {
+    await answerCallbackQuery(callback.id);
+    return;
+  }
+
+  const connection = await getConnectionByChatId(chatId);
+  if (!connection) {
+    await answerCallbackQuery(callback.id, 'Not connected');
+    return;
+  }
+
+  // Handle category navigation
+  if (data.startsWith('cat:')) {
+    const category = data.slice(4) as keyof typeof QUICK_ACTIONS;
+    const buttons = QUICK_ACTIONS[category];
+
+    if (buttons && messageId) {
+      const titles: Record<string, string> = {
+        main: 'What would you like to do?',
+        tasks: 'Task options:',
+        calendar: 'Calendar options:',
+        search: 'Search options:',
+        fun: 'Fun options:',
+      };
+
+      await editMessageButtons(
+        chatId,
+        messageId,
+        titles[category] || 'Choose an option:',
+        buttons
+      );
+    }
+    await answerCallbackQuery(callback.id);
+    return;
+  }
+
+  // Handle actions - route through chat
+  if (data.startsWith('act:')) {
+    const actionMessages: Record<string, string> = {
+      'act:tasks:pending': 'Show my pending tasks',
+      'act:tasks:create': 'I want to create a new task',
+      'act:calendar:today': 'What do I have on my calendar today?',
+      'act:calendar:week': 'What is on my calendar this week?',
+      'act:search:web': 'Let me help you search. What would you like to know?',
+      'act:search:weather': 'What is the weather like?',
+      'act:fun:joke': 'Tell me a joke',
+      'act:fun:fact': 'Tell me an interesting random fact',
+    };
+
+    const message = actionMessages[data];
+    if (message) {
+      await answerCallbackQuery(callback.id, 'Processing...');
+      await handleChatMessage(connection, message);
+    } else {
+      await answerCallbackQuery(callback.id);
+    }
+    return;
+  }
+
+  await answerCallbackQuery(callback.id);
+}
+
+async function handlePhotoMessage(
+  message: NonNullable<TelegramUpdate['message']>
+): Promise<void> {
+  const chatId = message.chat.id;
+
+  const connection = await getConnectionByChatId(chatId);
+  if (!connection) {
+    await sendTelegramMessage(
+      chatId,
+      'Your Telegram is not linked to a Luna account. Go to Settings > Triggers > Telegram to link it.'
+    );
+    return;
+  }
+
+  try {
+    // Send typing indicator
+    await telegramRequest('sendChatAction', {
+      chat_id: chatId,
+      action: 'typing',
+    });
+
+    // Get the largest photo (last in array)
+    const photo = message.photo![message.photo!.length - 1];
+
+    // Get file path from Telegram
+    const fileInfo = await telegramRequest('getFile', {
+      file_id: photo.file_id,
+    }) as { file_path: string };
+
+    // Download the image
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    const imageUrl = `https://api.telegram.org/file/bot${token}/${fileInfo.file_path}`;
+
+    // Get caption if any
+    const caption = message.caption || '';
+
+    // Build message for Luna
+    const userMessage = caption
+      ? `[User sent an image with caption: "${caption}"]\n\nImage URL: ${imageUrl}\n\nPlease describe what you see in this image and respond to the caption.`
+      : `[User sent an image]\n\nImage URL: ${imageUrl}\n\nPlease describe what you see in this image.`;
+
+    // Get or create session
+    const sessionId = await getOrCreateTelegramSession(connection.userId);
+
+    // Process through Luna (vision-capable model will handle the URL)
+    const response = await chatService.processMessage({
+      sessionId,
+      userId: connection.userId,
+      message: userMessage,
+      mode: 'companion',
+      source: 'telegram',
+    });
+
+    // Update last message time
+    await updateLastMessageTime(connection.userId);
+
+    // Send response
+    const maxLength = 4000;
+    let content = response.content;
+    while (content.length > 0) {
+      const chunk = content.slice(0, maxLength);
+      content = content.slice(maxLength);
+      await sendTelegramMessage(chatId, chunk, { parseMode: 'Markdown' });
+    }
+
+    resetTelegramIdleTimer(connection.userId, sessionId);
+
+    logger.info('Telegram photo message processed', {
+      userId: connection.userId,
+      sessionId,
+      hasCaption: !!caption,
+    });
+  } catch (error) {
+    logger.error('Failed to process Telegram photo', {
+      userId: connection.userId,
+      error: (error as Error).message,
+    });
+    await sendTelegramMessage(
+      chatId,
+      'Sorry, I had trouble processing that image. Please try again.'
+    );
+  }
+}
+
 // ============================================
 // Helpers
 // ============================================
@@ -547,4 +1027,5 @@ export default {
   processUpdate,
   isConfigured,
   getSetupInstructions,
+  clearAllTelegramTimers,
 };

@@ -19,11 +19,11 @@ WORKDIR /app
 # Add git for Claude CLI (required dependency)
 RUN apk add --no-cache wget docker-cli git
 
-# Install Claude CLI globally for coder agent
-RUN npm install -g @anthropic-ai/claude-code
+# Install Claude CLI and Gemini CLI globally for coding agents
+RUN npm install -g @anthropic-ai/claude-code @google/gemini-cli
 
-# Create .claude directory for credentials (will be mounted)
-RUN mkdir -p /home/node/.claude && chown node:node /home/node/.claude
+# Create credential directories for CLI tools (will be mounted)
+RUN mkdir -p /home/node/.claude /home/node/.gemini && chown node:node /home/node/.claude /home/node/.gemini
 
 # Create workspace and documents directories with proper ownership
 RUN mkdir -p /app/workspace /app/documents && chown -R node:node /app/workspace /app/documents

@@ -153,6 +153,13 @@ const configSchema = z.object({
     chatModel: z.string().default('qwen2.5:3b'),
   }),
 
+  orchestration: z.object({
+    maxConcurrency: z.coerce.number().min(1).max(10).default(3),
+    maxRetries: z.coerce.number().min(0).max(10).default(3),
+    enableSummarization: z.coerce.boolean().default(true),
+    intentCacheTtl: z.coerce.number().min(60).default(3600),
+  }).optional(),
+
   radicale: z.object({
     url: z.string().url().default('http://localhost:5232'),
     enabled: z.coerce.boolean().default(true),
@@ -291,6 +298,13 @@ const rawConfig = {
     embeddingModel: process.env.OLLAMA_EMBEDDING_MODEL,
     chatModel: process.env.OLLAMA_CHAT_MODEL,
   },
+
+  orchestration: process.env.ORCHESTRATION_MAX_CONCURRENCY ? {
+    maxConcurrency: process.env.ORCHESTRATION_MAX_CONCURRENCY,
+    maxRetries: process.env.ORCHESTRATION_MAX_RETRIES,
+    enableSummarization: process.env.ORCHESTRATION_ENABLE_SUMMARIZATION,
+    intentCacheTtl: process.env.ORCHESTRATION_INTENT_CACHE_TTL,
+  } : undefined,
 
   radicale: {
     url: process.env.RADICALE_URL,

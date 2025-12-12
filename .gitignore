@@ -37,3 +37,11 @@ data/
 
 # Docker secrets
 secrets/
+
+# User workspaces
+workspace/
+workspace-backup/
+
+# Generated images
+images/generated/
+images/moods/

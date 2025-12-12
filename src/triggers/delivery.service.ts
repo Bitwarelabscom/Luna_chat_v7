@@ -13,12 +13,33 @@ interface UserSubscriber {
   callback: (data: TriggerEvent) => void;
 }
 
+// Notification categories
+export type NotificationCategory = 'trading' | 'reminders' | 'email' | 'autonomous';
+
+// Navigation target for notifications
+export interface NotificationNavigationTarget {
+  appId: string;
+  context?: Record<string, unknown>;
+}
+
+// Enhanced notification payload
+export interface NotificationPayload {
+  category: NotificationCategory;
+  title: string;
+  message: string;
+  priority: number; // 1-10
+  eventType?: string;
+  navigationTarget?: NotificationNavigationTarget;
+}
+
 export interface TriggerEvent {
-  type: 'new_message' | 'trigger_delivered' | 'ping';
+  type: 'new_message' | 'trigger_delivered' | 'ping' | 'notification';
   triggerId?: string;
   sessionId?: string;
   message?: string;
   timestamp: Date;
+  // Enhanced notification data
+  notification?: NotificationPayload;
 }
 
 // ============================================
@@ -397,6 +418,119 @@ export async function getPushSubscriptions(userId: string): Promise<Array<{
   }));
 }
 
+/**
+ * Send a notification to user (bypasses trigger queue for real-time delivery)
+ */
+export async function sendNotification(
+  userId: string,
+  notification: NotificationPayload
+): Promise<void> {
+  const event: TriggerEvent = {
+    type: 'notification',
+    timestamp: new Date(),
+    notification,
+  };
+
+  // If user is online, send via SSE immediately
+  if (isUserOnline(userId)) {
+    broadcastToUser(userId, event);
+    logger.info('Notification sent via SSE', {
+      userId,
+      category: notification.category,
+      title: notification.title,
+    });
+  } else {
+    // User offline - optionally queue for later or send via other channels
+    logger.debug('User offline, notification not delivered via SSE', {
+      userId,
+      category: notification.category,
+    });
+  }
+}
+
+/**
+ * Send a trading notification
+ */
+export async function sendTradingNotification(
+  userId: string,
+  title: string,
+  message: string,
+  eventType: string,
+  priority: number = 7,
+  context?: Record<string, unknown>
+): Promise<void> {
+  await sendNotification(userId, {
+    category: 'trading',
+    title,
+    message,
+    priority,
+    eventType,
+    navigationTarget: {
+      appId: 'trading',
+      context,
+    },
+  });
+}
+
+/**
+ * Send a reminder notification
+ */
+export async function sendReminderNotification(
+  userId: string,
+  title: string,
+  message: string,
+  priority: number = 8,
+  appId: 'todo' | 'calendar' = 'todo'
+): Promise<void> {
+  await sendNotification(userId, {
+    category: 'reminders',
+    title,
+    message,
+    priority,
+    eventType: appId === 'calendar' ? 'calendar.event_soon' : 'reminder.due',
+    navigationTarget: { appId },
+  });
+}
+
+/**
+ * Send an email notification
+ */
+export async function sendEmailNotification(
+  userId: string,
+  title: string,
+  message: string,
+  priority: number = 5
+): Promise<void> {
+  await sendNotification(userId, {
+    category: 'email',
+    title,
+    message,
+    priority,
+    eventType: 'email.new',
+    navigationTarget: { appId: 'email' },
+  });
+}
+
+/**
+ * Send an autonomous/Luna notification
+ */
+export async function sendAutonomousNotification(
+  userId: string,
+  title: string,
+  message: string,
+  eventType: string = 'autonomous.message',
+  priority: number = 6
+): Promise<void> {
+  await sendNotification(userId, {
+    category: 'autonomous',
+    title,
+    message,
+    priority,
+    eventType,
+    navigationTarget: { appId: 'chat' },
+  });
+}
+
 export default {
   addUserSubscriber,
   removeUserSubscriber,
@@ -405,6 +539,11 @@ export default {
   deliverTrigger,
   processTriggerQueue,
   sendDirectMessage,
+  sendNotification,
+  sendTradingNotification,
+  sendReminderNotification,
+  sendEmailNotification,
+  sendAutonomousNotification,
   registerPushSubscription,
   removePushSubscription,
   getPushSubscriptions,

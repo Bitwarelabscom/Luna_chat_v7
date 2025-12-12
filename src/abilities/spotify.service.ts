@@ -171,7 +171,8 @@ export class SpotifyClient {
     await rateLimiter.acquire();
 
     let url = `${SPOTIFY_API_BASE}${endpoint}`;
-    if (params && method === 'GET') {
+    // Add params as query string for all methods (Spotify uses query params for GET, POST, PUT)
+    if (params) {
       const searchParams = new URLSearchParams();
       for (const [key, value] of Object.entries(params)) {
         searchParams.append(key, String(value));
@@ -220,10 +221,15 @@ export class SpotifyClient {
         throw new SpotifyError(`API error: ${response.status} - ${error}`, 'API_ERROR', false);
       }
 
-      return await response.json() as T;
+      // Check content type before parsing JSON
+      const contentType = response.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        return await response.json() as T;
+      }
+      return null;
     } catch (error) {
       if (error instanceof SpotifyError) throw error;
-      logger.error(`Spotify API request failed: ${endpoint}`, { error });
+      logger.error(`Spotify API request failed: ${endpoint}`, { error: (error as Error).message, stack: (error as Error).stack });
       throw new SpotifyError('Network error', 'NETWORK_ERROR', true);
     }
   }
@@ -835,17 +841,152 @@ export async function addToQueue(userId: string, query: string): Promise<Playbac
   }
 
   try {
+    logger.info('Spotify addToQueue: searching', { query });
     const results = await client.search(query, ['track'], 1);
+    logger.info('Spotify addToQueue: search results', { query, tracksFound: results.tracks.length });
     if (results.tracks.length === 0) {
       return { success: false, message: `No track found for "${query}"` };
     }
 
     const track = results.tracks[0];
+    logger.info('Spotify addToQueue: adding to queue', { trackName: track.name, trackUri: track.uri });
     await client.addToQueue(track.uri);
     return {
       success: true,
       message: `Added "${track.name}" to queue`,
       track,
+    };
+  } catch (error) {
+    logger.error('Spotify addToQueue: error', { query, error: (error as Error).message });
+    return handleSpotifyError(error);
+  }
+}
+
+/**
+ * Add multiple tracks to queue (by artist or search query)
+ * Searches for tracks and adds up to `count` to the queue
+ */
+export async function addMultipleToQueue(
+  userId: string,
+  query: string,
+  count: number = 5
+): Promise<{ success: boolean; message: string; tracksAdded: SpotifyTrack[] }> {
+  const client = await getSpotifyClient(userId);
+  if (!client) {
+    return { success: false, message: 'Spotify not connected', tracksAdded: [] };
+  }
+
+  try {
+    logger.info('Spotify addMultipleToQueue: searching', { query, count });
+
+    // Search for tracks with higher limit
+    const results = await client.search(query, ['track'], count);
+    logger.info('Spotify addMultipleToQueue: search results', { query, tracksFound: results.tracks.length });
+
+    if (results.tracks.length === 0) {
+      return { success: false, message: `No tracks found for "${query}"`, tracksAdded: [] };
+    }
+
+    const tracksAdded: SpotifyTrack[] = [];
+
+    // Add each track to the queue
+    for (const track of results.tracks) {
+      try {
+        logger.info('Spotify addMultipleToQueue: adding to queue', { trackName: track.name, artist: track.artists[0]?.name });
+        await client.addToQueue(track.uri);
+        tracksAdded.push(track);
+        // Small delay to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } catch (error) {
+        logger.warn('Spotify addMultipleToQueue: failed to add track', { trackName: track.name, error: (error as Error).message });
+        // Continue with other tracks even if one fails
+      }
+    }
+
+    if (tracksAdded.length === 0) {
+      return { success: false, message: 'Failed to add any tracks to queue', tracksAdded: [] };
+    }
+
+    // Format the track list for the message
+    const trackList = tracksAdded.map(t => `"${t.name}" by ${t.artists[0]?.name}`).join(', ');
+
+    return {
+      success: true,
+      message: `Added ${tracksAdded.length} tracks to queue: ${trackList}`,
+      tracksAdded,
+    };
+  } catch (error) {
+    logger.error('Spotify addMultipleToQueue: error', { query, error: (error as Error).message });
+    return { success: false, message: (error as Error).message, tracksAdded: [] };
+  }
+}
+
+/**
+ * Create a playlist and optionally add tracks to it
+ */
+export async function createPlaylistWithTracks(
+  userId: string,
+  name: string,
+  description?: string,
+  trackQueries?: string[]
+): Promise<{ success: boolean; message: string; playlistUrl?: string; tracksAdded?: number }> {
+  const client = await getSpotifyClient(userId);
+  if (!client) {
+    return { success: false, message: 'Spotify not connected' };
+  }
+
+  try {
+    // Get the user's Spotify ID
+    const user = await client.getCurrentUser();
+    if (!user) {
+      return { success: false, message: 'Could not get Spotify user info' };
+    }
+
+    // Create the playlist
+    const playlist = await client.createPlaylist(
+      user.id,
+      name,
+      description || `Created by Luna`,
+      false // private by default
+    );
+
+    if (!playlist) {
+      return { success: false, message: 'Failed to create playlist' };
+    }
+
+    let tracksAdded = 0;
+
+    // If track queries provided, search and add them
+    if (trackQueries && trackQueries.length > 0) {
+      const trackUris: string[] = [];
+
+      for (const query of trackQueries) {
+        try {
+          const results = await client.search(query, ['track'], 1);
+          if (results.tracks.length > 0) {
+            trackUris.push(results.tracks[0].uri);
+          }
+        } catch {
+          // Skip tracks that fail to find
+          logger.warn('Could not find track for playlist', { query, playlistId: playlist.id });
+        }
+      }
+
+      if (trackUris.length > 0) {
+        await client.addTracksToPlaylist(playlist.id, trackUris);
+        tracksAdded = trackUris.length;
+      }
+    }
+
+    const playlistUrl = `https://open.spotify.com/playlist/${playlist.id}`;
+
+    return {
+      success: true,
+      message: tracksAdded > 0
+        ? `Created playlist "${name}" with ${tracksAdded} tracks`
+        : `Created empty playlist "${name}"`,
+      playlistUrl,
+      tracksAdded,
     };
   } catch (error) {
     return handleSpotifyError(error);
@@ -1161,6 +1302,26 @@ export function formatSpotifyForLLM(): Array<{
           properties: {
             transferTo: { type: 'string', description: 'Device name to transfer playback to (optional)' },
           },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'spotify_create_playlist',
+        description: 'Create a new Spotify playlist and optionally add tracks to it',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Name of the playlist to create' },
+            description: { type: 'string', description: 'Optional description for the playlist' },
+            tracks: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Array of track names to search and add to the playlist',
+            },
+          },
+          required: ['name'],
         },
       },
     },

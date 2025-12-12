@@ -16,6 +16,7 @@ import {
   Wrench,
   Globe,
   Zap,
+  Terminal,
 } from 'lucide-react';
 import { mcpApi } from '@/lib/api';
 import type { McpServerWithTools, McpTool, McpPreset } from '@/lib/api';
@@ -33,8 +34,15 @@ export default function McpTab() {
   // Add form state
   const [newServer, setNewServer] = useState({
     name: '',
-    url: '',
     description: '',
+    transportType: 'http' as 'http' | 'stdio',
+    // HTTP
+    url: '',
+    // Stdio
+    commandPath: '',
+    commandArgs: '',
+    envVars: '',
+    workingDirectory: '',
   });
   const [testResult, setTestResult] = useState<{ success: boolean; toolCount?: number; error?: string } | null>(null);
 
@@ -72,11 +80,30 @@ export default function McpTab() {
   };
 
   const handleTestConnection = async () => {
-    if (!newServer.url) return;
+    const isHttp = newServer.transportType === 'http';
+    if (isHttp && !newServer.url) return;
+    if (!isHttp && !newServer.commandPath) return;
+
     try {
       setTesting(true);
       setTestResult(null);
-      const result = await mcpApi.testConnection(newServer.url);
+      const result = await mcpApi.testConnection({
+        transportType: newServer.transportType,
+        url: isHttp ? newServer.url : undefined,
+        commandPath: !isHttp ? newServer.commandPath : undefined,
+        commandArgs: !isHttp && newServer.commandArgs
+          ? newServer.commandArgs.split(/\s+/).filter(Boolean)
+          : undefined,
+        envVars: !isHttp && newServer.envVars
+          ? Object.fromEntries(
+              newServer.envVars.split('\n').filter(Boolean).map(line => {
+                const [key, ...rest] = line.split('=');
+                return [key.trim(), rest.join('=').trim()];
+              })
+            )
+          : undefined,
+        workingDirectory: !isHttp && newServer.workingDirectory ? newServer.workingDirectory : undefined,
+      });
       setTestResult(result);
     } catch (error) {
       setTestResult({ success: false, error: (error as Error).message });
@@ -86,20 +113,49 @@ export default function McpTab() {
   };
 
   const handleAddServer = async () => {
-    if (!newServer.name || !newServer.url) return;
+    const isHttp = newServer.transportType === 'http';
+    if (!newServer.name) return;
+    if (isHttp && !newServer.url) return;
+    if (!isHttp && !newServer.commandPath) return;
+
     try {
       await mcpApi.createServer({
         name: newServer.name,
-        url: newServer.url,
         description: newServer.description || undefined,
+        transportType: newServer.transportType,
+        // HTTP
+        url: isHttp ? newServer.url : undefined,
+        // Stdio
+        commandPath: !isHttp ? newServer.commandPath : undefined,
+        commandArgs: !isHttp && newServer.commandArgs
+          ? newServer.commandArgs.split(/\s+/).filter(Boolean)
+          : undefined,
+        envVars: !isHttp && newServer.envVars
+          ? Object.fromEntries(
+              newServer.envVars.split('\n').filter(Boolean).map(line => {
+                const [key, ...rest] = line.split('=');
+                return [key.trim(), rest.join('=').trim()];
+              })
+            )
+          : undefined,
+        workingDirectory: !isHttp && newServer.workingDirectory ? newServer.workingDirectory : undefined,
       });
-      setNewServer({ name: '', url: '', description: '' });
+      setNewServer({
+        name: '',
+        description: '',
+        transportType: 'http',
+        url: '',
+        commandPath: '',
+        commandArgs: '',
+        envVars: '',
+        workingDirectory: '',
+      });
       setTestResult(null);
       setShowAddForm(false);
       await loadData();
     } catch (error) {
       console.error('Failed to add server:', error);
-      alert('Failed to add server. Please check the URL and try again.');
+      alert('Failed to add server. Please check the configuration and try again.');
     }
   };
 
@@ -224,8 +280,17 @@ export default function McpTab() {
                 )}
 
                 <div className="min-w-0">
-                  <div className="font-medium text-theme-text-primary truncate">{server.name}</div>
-                  <div className="text-xs text-theme-text-muted truncate">{server.url}</div>
+                  <div className="font-medium text-theme-text-primary truncate flex items-center gap-2">
+                    {server.name}
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-theme-bg-tertiary text-theme-text-muted">
+                      {server.transportType === 'stdio' ? 'stdio' : 'http'}
+                    </span>
+                  </div>
+                  <div className="text-xs text-theme-text-muted truncate">
+                    {server.transportType === 'stdio'
+                      ? server.commandPath
+                      : server.url}
+                  </div>
                 </div>
               </div>
 
@@ -354,36 +419,134 @@ export default function McpTab() {
             />
           </div>
 
+          {/* Transport Type Selector */}
           <div>
-            <label className="block text-sm text-theme-text-muted mb-1">URL</label>
+            <label className="block text-sm text-theme-text-muted mb-2">Transport Type</label>
             <div className="flex gap-2">
-              <input
-                type="url"
-                value={newServer.url}
-                onChange={e => setNewServer({ ...newServer, url: e.target.value })}
-                placeholder="https://example.com/mcp"
-                className="flex-1 px-3 py-2 bg-theme-bg-primary border border-theme-border rounded-lg text-theme-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-theme-accent-primary/50"
-              />
               <button
-                onClick={handleTestConnection}
-                disabled={!newServer.url || testing}
-                className="px-3 py-2 bg-theme-bg-tertiary hover:bg-theme-bg-hover border border-theme-border rounded-lg text-sm text-theme-text-primary disabled:opacity-50"
+                onClick={() => setNewServer({ ...newServer, transportType: 'http' })}
+                className={`flex-1 py-2 px-3 rounded-lg border text-sm font-medium flex items-center justify-center gap-2 transition-colors ${
+                  newServer.transportType === 'http'
+                    ? 'border-theme-accent-primary bg-theme-accent-primary/10 text-theme-accent-primary'
+                    : 'border-theme-border bg-theme-bg-tertiary text-theme-text-muted hover:bg-theme-bg-hover'
+                }`}
               >
-                {testing ? (
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                ) : (
-                  'Test'
-                )}
+                <Globe className="w-4 h-4" />
+                HTTP
+              </button>
+              <button
+                onClick={() => setNewServer({ ...newServer, transportType: 'stdio' })}
+                className={`flex-1 py-2 px-3 rounded-lg border text-sm font-medium flex items-center justify-center gap-2 transition-colors ${
+                  newServer.transportType === 'stdio'
+                    ? 'border-theme-accent-primary bg-theme-accent-primary/10 text-theme-accent-primary'
+                    : 'border-theme-border bg-theme-bg-tertiary text-theme-text-muted hover:bg-theme-bg-hover'
+                }`}
+              >
+                <Terminal className="w-4 h-4" />
+                Stdio (Command)
               </button>
             </div>
-            {testResult && (
-              <div className={`mt-2 text-sm ${testResult.success ? 'text-green-500' : 'text-red-400'}`}>
-                {testResult.success
-                  ? `Connected! Found ${testResult.toolCount || 0} tools.`
-                  : `Failed: ${testResult.error}`}
-              </div>
-            )}
           </div>
+
+          {/* HTTP Fields */}
+          {newServer.transportType === 'http' && (
+            <div>
+              <label className="block text-sm text-theme-text-muted mb-1">URL</label>
+              <div className="flex gap-2">
+                <input
+                  type="url"
+                  value={newServer.url}
+                  onChange={e => setNewServer({ ...newServer, url: e.target.value })}
+                  placeholder="https://example.com/mcp"
+                  className="flex-1 px-3 py-2 bg-theme-bg-primary border border-theme-border rounded-lg text-theme-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-theme-accent-primary/50"
+                />
+                <button
+                  onClick={handleTestConnection}
+                  disabled={!newServer.url || testing}
+                  className="px-3 py-2 bg-theme-bg-tertiary hover:bg-theme-bg-hover border border-theme-border rounded-lg text-sm text-theme-text-primary disabled:opacity-50"
+                >
+                  {testing ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    'Test'
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Stdio Fields */}
+          {newServer.transportType === 'stdio' && (
+            <>
+              <div>
+                <label className="block text-sm text-theme-text-muted mb-1">Command Path</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newServer.commandPath}
+                    onChange={e => setNewServer({ ...newServer, commandPath: e.target.value })}
+                    placeholder="/path/to/mcp-server"
+                    className="flex-1 px-3 py-2 bg-theme-bg-primary border border-theme-border rounded-lg text-theme-text-primary text-sm font-mono focus:outline-none focus:ring-2 focus:ring-theme-accent-primary/50"
+                  />
+                  <button
+                    onClick={handleTestConnection}
+                    disabled={!newServer.commandPath || testing}
+                    className="px-3 py-2 bg-theme-bg-tertiary hover:bg-theme-bg-hover border border-theme-border rounded-lg text-sm text-theme-text-primary disabled:opacity-50"
+                  >
+                    {testing ? (
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                    ) : (
+                      'Test'
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm text-theme-text-muted mb-1">Command Arguments (optional)</label>
+                <input
+                  type="text"
+                  value={newServer.commandArgs}
+                  onChange={e => setNewServer({ ...newServer, commandArgs: e.target.value })}
+                  placeholder="--port 8080 --debug"
+                  className="w-full px-3 py-2 bg-theme-bg-primary border border-theme-border rounded-lg text-theme-text-primary text-sm font-mono focus:outline-none focus:ring-2 focus:ring-theme-accent-primary/50"
+                />
+                <p className="text-xs text-theme-text-muted mt-1">Space-separated arguments</p>
+              </div>
+
+              <div>
+                <label className="block text-sm text-theme-text-muted mb-1">Environment Variables (optional)</label>
+                <textarea
+                  value={newServer.envVars}
+                  onChange={e => setNewServer({ ...newServer, envVars: e.target.value })}
+                  placeholder="KEY=value&#10;ANOTHER_KEY=another_value"
+                  rows={3}
+                  className="w-full px-3 py-2 bg-theme-bg-primary border border-theme-border rounded-lg text-theme-text-primary text-sm font-mono focus:outline-none focus:ring-2 focus:ring-theme-accent-primary/50"
+                />
+                <p className="text-xs text-theme-text-muted mt-1">One per line: KEY=value</p>
+              </div>
+
+              <div>
+                <label className="block text-sm text-theme-text-muted mb-1">Working Directory (optional)</label>
+                <input
+                  type="text"
+                  value={newServer.workingDirectory}
+                  onChange={e => setNewServer({ ...newServer, workingDirectory: e.target.value })}
+                  placeholder="/path/to/working/directory"
+                  className="w-full px-3 py-2 bg-theme-bg-primary border border-theme-border rounded-lg text-theme-text-primary text-sm font-mono focus:outline-none focus:ring-2 focus:ring-theme-accent-primary/50"
+                />
+              </div>
+            </>
+          )}
+
+          {/* Test Result */}
+          {testResult && (
+            <div className={`text-sm ${testResult.success ? 'text-green-500' : 'text-red-400'}`}>
+              {testResult.success
+                ? `Connected! Found ${testResult.toolCount || 0} tools.`
+                : `Failed: ${testResult.error}`}
+            </div>
+          )}
 
           <div>
             <label className="block text-sm text-theme-text-muted mb-1">Description (optional)</label>
@@ -400,7 +563,16 @@ export default function McpTab() {
             <button
               onClick={() => {
                 setShowAddForm(false);
-                setNewServer({ name: '', url: '', description: '' });
+                setNewServer({
+                  name: '',
+                  description: '',
+                  transportType: 'http',
+                  url: '',
+                  commandPath: '',
+                  commandArgs: '',
+                  envVars: '',
+                  workingDirectory: '',
+                });
                 setTestResult(null);
               }}
               className="px-4 py-2 text-sm text-theme-text-muted hover:text-theme-text-primary"
@@ -409,7 +581,11 @@ export default function McpTab() {
             </button>
             <button
               onClick={handleAddServer}
-              disabled={!newServer.name || !newServer.url}
+              disabled={
+                !newServer.name ||
+                (newServer.transportType === 'http' && !newServer.url) ||
+                (newServer.transportType === 'stdio' && !newServer.commandPath)
+              }
               className="px-4 py-2 bg-theme-accent-primary hover:bg-theme-accent-primary/90 text-white rounded-lg text-sm font-medium disabled:opacity-50"
             >
               Add Server
@@ -429,6 +605,7 @@ export default function McpTab() {
       {/* Info */}
       <div className="text-xs text-theme-text-muted bg-theme-bg-tertiary rounded-lg p-3">
         <strong>What is MCP?</strong> Model Context Protocol allows Luna to connect to external services and use their tools.
+        Supports both HTTP servers and local stdio-based command-line tools.
         Tools from enabled servers will be available to Luna during conversations.
       </div>
     </div>

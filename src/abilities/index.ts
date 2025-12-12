@@ -9,6 +9,10 @@ export * as agents from './agents.service.js';
 export * as calendar from './calendar.service.js';
 export * as email from './email.service.js';
 export * as checkins from './checkins.service.js';
+export * as youtube from './youtube.service.js';
+export * as browser from './browser.service.js';
+export * as imageGeneration from './image-generation.service.js';
+export * as spotify from './spotify.service.js';
 
 // Re-export orchestrator
 export { buildAbilityContext, detectAbilityIntent, executeAbilityAction } from './orchestrator.js';

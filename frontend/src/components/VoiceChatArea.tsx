@@ -2,11 +2,11 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useChatStore } from '@/lib/store';
-import { streamMessage, synthesizeSpeech, getMediaUrl } from '@/lib/api';
+import { streamMessage, synthesizeSpeech } from '@/lib/api';
 import { Send, Mic, MicOff, Volume2, VolumeX, Loader2 } from 'lucide-react';
 import clsx from 'clsx';
 import { useSpeechToText } from './useSpeechToText';
-import Image from 'next/image';
+import LunaAvatar from './LunaAvatar';
 
 export default function VoiceChatArea() {
   const {
@@ -15,6 +15,8 @@ export default function VoiceChatArea() {
     streamingContent,
     statusMessage,
     loadSessions,
+    createSession,
+    loadSession,
     addUserMessage,
     addAssistantMessage,
     appendStreamingContent,
@@ -104,8 +106,19 @@ export default function VoiceChatArea() {
     setInput('');
     speechToText.resetTranscript();
 
-    const sessionId = currentSession?.id;
-    if (!sessionId) return;
+    let sessionId = currentSession?.id;
+
+    // Create a voice session if one doesn't exist
+    if (!sessionId) {
+      try {
+        const session = await createSession('voice');
+        sessionId = session.id;
+        await loadSession(sessionId);
+      } catch (error) {
+        console.error('Failed to create voice session:', error);
+        return;
+      }
+    }
 
     addUserMessage(message);
     setIsSending(true);
@@ -185,7 +198,7 @@ export default function VoiceChatArea() {
   const displayText = getDisplayText();
 
   return (
-    <main className="fixed inset-0 flex flex-col bg-black overflow-hidden">
+    <main className="h-full w-full flex flex-col bg-black overflow-hidden relative">
       {/* Ambient background glow */}
       <div
         className={clsx(
@@ -198,48 +211,12 @@ export default function VoiceChatArea() {
       />
 
       {/* Fixed top section - Luna Avatar */}
-      <div className="relative z-10 flex-shrink-0 pt-12 pb-8 flex flex-col items-center">
-        {/* Glow ring behind avatar */}
-        <div className="relative">
-          <div
-            className={clsx(
-              'absolute -inset-4 rounded-full transition-all duration-500',
-              isSpeaking
-                ? 'bg-green-500/20 blur-xl scale-110'
-                : 'bg-theme-accent-primary/10 blur-lg scale-100'
-            )}
-          />
-
-          {/* Avatar */}
-          <div
-            className={clsx(
-              'relative w-40 h-40 md:w-48 md:h-48 rounded-full overflow-hidden border-4 transition-all duration-300',
-              isSpeaking
-                ? 'border-green-400 shadow-2xl shadow-green-500/40'
-                : 'border-gray-700'
-            )}
-          >
-            <Image
-              src={getMediaUrl('/images/luna2.jpg')}
-              alt="Luna"
-              width={192}
-              height={192}
-              className={clsx(
-                'w-full h-full object-cover transition-transform duration-300',
-                isSpeaking && 'scale-105'
-              )}
-              priority
-            />
-          </div>
-
-          {/* Audio visualizer rings */}
-          {isSpeaking && (
-            <>
-              <div className="absolute inset-0 -m-2 rounded-full border-2 border-green-400/50 animate-ping" style={{ animationDuration: '1.5s' }} />
-              <div className="absolute inset-0 -m-4 rounded-full border border-green-400/30 animate-ping" style={{ animationDuration: '2s' }} />
-            </>
-          )}
-        </div>
+      <div className="relative z-10 flex-shrink-0 pt-6 pb-4 flex flex-col items-center">
+        {/* Video Avatar with loop cycling */}
+        <LunaAvatar
+          isSpeaking={isSpeaking}
+          size="lg"
+        />
 
         {/* Name and status */}
         <h2 className="mt-6 text-2xl font-light text-white tracking-wide">Luna</h2>
@@ -316,7 +293,7 @@ export default function VoiceChatArea() {
       </div>
 
       {/* Bottom section - User input */}
-      <div className="relative z-10 flex-shrink-0 p-6 pb-8">
+      <div className="relative z-10 flex-shrink-0 p-4 pb-6">
         <div className="max-w-xl mx-auto">
           {/* Speech-to-text interim display */}
           {speechToText.isListening && speechToText.interimTranscript && (

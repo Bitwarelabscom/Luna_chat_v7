@@ -5,6 +5,7 @@ import { authenticate } from '../auth/auth.middleware.js';
 import * as settingsService from './settings.service.js';
 import * as authService from '../auth/auth.service.js';
 import * as modelConfigService from '../llm/model-config.service.js';
+import * as ttsService from '../llm/tts.service.js';
 import { PROVIDERS, CONFIGURABLE_TASKS } from '../llm/types.js';
 import { LUNA_BASE_PROMPT, ASSISTANT_MODE_PROMPT, COMPANION_MODE_PROMPT } from '../persona/luna.persona.js';
 import logger from '../utils/logger.js';
@@ -60,6 +61,12 @@ const updateUserSettingsSchema = z.object({
   language: z.string().optional(),
   notifications: z.boolean().optional(),
   defaultMode: z.enum(['assistant', 'companion']).optional(),
+  // Locale settings
+  timeFormat: z.enum(['12h', '24h']).optional(),
+  dateFormat: z.enum(['DD/MM/YYYY', 'MM/DD/YYYY', 'YYYY-MM-DD']).optional(),
+  unitSystem: z.enum(['metric', 'imperial']).optional(),
+  currency: z.string().max(3).optional(),
+  timezone: z.string().optional(),
 });
 
 router.put('/user', async (req: Request, res: Response) => {
@@ -222,6 +229,28 @@ router.get('/stats', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to get stats', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to get stats' });
+  }
+});
+
+// Daily token usage for header display (resets at midnight)
+router.get('/daily-tokens', async (req: Request, res: Response) => {
+  try {
+    const stats = await settingsService.getDailyTokenStats(req.user!.userId);
+    res.json(stats);
+  } catch (error) {
+    logger.error('Failed to get daily tokens', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get daily token stats' });
+  }
+});
+
+// Enhanced stats with model breakdown by time period and costs
+router.get('/enhanced-stats', async (req: Request, res: Response) => {
+  try {
+    const stats = await settingsService.getEnhancedStats(req.user!.userId);
+    res.json({ stats });
+  } catch (error) {
+    logger.error('Failed to get enhanced stats', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get enhanced stats' });
   }
 });
 
@@ -432,6 +461,43 @@ router.delete('/models', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to reset model configs', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to reset model configurations' });
+  }
+});
+
+// === TTS SETTINGS ===
+
+// Get TTS settings
+router.get('/tts', async (_req: Request, res: Response) => {
+  try {
+    const settings = await ttsService.getTtsSettings();
+    res.json({
+      settings,
+      availableVoices: ttsService.OPENAI_VOICES,
+    });
+  } catch (error) {
+    logger.error('Failed to get TTS settings', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get TTS settings' });
+  }
+});
+
+// Update TTS settings
+const updateTtsSettingsSchema = z.object({
+  engine: z.enum(['elevenlabs', 'openai']).optional(),
+  openaiVoice: z.enum(['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer']).optional(),
+});
+
+router.put('/tts', async (req: Request, res: Response) => {
+  try {
+    const data = updateTtsSettingsSchema.parse(req.body);
+    const settings = await ttsService.updateTtsSettings(data);
+    res.json({ success: true, settings });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: 'Validation error', details: error.errors });
+      return;
+    }
+    logger.error('Failed to update TTS settings', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to update TTS settings' });
   }
 });
 

@@ -23,6 +23,7 @@ export interface CalendarEvent {
   location?: string;
   isAllDay: boolean;
   attendees?: Array<{ email: string; name?: string; status?: string }>;
+  reminderMinutes?: number | null;
 }
 
 export interface CreateEventInput {
@@ -32,6 +33,7 @@ export interface CreateEventInput {
   endAt: Date;
   location?: string;
   isAllDay?: boolean;
+  reminderMinutes?: number | null;
 }
 
 
@@ -278,6 +280,7 @@ export async function createEvent(
       endAt: input.endAt,
       location: input.location,
       isAllDay: input.isAllDay || false,
+      reminderMinutes: input.reminderMinutes ?? null,
     };
 
     // Also cache in database for fast querying
@@ -320,6 +323,7 @@ export async function updateEvent(
     endAt: input.endAt || existing.endAt,
     location: input.location !== undefined ? input.location : existing.location,
     isAllDay: input.isAllDay !== undefined ? input.isAllDay : existing.isAllDay,
+    reminderMinutes: input.reminderMinutes !== undefined ? input.reminderMinutes : existing.reminderMinutes,
     uid: eventId,
   };
 
@@ -543,8 +547,8 @@ async function cacheEventInDb(userId: string, event: CalendarEvent): Promise<voi
     }
 
     await pool.query(
-      `INSERT INTO calendar_events_cache (connection_id, external_id, title, description, start_at, end_at, location, is_all_day)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO calendar_events_cache (connection_id, external_id, title, description, start_at, end_at, location, is_all_day, reminder_minutes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        ON CONFLICT (connection_id, external_id) DO UPDATE SET
          title = EXCLUDED.title,
          description = EXCLUDED.description,
@@ -552,8 +556,9 @@ async function cacheEventInDb(userId: string, event: CalendarEvent): Promise<voi
          end_at = EXCLUDED.end_at,
          location = EXCLUDED.location,
          is_all_day = EXCLUDED.is_all_day,
+         reminder_minutes = EXCLUDED.reminder_minutes,
          synced_at = NOW()`,
-      [connectionId, event.externalId, event.title, event.description, event.startAt, event.endAt, event.location, event.isAllDay]
+      [connectionId, event.externalId, event.title, event.description, event.startAt, event.endAt, event.location, event.isAllDay, event.reminderMinutes ?? null]
     );
   } catch (error) {
     logger.error('Failed to cache event in database', { error: (error as Error).message });
@@ -687,7 +692,7 @@ export async function getUpcomingEvents(
 
   try {
     const result = await pool.query(
-      `SELECT ce.id, ce.external_id, ce.title, ce.description, ce.start_at, ce.end_at, ce.location, ce.is_all_day, ce.attendees
+      `SELECT ce.id, ce.external_id, ce.title, ce.description, ce.start_at, ce.end_at, ce.location, ce.is_all_day, ce.attendees, ce.reminder_minutes
        FROM calendar_events_cache ce
        JOIN calendar_connections cc ON cc.id = ce.connection_id
        WHERE cc.user_id = $1 AND cc.is_active = true
@@ -707,6 +712,7 @@ export async function getUpcomingEvents(
       location: row.location as string | undefined,
       isAllDay: row.is_all_day as boolean,
       attendees: row.attendees as CalendarEvent['attendees'],
+      reminderMinutes: row.reminder_minutes as number | null,
     }));
   } catch (error) {
     logger.error('Failed to get upcoming events', { error: (error as Error).message, userId });
@@ -725,7 +731,7 @@ export async function getTodayEvents(userId: string): Promise<CalendarEvent[]> {
 
   try {
     const result = await pool.query(
-      `SELECT ce.id, ce.external_id, ce.title, ce.description, ce.start_at, ce.end_at, ce.location, ce.is_all_day, ce.attendees
+      `SELECT ce.id, ce.external_id, ce.title, ce.description, ce.start_at, ce.end_at, ce.location, ce.is_all_day, ce.attendees, ce.reminder_minutes
        FROM calendar_events_cache ce
        JOIN calendar_connections cc ON cc.id = ce.connection_id
        WHERE cc.user_id = $1 AND cc.is_active = true
@@ -744,6 +750,7 @@ export async function getTodayEvents(userId: string): Promise<CalendarEvent[]> {
       location: row.location as string | undefined,
       isAllDay: row.is_all_day as boolean,
       attendees: row.attendees as CalendarEvent['attendees'],
+      reminderMinutes: row.reminder_minutes as number | null,
     }));
   } catch (error) {
     logger.error('Failed to get today events', { error: (error as Error).message, userId });

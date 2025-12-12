@@ -1,0 +1,94 @@
+FROM python:3.12-slim
+
+# System packages and language runtimes
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Build essentials
+    build-essential gcc g++ make \
+    # Node.js prerequisites
+    curl ca-certificates gnupg \
+    # Git
+    git \
+    # SQLite
+    sqlite3 libsqlite3-dev \
+    # Network tools
+    wget dnsutils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js 20 LTS
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && npm install -g npm@latest
+
+# Playwright and Chromium dependencies for browser automation
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 \
+    libcups2 libdrm2 libxkbcommon0 libxcomposite1 \
+    libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 \
+    libpango-1.0-0 libcairo2 \
+    fonts-liberation fonts-noto-color-emoji \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Playwright with Chromium browser
+RUN npm install -g playwright@latest && \
+    npx playwright install chromium --with-deps
+
+ENV PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
+
+# Install Go 1.22
+RUN curl -fsSL https://go.dev/dl/go1.22.0.linux-amd64.tar.gz | tar -C /usr/local -xzf -
+ENV PATH="/usr/local/go/bin:$PATH"
+ENV GOPATH="/go"
+ENV PATH="${GOPATH}/bin:${PATH}"
+
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:$PATH"
+
+# Python packages - Data Science & Math
+RUN pip install --no-cache-dir \
+    numpy pandas scipy matplotlib seaborn \
+    scikit-learn sympy networkx plotly
+
+# Python packages - Web/API
+RUN pip install --no-cache-dir \
+    requests httpx aiohttp \
+    beautifulsoup4 lxml \
+    fastapi uvicorn flask
+
+# Python packages - General Utils
+RUN pip install --no-cache-dir \
+    pyyaml pillow openpyxl python-dateutil \
+    rich typer click pydantic \
+    python-dotenv tqdm colorama tabulate \
+    jinja2 markdown
+
+# Python packages - Database & Caching
+RUN pip install --no-cache-dir \
+    duckdb sqlalchemy \
+    redis pymongo psycopg2-binary
+
+# Python packages - Crypto & Security
+RUN pip install --no-cache-dir \
+    cryptography bcrypt pyjwt
+
+# Python packages - Testing & Dev
+RUN pip install --no-cache-dir \
+    pytest black ruff ipython
+
+# Python packages - AI/ML APIs
+RUN pip install --no-cache-dir \
+    openai anthropic tiktoken
+
+# Node.js common packages (global)
+RUN npm install -g \
+    typescript ts-node \
+    axios lodash dayjs \
+    cheerio
+
+# Create workspace and package cache directories
+RUN mkdir -p /workspace /packages /data /go
+
+WORKDIR /workspace
+
+# Keep container running
+CMD ["sleep", "infinity"]

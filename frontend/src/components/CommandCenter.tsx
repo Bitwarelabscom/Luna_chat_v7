@@ -3,8 +3,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useChatStore, useAuthStore } from '@/lib/store';
-import { streamMessage, regenerateMessage, chatApi, settingsApi, emailApi, calendarApi, lunaMediaApi, getMediaUrl, type Email, type UserStats, type SystemMetrics, type CalendarEvent, type LunaMediaSelection } from '@/lib/api';
+import { streamMessage, regenerateMessage, chatApi, settingsApi, emailApi, calendarApi, lunaMediaApi, getMediaUrl, type Email, type UserStats, type SystemMetrics, type CalendarEvent, type LunaMediaSelection, type DailyTokenStats, type CreateCalendarEventInput } from '@/lib/api';
 import ReactMarkdown from 'react-markdown';
+import YouTubeEmbed, { parseMediaBlocks } from './YouTubeEmbed';
+import ImageEmbed from './ImageEmbed';
 import MessageActions from './MessageActions';
 import MessageMetrics from './MessageMetrics';
 import { useAudioPlayer } from './useAudioPlayer';
@@ -30,7 +32,9 @@ import AutonomousTab from './settings/AutonomousTab';
 import FriendsTab from './settings/FriendsTab';
 import MemoryTab from './settings/MemoryTab';
 import TriggersTab from './settings/TriggersTab';
+import McpTab from './settings/McpTab';
 import QuestionNotification from './QuestionNotification';
+import TradingDashboard from './trading/TradingDashboard';
 
 interface ActivityLog {
   time: string;
@@ -38,8 +42,15 @@ interface ActivityLog {
   type: 'info' | 'success' | 'warn' | 'error';
 }
 
-type MainTab = 'chat' | 'autonomous' | 'friends' | 'tasks' | 'workspace' | 'email' | 'calendar' | 'settings' | 'activity';
+type MainTab = 'chat' | 'autonomous' | 'friends' | 'tasks' | 'workspace' | 'email' | 'calendar' | 'trading' | 'settings' | 'activity';
 type SettingsTab = 'appearance' | 'prompts' | 'models' | 'integrations' | 'mcpconfig' | 'workspace' | 'tasks' | 'memory' | 'autonomous' | 'triggers' | 'stats' | 'data';
+
+// Format token count for compact display
+function formatTokenCount(count: number): string {
+  if (count >= 1000000) return (count / 1000000).toFixed(1) + 'M';
+  if (count >= 1000) return (count / 1000).toFixed(1) + 'K';
+  return count.toString();
+}
 
 const CommandCenter = () => {
   const router = useRouter();
@@ -83,17 +94,34 @@ const CommandCenter = () => {
   const [emails, setEmails] = useState<Email[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [stats, setStats] = useState<UserStats | null>(null);
+  const [dailyTokens, setDailyTokens] = useState<DailyTokenStats | null>(null);
   const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(null);
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [calendarView, setCalendarView] = useState<'today' | 'week'>('week');
   const [calendarLoading, setCalendarLoading] = useState(false);
+  const [showEventForm, setShowEventForm] = useState(false);
+  const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
+  const [eventFormData, setEventFormData] = useState<CreateCalendarEventInput>({
+    title: '',
+    description: '',
+    startAt: '',
+    endAt: '',
+    location: '',
+    isAllDay: false,
+    reminderMinutes: null,
+  });
+  const [customReminderMinutes, setCustomReminderMinutes] = useState('');
+  const [eventFormLoading, setEventFormLoading] = useState(false);
   const [showSessions, setShowSessions] = useState(true);
   const [showActivity, setShowActivity] = useState(true);
   const [lunaMedia, setLunaMedia] = useState<LunaMediaSelection | null>(null);
   const [lunaMediaLoading, setLunaMediaLoading] = useState(false);
   const [showModeSelector, setShowModeSelector] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [emailActionLoading, setEmailActionLoading] = useState<number | null>(null);
+  const [selectedEmail, setSelectedEmail] = useState<Email | null>(null);
 
   // Mobile detection
   const isMobile = useIsMobile();
@@ -222,6 +250,59 @@ const CommandCenter = () => {
     }
   };
 
+  // Email actions
+  const handleMarkEmailRead = async (uid: number, isRead: boolean) => {
+    if (!uid) return;
+    setEmailActionLoading(uid);
+    try {
+      await emailApi.markRead(uid, isRead);
+      addLog(`Email marked as ${isRead ? 'read' : 'unread'}`, 'success');
+      await loadEmails();
+    } catch (error) {
+      console.error('Failed to mark email:', error);
+      addLog('Failed to update email', 'error');
+    } finally {
+      setEmailActionLoading(null);
+    }
+  };
+
+  const handleDeleteEmail = async (uid: number) => {
+    if (!uid) return;
+    if (!confirm('Are you sure you want to delete this email? This action cannot be undone.')) {
+      return;
+    }
+    setEmailActionLoading(uid);
+    try {
+      await emailApi.deleteEmail(uid);
+      addLog('Email deleted', 'success');
+      await loadEmails();
+    } catch (error) {
+      console.error('Failed to delete email:', error);
+      addLog('Failed to delete email', 'error');
+    } finally {
+      setEmailActionLoading(null);
+    }
+  };
+
+  const handleViewEmail = async (uid: number) => {
+    if (!uid) return;
+    setEmailActionLoading(uid);
+    try {
+      const result = await emailApi.getEmail(uid);
+      setSelectedEmail(result.email);
+      // Mark as read when viewing
+      if (!result.email.read) {
+        await emailApi.markRead(uid, true);
+        await loadEmails();
+      }
+    } catch (error) {
+      console.error('Failed to load email:', error);
+      addLog('Failed to load email', 'error');
+    } finally {
+      setEmailActionLoading(null);
+    }
+  };
+
   // Load stats
   const loadStats = async () => {
     try {
@@ -231,6 +312,21 @@ const CommandCenter = () => {
       console.log('Stats not available');
     }
   };
+
+  // Load daily token usage (for header display)
+  const loadDailyTokens = useCallback(async () => {
+    try {
+      const tokens = await settingsApi.getDailyTokens();
+      setDailyTokens(tokens);
+    } catch (error) {
+      console.log('Daily tokens not available');
+    }
+  }, []);
+
+  // Load daily tokens on mount
+  useEffect(() => {
+    loadDailyTokens();
+  }, [loadDailyTokens]);
 
   // Poll system metrics every 3 seconds
   useEffect(() => {
@@ -302,6 +398,7 @@ const CommandCenter = () => {
         }
       }
       loadSessions();
+      loadDailyTokens(); // Refresh token counts after message
     } catch (error) {
       console.error('Failed to send message:', error);
       addAssistantMessage(
@@ -399,14 +496,115 @@ const CommandCenter = () => {
   };
 
   const formatEventTime = (dateStr: string, isAllDay: boolean) => {
-    if (isAllDay) return 'All day';
+    if (isAllDay) return 'Heldag';
     const date = new Date(dateStr);
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return date.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
   };
 
   const formatEventDate = (dateStr: string) => {
     const date = new Date(dateStr);
-    return date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+    return date.toLocaleDateString('sv-SE', { weekday: 'short', day: 'numeric', month: 'short' });
+  };
+
+  // Format date for datetime-local input
+  const formatDateTimeLocal = (date: Date | string) => {
+    const d = new Date(date);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
+  };
+
+  // Calendar event handlers
+  const handleOpenNewEventForm = () => {
+    const now = new Date();
+    const oneHourLater = new Date(now.getTime() + 60 * 60 * 1000);
+    setEditingEvent(null);
+    setEventFormData({
+      title: '',
+      description: '',
+      startAt: formatDateTimeLocal(now),
+      endAt: formatDateTimeLocal(oneHourLater),
+      location: '',
+      isAllDay: false,
+      reminderMinutes: null,
+    });
+    setCustomReminderMinutes('');
+    setShowEventForm(true);
+  };
+
+  const handleEditEvent = (event: CalendarEvent) => {
+    setEditingEvent(event);
+    const reminderVal = event.reminderMinutes ?? null;
+    const presetValues = [5, 10, 15, 30, 60];
+    const isCustom = reminderVal !== null && !presetValues.includes(reminderVal);
+    setEventFormData({
+      title: event.title,
+      description: event.description || '',
+      startAt: formatDateTimeLocal(event.startAt),
+      endAt: formatDateTimeLocal(event.endAt),
+      location: event.location || '',
+      isAllDay: event.isAllDay,
+      reminderMinutes: isCustom ? -1 : reminderVal,
+    });
+    setCustomReminderMinutes(isCustom ? String(reminderVal) : '');
+    setShowEventForm(true);
+  };
+
+  const handleDeleteEvent = async (eventId: string) => {
+    if (!confirm('Are you sure you want to delete this event?')) return;
+    try {
+      await calendarApi.deleteEvent(eventId);
+      addLog('Event deleted', 'success');
+      loadCalendarEvents();
+    } catch (error) {
+      console.error('Failed to delete event:', error);
+      addLog('Failed to delete event', 'error');
+    }
+  };
+
+  const handleSaveEvent = async () => {
+    if (!eventFormData.title.trim()) {
+      alert('Please enter a title');
+      return;
+    }
+    if (!eventFormData.startAt || !eventFormData.endAt) {
+      alert('Please enter start and end times');
+      return;
+    }
+
+    // Resolve custom reminder value
+    let finalReminderMinutes: number | null = eventFormData.reminderMinutes ?? null;
+    if (finalReminderMinutes === -1) {
+      const customVal = parseInt(customReminderMinutes, 10);
+      if (!customVal || customVal <= 0) {
+        alert('Please enter a valid reminder time in minutes');
+        return;
+      }
+      finalReminderMinutes = customVal;
+    }
+
+    const dataToSave = { ...eventFormData, reminderMinutes: finalReminderMinutes };
+
+    setEventFormLoading(true);
+    try {
+      if (editingEvent) {
+        await calendarApi.updateEvent(editingEvent.externalId, dataToSave);
+        addLog('Event updated', 'success');
+      } else {
+        await calendarApi.createEvent(dataToSave);
+        addLog('Event created', 'success');
+      }
+      setShowEventForm(false);
+      loadCalendarEvents();
+    } catch (error) {
+      console.error('Failed to save event:', error);
+      addLog('Failed to save event', 'error');
+    } finally {
+      setEventFormLoading(false);
+    }
   };
 
   // Compact metrics component for header
@@ -475,6 +673,7 @@ const CommandCenter = () => {
     { id: 'workspace', label: 'WORKSPACE' },
     { id: 'email', label: 'EMAIL' },
     { id: 'calendar', label: 'CALENDAR' },
+    { id: 'trading', label: 'TRADING' },
     { id: 'settings', label: 'SETTINGS' },
   ];
 
@@ -640,7 +839,15 @@ const CommandCenter = () => {
           {/* Right - Metrics and User */}
           <div style={{ display: 'flex', gap: '12px', fontSize: '11px', alignItems: 'center', flexShrink: 0 }}>
             <CompactMetrics />
-            <span style={{ color: '#607080' }}>TOKENS <span style={{ color: '#00b8ff' }}>{(stats?.tokens.total || 0).toLocaleString()}</span></span>
+            {/* Daily Token Usage Display */}
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <span style={{ color: '#607080' }}>IN <span style={{ color: '#00b8ff' }}>{formatTokenCount(dailyTokens?.inputTokens || 0)}</span></span>
+              <span style={{ color: '#607080' }}>CACHE <span style={{ color: '#00ff9f' }}>{formatTokenCount(dailyTokens?.cacheTokens || 0)}</span></span>
+              <span style={{ color: '#607080' }}>OUT <span style={{ color: '#ff9f00' }}>{formatTokenCount(dailyTokens?.outputTokens || 0)}</span></span>
+              {dailyTokens?.estimatedCost ? (
+                <span style={{ color: '#607080' }}>(<span style={{ color: '#c0c8d0' }}>${dailyTokens.estimatedCost.toFixed(4)}</span>)</span>
+              ) : null}
+            </div>
             <button
               onClick={handleLogout}
               style={{
@@ -1081,7 +1288,7 @@ const CommandCenter = () => {
                           }}>
                             {msg.role === 'user' ? (user?.displayName || 'USER') : msg.role === 'system' ? 'SYSTEM' : 'LUNA'}
                           </span>
-                          <span style={{ color: '#607080' }}>{new Date(msg.createdAt).toLocaleTimeString()}</span>
+                          <span style={{ color: '#607080' }}>{new Date(msg.createdAt).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })}</span>
                         </div>
                         <div style={{
                           fontSize: '14px',
@@ -1090,7 +1297,25 @@ const CommandCenter = () => {
                         }}>
                           {msg.role === 'assistant' ? (
                             <div className="prose prose-invert prose-sm max-w-none">
-                              <ReactMarkdown>{msg.content}</ReactMarkdown>
+                              {parseMediaBlocks(msg.content).map((block, idx) => (
+                                block.type === 'youtube' ? (
+                                  <YouTubeEmbed
+                                    key={`yt-${idx}`}
+                                    videoId={block.videoId}
+                                    title={block.title}
+                                    channel={block.channel}
+                                    duration={block.duration}
+                                  />
+                                ) : block.type === 'image' ? (
+                                  <ImageEmbed
+                                    key={`img-${idx}`}
+                                    url={block.url}
+                                    caption={block.caption}
+                                  />
+                                ) : (
+                                  <ReactMarkdown key={`md-${idx}`}>{block.content}</ReactMarkdown>
+                                )
+                              ))}
                             </div>
                           ) : (
                             <span style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</span>
@@ -1139,7 +1364,25 @@ const CommandCenter = () => {
                           <span style={{ color: '#607080' }}>{getCurrentTime()}</span>
                         </div>
                         <div className="prose prose-invert prose-sm max-w-none" style={{ fontSize: '14px', lineHeight: '1.6' }}>
-                          <ReactMarkdown>{streamingContent}</ReactMarkdown>
+                          {parseMediaBlocks(streamingContent).map((block, idx) => (
+                            block.type === 'youtube' ? (
+                              <YouTubeEmbed
+                                key={`yt-stream-${idx}`}
+                                videoId={block.videoId}
+                                title={block.title}
+                                channel={block.channel}
+                                duration={block.duration}
+                              />
+                            ) : block.type === 'image' ? (
+                              <ImageEmbed
+                                key={`img-stream-${idx}`}
+                                url={block.url}
+                                caption={block.caption}
+                              />
+                            ) : (
+                              <ReactMarkdown key={`md-stream-${idx}`}>{block.content}</ReactMarkdown>
+                            )
+                          ))}
                           <span style={{
                             display: 'inline-block',
                             width: '8px',
@@ -1491,10 +1734,64 @@ const CommandCenter = () => {
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
                       <span style={{ color: '#00b8ff', fontSize: '12px' }}>{email.from}</span>
                       <span style={{ color: '#607080', fontSize: '11px' }}>
-                        {new Date(email.date).toLocaleString()}
+                        {new Date(email.date).toLocaleString('sv-SE')}
                       </span>
                     </div>
-                    <div style={{ color: '#c0c8d0', fontSize: '14px' }}>{email.subject}</div>
+                    <div style={{ color: '#c0c8d0', fontSize: '14px', marginBottom: '10px' }}>{email.subject}</div>
+                    {/* Email Actions */}
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                      <button
+                        onClick={() => email.uid && handleViewEmail(email.uid)}
+                        disabled={!email.uid || emailActionLoading === email.uid}
+                        style={{
+                          background: '#1a2535',
+                          border: '1px solid #2a3545',
+                          color: '#00b8ff',
+                          padding: '4px 10px',
+                          borderRadius: '3px',
+                          cursor: email.uid ? 'pointer' : 'not-allowed',
+                          fontSize: '10px',
+                          fontFamily: 'inherit',
+                          opacity: emailActionLoading === email.uid ? 0.5 : 1,
+                        }}
+                      >
+                        {emailActionLoading === email.uid ? '...' : 'VIEW'}
+                      </button>
+                      <button
+                        onClick={() => email.uid && handleMarkEmailRead(email.uid, !email.read)}
+                        disabled={!email.uid || emailActionLoading === email.uid}
+                        style={{
+                          background: '#1a2535',
+                          border: '1px solid #2a3545',
+                          color: email.read ? '#ffb800' : '#00ff9f',
+                          padding: '4px 10px',
+                          borderRadius: '3px',
+                          cursor: email.uid ? 'pointer' : 'not-allowed',
+                          fontSize: '10px',
+                          fontFamily: 'inherit',
+                          opacity: emailActionLoading === email.uid ? 0.5 : 1,
+                        }}
+                      >
+                        {email.read ? 'MARK UNREAD' : 'MARK READ'}
+                      </button>
+                      <button
+                        onClick={() => email.uid && handleDeleteEmail(email.uid)}
+                        disabled={!email.uid || emailActionLoading === email.uid}
+                        style={{
+                          background: '#1a2535',
+                          border: '1px solid #ff6b6b50',
+                          color: '#ff6b6b',
+                          padding: '4px 10px',
+                          borderRadius: '3px',
+                          cursor: email.uid ? 'pointer' : 'not-allowed',
+                          fontSize: '10px',
+                          fontFamily: 'inherit',
+                          opacity: emailActionLoading === email.uid ? 0.5 : 1,
+                        }}
+                      >
+                        DELETE
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1538,21 +1835,38 @@ const CommandCenter = () => {
                   WEEK
                 </button>
               </div>
-              <button
-                onClick={loadCalendarEvents}
-                style={{
-                  background: 'transparent',
-                  border: '1px solid #2a3545',
-                  color: '#607080',
-                  padding: '6px 12px',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  fontSize: '11px',
-                  fontFamily: 'inherit',
-                }}
-              >
-                REFRESH
-              </button>
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button
+                  onClick={handleOpenNewEventForm}
+                  style={{
+                    background: 'linear-gradient(135deg, #00ff9f20, #00ff9f10)',
+                    border: '1px solid #00ff9f50',
+                    color: '#00ff9f',
+                    padding: '6px 16px',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '11px',
+                    fontFamily: 'inherit',
+                  }}
+                >
+                  + NEW EVENT
+                </button>
+                <button
+                  onClick={loadCalendarEvents}
+                  style={{
+                    background: 'transparent',
+                    border: '1px solid #2a3545',
+                    color: '#607080',
+                    padding: '6px 12px',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '11px',
+                    fontFamily: 'inherit',
+                  }}
+                >
+                  REFRESH
+                </button>
+              </div>
             </div>
 
             {calendarLoading ? (
@@ -1562,7 +1876,22 @@ const CommandCenter = () => {
             ) : calendarEvents.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '60px', color: '#607080' }}>
                 <div style={{ fontSize: '14px', marginBottom: '10px' }}>No upcoming events</div>
-                <div style={{ fontSize: '12px' }}>Connect your calendar in Settings &rarr; Integrations</div>
+                <div style={{ fontSize: '12px', marginBottom: '20px' }}>Create a new event or connect your calendar in Settings</div>
+                <button
+                  onClick={handleOpenNewEventForm}
+                  style={{
+                    background: 'linear-gradient(135deg, #00ff9f20, #00ff9f10)',
+                    border: '1px solid #00ff9f50',
+                    color: '#00ff9f',
+                    padding: '10px 24px',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    fontFamily: 'inherit',
+                  }}
+                >
+                  + CREATE EVENT
+                </button>
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -1574,11 +1903,23 @@ const CommandCenter = () => {
                     borderRadius: '4px',
                     borderLeft: '3px solid #00b8ff',
                   }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ color: '#c0c8d0', fontSize: '14px', fontWeight: 500 }}>
-                        {event.title}
-                      </span>
-                      <div style={{ textAlign: 'right' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                      <div style={{ flex: 1 }}>
+                        <span style={{ color: '#c0c8d0', fontSize: '14px', fontWeight: 500 }}>
+                          {event.title}
+                        </span>
+                        {event.description && (
+                          <div style={{ color: '#808890', fontSize: '12px', marginTop: '4px' }}>
+                            {event.description}
+                          </div>
+                        )}
+                        {event.location && (
+                          <div style={{ color: '#607080', fontSize: '12px', marginTop: '6px' }}>
+                            @ {event.location}
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ textAlign: 'right', marginLeft: '16px' }}>
                         <div style={{ color: '#00b8ff', fontSize: '12px' }}>
                           {formatEventTime(event.startAt, event.isAllDay)}
                         </div>
@@ -1587,15 +1928,49 @@ const CommandCenter = () => {
                         </div>
                       </div>
                     </div>
-                    {event.location && (
-                      <div style={{ color: '#607080', fontSize: '12px', marginTop: '8px' }}>
-                        @ {event.location}
-                      </div>
-                    )}
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #1a2535' }}>
+                      <button
+                        onClick={() => handleEditEvent(event)}
+                        style={{
+                          background: '#1a2535',
+                          border: '1px solid #2a3545',
+                          color: '#00b8ff',
+                          padding: '4px 10px',
+                          borderRadius: '3px',
+                          cursor: 'pointer',
+                          fontSize: '10px',
+                          fontFamily: 'inherit',
+                        }}
+                      >
+                        EDIT
+                      </button>
+                      <button
+                        onClick={() => handleDeleteEvent(event.externalId)}
+                        style={{
+                          background: '#1a2535',
+                          border: '1px solid #ff6b6b50',
+                          color: '#ff6b6b',
+                          padding: '4px 10px',
+                          borderRadius: '3px',
+                          cursor: 'pointer',
+                          fontSize: '10px',
+                          fontFamily: 'inherit',
+                        }}
+                      >
+                        DELETE
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {/* Trading Tab */}
+        {activeTab === 'trading' && (
+          <div style={{ flex: 1, overflow: 'hidden' }}>
+            <TradingDashboard />
           </div>
         )}
 
@@ -1640,6 +2015,7 @@ const CommandCenter = () => {
                 {settingsTab === 'prompts' && <PromptsTab />}
                 {settingsTab === 'models' && <ModelsTab />}
                 {settingsTab === 'integrations' && <IntegrationsTab />}
+                {settingsTab === 'mcpconfig' && <McpTab />}
                 {settingsTab === 'workspace' && <WorkspaceTab />}
                 {settingsTab === 'tasks' && <TasksTab />}
                 {settingsTab === 'memory' && <MemoryTab />}
@@ -1731,6 +2107,436 @@ const CommandCenter = () => {
           font-family: 'JetBrains Mono', monospace;
         }
       `}</style>
+
+      {/* Email viewer modal */}
+      {selectedEmail && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 9999,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}>
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              background: 'rgba(0, 0, 0, 0.8)',
+              backdropFilter: 'blur(4px)',
+            }}
+            onClick={() => setSelectedEmail(null)}
+          />
+          <div style={{
+            position: 'relative',
+            width: '90%',
+            maxWidth: '700px',
+            maxHeight: '80vh',
+            background: '#0d1218',
+            border: '1px solid #2a3545',
+            borderRadius: '8px',
+            overflow: 'hidden',
+            display: 'flex',
+            flexDirection: 'column',
+          }}>
+            {/* Header */}
+            <div style={{
+              padding: '20px',
+              borderBottom: '1px solid #2a3545',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'flex-start',
+            }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ color: '#c0c8d0', fontSize: '16px', fontWeight: 600, marginBottom: '8px' }}>
+                  {selectedEmail.subject}
+                </div>
+                <div style={{ color: '#00b8ff', fontSize: '13px', marginBottom: '4px' }}>
+                  From: {selectedEmail.from}
+                </div>
+                <div style={{ color: '#607080', fontSize: '12px' }}>
+                  {new Date(selectedEmail.date).toLocaleString('sv-SE')}
+                </div>
+              </div>
+              <button
+                onClick={() => setSelectedEmail(null)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: '#607080',
+                  fontSize: '24px',
+                  cursor: 'pointer',
+                  padding: '0 5px',
+                  lineHeight: 1,
+                }}
+              >
+                &times;
+              </button>
+            </div>
+            {/* Body */}
+            <div style={{
+              flex: 1,
+              overflow: 'auto',
+              padding: '20px',
+              color: '#c0c8d0',
+              fontSize: '14px',
+              lineHeight: '1.6',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+            }}>
+              {selectedEmail.body}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Calendar Event Form Modal */}
+      {showEventForm && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 9999,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}>
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              background: 'rgba(0, 0, 0, 0.8)',
+              backdropFilter: 'blur(4px)',
+            }}
+            onClick={() => setShowEventForm(false)}
+          />
+          <div style={{
+            position: 'relative',
+            width: '90%',
+            maxWidth: '500px',
+            background: '#0d1218',
+            border: '1px solid #2a3545',
+            borderRadius: '8px',
+            overflow: 'hidden',
+          }}>
+            {/* Header */}
+            <div style={{
+              padding: '16px 20px',
+              borderBottom: '1px solid #2a3545',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+            }}>
+              <span style={{ color: '#00ff9f', fontSize: '14px', fontWeight: 600 }}>
+                {editingEvent ? 'Edit Event' : 'New Event'}
+              </span>
+              <button
+                onClick={() => setShowEventForm(false)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: '#607080',
+                  fontSize: '20px',
+                  cursor: 'pointer',
+                  padding: '0 5px',
+                  lineHeight: 1,
+                }}
+              >
+                &times;
+              </button>
+            </div>
+
+            {/* Form */}
+            <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div>
+                <label style={{ display: 'block', color: '#607080', fontSize: '11px', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                  Title *
+                </label>
+                <input
+                  type="text"
+                  value={eventFormData.title}
+                  onChange={(e) => setEventFormData({ ...eventFormData, title: e.target.value })}
+                  placeholder="Event title"
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    background: '#0a0e14',
+                    border: '1px solid #2a3545',
+                    borderRadius: '4px',
+                    color: '#c0c8d0',
+                    fontSize: '14px',
+                    fontFamily: 'inherit',
+                    outline: 'none',
+                  }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', color: '#607080', fontSize: '11px', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                  Start * (YYYY-MM-DD HH:MM)
+                </label>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input
+                    type="text"
+                    placeholder="2025-12-08"
+                    value={eventFormData.startAt.split('T')[0] || ''}
+                    onChange={(e) => {
+                      const time = eventFormData.startAt.split('T')[1] || '12:00';
+                      setEventFormData({ ...eventFormData, startAt: `${e.target.value}T${time}` });
+                    }}
+                    style={{
+                      flex: 1,
+                      padding: '10px 12px',
+                      background: '#0a0e14',
+                      border: '1px solid #2a3545',
+                      borderRadius: '4px',
+                      color: '#c0c8d0',
+                      fontSize: '13px',
+                      fontFamily: 'inherit',
+                      outline: 'none',
+                    }}
+                  />
+                  <input
+                    type="text"
+                    placeholder="14:30"
+                    value={eventFormData.startAt.split('T')[1] || ''}
+                    onChange={(e) => {
+                      const date = eventFormData.startAt.split('T')[0] || new Date().toISOString().split('T')[0];
+                      setEventFormData({ ...eventFormData, startAt: `${date}T${e.target.value}` });
+                    }}
+                    style={{
+                      width: '80px',
+                      padding: '10px 12px',
+                      background: '#0a0e14',
+                      border: '1px solid #2a3545',
+                      borderRadius: '4px',
+                      color: '#c0c8d0',
+                      fontSize: '13px',
+                      fontFamily: 'inherit',
+                      outline: 'none',
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', color: '#607080', fontSize: '11px', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                  End * (YYYY-MM-DD HH:MM)
+                </label>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input
+                    type="text"
+                    placeholder="2025-12-08"
+                    value={eventFormData.endAt.split('T')[0] || ''}
+                    onChange={(e) => {
+                      const time = eventFormData.endAt.split('T')[1] || '13:00';
+                      setEventFormData({ ...eventFormData, endAt: `${e.target.value}T${time}` });
+                    }}
+                    style={{
+                      flex: 1,
+                      padding: '10px 12px',
+                      background: '#0a0e14',
+                      border: '1px solid #2a3545',
+                      borderRadius: '4px',
+                      color: '#c0c8d0',
+                      fontSize: '13px',
+                      fontFamily: 'inherit',
+                      outline: 'none',
+                    }}
+                  />
+                  <input
+                    type="text"
+                    placeholder="15:30"
+                    value={eventFormData.endAt.split('T')[1] || ''}
+                    onChange={(e) => {
+                      const date = eventFormData.endAt.split('T')[0] || new Date().toISOString().split('T')[0];
+                      setEventFormData({ ...eventFormData, endAt: `${date}T${e.target.value}` });
+                    }}
+                    style={{
+                      width: '80px',
+                      padding: '10px 12px',
+                      background: '#0a0e14',
+                      border: '1px solid #2a3545',
+                      borderRadius: '4px',
+                      color: '#c0c8d0',
+                      fontSize: '13px',
+                      fontFamily: 'inherit',
+                      outline: 'none',
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', color: '#607080', fontSize: '11px', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                  Location
+                </label>
+                <input
+                  type="text"
+                  value={eventFormData.location}
+                  onChange={(e) => setEventFormData({ ...eventFormData, location: e.target.value })}
+                  placeholder="Location (optional)"
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    background: '#0a0e14',
+                    border: '1px solid #2a3545',
+                    borderRadius: '4px',
+                    color: '#c0c8d0',
+                    fontSize: '14px',
+                    fontFamily: 'inherit',
+                    outline: 'none',
+                  }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', color: '#607080', fontSize: '11px', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                  Description
+                </label>
+                <textarea
+                  value={eventFormData.description}
+                  onChange={(e) => setEventFormData({ ...eventFormData, description: e.target.value })}
+                  placeholder="Description (optional)"
+                  rows={3}
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    background: '#0a0e14',
+                    border: '1px solid #2a3545',
+                    borderRadius: '4px',
+                    color: '#c0c8d0',
+                    fontSize: '14px',
+                    fontFamily: 'inherit',
+                    outline: 'none',
+                    resize: 'vertical',
+                  }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <input
+                  type="checkbox"
+                  id="isAllDay"
+                  checked={eventFormData.isAllDay}
+                  onChange={(e) => setEventFormData({ ...eventFormData, isAllDay: e.target.checked })}
+                  style={{ width: '16px', height: '16px', accentColor: '#00ff9f' }}
+                />
+                <label htmlFor="isAllDay" style={{ color: '#c0c8d0', fontSize: '13px', cursor: 'pointer' }}>
+                  All-day event
+                </label>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', color: '#607080', fontSize: '11px', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                  Telegram Reminder
+                </label>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <select
+                    value={eventFormData.reminderMinutes ?? ''}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === '') {
+                        setEventFormData({ ...eventFormData, reminderMinutes: null });
+                        setCustomReminderMinutes('');
+                      } else if (val === '-1') {
+                        setEventFormData({ ...eventFormData, reminderMinutes: -1 });
+                      } else {
+                        setEventFormData({ ...eventFormData, reminderMinutes: parseInt(val, 10) });
+                        setCustomReminderMinutes('');
+                      }
+                    }}
+                    style={{
+                      flex: 1,
+                      padding: '10px 12px',
+                      background: '#0a0e14',
+                      border: '1px solid #2a3545',
+                      borderRadius: '4px',
+                      color: '#c0c8d0',
+                      fontSize: '13px',
+                      fontFamily: 'inherit',
+                      outline: 'none',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <option value="">No reminder</option>
+                    <option value="5">5 minutes before</option>
+                    <option value="10">10 minutes before</option>
+                    <option value="15">15 minutes before</option>
+                    <option value="30">30 minutes before</option>
+                    <option value="60">1 hour before</option>
+                    <option value="-1">Custom...</option>
+                  </select>
+                  {eventFormData.reminderMinutes === -1 && (
+                    <input
+                      type="number"
+                      min="1"
+                      placeholder="min"
+                      value={customReminderMinutes}
+                      onChange={(e) => setCustomReminderMinutes(e.target.value)}
+                      style={{
+                        width: '80px',
+                        padding: '10px 12px',
+                        background: '#0a0e14',
+                        border: '1px solid #2a3545',
+                        borderRadius: '4px',
+                        color: '#c0c8d0',
+                        fontSize: '13px',
+                        fontFamily: 'inherit',
+                        outline: 'none',
+                      }}
+                    />
+                  )}
+                </div>
+                <span style={{ display: 'block', color: '#607080', fontSize: '10px', marginTop: '4px' }}>
+                  Requires Telegram to be connected
+                </span>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div style={{
+              padding: '16px 20px',
+              borderTop: '1px solid #2a3545',
+              display: 'flex',
+              justifyContent: 'flex-end',
+              gap: '12px',
+            }}>
+              <button
+                onClick={() => setShowEventForm(false)}
+                style={{
+                  padding: '10px 20px',
+                  borderRadius: '4px',
+                  background: '#1a2535',
+                  border: '1px solid #2a3545',
+                  color: '#c0c8d0',
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                  fontFamily: 'inherit',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveEvent}
+                disabled={eventFormLoading}
+                style={{
+                  padding: '10px 20px',
+                  borderRadius: '4px',
+                  background: 'linear-gradient(135deg, #00ff9f20, #00ff9f10)',
+                  border: '1px solid #00ff9f50',
+                  color: '#00ff9f',
+                  cursor: eventFormLoading ? 'not-allowed' : 'pointer',
+                  fontSize: '12px',
+                  fontFamily: 'inherit',
+                  opacity: eventFormLoading ? 0.5 : 1,
+                }}
+              >
+                {eventFormLoading ? 'Saving...' : editingEvent ? 'Update Event' : 'Create Event'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Regenerate confirmation dialog */}
       {showRegenerateConfirm && (

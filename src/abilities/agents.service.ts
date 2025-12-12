@@ -7,18 +7,22 @@ import { existsSync, mkdirSync, copyFileSync } from 'fs';
 import { homedir } from 'os';
 import path from 'path';
 import * as workspace from './workspace.service.js';
+import { DAGExecutor } from './dag-executor.js';
+import { config } from '../config/index.js';
 
 /**
  * Execute command using spawn (more reliable than execFile for Claude CLI)
+ * Supports cwd option for workspace sandboxing
  */
 function spawnAsync(
   command: string,
   args: string[],
-  options: { timeout?: number; maxBuffer?: number } = {}
+  options: { timeout?: number; maxBuffer?: number; cwd?: string } = {}
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: options.cwd,
     });
 
     let stdout = '';
@@ -228,27 +232,70 @@ Be thorough but concise. Focus on accuracy over speed.${EM_DASH_RULE}`,
     tools: ['search'],
     isDefault: false,
   },
-  coder: {
-    name: 'coder',
-    description: 'Code writing, debugging, and explanation',
-    systemPrompt: `You are an expert programmer. Your job is to:
-- Write clean, efficient, well-documented code
-- Debug issues systematically
-- Explain code clearly at any level
-- Follow best practices and design patterns
-- Consider edge cases and error handling
+  'coder-claude': {
+    name: 'coder-claude',
+    description: 'Senior Engineer - Complex architecture, refactoring, debugging hard errors, security-critical code (Claude CLI)',
+    systemPrompt: `You are a SENIOR SOFTWARE ENGINEER powered by Claude - the most capable reasoning model.
 
-Use the code execution sandbox when appropriate to test solutions.
+YOUR STRENGTHS:
+- Complex architectural decisions and system design
+- Debugging intricate logical errors and race conditions
+- Security-critical code review and implementation
+- Large-scale refactoring with minimal breakage
+- Understanding deep codebases and legacy systems
 
-WORKSPACE: You can save scripts to the user's persistent workspace. When writing substantial scripts or files:
-- Use markdown code blocks with a filename annotation like: \`\`\`python:analysis.py
+YOUR APPROACH:
+- Think deeply before coding - reason through edge cases
+- Write production-ready, maintainable code
+- Consider security implications at every step
+- Document complex logic thoroughly
+- Test critical paths rigorously
+
+WORKSPACE & CODE EXECUTION:
+- Save scripts using markdown code blocks with filename annotation: \`\`\`python:analysis.py
 - Supported file types: .py, .js, .ts, .sh, .json, .txt, .md, .csv, .sql
-- Saved files can be executed later from the workspace
-- Example format for saving:
-  \`\`\`python:data_processor.py
-  # Your Python code here
-  \`\`\`${EM_DASH_RULE}`,
-    model: 'o4-mini',
+
+IMPORTANT - EXECUTE YOUR CODE:
+- After writing a script, USE THE BASH TOOL to run it immediately
+- Example: After saving analysis.py, run: python3 analysis.py
+- Always show the actual execution output to the user
+- If the script generates files (like charts), mention where they are saved
+- DO NOT just save scripts - EXECUTE them and show results${EM_DASH_RULE}`,
+    model: 'claude-cli',
+    temperature: 0.2,
+    tools: ['code_execution', 'workspace'],
+    isDefault: false,
+  },
+  'coder-gemini': {
+    name: 'coder-gemini',
+    description: 'Rapid Prototyper - Fast scripting, unit tests, large context analysis, code explanations (Gemini CLI)',
+    systemPrompt: `You are a RAPID PROTOTYPER powered by Gemini - optimized for speed and massive context.
+
+YOUR STRENGTHS:
+- Processing huge files, logs, and documentation (1M+ token context)
+- Writing utility scripts and automation quickly
+- Generating comprehensive unit tests
+- Code explanations and documentation
+- Data formatting and transformation
+
+YOUR APPROACH:
+- Move fast and iterate
+- Cover all cases with thorough test generation
+- Process entire repositories for context
+- Explain complex code in simple terms
+- Generate boilerplate efficiently
+
+WORKSPACE & CODE EXECUTION:
+- Save scripts using markdown code blocks with filename annotation: \`\`\`python:analysis.py
+- Supported file types: .py, .js, .ts, .sh, .json, .txt, .md, .csv, .sql
+
+IMPORTANT - EXECUTE YOUR CODE:
+- After writing a script, USE run_shell_command to execute it immediately
+- Example: After saving analysis.py, run: python3 analysis.py
+- Always show the actual execution output to the user
+- If the script generates files (like charts), mention where they are saved
+- DO NOT just save scripts - EXECUTE them and show results${EM_DASH_RULE}`,
+    model: 'gemini-cli',
     temperature: 0.2,
     tools: ['code_execution', 'workspace'],
     isDefault: false,
@@ -303,14 +350,30 @@ If the task is vague or lacks a specific subject, output this error instead of a
 Available specialists:
 - researcher: Finds information, data, facts (needs specific search topics)
 - analyst: Performs calculations, data analysis (needs specific data or results to analyze)
-- coder: Writes code, debugs (needs specific code requirements)
 - writer: Creates content, synthesizes information
+
+CODING AGENTS - You have TWO coding specialists with different strengths:
+
+| Agent | Use For | Strengths |
+|-------|---------|-----------|
+| coder-claude | HIGH COMPLEXITY | Architecture, refactoring, debugging complex errors, security-critical code |
+| coder-gemini | HIGH VOLUME/SPEED | Simple scripts, unit tests, large file analysis, code explanations |
+
+CODING AGENT DECISION LOGIC:
+- "Refactor the authentication system" -> coder-claude (complex logic)
+- "Debug this race condition" -> coder-claude (hard error)
+- "Review this code for security issues" -> coder-claude (security-critical)
+- "Analyze this error log" -> coder-gemini (large context)
+- "Write unit tests for this module" -> coder-gemini (high volume)
+- "Create a simple utility script" -> coder-gemini (fast prototyping)
+- "Explain what this code does" -> coder-gemini (code explanation)
+- If unsure, prefer coder-claude for production code, coder-gemini for tests/scripts
 
 Output your plan as JSON with this exact format:
 {
   "steps": [
     {"step": 1, "agent": "researcher", "task": "Research [SPECIFIC TOPIC] including [specific aspects]", "dependsOn": []},
-    {"step": 2, "agent": "analyst", "task": "Analyze [SPECIFIC DATA] to determine [specific goal]", "dependsOn": [1]}
+    {"step": 2, "agent": "coder-claude", "task": "Refactor [SPECIFIC CODE] to improve [specific goal]", "dependsOn": [1]}
   ]
 }
 
@@ -319,9 +382,143 @@ Rules:
 - Use "dependsOn" to list step numbers that must complete first
 - Steps with no dependencies use an empty array: []
 - Be VERY specific in task descriptions - include what to search for, what to analyze, etc.
-- Only use the agents listed above${EM_DASH_RULE}`,
+- Only use the agents listed above (researcher, analyst, writer, coder-claude, coder-gemini)${EM_DASH_RULE}`,
     model: 'o4-mini',
     temperature: 0.4,
+    tools: [],
+    isDefault: false,
+  },
+  'project-planner': {
+    name: 'project-planner',
+    description: 'Interactive project planning with clarifying questions',
+    systemPrompt: `You are an expert project planner for web and software projects. Your job is to:
+1. FIRST ask clarifying questions to understand the user's vision
+2. THEN create a detailed step-by-step plan after getting answers
+
+When given a project request, you MUST respond with JSON in one of these formats:
+
+FORMAT 1 - QUESTIONS (when you need more information):
+{
+  "phase": "questioning",
+  "questions": [
+    {
+      "id": "q1",
+      "question": "What visual style would you prefer?",
+      "options": ["Modern minimalist", "Bold and colorful", "Classic elegant", "Dark mode"],
+      "type": "choice",
+      "category": "design",
+      "required": true
+    },
+    {
+      "id": "q2",
+      "question": "Which sections do you need?",
+      "options": ["Home", "About", "Gallery", "Contact", "Blog", "Pricing"],
+      "type": "multiselect",
+      "category": "structure",
+      "required": true
+    },
+    {
+      "id": "q3",
+      "question": "Any specific functionality requirements?",
+      "type": "text",
+      "category": "features",
+      "required": false
+    }
+  ]
+}
+
+FORMAT 2 - PLAN (after questions are answered):
+{
+  "phase": "planning",
+  "projectName": "my-portfolio",
+  "projectType": "web",
+  "steps": [
+    {"stepNumber": 1, "description": "Generate hero image with minimalist aesthetic", "stepType": "generate_image"},
+    {"stepNumber": 2, "description": "Create index.html with navigation and hero section", "stepType": "generate_file"},
+    {"stepNumber": 3, "description": "Create styles.css with modern minimalist theme", "stepType": "generate_file"},
+    {"stepNumber": 4, "description": "Create main.js for interactive features", "stepType": "generate_file"},
+    {"stepNumber": 5, "description": "Preview the generated website", "stepType": "preview"}
+  ]
+}
+
+RULES:
+- Always ask 3-5 clarifying questions FIRST before creating a plan
+- Questions should cover: visual style, structure, content, functionality, target audience
+- Use "choice" type for single-select, "multiselect" for multiple options, "text" for free-form
+- Step types: "generate_file", "generate_image", "execute", "preview", "modify"
+- Be specific in step descriptions - include exact file names and what content they should have
+- For web projects: always include HTML, CSS, and JS files minimum
+- For fullstack: include backend files (Python/Node) as well${EM_DASH_RULE}`,
+    model: 'o4-mini',
+    temperature: 0.4,
+    tools: [],
+    isDefault: false,
+  },
+  'project-generator': {
+    name: 'project-generator',
+    description: 'Generates project files based on specifications',
+    systemPrompt: `You are an expert web developer and designer. Your job is to generate complete, production-ready files for projects.
+
+When given a file generation task, output the complete file content in a markdown code block with the filename:
+
+\`\`\`html:index.html
+<!DOCTYPE html>
+...complete HTML content...
+\`\`\`
+
+RULES:
+- Generate COMPLETE, WORKING files - no placeholders or "add your content here"
+- Use modern best practices (semantic HTML5, CSS Grid/Flexbox, ES6+ JavaScript)
+- Make files visually appealing with good default styling
+- Include responsive design for mobile
+- Add appropriate comments for complex sections
+- For images, use placeholder URLs that will be replaced: ./images/[description].jpg
+- Ensure all files work together (correct paths, class names match CSS selectors, etc.)
+
+FORMATTING:
+- Use the exact format: \`\`\`language:filename.ext
+- Supported: html, css, js, py, json, md, txt
+- Output ONE file per code block
+- Be thorough - a landing page HTML should be 100+ lines, CSS 200+ lines${EM_DASH_RULE}`,
+    model: 'o4-mini',
+    temperature: 0.5,
+    tools: [],
+    isDefault: false,
+  },
+  debugger: {
+    name: 'debugger',
+    description: 'Analyzes errors and suggests fixes for failed agent tasks',
+    systemPrompt: `You are a debugging specialist. When given a failed task, analyze why it failed and suggest ONE action:
+
+- retry_same: Retry with the same approach (transient error, timeout, rate limit)
+- modify_task: Rewrite the task more specifically to avoid the error
+- switch_agent: Use a different agent type better suited for this task
+- abort: Task is fundamentally impossible or blocked, stop trying
+
+Output JSON only:
+{
+  "action": "retry_same|modify_task|switch_agent|abort",
+  "modifiedTask": "new task text if action is modify_task",
+  "newAgent": "researcher|coder-claude|coder-gemini|writer|analyst if action is switch_agent",
+  "explanation": "brief explanation of your reasoning"
+}
+
+Available agents:
+- researcher: Deep research, information gathering, web search
+- coder-claude: SENIOR ENGINEER - Complex architecture, refactoring, debugging hard errors, security-critical
+- coder-gemini: RAPID PROTOTYPER - Simple scripts, unit tests, large context analysis, code explanations
+- writer: Creative writing, content synthesis, drafting
+- analyst: Data analysis, calculations, insights
+
+CODING AGENT FAILOVER:
+- If coder-claude fails on a simple task, suggest switch to coder-gemini
+- If coder-gemini fails on complex logic, suggest switch to coder-claude
+- If either fails on large context, suggest coder-gemini (1M token window)
+
+IMPORTANT: Only suggest switch_agent if the current agent type is clearly wrong for the task.
+Most failures should retry_same (transient) or modify_task (unclear requirements).${EM_DASH_RULE}`,
+    model: 'qwen2.5:3b', // Use lightweight local model for fast debugging
+    temperature: 0.2,
     tools: [],
     isDefault: false,
   },
@@ -442,8 +639,12 @@ export async function executeAgentTask(
     userMessage += `Task: ${task.task}`;
 
     // Route agents to appropriate execution method
-    if (task.agentName === 'coder') {
+    if (task.agentName === 'coder-claude') {
+      // Claude CLI for senior engineer agent
       return executeWithClaudeCLI(task.agentName, systemPrompt, userMessage, startTime, userId);
+    } else if (task.agentName === 'coder-gemini') {
+      // Gemini CLI for rapid prototyper agent
+      return executeWithGeminiCLI(task.agentName, systemPrompt, userMessage, startTime, userId);
     } else if (task.agentName === 'researcher') {
       return executeResearcherWithWebSearch(task.agentName, systemPrompt, userMessage, startTime);
     } else {
@@ -462,6 +663,35 @@ export async function executeAgentTask(
       executionTimeMs: Date.now() - startTime,
     };
   }
+}
+
+/**
+ * Execute agent task with streaming status updates
+ * Used for project planning/generation where we want to stream progress
+ */
+export async function* executeAgentStream(
+  agentName: string,
+  userId: string,
+  task: string,
+  context?: string
+): AsyncGenerator<{ type: 'status' | 'content' | 'done'; status?: string; content?: string; result?: AgentResult }> {
+  yield { type: 'status', status: `Running ${agentName} agent...` };
+
+  // Execute the task using the standard executeAgentTask
+  const result = await executeAgentTask(userId, {
+    agentName,
+    task,
+    context,
+  });
+
+  // Yield the result as content
+  if (result.success && result.result) {
+    yield { type: 'content', content: result.result };
+  } else if (!result.success) {
+    yield { type: 'content', content: `Agent error: ${result.result}` };
+  }
+
+  yield { type: 'done', result };
 }
 
 /**
@@ -618,8 +848,26 @@ function setupClaudeCredentials(): void {
 }
 
 /**
+ * Get or create user's workspace directory
+ * Returns the absolute path to the user's workspace
+ */
+async function ensureUserWorkspace(userId: string): Promise<string> {
+  const workspaceDir = process.env.WORKSPACE_DIR || '/app/workspace';
+  const userWorkspace = path.join(workspaceDir, userId);
+
+  // Create workspace directory if it doesn't exist
+  if (!existsSync(userWorkspace)) {
+    mkdirSync(userWorkspace, { recursive: true, mode: 0o750 });
+    logger.info('Created user workspace', { userId, path: userWorkspace });
+  }
+
+  return userWorkspace;
+}
+
+/**
  * Execute task with Claude CLI (for coder agent)
- * SECURITY: Uses execFile instead of exec to prevent command injection
+ * SECURITY: Uses spawn with arguments array to prevent command injection
+ * SANDBOXING: Runs in user's workspace directory with restricted access
  * Automatically extracts and saves code files to workspace
  */
 async function executeWithClaudeCLI(
@@ -629,25 +877,45 @@ async function executeWithClaudeCLI(
   startTime: number,
   userId: string
 ): Promise<AgentResult> {
-  const fullPrompt = `${systemPrompt}\n\n${userMessage}`;
   const claudePath = process.env.CLAUDE_PATH || '/usr/local/bin/claude';
 
   // Setup credentials using safe file operations (no shell)
   setupClaudeCredentials();
 
-  logger.info('Executing agent task via Claude CLI', { agentName });
+  // SANDBOXING: Ensure user workspace exists and get its path
+  const userWorkspace = await ensureUserWorkspace(userId);
+
+  // Add workspace context to the prompt
+  const workspacePrompt = `${systemPrompt}
+
+WORKSPACE CONTEXT:
+- You are running in a sandboxed workspace directory: ${userWorkspace}
+- All files you create or modify will be saved in this workspace
+- You can create subdirectories within this workspace as needed
+- The workspace is persistent - files will be available in future sessions
+- Use relative paths when creating files (e.g., 'analysis.py' not '/app/workspace/user/analysis.py')
+
+${userMessage}`;
+
+  logger.info('Executing agent task via Claude CLI', {
+    agentName,
+    workspace: userWorkspace,
+  });
 
   try {
     // SECURITY: Use spawn with arguments array - no shell invocation
     // This prevents command injection as arguments are passed directly to the process
     // Use --permission-mode bypassPermissions to avoid interactive prompts in container
+    // SANDBOXING: Set cwd to user's workspace and restrict with --add-dir
     const { stdout, stderr } = await spawnAsync(claudePath, [
       '--permission-mode', 'bypassPermissions',
+      '--add-dir', userWorkspace,
       '-p',
-      fullPrompt
+      workspacePrompt
     ], {
       maxBuffer: 100 * 1024 * 1024,
       timeout: 300000,
+      cwd: userWorkspace, // Run from user's workspace directory
     });
 
     if (stderr) {
@@ -685,6 +953,103 @@ async function executeWithClaudeCLI(
     };
   } catch (error) {
     logger.error('Claude CLI execution failed', {
+      error: (error as Error).message,
+      agentName
+    });
+    return {
+      agentName,
+      success: false,
+      result: `Error: ${(error as Error).message}`,
+      executionTimeMs: Date.now() - startTime,
+    };
+  }
+}
+
+/**
+ * Execute task with Gemini CLI (for gemini-coder agent)
+ * SECURITY: Uses spawn with arguments array to prevent command injection
+ * SANDBOXING: Runs in user's workspace directory with restricted access
+ * Automatically extracts and saves code files to workspace
+ */
+async function executeWithGeminiCLI(
+  agentName: string,
+  systemPrompt: string,
+  userMessage: string,
+  startTime: number,
+  userId: string
+): Promise<AgentResult> {
+  const geminiPath = process.env.GEMINI_PATH || '/usr/local/bin/gemini';
+
+  // SANDBOXING: Ensure user workspace exists and get its path
+  const userWorkspace = await ensureUserWorkspace(userId);
+
+  // Add workspace context to the prompt
+  const workspacePrompt = `${systemPrompt}
+
+WORKSPACE CONTEXT:
+- You are running in a sandboxed workspace directory: ${userWorkspace}
+- All files you create or modify will be saved in this workspace
+- You can create subdirectories within this workspace as needed
+- The workspace is persistent - files will be available in future sessions
+- Use relative paths when creating files (e.g., 'analysis.py' not '/app/workspace/user/analysis.py')
+
+${userMessage}`;
+
+  logger.info('Executing agent task via Gemini CLI', {
+    agentName,
+    workspace: userWorkspace,
+  });
+
+  try {
+    // SECURITY: Use spawn with arguments array - no shell invocation
+    // Gemini CLI uses -p for prompt mode, --yolo auto-approves tools
+    // --include-directories allows workspace access
+    const { stdout, stderr } = await spawnAsync(geminiPath, [
+      '--yolo',
+      '--include-directories', userWorkspace,
+      '-p',
+      workspacePrompt
+    ], {
+      maxBuffer: 100 * 1024 * 1024,
+      timeout: 300000,
+      cwd: userWorkspace, // Run from user's workspace directory
+    });
+
+    if (stderr) {
+      logger.warn('Gemini CLI stderr', { stderr, agentName });
+    }
+
+    let result = stdout.trim() || 'No response generated';
+
+    // Extract and save any files from the output
+    const extractedFiles = extractFilesFromOutput(result);
+    const savedFileNames: string[] = [];
+
+    if (extractedFiles.length > 0) {
+      const savedFiles = await saveExtractedFiles(userId, extractedFiles);
+      savedFileNames.push(...savedFiles.map(f => f.name));
+
+      // Append saved file info to the result
+      if (savedFiles.length > 0) {
+        result += `\n\n📁 **Saved to workspace:** ${savedFiles.map(f => f.name).join(', ')}`;
+      }
+    }
+
+    logger.info('Gemini agent task completed', {
+      agentName,
+      executionTimeMs: Date.now() - startTime,
+      savedFiles: savedFileNames.length,
+    });
+
+    return {
+      agentName,
+      success: true,
+      result,
+      executionTimeMs: Date.now() - startTime,
+      savedFiles: savedFileNames.length > 0 ? savedFileNames : undefined,
+    };
+  } catch (error) {
+    logger.error('Gemini CLI execution failed', {
       error: (error as Error).message,
       agentName
     });
@@ -874,62 +1239,99 @@ export async function* orchestrateTaskStream(
     return;
   }
 
-  // Step 3: Execute steps sequentially with context passing
-  const results = new Map<number, AgentResult>();
+  // Step 3: Execute steps using DAG parallel executor with retry logic
+  const dagConfig = {
+    maxConcurrency: config.orchestration?.maxConcurrency ?? 3,
+    maxRetries: config.orchestration?.maxRetries ?? 3,
+    enableSummarization: config.orchestration?.enableSummarization ?? true,
+    summarizationModel: config.ollama?.chatModel ?? 'qwen2.5:3b',
+  };
 
-  for (const step of plan.steps) {
-    yield { type: 'status', status: `Running ${step.agent} agent (step ${step.step}/${plan.steps.length})...` };
+  const executor = new DAGExecutor(
+    plan.steps,
+    (uid, agentTask) => executeAgentTask(uid, agentTask),
+    dagConfig
+  );
 
-    // Build context from dependencies + original context
-    let stepContext = '';
+  let results = new Map<number, AgentResult>();
+  let dagSuccess = true;
+  let dagError: string | undefined;
 
-    // Include original context (e.g., todo description) for the first step
-    if (context && step.dependsOn.length === 0) {
-      stepContext += `[Original Context]\n${context}\n\n`;
-    }
+  for await (const event of executor.execute(userId, context)) {
+    switch (event.type) {
+      case 'status':
+        yield { type: 'status', status: event.status };
+        break;
 
-    for (const depId of step.dependsOn) {
-      const depResult = results.get(depId);
-      if (depResult && depResult.success) {
-        stepContext += `\n\n[Result from step ${depId} (${depResult.agentName})]:\n${depResult.result}`;
-      }
-    }
+      case 'step_started':
+        yield { type: 'status', status: `Running ${event.agent} agent (step ${event.step})...` };
+        break;
 
-    const result = await executeAgentTask(userId, {
-      agentName: step.agent,
-      task: step.task,
-      context: stepContext.trim() || undefined,
-    });
+      case 'step_completed':
+        yield { type: 'status', status: `${event.agent} agent completed (step ${event.step})` };
+        break;
 
-    if (!result.success) {
-      yield {
-        type: 'done',
-        result: {
-          plan: planResult.result,
-          results: Array.from(results.values()),
-          synthesis: `Orchestration failed at step ${step.step} (${step.agent}): ${result.result}`,
-          success: false,
-          error: result.result,
+      case 'step_failed':
+        yield { type: 'status', status: `${event.agent} agent failed (step ${event.step}): ${event.error}` };
+        break;
+
+      case 'step_retrying':
+        yield { type: 'status', status: `Retrying ${event.agent} (step ${event.step}): ${event.suggestion.explanation}` };
+        break;
+
+      case 'step_skipped':
+        yield { type: 'status', status: `Skipped ${event.agent} (step ${event.step}): ${event.reason}` };
+        break;
+
+      case 'parallel_status':
+        if (event.running.length > 0) {
+          yield { type: 'status', status: `Progress: ${event.completed}/${event.total} - running: ${event.running.join(', ')}` };
         }
-      };
-      return;
-    }
+        break;
 
-    results.set(step.step, result);
-    yield { type: 'status', status: `${step.agent} agent completed` };
+      case 'done':
+        results = event.results;
+        dagSuccess = event.success;
+        dagError = event.error;
+        break;
+    }
+  }
+
+  // Check if DAG execution failed completely
+  if (!dagSuccess && results.size === 0) {
+    yield {
+      type: 'done',
+      result: {
+        plan: planResult.result,
+        results: [],
+        synthesis: `Orchestration failed: ${dagError || 'Unknown error'}`,
+        success: false,
+        error: dagError,
+      }
+    };
+    return;
   }
 
   // Step 4: Synthesize results with writer
   yield { type: 'status', status: 'Synthesizing results with writer agent...' };
 
-  const allResultsText = Array.from(results.entries())
+  // Filter to only successful results for synthesis
+  const successfulResults = Array.from(results.entries())
+    .filter(([_, r]) => r.success);
+
+  const allResultsText = successfulResults
     .map(([stepNum, r]) => `### Step ${stepNum} (${r.agentName})\n${r.result}`)
     .join('\n\n');
 
+  // Add note about partial completion if some steps failed
+  const partialNote = !dagSuccess
+    ? `\n\nNote: Some steps failed or were skipped. Results may be incomplete.`
+    : '';
+
   const synthesisResult = await executeAgentTask(userId, {
     agentName: 'writer',
-    task: `Synthesize these results into a clear, unified response for the original task: "${task}"`,
-    context: allResultsText,
+    task: `Synthesize these results into a clear, unified response for the original task: "${task}"${partialNote}`,
+    context: allResultsText || 'No successful results to synthesize.',
   });
 
   yield {
@@ -938,7 +1340,7 @@ export async function* orchestrateTaskStream(
       plan: planResult.result,
       results: Array.from(results.values()),
       synthesis: synthesisResult.result,
-      success: true,
+      success: dagSuccess, // Reflect actual success status
     }
   };
 }

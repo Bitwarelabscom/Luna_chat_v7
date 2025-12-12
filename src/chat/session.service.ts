@@ -21,7 +21,11 @@ interface DbMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
   tokens_used: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_tokens: number;
   model: string | null;
+  provider: string | null;
   search_results: unknown;
   memory_context: unknown;
   created_at: Date;
@@ -164,17 +168,22 @@ export async function getSessionMessages(
 
 export async function addMessage(data: MessageCreate): Promise<Message> {
   const message = await queryOne<DbMessage>(
-    `INSERT INTO messages (session_id, role, content, tokens_used, model, search_results, memory_context)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO messages (session_id, role, content, tokens_used, input_tokens, output_tokens, cache_tokens, model, provider, search_results, memory_context, source)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
      RETURNING *`,
     [
       data.sessionId,
       data.role,
       data.content,
       data.tokensUsed || 0,
+      data.inputTokens || 0,
+      data.outputTokens || 0,
+      data.cacheTokens || 0,
       data.model || null,
+      data.provider || null,
       data.searchResults ? JSON.stringify(data.searchResults) : null,
       data.memoryContext ? JSON.stringify(data.memoryContext) : null,
+      data.source || 'web',
     ]
   );
 

@@ -51,8 +51,14 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 }));
 
+interface BrowserAction {
+  type: 'open' | 'close';
+  url?: string;
+}
+
 interface ChatState {
   sessions: Session[];
+  archivedSessions: Session[];
   currentSession: (Session & { messages: Message[] }) | null;
   isLoadingSessions: boolean;
   isLoadingMessages: boolean;
@@ -62,10 +68,15 @@ interface ChatState {
   // Startup state
   startupSuggestions: string[];
   isLoadingStartup: boolean;
+  // Browser action for visual browsing
+  browserAction: BrowserAction | null;
 
   loadSessions: () => Promise<void>;
+  loadArchivedSessions: () => Promise<void>;
   loadSession: (id: string) => Promise<void>;
   createSession: (mode?: 'assistant' | 'companion' | 'voice') => Promise<Session>;
+  archiveSession: (id: string) => Promise<void>;
+  restoreSession: (id: string) => Promise<void>;
   deleteSession: (id: string) => Promise<void>;
   renameSession: (id: string, title: string) => Promise<void>;
   addUserMessage: (content: string) => void;
@@ -81,10 +92,13 @@ interface ChatState {
   setStartupSuggestions: (suggestions: string[]) => void;
   clearStartupSuggestions: () => void;
   setIsLoadingStartup: (loading: boolean) => void;
+  // Browser action
+  setBrowserAction: (action: BrowserAction | null) => void;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
   sessions: [],
+  archivedSessions: [],
   currentSession: null,
   isLoadingSessions: false,
   isLoadingMessages: false,
@@ -93,6 +107,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   statusMessage: '',
   startupSuggestions: [],
   isLoadingStartup: false,
+  browserAction: null,
 
   loadSessions: async () => {
     set({ isLoadingSessions: true });
@@ -101,6 +116,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
       set({ sessions });
     } finally {
       set({ isLoadingSessions: false });
+    }
+  },
+
+  loadArchivedSessions: async () => {
+    try {
+      const { sessions } = await chatApi.getSessions({ limit: 50, archived: true });
+      set({ archivedSessions: sessions });
+    } catch {
+      // Ignore errors
     }
   },
 
@@ -122,10 +146,34 @@ export const useChatStore = create<ChatState>((set, get) => ({
     return session;
   },
 
+  archiveSession: async (id) => {
+    await chatApi.updateSession(id, { isArchived: true });
+    set((state) => {
+      const session = state.sessions.find((s) => s.id === id);
+      return {
+        sessions: state.sessions.filter((s) => s.id !== id),
+        archivedSessions: session ? [{ ...session, isArchived: true }, ...state.archivedSessions] : state.archivedSessions,
+        currentSession: state.currentSession?.id === id ? null : state.currentSession,
+      };
+    });
+  },
+
+  restoreSession: async (id) => {
+    await chatApi.updateSession(id, { isArchived: false });
+    set((state) => {
+      const session = state.archivedSessions.find((s) => s.id === id);
+      return {
+        archivedSessions: state.archivedSessions.filter((s) => s.id !== id),
+        sessions: session ? [{ ...session, isArchived: false }, ...state.sessions] : state.sessions,
+      };
+    });
+  },
+
   deleteSession: async (id) => {
     await chatApi.deleteSession(id);
     set((state) => ({
       sessions: state.sessions.filter((s) => s.id !== id),
+      archivedSessions: state.archivedSessions.filter((s) => s.id !== id),
       currentSession: state.currentSession?.id === id ? null : state.currentSession,
     }));
   },
@@ -212,4 +260,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setStartupSuggestions: (suggestions) => set({ startupSuggestions: suggestions }),
   clearStartupSuggestions: () => set({ startupSuggestions: [] }),
   setIsLoadingStartup: (loading) => set({ isLoadingStartup: loading }),
+  // Browser action
+  setBrowserAction: (action) => set({ browserAction: action }),
 }));

@@ -1,3 +1,5 @@
+import type { DisplayContent } from '@/types/display';
+
 // In production (empty NEXT_PUBLIC_API_URL), API calls go through nginx at /luna-chat/api
 // In development, API calls go directly to the backend
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
@@ -171,7 +173,7 @@ export const chatApi = {
 export async function* streamMessage(
   sessionId: string,
   message: string
-): AsyncGenerator<{ type: 'content' | 'done' | 'status'; content?: string; status?: string; messageId?: string; metrics?: MessageMetrics }> {
+): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action'; content?: string; status?: string; messageId?: string; metrics?: MessageMetrics; action?: string; url?: string }> {
   const response = await fetch(`${API_URL}${API_PREFIX}/api/chat/sessions/${sessionId}/send`, {
     method: 'POST',
     headers: {
@@ -317,6 +319,50 @@ export interface UserStats {
   };
 }
 
+export interface DailyTokenStats {
+  inputTokens: number;
+  outputTokens: number;
+  cacheTokens: number;
+  totalTokens: number;
+  estimatedCost: number;
+  byModel: Record<string, { input: number; output: number; cache: number; total: number; cost: number }>;
+}
+
+export interface ModelPeriodStats {
+  inputTokens: number;
+  outputTokens: number;
+  cacheTokens: number;
+  totalTokens: number;
+  cost: number;
+}
+
+export interface EnhancedStats {
+  tokens: {
+    today: ModelPeriodStats;
+    thisWeek: ModelPeriodStats;
+    thisMonth: ModelPeriodStats;
+    total: ModelPeriodStats;
+  };
+  byModel: Record<string, {
+    today: ModelPeriodStats;
+    thisWeek: ModelPeriodStats;
+    thisMonth: ModelPeriodStats;
+    total: ModelPeriodStats;
+  }>;
+  memory: {
+    totalFacts: number;
+    activeFacts: number;
+    factsByCategory: Record<string, number>;
+    totalEmbeddings: number;
+    totalSummaries: number;
+  };
+  sessions: {
+    total: number;
+    archived: number;
+    totalMessages: number;
+  };
+}
+
 export interface BackupData {
   version: string;
   exportedAt: string;
@@ -381,7 +427,19 @@ export interface UserModelConfig {
   model: string;
 }
 
+// TTS Settings Types
+export type OpenAIVoice = 'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer';
+
+export interface TtsSettings {
+  engine: 'elevenlabs' | 'openai';
+  openaiVoice: OpenAIVoice;
+}
+
 export type ThemeType = 'dark' | 'retro' | 'light' | 'cyberpunk' | 'nord' | 'solarized';
+
+export type TimeFormat = '12h' | '24h';
+export type DateFormat = 'DD/MM/YYYY' | 'MM/DD/YYYY' | 'YYYY-MM-DD';
+export type UnitSystem = 'metric' | 'imperial';
 
 export interface UserSettings {
   theme?: ThemeType;
@@ -389,6 +447,12 @@ export interface UserSettings {
   language?: string;
   notifications?: boolean;
   defaultMode?: 'assistant' | 'companion' | 'voice';
+  // Locale settings
+  timeFormat?: TimeFormat;
+  dateFormat?: DateFormat;
+  unitSystem?: UnitSystem;
+  currency?: string;
+  timezone?: string;
 }
 
 // System Metrics Types
@@ -461,6 +525,14 @@ export const settingsApi = {
   getStats: () =>
     api<{ stats: UserStats }>('/api/settings/stats'),
 
+  // Daily token usage (for header display, resets at midnight)
+  getDailyTokens: () =>
+    api<DailyTokenStats>('/api/settings/daily-tokens'),
+
+  // Enhanced stats with model breakdown by time period and costs
+  getEnhancedStats: () =>
+    api<{ stats: EnhancedStats }>('/api/settings/enhanced-stats'),
+
   // Backup & Restore
   exportData: () =>
     api<BackupData>('/api/settings/backup'),
@@ -490,6 +562,13 @@ export const settingsApi = {
 
   resetModelConfigs: () =>
     api<{ success: boolean }>('/api/settings/models', { method: 'DELETE' }),
+
+  // TTS Settings
+  getTtsSettings: () =>
+    api<{ settings: TtsSettings; availableVoices: string[] }>('/api/settings/tts'),
+
+  updateTtsSettings: (settings: Partial<TtsSettings>) =>
+    api<{ success: boolean; settings: TtsSettings }>('/api/settings/tts', { method: 'PUT', body: settings }),
 };
 
 // Integrations API
@@ -524,6 +603,15 @@ export interface LunaMediaSelection {
   url: string;
   mood: string;
   trigger?: string;
+  isSpecial?: boolean;
+  loopSet?: string;
+}
+
+export interface AvatarState {
+  currentSet: string;
+  lastVideoIndex: number;
+  isPlayingSpecial: boolean;
+  specialQueue: string[];
 }
 
 export const lunaMediaApi = {
@@ -541,11 +629,42 @@ export const lunaMediaApi = {
       method: 'POST',
       body: { mood },
     }),
+
+  // Avatar (loop-based video system)
+  getAvatarState: () =>
+    api<{ state: AvatarState }>('/api/abilities/luna/avatar/state'),
+
+  getNextVideo: (set?: string) =>
+    api<LunaMediaSelection>(`/api/abilities/luna/avatar/next${set ? `?set=${set}` : ''}`),
+
+  getLoopSets: () =>
+    api<{ loopSets: Record<string, number> }>('/api/abilities/luna/avatar/loop-sets'),
+
+  getSpecialGestures: () =>
+    api<{ specials: string[] }>('/api/abilities/luna/avatar/specials'),
+
+  queueSpecialGesture: (gesture: string) =>
+    api<{ queued: boolean; video: LunaMediaSelection }>('/api/abilities/luna/avatar/special', {
+      method: 'POST',
+      body: { gesture },
+    }),
+
+  finishSpecialGesture: () =>
+    api<{ success: boolean }>('/api/abilities/luna/avatar/special/finish', {
+      method: 'POST',
+    }),
+
+  setMood: (mood: string) =>
+    api<{ loopSet: string }>('/api/abilities/luna/avatar/mood', {
+      method: 'POST',
+      body: { mood },
+    }),
 };
 
 // Email API
 export interface Email {
   id: string;
+  uid?: number;
   from: string;
   to: string[];
   subject: string;
@@ -563,6 +682,24 @@ export const emailApi = {
 
   getStatus: () =>
     api<EmailStatus>('/api/email/status'),
+
+  getEmail: (uid: number) =>
+    api<{ email: Email }>(`/api/email/${uid}`),
+
+  deleteEmail: (uid: number) =>
+    api<{ message: string; uid: number }>(`/api/email/${uid}`, { method: 'DELETE' }),
+
+  markRead: (uid: number, isRead: boolean) =>
+    api<{ message: string; uid: number; isRead: boolean }>(`/api/email/${uid}/read`, {
+      method: 'PUT',
+      body: JSON.stringify({ isRead }),
+    }),
+
+  reply: (uid: number, body: string) =>
+    api<{ message: string; messageId?: string }>(`/api/email/${uid}/reply`, {
+      method: 'POST',
+      body: JSON.stringify({ body }),
+    }),
 };
 
 // Workspace API
@@ -653,6 +790,7 @@ export interface CalendarEvent {
   endAt: string;
   location?: string;
   isAllDay: boolean;
+  reminderMinutes?: number | null;
 }
 
 export interface CalendarStatus {
@@ -660,6 +798,16 @@ export interface CalendarStatus {
   connected: boolean;
   eventCount: number;
   lastSync: string | null;
+}
+
+export interface CreateCalendarEventInput {
+  title: string;
+  description?: string;
+  startAt: string;
+  endAt: string;
+  location?: string;
+  isAllDay?: boolean;
+  reminderMinutes?: number | null;
 }
 
 export const calendarApi = {
@@ -674,6 +822,26 @@ export const calendarApi = {
 
   getStatus: () =>
     api<CalendarStatus>('/api/abilities/calendar/status'),
+
+  getEvent: (id: string) =>
+    api<CalendarEvent>(`/api/abilities/calendar/events/${id}`),
+
+  createEvent: (input: CreateCalendarEventInput) =>
+    api<CalendarEvent>('/api/abilities/calendar/events', {
+      method: 'POST',
+      body: input,
+    }),
+
+  updateEvent: (id: string, input: Partial<CreateCalendarEventInput>) =>
+    api<CalendarEvent>(`/api/abilities/calendar/events/${id}`, {
+      method: 'PUT',
+      body: input,
+    }),
+
+  deleteEvent: (id: string) =>
+    api<void>(`/api/abilities/calendar/events/${id}`, {
+      method: 'DELETE',
+    }),
 };
 
 // Tasks API
@@ -1420,6 +1588,19 @@ export const triggersApi = {
       body: { message, deliveryMethod },
     }),
 
+  // Send notification (for testing the notification panel)
+  sendNotification: (notification: {
+    category: 'trading' | 'reminders' | 'email' | 'autonomous';
+    title: string;
+    message: string;
+    priority?: number;
+    eventType?: string;
+  }) =>
+    api<{ success: boolean; message: string }>('/api/triggers/notification', {
+      method: 'POST',
+      body: notification,
+    }),
+
   // Telegram
   getTelegramStatus: () =>
     api<TelegramStatus>('/api/triggers/telegram/status'),
@@ -1439,8 +1620,16 @@ export interface McpServer {
   id: string;
   name: string;
   description: string | null;
-  url: string;
+  transportType: 'http' | 'stdio';
+  // HTTP transport
+  url: string | null;
   headers: Record<string, string>;
+  // Stdio transport
+  commandPath: string | null;
+  commandArgs: string[];
+  envVars: Record<string, string>;
+  workingDirectory: string | null;
+  // Status
   isEnabled: boolean;
   isConnected: boolean;
   lastConnectedAt: string | null;
@@ -1485,18 +1674,55 @@ export interface McpTestResult {
   error?: string;
 }
 
+export interface McpServerCreateData {
+  name: string;
+  description?: string;
+  transportType?: 'http' | 'stdio';
+  // HTTP transport
+  url?: string;
+  headers?: Record<string, string>;
+  // Stdio transport
+  commandPath?: string;
+  commandArgs?: string[];
+  envVars?: Record<string, string>;
+  workingDirectory?: string;
+}
+
+export interface McpServerUpdateData {
+  name?: string;
+  description?: string;
+  transportType?: 'http' | 'stdio';
+  url?: string;
+  headers?: Record<string, string>;
+  commandPath?: string;
+  commandArgs?: string[];
+  envVars?: Record<string, string>;
+  workingDirectory?: string;
+  isEnabled?: boolean;
+}
+
+export interface McpTestConnectionData {
+  transportType: 'http' | 'stdio';
+  url?: string;
+  headers?: Record<string, string>;
+  commandPath?: string;
+  commandArgs?: string[];
+  envVars?: Record<string, string>;
+  workingDirectory?: string;
+}
+
 export const mcpApi = {
   // Servers
   getServers: () =>
     api<{ servers: McpServerWithTools[] }>('/api/mcp/servers'),
 
-  createServer: (data: { name: string; url: string; description?: string; headers?: Record<string, string> }) =>
+  createServer: (data: McpServerCreateData) =>
     api<{ server: McpServerWithTools }>('/api/mcp/servers', { method: 'POST', body: data }),
 
   getServer: (id: string) =>
     api<{ server: McpServerWithTools }>(`/api/mcp/servers/${id}`),
 
-  updateServer: (id: string, data: Partial<{ name: string; url: string; description: string; headers: Record<string, string>; isEnabled: boolean }>) =>
+  updateServer: (id: string, data: McpServerUpdateData) =>
     api<{ server: McpServer }>(`/api/mcp/servers/${id}`, { method: 'PUT', body: data }),
 
   deleteServer: (id: string) =>
@@ -1513,8 +1739,8 @@ export const mcpApi = {
     api<{ tool: McpTool }>(`/api/mcp/tools/${toolId}`, { method: 'PUT', body: data }),
 
   // Test
-  testConnection: (url: string, headers?: Record<string, string>) =>
-    api<McpTestResult>('/api/mcp/test', { method: 'POST', body: { url, headers } }),
+  testConnection: (data: McpTestConnectionData) =>
+    api<McpTestResult>('/api/mcp/test', { method: 'POST', body: data }),
 
   // Presets
   getPresets: () =>
@@ -1522,6 +1748,579 @@ export const mcpApi = {
 
   addPreset: (presetId: string) =>
     api<{ server: McpServerWithTools }>('/api/mcp/presets/add', { method: 'POST', body: { presetId } }),
+};
+
+// Trading API Types
+export interface TradingSettings {
+  userId: string;
+  binanceConnected: boolean;
+  maxPositionPct: number;
+  dailyLossLimitPct: number;
+  requireStopLoss: boolean;
+  defaultStopLossPct: number;
+  allowedSymbols: string[];
+  riskTolerance: 'conservative' | 'moderate' | 'aggressive';
+}
+
+export interface PortfolioHolding {
+  symbol: string;
+  asset: string;
+  amount: number;
+  valueUsdt: number;
+  price: number;
+  priceChange24h: number;
+  allocationPct: number;
+}
+
+export interface Portfolio {
+  totalValueUsdt: number;
+  availableUsdt: number;
+  holdings: PortfolioHolding[];
+  dailyPnl: number;
+  dailyPnlPct: number;
+}
+
+export interface PriceData {
+  symbol: string;
+  price: number;
+  change24h: number;
+  high24h?: number;
+  low24h?: number;
+  volume24h?: number;
+}
+
+export interface Kline {
+  openTime: number;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  volume: string;
+  closeTime: number;
+  quoteAssetVolume: string;
+  numberOfTrades: number;
+  takerBuyBaseAssetVolume: string;
+  takerBuyQuoteAssetVolume: string;
+}
+
+export interface TradeRecord {
+  id: string;
+  userId: string;
+  botId: string | null;
+  symbol: string;
+  side: 'buy' | 'sell';
+  orderType: string;
+  quantity: number;
+  price: number | null;
+  filledPrice: number | null;
+  total: number | null;
+  fee: number;
+  feeAsset: string | null;
+  status: string;
+  binanceOrderId: string | null;
+  stopLossPrice: number | null;
+  takeProfitPrice: number | null;
+  notes: string | null;
+  createdAt: Date;
+  filledAt: Date | null;
+}
+
+export interface BotConfig {
+  id: string;
+  userId: string;
+  name: string;
+  type: 'grid' | 'dca' | 'rsi' | 'ma_crossover' | 'custom';
+  symbol: string;
+  config: Record<string, unknown>;
+  status: 'running' | 'stopped' | 'error' | 'paused';
+  lastError: string | null;
+  totalProfit: number;
+  totalTrades: number;
+  winRate: number;
+  createdAt: Date;
+  updatedAt: Date;
+  startedAt: Date | null;
+  stoppedAt: Date | null;
+}
+
+export interface ResearchSettings {
+  executionMode: 'auto' | 'confirm' | 'manual';
+  paperLiveMode: 'paper' | 'live';
+  enableAutoDiscovery: boolean;
+  autoDiscoveryLimit: number;
+  customSymbols: string[];
+  minConfidence: number;
+}
+
+export interface ResearchSignal {
+  id: string;
+  symbol: string;
+  price: number;
+  rsi1m?: number;
+  rsi5m?: number;
+  rsi15m?: number;
+  priceDropPct?: number;
+  volumeRatio?: number;
+  confidence: number;
+  reasons: string[];
+  status: 'pending' | 'executed' | 'skipped' | 'expired' | 'failed';
+  executionMode: string;
+  paperLiveMode: string;
+  createdAt: string;
+  indicators?: {
+    rsi: { value1m: number; value5m: number; value15m: number };
+    macd: { value: number; signal: number; histogram: number; crossover: string | null };
+    bollinger: { percentB: number; squeeze: boolean };
+    ema: { trend: string; crossover: string | null };
+    volume: { ratio: number; spike: boolean };
+  };
+  confidenceBreakdown?: {
+    rsi: number;
+    macd: number;
+    bollinger: number;
+    ema: number;
+    volume: number;
+    priceAction: number;
+    total: number;
+  };
+}
+
+export interface ResearchMetrics {
+  research: {
+    totalSignals: number;
+    executed: number;
+    skipped: number;
+    expired: number;
+    successRate: number;
+    avgConfidence: number;
+  };
+  scalping: {
+    paper: { trades: number; winRate: number; totalPnl: number; avgPnl: number };
+    live: { trades: number; winRate: number; totalPnl: number; avgPnl: number };
+    patterns: { key: string; winRate: number; trades: number; modifier: number }[];
+  };
+}
+
+// Indicator Settings
+export interface IndicatorWeights {
+  rsi: number;
+  macd: number;
+  bollinger: number;
+  ema: number;
+  volume: number;
+  priceAction: number;
+}
+
+export interface IndicatorSettings {
+  userId: string;
+  preset: 'conservative' | 'balanced' | 'aggressive' | 'custom';
+  enableRsi: boolean;
+  enableMacd: boolean;
+  enableBollinger: boolean;
+  enableEma: boolean;
+  enableVolume: boolean;
+  enablePriceAction: boolean;
+  weights: IndicatorWeights;
+  macdFast: number;
+  macdSlow: number;
+  macdSignal: number;
+  bollingerPeriod: number;
+  bollingerStddev: number;
+  emaShort: number;
+  emaMedium: number;
+  emaLong: number;
+  volumeAvgPeriod: number;
+  volumeSpikeThreshold: number;
+  minConfidence: number;
+}
+
+export interface IndicatorPreset {
+  weights: IndicatorWeights;
+  minConfidence: number;
+}
+
+export interface TradingStats {
+  totalTrades: number;
+  winningTrades: number;
+  losingTrades: number;
+  winRate: number;
+  totalPnl: number;
+  avgWin: number;
+  avgLoss: number;
+  largestWin: number;
+  largestLoss: number;
+}
+
+export interface ConditionalOrderAction {
+  side: 'buy' | 'sell';
+  type: 'market' | 'limit';
+  amountType: 'quantity' | 'percentage' | 'quote';
+  amount: number;
+  limitPrice?: number;
+  stopLoss?: number;
+  takeProfit?: number;
+  trailingStopPct?: number;
+  trailingStopDollar?: number;
+}
+
+export interface ConditionalOrder {
+  id: string;
+  userId: string;
+  symbol: string;
+  condition: 'above' | 'below' | 'crosses_up' | 'crosses_down';
+  triggerPrice: number;
+  action: ConditionalOrderAction;
+  status: 'active' | 'triggered' | 'cancelled' | 'expired';
+  expiresAt?: string;
+  triggeredAt?: string;
+  createdAt: string;
+}
+
+export interface CreateConditionalOrderParams {
+  symbol: string;
+  condition: 'above' | 'below' | 'crosses_up' | 'crosses_down';
+  triggerPrice: number;
+  action: ConditionalOrderAction;
+  expiresInHours?: number;
+}
+
+// Trading API
+export const tradingApi = {
+  // Connection
+  connect: (apiKey: string, apiSecret: string) =>
+    api<{ success: boolean; canTrade: boolean; error?: string }>('/api/trading/connect', {
+      method: 'POST',
+      body: { apiKey, apiSecret },
+    }),
+
+  disconnect: () =>
+    api<{ success: boolean }>('/api/trading/disconnect', { method: 'POST' }),
+
+  // Settings
+  getSettings: () =>
+    api<TradingSettings>('/api/trading/settings'),
+
+  updateSettings: (updates: Partial<Omit<TradingSettings, 'userId' | 'binanceConnected'>>) =>
+    api<TradingSettings>('/api/trading/settings', { method: 'PUT', body: updates }),
+
+  // Portfolio & Prices
+  getPortfolio: () =>
+    api<Portfolio>('/api/trading/portfolio'),
+
+  getPrices: (symbols?: string[]) =>
+    api<PriceData[]>(`/api/trading/prices${symbols ? `?symbols=${symbols.join(',')}` : ''}`),
+
+  getKlines: (symbol: string, interval: string, limit?: number) =>
+    api<Kline[]>(`/api/trading/klines/${symbol}?interval=${interval}${limit ? `&limit=${limit}` : ''}`),
+
+  // Trading
+  getTrades: (limit?: number) =>
+    api<TradeRecord[]>(`/api/trading/trades${limit ? `?limit=${limit}` : ''}`),
+
+  placeOrder: (params: {
+    symbol: string;
+    side: 'buy' | 'sell';
+    type: 'market' | 'limit';
+    quantity?: number;
+    quoteAmount?: number;
+    price?: number;
+    stopLoss?: number;
+    takeProfit?: number;
+    notes?: string;
+  }) =>
+    api<TradeRecord>('/api/trading/order', { method: 'POST', body: params }),
+
+  cancelOrder: (tradeId: string) =>
+    api<{ success: boolean }>(`/api/trading/order/${tradeId}`, { method: 'DELETE' }),
+
+  getStats: (days?: number) =>
+    api<TradingStats>(`/api/trading/stats${days ? `?days=${days}` : ''}`),
+
+  // Bots
+  getBots: () =>
+    api<BotConfig[]>('/api/trading/bots'),
+
+  createBot: (config: {
+    name: string;
+    type: BotConfig['type'];
+    symbol: string;
+    config: Record<string, unknown>;
+  }) =>
+    api<BotConfig>('/api/trading/bots', { method: 'POST', body: config }),
+
+  updateBotStatus: (botId: string, status: 'running' | 'stopped' | 'paused') =>
+    api<{ success: boolean }>(`/api/trading/bots/${botId}/status`, { method: 'PATCH', body: { status } }),
+
+  deleteBot: (botId: string) =>
+    api<{ success: boolean }>(`/api/trading/bots/${botId}`, { method: 'DELETE' }),
+
+  // Trading Chat
+  createChatSession: () =>
+    api<{ sessionId: string }>('/api/trading/chat/session', { method: 'POST' }),
+
+  getChatMessages: (sessionId: string) =>
+    api<Array<{ role: string; content: string }>>(`/api/trading/chat/session/${sessionId}/messages`),
+
+  sendChatMessage: (sessionId: string, message: string) =>
+    api<{ messageId: string; content: string; tokensUsed: number; display?: DisplayContent }>(
+      `/api/trading/chat/session/${sessionId}/send`,
+      { method: 'POST', body: { message } }
+    ),
+
+  // Research Mode
+  getResearchSettings: () =>
+    api<ResearchSettings>('/api/trading/research/settings'),
+
+  updateResearchSettings: (updates: Partial<ResearchSettings>) =>
+    api<ResearchSettings>('/api/trading/research/settings', { method: 'PUT', body: updates }),
+
+  getResearchSignals: (limit?: number) =>
+    api<ResearchSignal[]>(`/api/trading/research/signals${limit ? `?limit=${limit}` : ''}`),
+
+  getResearchMetrics: (days?: number) =>
+    api<ResearchMetrics>(`/api/trading/research/metrics${days ? `?days=${days}` : ''}`),
+
+  getTopPairs: (limit?: number) =>
+    api<{ pairs: string[] }>(`/api/trading/research/top-pairs${limit ? `?limit=${limit}` : ''}`),
+
+  executeSignal: (signalId: string) =>
+    api<{ success: boolean; result?: string }>(`/api/trading/research/execute/${signalId}`, { method: 'POST' }),
+
+  confirmSignal: (signalId: string, action: 'execute' | 'skip') =>
+    api<{ success: boolean; result?: string }>(`/api/trading/research/confirm/${signalId}`, {
+      method: 'POST',
+      body: { action },
+    }),
+
+  // Indicator Settings
+  getIndicatorSettings: () =>
+    api<IndicatorSettings>('/api/trading/research/indicators'),
+
+  updateIndicatorSettings: (updates: Partial<Omit<IndicatorSettings, 'userId'>>) =>
+    api<IndicatorSettings>('/api/trading/research/indicators', { method: 'PUT', body: updates }),
+
+  getIndicatorPresets: () =>
+    api<Record<string, IndicatorPreset>>('/api/trading/research/indicators/presets'),
+
+  applyIndicatorPreset: (preset: 'conservative' | 'balanced' | 'aggressive') =>
+    api<IndicatorSettings>('/api/trading/research/indicators/preset', { method: 'POST', body: { preset } }),
+
+  // Trade Rules (Conditional Orders)
+  getRules: (status?: string) =>
+    api<ConditionalOrder[]>(`/api/trading/rules${status ? `?status=${status}` : ''}`),
+
+  createRule: (params: CreateConditionalOrderParams) =>
+    api<ConditionalOrder>('/api/trading/rules', { method: 'POST', body: params }),
+
+  cancelRule: (id: string) =>
+    api<{ success: boolean }>(`/api/trading/rules/${id}`, { method: 'DELETE' }),
+};
+
+// Spotify API
+export interface SpotifyStatus {
+  isLinked: boolean;
+  spotifyId: string | null;
+  displayName: string | null;
+}
+
+export interface SpotifyAuthUrl {
+  url: string;
+  stateToken: string;
+}
+
+export interface SpotifyDevice {
+  id: string;
+  name: string;
+  type: string;
+  isActive: boolean;
+  isRestricted: boolean;
+  volumePercent: number | null;
+}
+
+export interface SpotifyArtist {
+  id: string;
+  name: string;
+  uri: string;
+}
+
+export interface SpotifyAlbum {
+  id: string;
+  name: string;
+  images: Array<{ url: string; width: number; height: number }>;
+  uri: string;
+}
+
+export interface SpotifyTrack {
+  id: string;
+  name: string;
+  artists: SpotifyArtist[];
+  album: SpotifyAlbum;
+  durationMs: number;
+  uri: string;
+  previewUrl: string | null;
+}
+
+export interface SpotifyPlaybackState {
+  isPlaying: boolean;
+  progressMs: number | null;
+  item: SpotifyTrack | null;
+  device: SpotifyDevice | null;
+  shuffleState: boolean;
+  repeatState: string;
+}
+
+export const spotifyApi = {
+  // Get connection status
+  getStatus: () =>
+    api<SpotifyStatus>('/api/abilities/spotify/status'),
+
+  // Get authorization URL to start OAuth flow
+  getAuthUrl: () =>
+    api<SpotifyAuthUrl>('/api/abilities/spotify/authorize'),
+
+  // Disconnect Spotify
+  disconnect: () =>
+    api<{ success: boolean; message: string }>('/api/abilities/spotify/disconnect', { method: 'DELETE' }),
+
+  // Get current playback state
+  getPlaybackStatus: () =>
+    api<{ state: SpotifyPlaybackState | null }>('/api/abilities/spotify/playback'),
+
+  // Playback controls
+  play: () =>
+    api<{ success: boolean; message: string }>('/api/abilities/spotify/play', { method: 'POST' }),
+
+  pause: () =>
+    api<{ success: boolean; message: string }>('/api/abilities/spotify/pause', { method: 'POST' }),
+
+  skipNext: () =>
+    api<{ success: boolean; message: string }>('/api/abilities/spotify/next', { method: 'POST' }),
+
+  skipPrevious: () =>
+    api<{ success: boolean; message: string }>('/api/abilities/spotify/previous', { method: 'POST' }),
+};
+
+// ==================== Projects API ====================
+
+export interface ProjectQuestion {
+  id: string;
+  question: string;
+  category: string;
+  required: boolean;
+}
+
+export interface ProjectStep {
+  id: string;
+  stepNumber: number;
+  description: string;
+  stepType: string;
+  filename?: string;
+  requiresApproval: boolean;
+  status: string;
+  result?: string;
+  error?: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface ProjectFile {
+  id: string;
+  filename: string;
+  filePath: string;
+  fileType: string;
+  fileSize: number;
+  isGenerated: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Project {
+  id: string;
+  userId: string;
+  sessionId: string | null;
+  name: string;
+  description: string;
+  type: 'web' | 'fullstack' | 'python' | 'node';
+  status: 'planning' | 'questioning' | 'building' | 'paused' | 'review' | 'complete' | 'error';
+  currentStep: number;
+  plan: ProjectStep[];
+  questions: ProjectQuestion[];
+  answers: Record<string, unknown>;
+  files: ProjectFile[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const projectsApi = {
+  // List user's projects
+  list: () =>
+    api<{ projects: Project[] }>('/api/projects'),
+
+  // Get single project
+  get: (id: string) =>
+    api<{ project: Project }>(`/api/projects/${id}`),
+
+  // Get active project
+  getActive: () =>
+    api<{ project: Project | null }>('/api/projects/active'),
+
+  // Create new project
+  create: (data: { name: string; description?: string; type?: string; sessionId?: string }) =>
+    api<{ project: Project }>('/api/projects', { method: 'POST', body: data }),
+
+  // Update project status
+  updateStatus: (id: string, status: string, currentStep?: number) =>
+    api<{ success: boolean }>(`/api/projects/${id}/status`, {
+      method: 'PUT',
+      body: { status, currentStep },
+    }),
+
+  // Set project questions
+  setQuestions: (id: string, questions: Omit<ProjectQuestion, 'id'>[]) =>
+    api<{ success: boolean }>(`/api/projects/${id}/questions`, {
+      method: 'POST',
+      body: { questions },
+    }),
+
+  // Save answers
+  saveAnswers: (id: string, answers: Record<string, unknown>) =>
+    api<{ success: boolean }>(`/api/projects/${id}/answers`, {
+      method: 'POST',
+      body: { answers },
+    }),
+
+  // Set project plan
+  setPlan: (id: string, steps: Omit<ProjectStep, 'id'>[]) =>
+    api<{ success: boolean; steps: ProjectStep[] }>(`/api/projects/${id}/plan`, {
+      method: 'POST',
+      body: { steps },
+    }),
+
+  // Update step status
+  updateStep: (id: string, stepNumber: number, status: string, result?: string, error?: string) =>
+    api<{ success: boolean }>(`/api/projects/${id}/steps/${stepNumber}`, {
+      method: 'PUT',
+      body: { status, result, error },
+    }),
+
+  // Get project files
+  getFiles: (id: string) =>
+    api<{ files: ProjectFile[] }>(`/api/projects/${id}/files`),
+
+  // Read project file
+  getFile: (id: string, filename: string) =>
+    api<{ content: string; filename: string }>(`/api/projects/${id}/files/${encodeURIComponent(filename)}`),
+
+  // Write project file
+  writeFile: (id: string, filename: string, content: string, fileType?: string) =>
+    api<{ file: ProjectFile }>(`/api/projects/${id}/files`, {
+      method: 'POST',
+      body: { filename, content, fileType },
+    }),
+
+  // Delete project
+  delete: (id: string) =>
+    api<{ success: boolean }>(`/api/projects/${id}`, { method: 'DELETE' }),
 };
 
 export { ApiError };

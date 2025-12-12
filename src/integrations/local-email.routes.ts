@@ -135,4 +135,139 @@ router.post('/validate-recipient', (req: Request, res: Response) => {
   res.json({ email, approved });
 });
 
+/**
+ * GET /api/email/:uid
+ * Get full email content by UID
+ */
+router.get('/:uid', async (req: Request, res: Response) => {
+  try {
+    const uid = parseInt(req.params.uid, 10);
+
+    if (isNaN(uid)) {
+      res.status(400).json({ error: 'Invalid UID' });
+      return;
+    }
+
+    const email = await emailService.fetchEmailByUid(uid);
+
+    if (!email) {
+      res.status(404).json({ error: 'Email not found' });
+      return;
+    }
+
+    res.json({ email });
+  } catch (error) {
+    logger.error('Failed to fetch email by UID', {
+      error: (error as Error).message,
+      uid: req.params.uid,
+    });
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+/**
+ * DELETE /api/email/:uid
+ * Delete an email by UID
+ */
+router.delete('/:uid', async (req: Request, res: Response) => {
+  try {
+    const uid = parseInt(req.params.uid, 10);
+
+    if (isNaN(uid)) {
+      res.status(400).json({ error: 'Invalid UID' });
+      return;
+    }
+
+    const success = await emailService.deleteEmail(uid);
+
+    if (success) {
+      res.json({ message: 'Email deleted successfully', uid });
+    } else {
+      res.status(500).json({ error: 'Failed to delete email' });
+    }
+  } catch (error) {
+    logger.error('Failed to delete email', {
+      error: (error as Error).message,
+      uid: req.params.uid,
+    });
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+/**
+ * PUT /api/email/:uid/read
+ * Mark an email as read or unread
+ */
+router.put('/:uid/read', async (req: Request, res: Response) => {
+  try {
+    const uid = parseInt(req.params.uid, 10);
+    const { isRead } = req.body;
+
+    if (isNaN(uid)) {
+      res.status(400).json({ error: 'Invalid UID' });
+      return;
+    }
+
+    if (typeof isRead !== 'boolean') {
+      res.status(400).json({ error: 'isRead must be a boolean' });
+      return;
+    }
+
+    const success = await emailService.markEmailRead(uid, isRead);
+
+    if (success) {
+      res.json({ message: `Email marked as ${isRead ? 'read' : 'unread'}`, uid, isRead });
+    } else {
+      res.status(500).json({ error: 'Failed to update email read status' });
+    }
+  } catch (error) {
+    logger.error('Failed to mark email as read', {
+      error: (error as Error).message,
+      uid: req.params.uid,
+    });
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+/**
+ * POST /api/email/:uid/reply
+ * Reply to an email
+ */
+router.post('/:uid/reply', async (req: Request, res: Response) => {
+  try {
+    const uid = parseInt(req.params.uid, 10);
+    const { body } = req.body;
+
+    if (isNaN(uid)) {
+      res.status(400).json({ error: 'Invalid UID' });
+      return;
+    }
+
+    if (!body || typeof body !== 'string') {
+      res.status(400).json({ error: 'Reply body is required' });
+      return;
+    }
+
+    const result = await emailService.replyToEmail(uid, body);
+
+    if (result.success) {
+      res.json({
+        message: 'Reply sent successfully',
+        messageId: result.messageId,
+      });
+    } else {
+      res.status(400).json({
+        error: result.error,
+        blockedRecipients: result.blockedRecipients,
+      });
+    }
+  } catch (error) {
+    logger.error('Failed to send reply', {
+      error: (error as Error).message,
+      uid: req.params.uid,
+    });
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
 export default router;

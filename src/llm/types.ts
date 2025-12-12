@@ -40,12 +40,18 @@ export interface CompletionResult {
   tokensUsed: number;
   model: string;
   provider: ProviderId;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheTokens?: number;
 }
 
 export interface StreamChunk {
   type: 'content' | 'done';
   content?: string;
   tokensUsed?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheTokens?: number;
 }
 
 // Available providers and models registry
@@ -762,7 +768,8 @@ export type ConfigurableTask =
   | 'agent:writer'
   | 'agent:analyst'
   | 'agent:planner'
-  | 'friend';
+  | 'friend'
+  | 'smalltalk';
 
 export interface TaskModelConfig {
   taskType: ConfigurableTask;
@@ -828,6 +835,13 @@ export const CONFIGURABLE_TASKS: TaskModelConfig[] = [
     description: 'Luna\'s conversations with AI friends about patterns',
     defaultProvider: 'ollama',
     defaultModel: 'llama3.2:3b',
+  },
+  {
+    taskType: 'smalltalk',
+    displayName: 'Smalltalk & Quick Replies',
+    description: 'Simple greetings, acknowledgments, and casual chat',
+    defaultProvider: 'xai',
+    defaultModel: 'grok-4-1-fast-non-reasoning-latest',
   },
 ];
 

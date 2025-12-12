@@ -1,6 +1,8 @@
 import {
   createChatCompletion,
   searchTool,
+  youtubeSearchTool,
+  browserVisualSearchTool,
   delegateToAgentTool,
   workspaceWriteTool,
   workspaceExecuteTool,
@@ -8,6 +10,11 @@ import {
   workspaceReadTool,
   sendEmailTool,
   checkEmailTool,
+  readEmailTool,
+  deleteEmailTool,
+  replyEmailTool,
+  markEmailReadTool,
+  sendTelegramTool,
   searchDocumentsTool,
   suggestGoalTool,
   fetchUrlTool,
@@ -15,10 +22,24 @@ import {
   createTodoTool,
   completeTodoTool,
   updateTodoTool,
+  sessionNoteTool,
+  createReminderTool,
+  listRemindersTool,
+  cancelReminderTool,
+  browserNavigateTool,
+  browserScreenshotTool,
+  browserClickTool,
+  browserFillTool,
+  browserExtractTool,
+  browserWaitTool,
+  browserCloseTool,
+  browserRenderHtmlTool,
+  generateImageTool,
   formatSearchResultsForContext,
   formatAgentResultForContext,
   type ChatMessage,
 } from '../llm/openai.client.js';
+import * as browserScreencast from '../abilities/browser-screencast.service.js';
 
 /**
  * Decode HTML entities in a string
@@ -47,13 +68,21 @@ import * as agents from '../abilities/agents.service.js';
 import * as workspace from '../abilities/workspace.service.js';
 import * as sandbox from '../abilities/sandbox.service.js';
 import * as emailService from '../abilities/email.service.js';
+import * as telegramService from '../triggers/telegram.service.js';
 import * as documents from '../abilities/documents.service.js';
+import * as youtube from '../abilities/youtube.service.js';
 import * as tasksService from '../abilities/tasks.service.js';
+import * as reminderService from '../abilities/reminder.service.js';
+import * as browser from '../abilities/browser.service.js';
+import * as imageGeneration from '../abilities/image-generation.service.js';
+import * as projectService from '../abilities/project.service.js';
 import * as memoryService from '../memory/memory.service.js';
 import * as preferencesService from '../memory/preferences.service.js';
 import * as abilities from '../abilities/orchestrator.js';
 import { buildContextualPrompt } from '../persona/luna.persona.js';
 import * as sessionService from './session.service.js';
+import * as contextCompression from './context-compression.service.js';
+import * as sessionLogService from './session-log.service.js';
 import * as authService from '../auth/auth.service.js';
 import logger from '../utils/logger.js';
 import { sysmonTools, executeSysmonTool } from '../abilities/sysmon.service.js';
@@ -65,6 +94,7 @@ export interface ChatInput {
   userId: string;
   message: string;
   mode: 'assistant' | 'companion' | 'voice';
+  source?: 'web' | 'telegram' | 'api';
 }
 
 export interface ChatOutput {
@@ -75,7 +105,7 @@ export interface ChatOutput {
 }
 
 export async function processMessage(input: ChatInput): Promise<ChatOutput> {
-  const { sessionId, userId, message, mode } = input;
+  const { sessionId, userId, message, mode, source = 'web' } = input;
 
   // INTENT GATING: Detect if this is smalltalk FIRST
   const isSmallTalkMessage = abilities.isSmallTalk(message);
@@ -85,17 +115,17 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   const [
     modelConfig,
     user,
-    history,
+    rawHistory,
     memoryContext,
     abilityContext,
     prefGuidelines,
   ] = await Promise.all([
-    // Get user's model configuration for main chat
-    getUserModelConfig(userId, 'main_chat'),
+    // Get user's model configuration - use fast model for smalltalk
+    getUserModelConfig(userId, isSmallTalkMessage ? 'smalltalk' : 'main_chat'),
     // Get user profile for personalization
     authService.getUserById(userId),
-    // Get conversation history
-    sessionService.getSessionMessages(sessionId, { limit: 20 }),
+    // Get conversation history (higher limit for compression to work with)
+    sessionService.getSessionMessages(sessionId, { limit: 50 }),
     // Build memory context - skip for pure smalltalk
     isSmallTalkMessage ? Promise.resolve({ facts: '', relevantHistory: '', conversationContext: '', learnings: '' }) : memoryService.buildMemoryContext(userId, message, sessionId),
     // Build ability context - uses contextOptions for selective loading
@@ -103,6 +133,14 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     // Get personalization preferences - lightweight, always load
     preferencesService.getResponseGuidelines(userId),
   ]);
+
+  // Build compressed context from history
+  const compressedCtx = await contextCompression.buildCompressedContext(
+    sessionId,
+    userId,
+    message,
+    rawHistory
+  );
 
   const userName = user?.displayName || undefined;
   const memoryPrompt = memoryService.formatMemoryForPrompt(memoryContext);
@@ -118,27 +156,71 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   // Detect ability intent and execute if confident
   const intent = abilities.detectAbilityIntent(message);
   let abilityActionResult: string | undefined;
+  logger.info('Ability intent detected', { intent, message: message.slice(0, 50) });
   if (intent.confidence >= 0.8) {
+    logger.info('Executing ability action', { type: intent.type, action: intent.action });
     const result = await abilities.executeAbilityAction(userId, sessionId, intent, message);
+    logger.info('Ability action result', { handled: result.handled, hasResult: !!result.result, result: result.result?.substring(0, 200) });
     if (result.handled && result.result) {
       abilityActionResult = `[Action Taken: ${intent.type}]\n${result.result}`;
+      logger.info('Ability action result added to context', { type: intent.type, abilityActionResult: abilityActionResult.substring(0, 200) });
     }
+  }
+
+  // Load MCP tools dynamically for this user (before building system prompt)
+  const mcpUserTools = await mcpService.getAllUserTools(userId);
+
+  // Session log: On first message, get recent sessions for context and create new log
+  let sessionHistoryContext = '';
+  if (rawHistory.length === 0) {
+    // Get recent session logs for context continuity
+    const recentLogs = await sessionLogService.getRecentSessionLogs(userId, 3);
+    sessionHistoryContext = sessionLogService.formatLogsForContext(recentLogs);
+
+    // Create new session log entry (async, don't block)
+    sessionLogService.createSessionLog(userId, sessionId, mode).catch(() => {});
   }
 
   // Combine all context
   const fullContext = [memoryPrompt, abilityPrompt, prefPrompt, abilityActionResult].filter(Boolean).join('\n\n');
 
-  // Build messages array
+  // Build messages array with MCP tool info and compressed context
+  const mcpToolsForPrompt = mcpUserTools.map(t => ({
+    name: t.name,
+    serverName: t.serverName,
+    description: t.description,
+  }));
   const messages: ChatMessage[] = [
-    { role: 'system', content: buildContextualPrompt(mode, { userName, memoryContext: fullContext }) },
+    {
+      role: 'system',
+      content: buildContextualPrompt(mode, {
+        userName,
+        memoryContext: fullContext,
+        sessionHistory: sessionHistoryContext,
+        conversationSummary: compressedCtx.systemPrefix,
+        mcpTools: mcpToolsForPrompt,
+        source,
+      }),
+    },
   ];
 
-  // Add history
-  for (const msg of history) {
-    messages.push({ role: msg.role, content: msg.content });
+  // Add semantically relevant older messages first (marked as earlier context)
+  for (const relevant of compressedCtx.relevantMessages) {
+    messages.push({
+      role: relevant.role as 'user' | 'assistant',
+      content: `[Earlier context] ${contextCompression.compressMessage({ content: relevant.content, role: relevant.role } as Message)}`,
+    });
   }
 
-  // Add current message
+  // Add recent messages (truncated for efficiency)
+  for (const msg of compressedCtx.recentMessages) {
+    messages.push({
+      role: msg.role,
+      content: contextCompression.compressMessage(msg),
+    });
+  }
+
+  // Add current message (full, not compressed)
   messages.push({ role: 'user', content: message });
 
   // Save user message
@@ -146,16 +228,15 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     sessionId,
     role: 'user',
     content: message,
+    source,
   });
 
   // Store user message embedding (async)
   memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user');
 
   // TOOL GATING: For smalltalk, don't expose tools at all to prevent eager tool calling
-  // Load MCP tools dynamically for this user
-  const mcpUserTools = await mcpService.getAllUserTools(userId);
   const mcpToolsForLLM = mcpService.formatMcpToolsForLLM(mcpUserTools.map(t => ({ ...t, serverId: t.serverId })));
-  const allTools = [searchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, searchDocumentsTool, suggestGoalTool, fetchUrlTool, listTodosTool, createTodoTool, completeTodoTool, updateTodoTool, ...sysmonTools, ...mcpToolsForLLM];
+  const allTools = [searchTool, youtubeSearchTool, browserVisualSearchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, readEmailTool, deleteEmailTool, replyEmailTool, markEmailReadTool, sendTelegramTool, searchDocumentsTool, suggestGoalTool, fetchUrlTool, listTodosTool, createTodoTool, completeTodoTool, updateTodoTool, sessionNoteTool, createReminderTool, listRemindersTool, cancelReminderTool, browserNavigateTool, browserScreenshotTool, browserClickTool, browserFillTool, browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool, generateImageTool, ...sysmonTools, ...mcpToolsForLLM];
   const availableTools = isSmallTalkMessage ? [] : allTools;
   let searchResults: SearchResult[] | undefined;
   let agentResults: Array<{ agent: string; result: string; success: boolean }> = [];
@@ -194,6 +275,37 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
           role: 'tool',
           tool_call_id: toolCall.id,
           content: searchContext,
+        } as ChatMessage);
+      } else if (toolCall.function.name === 'youtube_search') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('YouTube search executing', { query: args.query, limit: args.limit });
+
+        const results = await youtube.searchYouTube(args.query, args.limit || 3);
+
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: youtube.formatYouTubeForPrompt(results),
+        } as ChatMessage);
+      } else if (toolCall.function.name === 'browser_visual_search') {
+        const args = JSON.parse(toolCall.function.arguments);
+        const searchEngine = args.searchEngine || 'google_news';
+        const searchUrl = browserScreencast.getSearchUrl(args.query, searchEngine);
+        logger.info('Browser visual search', { query: args.query, searchEngine, searchUrl });
+
+        // Store pending URL for frontend to consume when browser window opens
+        browserScreencast.setPendingVisualBrowse(userId, searchUrl);
+
+        // Also do a text search to get content for the LLM to summarize
+        const searchResults = await searxng.search(args.query);
+        const searchContext = searchResults && searchResults.length > 0
+          ? formatSearchResultsForContext(searchResults)
+          : 'No search results found.';
+
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: `Browser opened to ${searchUrl} for visual browsing.\n\nSearch results for context:\n${searchContext}`,
         } as ChatMessage);
       } else if (toolCall.function.name === 'delegate_to_agent') {
         const args = JSON.parse(toolCall.function.arguments);
@@ -311,6 +423,124 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
             tool_call_id: toolCall.id,
             content: 'No emails found in inbox.',
           } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'read_email') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Luna reading email by UID', { uid: args.uid });
+        try {
+          const email = await emailService.fetchEmailByUid(args.uid);
+          if (email) {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Email from ${email.from}:\nSubject: ${email.subject}\nDate: ${email.date}\nRead: ${email.read ? 'Yes' : 'No'}\n\n${email.body}`,
+            } as ChatMessage);
+          } else {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Email with UID ${args.uid} not found.`,
+            } as ChatMessage);
+          }
+        } catch (error) {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to read email: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'delete_email') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Luna deleting email', { uid: args.uid });
+        try {
+          const success = await emailService.deleteEmail(args.uid);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: success
+              ? `Email with UID ${args.uid} has been deleted successfully.`
+              : `Failed to delete email with UID ${args.uid}.`,
+          } as ChatMessage);
+        } catch (error) {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to delete email: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'reply_email') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Luna replying to email', { uid: args.uid });
+        try {
+          const result = await emailService.replyToEmail(args.uid, args.body);
+          if (result.success) {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Reply sent successfully. Message ID: ${result.messageId}`,
+            } as ChatMessage);
+          } else {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Failed to send reply: ${result.error}${result.blockedRecipients ? ` (blocked: ${result.blockedRecipients.join(', ')})` : ''}`,
+            } as ChatMessage);
+          }
+        } catch (error) {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to send reply: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'mark_email_read') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Luna marking email read status', { uid: args.uid, isRead: args.isRead });
+        try {
+          const success = await emailService.markEmailRead(args.uid, args.isRead);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: success
+              ? `Email with UID ${args.uid} has been marked as ${args.isRead ? 'read' : 'unread'}.`
+              : `Failed to update read status for email with UID ${args.uid}.`,
+          } as ChatMessage);
+        } catch (error) {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to mark email: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'send_telegram') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Luna sending Telegram message', { userId });
+
+        const connection = await telegramService.getTelegramConnection(userId);
+
+        if (!connection || !connection.isActive) {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: 'Telegram is not connected for this user. Ask them to link their Telegram account in Settings.',
+          } as ChatMessage);
+        } else {
+          try {
+            await telegramService.sendTelegramMessage(connection.chatId, args.message, {
+              parseMode: 'Markdown',
+            });
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: 'Message sent successfully to Telegram.',
+            } as ChatMessage);
+          } catch (error) {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Failed to send Telegram message: ${(error as Error).message}`,
+            } as ChatMessage);
+          }
         }
       } else if (toolCall.function.name === 'search_documents') {
         const args = JSON.parse(toolCall.function.arguments);
@@ -493,6 +723,343 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
             content: 'Could not find a matching todo. Use list_todos to see available todos.',
           } as ChatMessage);
         }
+      } else if (toolCall.function.name === 'session_note') {
+        // Session note tool - appends notes to session log for future reference
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Luna adding session note', { sessionId, note: args.note });
+        await sessionLogService.appendToSummary(sessionId, args.note);
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: 'Note saved. It will appear in future session greetings.',
+        } as ChatMessage);
+      } else if (toolCall.function.name === 'create_reminder') {
+        // Quick reminder tool
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Luna creating reminder', { sessionId, userId, message: args.message, delayMinutes: args.delay_minutes });
+        try {
+          const reminder = await reminderService.createReminder(userId, args.message, args.delay_minutes);
+          const remindAt = reminder.remindAt.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Reminder set! I'll notify you via Telegram at ${remindAt} about: "${args.message}"`,
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Failed to create reminder', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to create reminder: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'list_reminders') {
+        // List reminders tool
+        logger.info('Luna listing reminders', { sessionId, userId });
+        try {
+          const reminders = await reminderService.listReminders(userId);
+          if (reminders.length === 0) {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: 'No pending reminders.',
+            } as ChatMessage);
+          } else {
+            const list = reminders.map(r => {
+              const time = r.remindAt.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+              return `- [${r.id.slice(0, 8)}] at ${time}: "${r.message}"`;
+            }).join('\n');
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Pending reminders:\n${list}`,
+            } as ChatMessage);
+          }
+        } catch (error) {
+          logger.error('Failed to list reminders', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to list reminders: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'cancel_reminder') {
+        // Cancel reminder tool
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Luna cancelling reminder', { sessionId, userId, reminderId: args.reminder_id });
+        try {
+          const cancelled = await reminderService.cancelReminder(userId, args.reminder_id);
+          if (cancelled) {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: 'Reminder cancelled.',
+            } as ChatMessage);
+          } else {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: 'Reminder not found or already delivered.',
+            } as ChatMessage);
+          }
+        } catch (error) {
+          logger.error('Failed to cancel reminder', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to cancel reminder: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'browser_navigate') {
+        // Browser navigate tool
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Browser navigate', { userId, url: args.url });
+        try {
+          const result = await browser.navigate(userId, args.url, {
+            waitUntil: args.waitUntil || 'domcontentloaded',
+          });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: browser.formatBrowserResultForPrompt(result),
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Browser navigate failed', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Browser error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'browser_screenshot') {
+        // Browser screenshot tool - takes screenshot and saves to disk for display
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Browser screenshot', { userId, url: args.url, fullPage: args.fullPage });
+        try {
+          const result = await browser.screenshot(userId, args.url, {
+            fullPage: args.fullPage,
+            selector: args.selector,
+          });
+
+          // If screenshot was captured, save it to disk and format for display
+          if (result.success && result.screenshot) {
+            const saveResult = await imageGeneration.saveScreenshot(
+              userId,
+              result.screenshot,
+              result.pageUrl || args.url
+            );
+
+            if (saveResult.success && saveResult.imageUrl) {
+              const caption = `Screenshot of ${result.pageTitle || result.pageUrl || args.url}`;
+              const imageBlock = imageGeneration.formatImageForChat(saveResult.imageUrl, caption);
+              messages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: `Screenshot captured successfully.\n\n${imageBlock}\n\nPage: ${result.pageUrl || args.url}\nTitle: ${result.pageTitle || 'N/A'}`,
+              } as ChatMessage);
+            } else {
+              // Save failed - don't claim we have a displayable image
+              logger.warn('Screenshot save failed', { userId, url: args.url, error: saveResult.error });
+              messages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: `Screenshot was captured but could not be saved for display.\nPage visited: ${result.pageUrl || args.url}\nTitle: ${result.pageTitle || 'N/A'}`,
+              } as ChatMessage);
+            }
+          } else {
+            // Screenshot capture failed
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Screenshot failed: ${result.error || 'Unknown error'}\nPage: ${result.pageUrl || args.url}`,
+            } as ChatMessage);
+          }
+        } catch (error) {
+          logger.error('Browser screenshot failed', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Browser error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'browser_click') {
+        // Browser click tool
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Browser click', { userId, url: args.url, selector: args.selector });
+        try {
+          const result = await browser.click(userId, args.url, args.selector);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: browser.formatBrowserResultForPrompt(result),
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Browser click failed', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Browser error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'browser_fill') {
+        // Browser fill tool
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Browser fill', { userId, url: args.url, selector: args.selector });
+        try {
+          const result = await browser.fill(userId, args.url, args.selector, args.value);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: browser.formatBrowserResultForPrompt(result),
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Browser fill failed', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Browser error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'browser_extract') {
+        // Browser extract tool
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Browser extract', { userId, url: args.url, selector: args.selector });
+        try {
+          const result = args.selector
+            ? await browser.extractElements(userId, args.url, args.selector, args.limit)
+            : await browser.getContent(userId, args.url);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: browser.formatBrowserResultForPrompt(result),
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Browser extract failed', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Browser error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'browser_wait') {
+        // Browser wait tool
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Browser wait', { userId, url: args.url, selector: args.selector });
+        try {
+          const result = await browser.waitFor(userId, args.url, args.selector, args.timeout);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: browser.formatBrowserResultForPrompt(result),
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Browser wait failed', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Browser error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'browser_close') {
+        // Browser close tool
+        logger.info('Browser close', { userId });
+        try {
+          const result = await browser.closeBrowser(userId);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: browser.formatBrowserResultForPrompt(result),
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Browser close failed', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Browser error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'browser_render_html') {
+        // Browser render HTML tool - renders HTML content and takes screenshot
+        const args = JSON.parse(toolCall.function.arguments);
+        // Decode HTML entities in case LLM encoded them
+        const htmlContent = decodeHtmlEntities(args.html);
+        const pageTitle = args.title || 'Luna HTML Page';
+        logger.info('Browser render HTML', { userId, htmlLength: htmlContent.length, title: pageTitle });
+        try {
+          const result = await browser.renderHtml(userId, htmlContent);
+
+          // If screenshot was captured, save it to disk and format for display
+          if (result.success && result.screenshot) {
+            const saveResult = await imageGeneration.saveScreenshot(
+              userId,
+              result.screenshot,
+              'rendered-html'
+            );
+
+            if (saveResult.success && saveResult.imageUrl) {
+              const caption = pageTitle;
+              const imageBlock = imageGeneration.formatImageForChat(saveResult.imageUrl, caption);
+              messages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: `HTML page rendered successfully.\n\n${imageBlock}\n\nTitle: ${pageTitle}`,
+              } as ChatMessage);
+            } else {
+              // Save failed
+              logger.warn('HTML render save failed', { userId, error: saveResult.error });
+              messages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: `HTML was rendered but the screenshot could not be saved for display.`,
+              } as ChatMessage);
+            }
+          } else {
+            // Render failed
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `HTML render failed: ${result.error || 'Unknown error'}`,
+            } as ChatMessage);
+          }
+        } catch (error) {
+          logger.error('Browser render HTML failed', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Browser error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'generate_image') {
+        // Image generation tool
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Generate image', { userId, promptLength: args.prompt?.length });
+        try {
+          const result = await imageGeneration.generateImage(userId, args.prompt);
+          if (result.success && result.imageUrl) {
+            const imageBlock = imageGeneration.formatImageForChat(
+              result.imageUrl,
+              `Generated image: ${args.prompt.substring(0, 100)}${args.prompt.length > 100 ? '...' : ''}`
+            );
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Image generated successfully.\n\n${imageBlock}`,
+            } as ChatMessage);
+          } else {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Failed to generate image: ${result.error || 'Unknown error'}`,
+            } as ChatMessage);
+          }
+        } catch (error) {
+          logger.error('Image generation failed', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Image generation error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
       } else if (toolCall.function.name.startsWith('system_') ||
                  toolCall.function.name.startsWith('network_') ||
                  toolCall.function.name.startsWith('process_') ||
@@ -571,7 +1138,11 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     role: 'assistant',
     content: completion.content,
     tokensUsed: completion.tokensUsed,
+    inputTokens: completion.promptTokens,
+    outputTokens: completion.completionTokens,
+    cacheTokens: 0, // OpenAI-compatible providers don't have cache tokens
     model: modelConfig.model,
+    provider: modelConfig.provider,
     searchResults,
   });
 
@@ -579,24 +1150,33 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   memoryService.processMessageMemory(userId, sessionId, assistantMessage.id, completion.content, 'assistant');
 
   // Process facts from conversation (async, every few messages)
-  const totalMessages = history.length + 2; // +2 for this exchange
+  const totalMessages = rawHistory.length + 2; // +2 for this exchange
   if (totalMessages % 4 === 0) { // Every 4 messages
     const allMessages = [
-      ...history.map(m => ({ id: m.id, role: m.role, content: m.content })),
+      ...rawHistory.map(m => ({ id: m.id, role: m.role, content: m.content })),
       { id: userMessage.id, role: 'user', content: message },
       { id: assistantMessage.id, role: 'assistant', content: completion.content },
     ];
     memoryService.processConversationMemory(userId, sessionId, allMessages).catch(() => {});
     // Also learn preferences from conversation
     preferencesService.learnFromConversation(userId, sessionId, allMessages).catch(() => {});
+
+    // Trigger rolling summary update if conversation is long enough
+    if (totalMessages > 10) {
+      contextCompression.updateRollingSummary(sessionId, userId).catch(() => {});
+    }
   }
 
-  // Update session title if this is the first message
-  if (history.length === 0) {
-    const title = await sessionService.generateSessionTitle([
-      { role: 'user', content: message } as Message,
-    ]);
-    await sessionService.updateSession(sessionId, userId, { title });
+  // Update session title if this is the first message AND not a special session
+  if (rawHistory.length === 0) {
+    const session = await sessionService.getSession(sessionId, userId);
+    // Don't overwrite special session titles like "Telegram"
+    if (session && session.title === 'New Chat') {
+      const title = await sessionService.generateSessionTitle([
+        { role: 'user', content: message } as Message,
+      ]);
+      await sessionService.updateSession(sessionId, userId, { title });
+    }
   }
 
   return {
@@ -606,6 +1186,581 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     searchResults,
   };
 }
+
+// ==================== PROJECT HANDLING FUNCTIONS ====================
+
+/**
+ * Handle steering messages for an active project
+ */
+async function* handleProjectSteering(
+  userId: string,
+  sessionId: string,
+  project: projectService.Project,
+  message: string,
+  startTime: number
+): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action'; content?: string; status?: string; messageId?: string; tokensUsed?: number; metrics?: StreamMetrics; action?: string; url?: string }> {
+  const lowerMessage = message.toLowerCase();
+
+  // Handle pause/stop commands
+  if (/\b(stop|pause|wait|hold on)\b/i.test(lowerMessage)) {
+    await projectService.updateProjectStatus(project.id, 'paused');
+    const responseContent = `Got it! I've paused the project "${project.name}". Just say "continue" or "go ahead" when you're ready to resume.`;
+
+    yield { type: 'content', content: responseContent };
+
+    const assistantMessage = await sessionService.addMessage({
+      sessionId,
+      role: 'assistant',
+      content: responseContent,
+    });
+
+    yield {
+      type: 'done',
+      messageId: assistantMessage.id,
+      tokensUsed: 0,
+      metrics: {
+        promptTokens: 0,
+        completionTokens: 0,
+        processingTimeMs: Date.now() - startTime,
+        tokensPerSecond: 0,
+        toolsUsed: ['project-steering'],
+        model: 'internal',
+      },
+    };
+    return;
+  }
+
+  // Handle continue/resume commands
+  if (/\b(continue|go ahead|proceed|resume)\b/i.test(lowerMessage)) {
+    await projectService.updateProjectStatus(project.id, 'building');
+    yield { type: 'status', status: `Resuming project ${project.name}...` };
+
+    // Continue building from current step
+    yield* executeProjectBuild(userId, sessionId, project, startTime);
+    return;
+  }
+
+  // Handle modification requests - pass to generator agent
+  yield { type: 'status', status: 'Processing your modification request...' };
+
+  // Use the project-generator agent to handle the modification
+  const modificationPrompt = `
+The user wants to modify the project "${project.name}".
+
+Current project state:
+- Status: ${project.status}
+- Current step: ${project.currentStep}
+- Plan: ${JSON.stringify(project.plan, null, 2)}
+
+User's modification request: "${message}"
+
+Generate the updated files based on this request. Use the format:
+\`\`\`language:filename.ext
+file content here
+\`\`\`
+`;
+
+  let responseContent = '';
+  for await (const event of agents.executeAgentStream('project-generator', userId, modificationPrompt)) {
+    if (event.type === 'status') {
+      yield { type: 'status', status: event.status };
+    } else if (event.type === 'content') {
+      responseContent += event.content;
+      yield { type: 'content', content: event.content };
+    }
+  }
+
+  // Parse and save any generated files
+  const fileMatches = responseContent.matchAll(/```(\w+):([^\n]+)\n([\s\S]*?)```/g);
+  const executableFiles: string[] = [];
+  const executableExtensions = ['.py', '.js', '.sh'];
+
+  for (const match of fileMatches) {
+    const [, , filename, content] = match;
+    const trimmedFilename = filename.trim();
+    try {
+      await projectService.writeProjectFile(
+        project.id,
+        userId,
+        project.name,
+        trimmedFilename,
+        content.trim(),
+        trimmedFilename.split('.').pop() || 'txt'
+      );
+      logger.info('Wrote modified project file', { projectId: project.id, filename: trimmedFilename });
+
+      // Track executable files for potential execution
+      if (executableExtensions.some(ext => trimmedFilename.endsWith(ext))) {
+        executableFiles.push(trimmedFilename);
+      }
+    } catch (err) {
+      logger.error('Failed to write modified project file', { error: (err as Error).message, filename: trimmedFilename });
+    }
+  }
+
+  // AUTO-EXECUTE: If user asked to "run" or "execute" and we have executable files, run them
+  const wantsExecution = /\b(run|execute|test|try)\b/i.test(lowerMessage);
+  if (wantsExecution && executableFiles.length > 0) {
+    yield { type: 'status', status: 'Running script...' };
+
+    for (const filename of executableFiles) {
+      try {
+        // Read the file content from project and execute via sandbox
+        const fileContent = await projectService.readProjectFile(project.id, userId, filename);
+        if (fileContent) {
+          const execResult = await sandbox.executeCode(fileContent, userId, sessionId);
+          const executionOutput = `\n\n**Execution Output (${filename}):**\n\`\`\`\n${execResult.output || execResult.error || 'No output'}\n\`\`\``;
+          responseContent += executionOutput;
+          yield { type: 'content', content: executionOutput };
+          logger.info('Executed project file', { projectId: project.id, filename, success: !execResult.error });
+        }
+      } catch (err) {
+        const errorOutput = `\n\n**Execution Error (${filename}):** ${(err as Error).message}`;
+        responseContent += errorOutput;
+        yield { type: 'content', content: errorOutput };
+        logger.error('Failed to execute project file', { error: (err as Error).message, filename });
+      }
+    }
+  }
+
+  const assistantMessage = await sessionService.addMessage({
+    sessionId,
+    role: 'assistant',
+    content: responseContent,
+  });
+
+  memoryService.processMessageMemory(userId, sessionId, assistantMessage.id, responseContent, 'assistant');
+
+  yield {
+    type: 'done',
+    messageId: assistantMessage.id,
+    tokensUsed: 0,
+    metrics: {
+      promptTokens: 0,
+      completionTokens: 0,
+      processingTimeMs: Date.now() - startTime,
+      tokensPerSecond: 0,
+      toolsUsed: ['project-steering', 'project-generator'],
+      model: 'claude-cli',
+    },
+  };
+}
+
+/**
+ * Handle user responses to project questions
+ */
+async function* handleProjectQuestionResponse(
+  userId: string,
+  sessionId: string,
+  project: projectService.Project,
+  message: string,
+  startTime: number
+): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action'; content?: string; status?: string; messageId?: string; tokensUsed?: number; metrics?: StreamMetrics; action?: string; url?: string }> {
+  // Save the answers
+  await projectService.saveProjectAnswers(project.id, { userResponse: message });
+
+  yield { type: 'status', status: 'Creating project plan...' };
+
+  // Use project-planner agent to create the plan based on answers
+  const planPrompt = `
+The user answered your questions for the project. Now create a detailed step-by-step plan.
+
+Project: ${project.name}
+Description: ${project.description}
+Type: ${project.type}
+
+Questions that were asked:
+${JSON.stringify(project.questions, null, 2)}
+
+User's answers: "${message}"
+
+Now create a detailed implementation plan. Output ONLY valid JSON in this format:
+{
+  "phase": "planning",
+  "projectName": "${project.name}",
+  "steps": [
+    { "stepNumber": 1, "description": "...", "type": "generate_file", "filename": "...", "requiresApproval": false },
+    ...
+  ]
+}
+
+Step types: generate_file, generate_image, execute, preview
+`;
+
+  let planResponse = '';
+  for await (const event of agents.executeAgentStream('project-planner', userId, planPrompt)) {
+    if (event.type === 'status') {
+      yield { type: 'status', status: event.status };
+    } else if (event.type === 'content') {
+      planResponse += event.content;
+    }
+  }
+
+  // Parse the plan
+  let plan: { steps: Array<{ stepNumber: number; description: string; type: string; filename?: string; requiresApproval: boolean }> } | null = null;
+  try {
+    // Extract JSON from response
+    const jsonMatch = planResponse.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      plan = JSON.parse(jsonMatch[0]);
+    }
+  } catch (err) {
+    logger.error('Failed to parse project plan', { error: (err as Error).message, response: planResponse.substring(0, 500) });
+  }
+
+  if (!plan || !plan.steps) {
+    const errorResponse = `I had trouble creating a plan for your project. Let me try a simpler approach.\n\nBased on your answers, I'll create a basic ${project.type} project. Would you like me to proceed with a standard structure?`;
+    yield { type: 'content', content: errorResponse };
+
+    const assistantMessage = await sessionService.addMessage({
+      sessionId,
+      role: 'assistant',
+      content: errorResponse,
+    });
+
+    yield {
+      type: 'done',
+      messageId: assistantMessage.id,
+      tokensUsed: 0,
+      metrics: {
+        promptTokens: 0,
+        completionTokens: 0,
+        processingTimeMs: Date.now() - startTime,
+        tokensPerSecond: 0,
+        toolsUsed: ['project-planner'],
+        model: 'claude-cli',
+      },
+    };
+    return;
+  }
+
+  // Save the plan to the project
+  await projectService.setProjectPlan(project.id, plan.steps.map(s => ({
+    stepNumber: s.stepNumber,
+    description: s.description,
+    stepType: s.type as projectService.StepType,
+    filename: s.filename,
+    requiresApproval: s.requiresApproval,
+    status: 'pending' as const,
+  })));
+
+  // Update project status
+  await projectService.updateProjectStatus(project.id, 'building');
+
+  // Show the plan to the user
+  let planDisplay = `Great! Here's my plan for **${project.name}**:\n\n`;
+  for (const step of plan.steps) {
+    const icon = step.type === 'generate_image' ? '🎨' : step.type === 'generate_file' ? '📄' : step.type === 'execute' ? '▶️' : step.type === 'preview' ? '👁️' : '☐';
+    planDisplay += `${icon} **Step ${step.stepNumber}:** ${step.description}\n`;
+  }
+  planDisplay += `\nReady to start building? Say "continue" to begin, or let me know if you'd like to modify the plan.`;
+
+  yield { type: 'content', content: planDisplay };
+
+  const assistantMessage = await sessionService.addMessage({
+    sessionId,
+    role: 'assistant',
+    content: planDisplay,
+  });
+
+  memoryService.processMessageMemory(userId, sessionId, assistantMessage.id, planDisplay, 'assistant');
+
+  yield {
+    type: 'done',
+    messageId: assistantMessage.id,
+    tokensUsed: 0,
+    metrics: {
+      promptTokens: 0,
+      completionTokens: 0,
+      processingTimeMs: Date.now() - startTime,
+      tokensPerSecond: 0,
+      toolsUsed: ['project-planner'],
+      model: 'claude-cli',
+    },
+  };
+}
+
+/**
+ * Execute project build steps
+ */
+async function* executeProjectBuild(
+  userId: string,
+  sessionId: string,
+  project: projectService.Project,
+  startTime: number
+): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action'; content?: string; status?: string; messageId?: string; tokensUsed?: number; metrics?: StreamMetrics; action?: string; url?: string }> {
+  // Refresh project to get latest state
+  const currentProject = await projectService.getProject(project.id);
+  if (!currentProject) {
+    yield { type: 'content', content: 'Error: Project not found.' };
+    return;
+  }
+
+  const steps = await projectService.getProjectSteps(project.id);
+  if (!steps || steps.length === 0) {
+    yield { type: 'content', content: 'No steps defined in the project plan. Please start over.' };
+    return;
+  }
+
+  let responseContent = `Starting to build **${currentProject.name}**...\n\n`;
+  yield { type: 'content', content: responseContent };
+
+  // Process each pending step
+  for (const step of steps) {
+    if (step.status === 'completed') continue;
+
+    // Check if project was paused
+    const updatedProject = await projectService.getProject(project.id);
+    if (updatedProject?.status === 'paused') {
+      responseContent += `\n⏸️ Project paused at step ${step.stepNumber}. Say "continue" when ready.`;
+      yield { type: 'content', content: `\n⏸️ Project paused at step ${step.stepNumber}. Say "continue" when ready.` };
+      break;
+    }
+
+    yield { type: 'status', status: `Step ${step.stepNumber}: ${step.description}` };
+    await projectService.updateStepStatus(project.id, step.stepNumber, 'active');
+
+    try {
+      if (step.stepType === 'generate_file') {
+        // Generate file content using project-generator agent
+        const generatePrompt = `
+Generate the file "${step.filename || 'file'}" for project "${currentProject.name}".
+Project type: ${currentProject.type}
+Project description: ${currentProject.description}
+Step description: ${step.description}
+
+User preferences from answers: ${JSON.stringify(currentProject.answers)}
+
+Generate ONLY the file content in this format:
+\`\`\`${step.filename?.split('.').pop() || 'txt'}:${step.filename || 'file.txt'}
+content here
+\`\`\`
+`;
+
+        let fileContent = '';
+        for await (const event of agents.executeAgentStream('project-generator', userId, generatePrompt)) {
+          if (event.type === 'content') {
+            fileContent += event.content;
+          }
+        }
+
+        // Extract and save file
+        const fileMatch = fileContent.match(/```\w+:([^\n]+)\n([\s\S]*?)```/);
+        if (fileMatch) {
+          const [, filename, content] = fileMatch;
+          await projectService.writeProjectFile(
+            project.id,
+            userId,
+            currentProject.name,
+            filename.trim(),
+            content.trim(),
+            filename.split('.').pop() || 'txt'
+          );
+          responseContent += `✅ Created ${filename}\n`;
+          yield { type: 'content', content: `✅ Created ${filename}\n` };
+        }
+
+        await projectService.updateStepStatus(project.id, step.stepNumber, 'completed', 'File generated successfully');
+
+      } else if (step.stepType === 'generate_image') {
+        // Generate image using image generation service
+        const imagePrompt = step.description.replace(/^generate\s+(image|picture)\s+(for|of)\s+/i, '');
+        const result = await imageGeneration.generateProjectImage(
+          userId,
+          projectService.getProjectDirectory(userId, currentProject.name),
+          imagePrompt,
+          step.filename
+        );
+
+        if (result.success) {
+          responseContent += `🎨 Generated image: ${step.filename || 'image.png'}\n`;
+          yield { type: 'content', content: `🎨 Generated image: ${step.filename || 'image.png'}\n` };
+          await projectService.updateStepStatus(project.id, step.stepNumber, 'completed', result.imageUrl);
+        } else {
+          responseContent += `⚠️ Image generation failed: ${result.error}\n`;
+          yield { type: 'content', content: `⚠️ Image generation failed: ${result.error}\n` };
+          await projectService.updateStepStatus(project.id, step.stepNumber, 'completed', undefined, result.error);
+        }
+
+      } else if (step.stepType === 'preview') {
+        // Generate preview using browser service
+        // TODO: Integrate with browser.service.ts to capture screenshot of projectDir/index.html
+        const projectDir = projectService.getProjectDirectory(userId, currentProject.name);
+
+        // For now, just note that preview is available
+        responseContent += `👁️ Preview ready at ${projectDir} - open the project files to view\n`;
+        yield { type: 'content', content: `👁️ Preview ready - open the project files to view\n` };
+        await projectService.updateStepStatus(project.id, step.stepNumber, 'completed', 'Preview available');
+      }
+
+    } catch (err) {
+      const errorMsg = (err as Error).message;
+      logger.error('Step execution failed', { projectId: project.id, stepNumber: step.stepNumber, error: errorMsg });
+      responseContent += `❌ Step ${step.stepNumber} failed: ${errorMsg}\n`;
+      yield { type: 'content', content: `❌ Step ${step.stepNumber} failed: ${errorMsg}\n` };
+      await projectService.updateStepStatus(project.id, step.stepNumber, 'pending', undefined, errorMsg);
+      break; // Stop on error
+    }
+  }
+
+  // Check if all steps completed
+  const finalSteps = await projectService.getProjectSteps(project.id);
+  const allComplete = finalSteps.every(s => s.status === 'completed');
+
+  if (allComplete) {
+    await projectService.updateProjectStatus(project.id, 'complete');
+    responseContent += `\n🎉 Project "${currentProject.name}" is complete! You can find the files in your workspace.`;
+    yield { type: 'content', content: `\n🎉 Project "${currentProject.name}" is complete! You can find the files in your workspace.` };
+  }
+
+  const assistantMessage = await sessionService.addMessage({
+    sessionId,
+    role: 'assistant',
+    content: responseContent,
+  });
+
+  memoryService.processMessageMemory(userId, sessionId, assistantMessage.id, responseContent, 'assistant');
+
+  yield {
+    type: 'done',
+    messageId: assistantMessage.id,
+    tokensUsed: 0,
+    metrics: {
+      promptTokens: 0,
+      completionTokens: 0,
+      processingTimeMs: Date.now() - startTime,
+      tokensPerSecond: 0,
+      toolsUsed: ['project-build'],
+      model: 'claude-cli',
+    },
+  };
+}
+
+/**
+ * Handle new project creation request
+ */
+async function* handleProjectCreation(
+  userId: string,
+  sessionId: string,
+  message: string,
+  startTime: number
+): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action'; content?: string; status?: string; messageId?: string; tokensUsed?: number; metrics?: StreamMetrics; action?: string; url?: string }> {
+  // Use project-planner agent to analyze the request and generate questions
+  const analysisPrompt = `
+The user wants to create a project. Analyze their request and generate 3-5 clarifying questions.
+
+User's request: "${message}"
+
+Output ONLY valid JSON in this format:
+{
+  "phase": "questioning",
+  "projectName": "suggested-project-name",
+  "description": "brief description of what the user wants",
+  "type": "web|fullstack|python|node",
+  "questions": [
+    { "id": 1, "question": "What visual style do you prefer?", "category": "style", "required": true },
+    { "id": 2, "question": "Which sections do you need?", "category": "features", "required": true },
+    ...
+  ]
+}
+
+Questions should cover: visual style, specific features, content requirements, any special functionality.
+`;
+
+  let analysisResponse = '';
+  for await (const event of agents.executeAgentStream('project-planner', userId, analysisPrompt)) {
+    if (event.type === 'status') {
+      yield { type: 'status', status: event.status };
+    } else if (event.type === 'content') {
+      analysisResponse += event.content;
+    }
+  }
+
+  // Parse the analysis
+  let analysis: {
+    projectName: string;
+    description: string;
+    type: 'web' | 'fullstack' | 'python' | 'node';
+    questions: Array<{ id: number; question: string; category: string; required: boolean }>;
+  } | null = null;
+
+  try {
+    const jsonMatch = analysisResponse.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      analysis = JSON.parse(jsonMatch[0]);
+    }
+  } catch (err) {
+    logger.error('Failed to parse project analysis', { error: (err as Error).message });
+  }
+
+  if (!analysis || !analysis.questions || analysis.questions.length === 0) {
+    // Fallback: ask generic questions
+    analysis = {
+      projectName: 'new-project',
+      description: message,
+      type: 'web',
+      questions: [
+        { id: 1, question: 'What visual style would you like? (e.g., modern, minimal, colorful, professional)', category: 'style', required: true },
+        { id: 2, question: 'What main sections or features do you need?', category: 'features', required: true },
+        { id: 3, question: 'Should I generate placeholder images or will you provide your own?', category: 'content', required: true },
+      ],
+    };
+  }
+
+  // Create the project in the database
+  const project = await projectService.createProject(
+    userId,
+    sessionId,
+    analysis.projectName,
+    analysis.description,
+    analysis.type
+  );
+
+  // Save the questions
+  await projectService.setProjectQuestions(project.id, analysis.questions.map(q => ({
+    id: q.id.toString(),
+    question: q.question,
+    type: 'text' as const,
+    category: q.category,
+    required: q.required,
+  })));
+
+  // Update status to questioning
+  await projectService.updateProjectStatus(project.id, 'questioning');
+
+  // Format questions for display
+  let responseContent = `I'd love to help you create **${analysis.projectName}**! Before I start, let me ask a few questions:\n\n`;
+  for (const q of analysis.questions) {
+    responseContent += `${q.id}. ${q.question}\n`;
+  }
+  responseContent += `\nPlease answer these questions so I can create exactly what you're looking for.`;
+
+  yield { type: 'content', content: responseContent };
+
+  const assistantMessage = await sessionService.addMessage({
+    sessionId,
+    role: 'assistant',
+    content: responseContent,
+  });
+
+  memoryService.processMessageMemory(userId, sessionId, assistantMessage.id, responseContent, 'assistant');
+
+  yield {
+    type: 'done',
+    messageId: assistantMessage.id,
+    tokensUsed: 0,
+    metrics: {
+      promptTokens: 0,
+      completionTokens: 0,
+      processingTimeMs: Date.now() - startTime,
+      tokensPerSecond: 0,
+      toolsUsed: ['project-planner'],
+      model: 'claude-cli',
+    },
+  };
+}
+
+// ==================== END PROJECT HANDLING ====================
 
 export interface StreamMetrics {
   promptTokens: number;
@@ -618,8 +1773,8 @@ export interface StreamMetrics {
 
 export async function* streamMessage(
   input: ChatInput
-): AsyncGenerator<{ type: 'content' | 'done' | 'status'; content?: string; status?: string; messageId?: string; tokensUsed?: number; metrics?: StreamMetrics }> {
-  const { sessionId, userId, message, mode } = input;
+): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action'; content?: string; status?: string; messageId?: string; tokensUsed?: number; metrics?: StreamMetrics; action?: string; url?: string }> {
+  const { sessionId, userId, message, mode, source = 'web' } = input;
   const startTime = Date.now();
   const toolsUsed: string[] = [];
 
@@ -631,6 +1786,76 @@ export async function* streamMessage(
     yield { type: 'status', status: 'Loading context...' };
   }
 
+  // PROJECT HANDLING: Check if user has an active project and route accordingly
+  const activeProject = await projectService.getActiveProject(userId);
+  if (activeProject && !isSmallTalkMessage) {
+    // Check if this is a steering message for the active project
+    if (projectService.isSteeringMessage(message)) {
+      logger.info('Detected steering message for active project', {
+        projectId: activeProject.id,
+        projectName: activeProject.name,
+        message: message.substring(0, 100),
+      });
+
+      // Save user message
+      const userMessage = await sessionService.addMessage({
+        sessionId,
+        role: 'user',
+        content: message,
+        source,
+      });
+      memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user');
+
+      // Handle steering based on project status
+      yield { type: 'status', status: `Processing steering for ${activeProject.name}...` };
+
+      // Route steering to appropriate handler
+      yield* handleProjectSteering(userId, sessionId, activeProject, message, startTime);
+      return;
+    }
+
+    // Check if project is waiting for input (questions answered)
+    if (activeProject.status === 'questioning') {
+      logger.info('Project is waiting for question answers', {
+        projectId: activeProject.id,
+        questionsCount: activeProject.questions?.length || 0,
+      });
+
+      // Save user message
+      const userMessage = await sessionService.addMessage({
+        sessionId,
+        role: 'user',
+        content: message,
+        source,
+      });
+      memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user');
+
+      // Handle as answer to project questions
+      yield { type: 'status', status: 'Processing your answers...' };
+      yield* handleProjectQuestionResponse(userId, sessionId, activeProject, message, startTime);
+      return;
+    }
+  }
+
+  // PROJECT CREATION: Check if user wants to start a new project
+  if (!isSmallTalkMessage && projectService.isProjectCreationIntent(message)) {
+    logger.info('Detected project creation intent', { message: message.substring(0, 100) });
+
+    // Save user message
+    const userMessage = await sessionService.addMessage({
+      sessionId,
+      role: 'user',
+      content: message,
+      source,
+    });
+    memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user');
+
+    // Start project creation flow
+    yield { type: 'status', status: 'Planning your project...' };
+    yield* handleProjectCreation(userId, sessionId, message, startTime);
+    return;
+  }
+
   // Check if this task needs multi-agent orchestration (never for smalltalk)
   if (!isSmallTalkMessage && agents.needsOrchestration(message)) {
     logger.info('Detected orchestration-worthy task', { message: message.substring(0, 100) });
@@ -640,6 +1865,7 @@ export async function* streamMessage(
       sessionId,
       role: 'user',
       content: message,
+      source,
     });
 
     // Store user message embedding (async)
@@ -780,17 +2006,17 @@ export async function* streamMessage(
   const [
     modelConfig,
     user,
-    history,
+    rawHistory,
     memoryContext,
     abilityContext,
     prefGuidelines,
   ] = await Promise.all([
-    // Get user's model configuration for main chat
-    getUserModelConfig(userId, 'main_chat'),
+    // Get user's model configuration - use fast model for smalltalk
+    getUserModelConfig(userId, isSmallTalkMessage ? 'smalltalk' : 'main_chat'),
     // Get user profile for personalization
     authService.getUserById(userId),
-    // Get conversation history
-    sessionService.getSessionMessages(sessionId, { limit: 20 }),
+    // Get conversation history (higher limit for compression to work with)
+    sessionService.getSessionMessages(sessionId, { limit: 50 }),
     // Build memory context - skip for pure smalltalk
     isSmallTalkMessage ? Promise.resolve({ facts: '', relevantHistory: '', conversationContext: '', learnings: '' }) : memoryService.buildMemoryContext(userId, message, sessionId),
     // Build ability context - uses contextOptions for selective loading
@@ -798,6 +2024,14 @@ export async function* streamMessage(
     // Get personalization preferences - lightweight, always load
     preferencesService.getResponseGuidelines(userId),
   ]);
+
+  // Build compressed context from history
+  const compressedCtx = await contextCompression.buildCompressedContext(
+    sessionId,
+    userId,
+    message,
+    rawHistory
+  );
 
   if (!isSmallTalkMessage) {
     yield { type: 'status', status: 'Recalling memories...' };
@@ -827,18 +2061,60 @@ export async function* streamMessage(
 
   yield { type: 'status', status: 'Thinking...' };
 
+  // Load MCP tools dynamically for this user (before building system prompt)
+  const mcpUserTools = await mcpService.getAllUserTools(userId);
+
+  // Session log: On first message, get recent sessions for context and create new log
+  let sessionHistoryContext = '';
+  if (rawHistory.length === 0) {
+    // Get recent session logs for context continuity
+    const recentLogs = await sessionLogService.getRecentSessionLogs(userId, 3);
+    sessionHistoryContext = sessionLogService.formatLogsForContext(recentLogs);
+
+    // Create new session log entry (async, don't block)
+    sessionLogService.createSessionLog(userId, sessionId, mode).catch(() => {});
+  }
+
   // Combine all context
   const fullContext = [memoryPrompt, abilityPrompt, prefPrompt, abilityActionResult].filter(Boolean).join('\n\n');
 
-  // Build messages array
+  // Build messages array with MCP tool info and compressed context
+  const mcpToolsForPrompt = mcpUserTools.map(t => ({
+    name: t.name,
+    serverName: t.serverName,
+    description: t.description,
+  }));
   const messages: ChatMessage[] = [
-    { role: 'system', content: buildContextualPrompt(mode, { userName, memoryContext: fullContext }) },
+    {
+      role: 'system',
+      content: buildContextualPrompt(mode, {
+        userName,
+        memoryContext: fullContext,
+        sessionHistory: sessionHistoryContext,
+        conversationSummary: compressedCtx.systemPrefix,
+        mcpTools: mcpToolsForPrompt,
+        source,
+      }),
+    },
   ];
 
-  for (const msg of history) {
-    messages.push({ role: msg.role, content: msg.content });
+  // Add semantically relevant older messages first (marked as earlier context)
+  for (const relevant of compressedCtx.relevantMessages) {
+    messages.push({
+      role: relevant.role as 'user' | 'assistant',
+      content: `[Earlier context] ${contextCompression.compressMessage({ content: relevant.content, role: relevant.role } as Message)}`,
+    });
   }
 
+  // Add recent messages (truncated for efficiency)
+  for (const msg of compressedCtx.recentMessages) {
+    messages.push({
+      role: msg.role,
+      content: contextCompression.compressMessage(msg),
+    });
+  }
+
+  // Add current message (full, not compressed)
   messages.push({ role: 'user', content: message });
 
   // Save user message
@@ -846,6 +2122,7 @@ export async function* streamMessage(
     sessionId,
     role: 'user',
     content: message,
+    source,
   });
 
   // Store user message embedding (async)
@@ -853,10 +2130,8 @@ export async function* streamMessage(
 
   // TOOL GATING: For smalltalk, don't expose tools at all to prevent eager tool calling
   // For other messages, provide relevant tools
-  // Load MCP tools dynamically for this user
-  const mcpUserTools = await mcpService.getAllUserTools(userId);
   const mcpToolsForLLM = mcpService.formatMcpToolsForLLM(mcpUserTools.map(t => ({ ...t, serverId: t.serverId })));
-  const allTools = [searchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, searchDocumentsTool, suggestGoalTool, fetchUrlTool, listTodosTool, createTodoTool, completeTodoTool, updateTodoTool, ...sysmonTools, ...mcpToolsForLLM];
+  const allTools = [searchTool, youtubeSearchTool, browserVisualSearchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, readEmailTool, deleteEmailTool, replyEmailTool, markEmailReadTool, sendTelegramTool, searchDocumentsTool, suggestGoalTool, fetchUrlTool, listTodosTool, createTodoTool, completeTodoTool, updateTodoTool, sessionNoteTool, createReminderTool, listRemindersTool, cancelReminderTool, browserNavigateTool, browserScreenshotTool, browserClickTool, browserFillTool, browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool, generateImageTool, ...sysmonTools, ...mcpToolsForLLM];
   const availableTools = isSmallTalkMessage ? [] : allTools;
   let searchResults: SearchResult[] | undefined;
 
@@ -908,6 +2183,44 @@ export async function* streamMessage(
           role: 'tool',
           tool_call_id: toolCall.id,
           content: searchContext,
+        } as ChatMessage);
+      } else if (toolCall.function.name === 'youtube_search') {
+        const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'status', status: `Searching YouTube: ${args.query}` };
+        logger.info('YouTube search executing (stream)', { query: args.query, limit: args.limit });
+
+        const results = await youtube.searchYouTube(args.query, args.limit || 3);
+
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: youtube.formatYouTubeForPrompt(results),
+        } as ChatMessage);
+      } else if (toolCall.function.name === 'browser_visual_search') {
+        const args = JSON.parse(toolCall.function.arguments);
+        const searchEngine = args.searchEngine || 'google_news';
+        const searchUrl = browserScreencast.getSearchUrl(args.query, searchEngine);
+        logger.info('Browser visual search (stream)', { query: args.query, searchEngine, searchUrl });
+
+        yield { type: 'status', status: `Opening browser to search: ${args.query}` };
+
+        // Signal frontend to open browser window
+        yield { type: 'browser_action', action: 'open', url: searchUrl };
+
+        // Store pending URL for frontend to consume when browser window opens
+        browserScreencast.setPendingVisualBrowse(userId, searchUrl);
+
+        // Also do a text search to get content for the LLM to summarize
+        yield { type: 'status', status: 'Fetching search results...' };
+        const searchResults = await searxng.search(args.query);
+        const searchContext = searchResults && searchResults.length > 0
+          ? formatSearchResultsForContext(searchResults)
+          : 'No search results found.';
+
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: `Browser opened to ${searchUrl} for visual browsing.\n\nSearch results for context:\n${searchContext}`,
         } as ChatMessage);
       } else if (toolCall.function.name === 'delegate_to_agent') {
         const args = JSON.parse(toolCall.function.arguments);
@@ -1030,6 +2343,37 @@ export async function* streamMessage(
             tool_call_id: toolCall.id,
             content: 'No emails found in inbox.',
           } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'send_telegram') {
+        const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'status', status: 'Sending to Telegram...' };
+        logger.info('Luna sending Telegram message', { userId });
+
+        const connection = await telegramService.getTelegramConnection(userId);
+
+        if (!connection || !connection.isActive) {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: 'Telegram is not connected for this user. Ask them to link their Telegram account in Settings.',
+          } as ChatMessage);
+        } else {
+          try {
+            await telegramService.sendTelegramMessage(connection.chatId, args.message, {
+              parseMode: 'Markdown',
+            });
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: 'Message sent successfully to Telegram.',
+            } as ChatMessage);
+          } catch (error) {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Failed to send Telegram message: ${(error as Error).message}`,
+            } as ChatMessage);
+          }
         }
       } else if (toolCall.function.name === 'search_documents') {
         const args = JSON.parse(toolCall.function.arguments);
@@ -1218,6 +2562,344 @@ export async function* streamMessage(
             content: 'Could not find a matching todo. Use list_todos to see available todos.',
           } as ChatMessage);
         }
+      } else if (toolCall.function.name === 'session_note') {
+        // Session note tool - appends notes to session log for future reference
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Luna adding session note', { sessionId, note: args.note });
+        await sessionLogService.appendToSummary(sessionId, args.note);
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: 'Note saved. It will appear in future session greetings.',
+        } as ChatMessage);
+      } else if (toolCall.function.name === 'create_reminder') {
+        // Quick reminder tool
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Luna creating reminder', { sessionId, userId, message: args.message, delayMinutes: args.delay_minutes });
+        try {
+          const reminder = await reminderService.createReminder(userId, args.message, args.delay_minutes);
+          const remindAt = reminder.remindAt.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Reminder set! I'll notify you via Telegram at ${remindAt} about: "${args.message}"`,
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Failed to create reminder', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to create reminder: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'list_reminders') {
+        // List reminders tool
+        logger.info('Luna listing reminders', { sessionId, userId });
+        try {
+          const reminders = await reminderService.listReminders(userId);
+          if (reminders.length === 0) {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: 'No pending reminders.',
+            } as ChatMessage);
+          } else {
+            const list = reminders.map(r => {
+              const time = r.remindAt.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+              return `- [${r.id.slice(0, 8)}] at ${time}: "${r.message}"`;
+            }).join('\n');
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Pending reminders:\n${list}`,
+            } as ChatMessage);
+          }
+        } catch (error) {
+          logger.error('Failed to list reminders', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to list reminders: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'cancel_reminder') {
+        // Cancel reminder tool
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Luna cancelling reminder', { sessionId, userId, reminderId: args.reminder_id });
+        try {
+          const cancelled = await reminderService.cancelReminder(userId, args.reminder_id);
+          if (cancelled) {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: 'Reminder cancelled.',
+            } as ChatMessage);
+          } else {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: 'Reminder not found or already delivered.',
+            } as ChatMessage);
+          }
+        } catch (error) {
+          logger.error('Failed to cancel reminder', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to cancel reminder: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'browser_navigate') {
+        // Browser navigate tool
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Browser navigate', { userId, url: args.url });
+        try {
+          const result = await browser.navigate(userId, args.url, {
+            waitUntil: args.waitUntil || 'domcontentloaded',
+          });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: browser.formatBrowserResultForPrompt(result),
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Browser navigate failed', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Browser error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'browser_screenshot') {
+        // Browser screenshot tool - takes screenshot and saves to disk for display
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Browser screenshot', { userId, url: args.url, fullPage: args.fullPage });
+        try {
+          const result = await browser.screenshot(userId, args.url, {
+            fullPage: args.fullPage,
+            selector: args.selector,
+          });
+
+          // If screenshot was captured, save it to disk and format for display
+          if (result.success && result.screenshot) {
+            const saveResult = await imageGeneration.saveScreenshot(
+              userId,
+              result.screenshot,
+              result.pageUrl || args.url
+            );
+
+            if (saveResult.success && saveResult.imageUrl) {
+              const caption = `Screenshot of ${result.pageTitle || result.pageUrl || args.url}`;
+              const imageBlock = imageGeneration.formatImageForChat(saveResult.imageUrl, caption);
+              messages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: `Screenshot captured successfully.\n\n${imageBlock}\n\nPage: ${result.pageUrl || args.url}\nTitle: ${result.pageTitle || 'N/A'}`,
+              } as ChatMessage);
+            } else {
+              // Save failed - don't claim we have a displayable image
+              logger.warn('Screenshot save failed', { userId, url: args.url, error: saveResult.error });
+              messages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: `Screenshot was captured but could not be saved for display.\nPage visited: ${result.pageUrl || args.url}\nTitle: ${result.pageTitle || 'N/A'}`,
+              } as ChatMessage);
+            }
+          } else {
+            // Screenshot capture failed
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Screenshot failed: ${result.error || 'Unknown error'}\nPage: ${result.pageUrl || args.url}`,
+            } as ChatMessage);
+          }
+        } catch (error) {
+          logger.error('Browser screenshot failed', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Browser error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'browser_click') {
+        // Browser click tool
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Browser click', { userId, url: args.url, selector: args.selector });
+        try {
+          const result = await browser.click(userId, args.url, args.selector);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: browser.formatBrowserResultForPrompt(result),
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Browser click failed', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Browser error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'browser_fill') {
+        // Browser fill tool
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Browser fill', { userId, url: args.url, selector: args.selector });
+        try {
+          const result = await browser.fill(userId, args.url, args.selector, args.value);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: browser.formatBrowserResultForPrompt(result),
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Browser fill failed', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Browser error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'browser_extract') {
+        // Browser extract tool
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Browser extract', { userId, url: args.url, selector: args.selector });
+        try {
+          const result = args.selector
+            ? await browser.extractElements(userId, args.url, args.selector, args.limit)
+            : await browser.getContent(userId, args.url);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: browser.formatBrowserResultForPrompt(result),
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Browser extract failed', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Browser error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'browser_wait') {
+        // Browser wait tool
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Browser wait', { userId, url: args.url, selector: args.selector });
+        try {
+          const result = await browser.waitFor(userId, args.url, args.selector, args.timeout);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: browser.formatBrowserResultForPrompt(result),
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Browser wait failed', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Browser error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'browser_close') {
+        // Browser close tool
+        logger.info('Browser close', { userId });
+        try {
+          const result = await browser.closeBrowser(userId);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: browser.formatBrowserResultForPrompt(result),
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Browser close failed', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Browser error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'browser_render_html') {
+        // Browser render HTML tool - renders HTML content and takes screenshot
+        const args = JSON.parse(toolCall.function.arguments);
+        // Decode HTML entities in case LLM encoded them
+        const htmlContent = decodeHtmlEntities(args.html);
+        const pageTitle = args.title || 'Luna HTML Page';
+        logger.info('Browser render HTML', { userId, htmlLength: htmlContent.length, title: pageTitle });
+        yield { type: 'status', status: 'Rendering HTML page...' };
+        try {
+          const result = await browser.renderHtml(userId, htmlContent);
+
+          // If screenshot was captured, save it to disk and format for display
+          if (result.success && result.screenshot) {
+            const saveResult = await imageGeneration.saveScreenshot(
+              userId,
+              result.screenshot,
+              'rendered-html'
+            );
+
+            if (saveResult.success && saveResult.imageUrl) {
+              const caption = pageTitle;
+              const imageBlock = imageGeneration.formatImageForChat(saveResult.imageUrl, caption);
+              messages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: `HTML page rendered successfully.\n\n${imageBlock}\n\nTitle: ${pageTitle}`,
+              } as ChatMessage);
+            } else {
+              // Save failed
+              logger.warn('HTML render save failed', { userId, error: saveResult.error });
+              messages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: `HTML was rendered but the screenshot could not be saved for display.`,
+              } as ChatMessage);
+            }
+          } else {
+            // Render failed
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `HTML render failed: ${result.error || 'Unknown error'}`,
+            } as ChatMessage);
+          }
+        } catch (error) {
+          logger.error('Browser render HTML failed', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Browser error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'generate_image') {
+        // Image generation tool
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Generate image', { userId, promptLength: args.prompt?.length });
+        try {
+          const result = await imageGeneration.generateImage(userId, args.prompt);
+          if (result.success && result.imageUrl) {
+            const imageBlock = imageGeneration.formatImageForChat(
+              result.imageUrl,
+              `Generated image: ${args.prompt.substring(0, 100)}${args.prompt.length > 100 ? '...' : ''}`
+            );
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Image generated successfully.\n\n${imageBlock}`,
+            } as ChatMessage);
+          } else {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Failed to generate image: ${result.error || 'Unknown error'}`,
+            } as ChatMessage);
+          }
+        } catch (error) {
+          logger.error('Image generation failed', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Image generation error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
       } else if (toolCall.function.name.startsWith('system_') ||
                  toolCall.function.name.startsWith('network_') ||
                  toolCall.function.name.startsWith('process_') ||
@@ -1364,6 +3046,27 @@ export async function* streamMessage(
             tool_call_id: toolCall.id,
             content: results && results.length > 0 ? formatSearchResultsForContext(results) : 'No search results found.',
           } as ChatMessage);
+        } else if (toolCall.function.name === 'browser_visual_search') {
+          const args = JSON.parse(toolCall.function.arguments);
+          const searchEngine = args.searchEngine || 'google_news';
+          const searchUrl = browserScreencast.getSearchUrl(args.query, searchEngine);
+          logger.info('Browser visual search (follow-up)', { query: args.query, searchEngine, searchUrl });
+
+          yield { type: 'status', status: `Opening browser to search: ${args.query}` };
+          yield { type: 'browser_action', action: 'open', url: searchUrl };
+
+          browserScreencast.setPendingVisualBrowse(userId, searchUrl);
+
+          const searchResults = await searxng.search(args.query);
+          const searchContext = searchResults && searchResults.length > 0
+            ? formatSearchResultsForContext(searchResults)
+            : 'No search results found.';
+
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Browser opened to ${searchUrl} for visual browsing.\n\nSearch results for context:\n${searchContext}`,
+          } as ChatMessage);
         } else if (toolCall.function.name === 'send_email') {
           const args = JSON.parse(toolCall.function.arguments);
           yield { type: 'status', status: `Sending email to ${args.to}...` };
@@ -1493,27 +3196,36 @@ export async function* streamMessage(
     role: 'assistant',
     content: fullContent,
     tokensUsed,
+    inputTokens: promptTokens,
+    outputTokens: completionTokens,
+    cacheTokens: 0, // OpenAI-compatible providers don't have cache tokens
     model: modelConfig.model,
+    provider: modelConfig.provider,
   });
 
   // Store assistant message embedding (async)
   memoryService.processMessageMemory(userId, sessionId, assistantMessage.id, fullContent, 'assistant');
 
   // Process facts from conversation (async, every few messages)
-  const totalMessages = history.length + 2;
+  const totalMessages = rawHistory.length + 2;
   if (totalMessages % 4 === 0) {
     const allMessages = [
-      ...history.map(m => ({ id: m.id, role: m.role, content: m.content })),
+      ...rawHistory.map(m => ({ id: m.id, role: m.role, content: m.content })),
       { id: userMessage.id, role: 'user', content: message },
       { id: assistantMessage.id, role: 'assistant', content: fullContent },
     ];
     memoryService.processConversationMemory(userId, sessionId, allMessages).catch(() => {});
     // Also learn preferences from conversation
     preferencesService.learnFromConversation(userId, sessionId, allMessages).catch(() => {});
+
+    // Trigger rolling summary update if conversation is long enough
+    if (totalMessages > 10) {
+      contextCompression.updateRollingSummary(sessionId, userId).catch(() => {});
+    }
   }
 
   // Update session title if first message
-  if (history.length === 0) {
+  if (rawHistory.length === 0) {
     const title = await sessionService.generateSessionTitle([
       { role: 'user', content: message } as Message,
     ]);

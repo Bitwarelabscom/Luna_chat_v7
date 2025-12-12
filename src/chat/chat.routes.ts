@@ -169,8 +169,14 @@ router.post('/sessions/:id/startup', async (req: Request, res: Response) => {
       return;
     }
 
-    // Generate startup message
+    // Generate startup message (returns null for assistant mode)
     const result = await startupService.generateStartupMessage(userId, sessionId, session.mode);
+
+    if (result === null) {
+      // Assistant mode: no startup message
+      res.json({ message: null, suggestions: [] });
+      return;
+    }
 
     res.json(result);
   } catch (error) {
@@ -209,6 +215,8 @@ router.post('/sessions/:id/send', rateLimit, async (req: Request, res: Response)
           res.write(`data: ${JSON.stringify({ type: 'status', status: chunk.status })}\n\n`);
         } else if (chunk.type === 'content') {
           res.write(`data: ${JSON.stringify({ type: 'content', content: chunk.content })}\n\n`);
+        } else if (chunk.type === 'browser_action') {
+          res.write(`data: ${JSON.stringify({ type: 'browser_action', action: chunk.action, url: chunk.url })}\n\n`);
         } else if (chunk.type === 'done') {
           res.write(`data: ${JSON.stringify({
             type: 'done',
@@ -437,6 +445,8 @@ router.post('/sessions/:sessionId/messages/:messageId/regenerate', rateLimit, as
         res.write(`data: ${JSON.stringify({ type: 'status', status: chunk.status })}\n\n`);
       } else if (chunk.type === 'content') {
         res.write(`data: ${JSON.stringify({ type: 'content', content: chunk.content })}\n\n`);
+      } else if (chunk.type === 'browser_action') {
+        res.write(`data: ${JSON.stringify({ type: 'browser_action', action: chunk.action, url: chunk.url })}\n\n`);
       } else if (chunk.type === 'done') {
         res.write(`data: ${JSON.stringify({
           type: 'done',

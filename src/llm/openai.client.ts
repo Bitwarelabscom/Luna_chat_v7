@@ -236,24 +236,82 @@ export const searchTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   },
 };
 
+export const browserVisualSearchTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'browser_visual_search',
+    description: 'Search the web visually by opening the browser window for the user to watch in real-time. Use this for news, current events, or when the user wants to see you browsing. The browser window will open and show live navigation.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'The search query to look up',
+        },
+        searchEngine: {
+          type: 'string',
+          enum: ['google', 'google_news', 'bing'],
+          description: 'Which search engine to use. Default is google_news for news queries.',
+        },
+      },
+      required: ['query'],
+    },
+  },
+};
+
+export const youtubeSearchTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'youtube_search',
+    description: 'Search YouTube for videos. ALWAYS use this tool when the user mentions videos, YouTube, watching, or playing video content. Examples: "play me a video", "find a video about...", "show me a YouTube video", "search YouTube for...", "I want to watch...", "play something". This tool works and should be used for any video-related request.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'The search query for YouTube videos',
+        },
+        limit: {
+          type: 'number',
+          description: 'Number of results to return (default: 3, max: 5)',
+        },
+      },
+      required: ['query'],
+    },
+  },
+};
+
 export const delegateToAgentTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: 'function',
   function: {
     name: 'delegate_to_agent',
     description: `Delegate a specialized task to an expert agent. Available agents:
 - researcher: Deep research, information gathering, fact-finding
-- coder: Code writing, debugging, code explanation, programming help (can save scripts to workspace)
+- coder-claude: SENIOR ENGINEER - Use for HIGH COMPLEXITY: architecture, refactoring, debugging hard errors, security-critical code
+- coder-gemini: RAPID PROTOTYPER - Use for HIGH VOLUME/SPEED: simple scripts, unit tests, log analysis, code explanations, boilerplate
 - writer: Creative writing, professional writing, editing, content creation
 - analyst: Data analysis, calculations, statistics, insights
 - planner: Task breakdown, project planning, organizing complex goals
 
-Use this when a task requires specialized expertise that would benefit from focused attention.`,
+CODING AGENT DECISION MATRIX:
+| Task | Agent |
+|------|-------|
+| "Refactor the auth system" | coder-claude |
+| "Debug this race condition" | coder-claude |
+| "Review for security issues" | coder-claude |
+| "Analyze this error log" | coder-gemini |
+| "Write unit tests" | coder-gemini |
+| "Create a simple utility script" | coder-gemini |
+| "Explain what this code does" | coder-gemini |
+
+Default: coder-claude for production code, coder-gemini for tests/scripts/docs.
+The coding agents can execute code, create files/folders in the workspace, and persist work across sessions.`,
     parameters: {
       type: 'object',
       properties: {
         agent: {
           type: 'string',
-          enum: ['researcher', 'coder', 'writer', 'analyst', 'planner'],
+          enum: ['researcher', 'coder-claude', 'coder-gemini', 'writer', 'analyst', 'planner'],
           description: 'The specialist agent to delegate to',
         },
         task: {
@@ -387,6 +445,104 @@ export const checkEmailTool: OpenAI.Chat.Completions.ChatCompletionTool = {
         },
       },
       required: [],
+    },
+  },
+};
+
+export const readEmailTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'read_email',
+    description: `Read the full content of a specific email by its UID. Use when the user wants to see the full details of an email, or when you need to read an email before replying.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        uid: {
+          type: 'number',
+          description: 'The UID of the email to read (obtained from check_email results)',
+        },
+      },
+      required: ['uid'],
+    },
+  },
+};
+
+export const deleteEmailTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'delete_email',
+    description: `Delete an email by its UID. IMPORTANT: Always confirm with the user before deleting. This action is permanent and cannot be undone.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        uid: {
+          type: 'number',
+          description: 'The UID of the email to delete',
+        },
+      },
+      required: ['uid'],
+    },
+  },
+};
+
+export const replyEmailTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'reply_email',
+    description: `Reply to an email. This will compose and send a reply with proper email threading. Use when the user asks you to respond to or reply to an email. Always confirm the reply content with the user before sending.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        uid: {
+          type: 'number',
+          description: 'The UID of the email to reply to',
+        },
+        body: {
+          type: 'string',
+          description: 'The reply message content. Compose a helpful, professional reply as Luna.',
+        },
+      },
+      required: ['uid', 'body'],
+    },
+  },
+};
+
+export const markEmailReadTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'mark_email_read',
+    description: `Mark an email as read or unread. Use when the user wants to change the read status of an email.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        uid: {
+          type: 'number',
+          description: 'The UID of the email to update',
+        },
+        isRead: {
+          type: 'boolean',
+          description: 'Set to true to mark as read, false to mark as unread',
+        },
+      },
+      required: ['uid', 'isRead'],
+    },
+  },
+};
+
+export const sendTelegramTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'send_telegram',
+    description: `Send a message to the user via Telegram. Use this when you want to send them a reminder, follow-up, or important information to their phone. Only works if the user has Telegram connected.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        message: {
+          type: 'string',
+          description: 'The message to send via Telegram',
+        },
+      },
+      required: ['message'],
     },
   },
 };
@@ -570,6 +726,280 @@ export const updateTodoTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   },
 };
 
+export const sessionNoteTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'session_note',
+    description: 'Add a note about this session for future reference. Use to record important context like user mood, key topics discussed, action items, or anything you want to remember for the next session. Notes appear in startup greetings.',
+    parameters: {
+      type: 'object',
+      properties: {
+        note: {
+          type: 'string',
+          description: 'Brief note about the session (max 200 characters). Examples: "User feeling stressed about work", "Discussed vacation plans", "Follow up on project deadline"',
+        },
+      },
+      required: ['note'],
+    },
+  },
+};
+
+export const createReminderTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'create_reminder',
+    description: 'Set a quick reminder to notify the user via Telegram after a specified time. Use when user says things like "remind me in X minutes about Y" or "set a reminder for...".',
+    parameters: {
+      type: 'object',
+      properties: {
+        message: {
+          type: 'string',
+          description: 'What to remind about (the reminder message)',
+        },
+        delay_minutes: {
+          type: 'number',
+          description: 'Number of minutes from now to send the reminder',
+        },
+      },
+      required: ['message', 'delay_minutes'],
+    },
+  },
+};
+
+export const listRemindersTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'list_reminders',
+    description: 'List all pending reminders for the user. Use when user asks "what reminders do I have?" or wants to see their upcoming reminders.',
+    parameters: {
+      type: 'object',
+      properties: {},
+    },
+  },
+};
+
+export const cancelReminderTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'cancel_reminder',
+    description: 'Cancel a pending reminder by its ID. Use when user wants to cancel or remove a reminder.',
+    parameters: {
+      type: 'object',
+      properties: {
+        reminder_id: {
+          type: 'string',
+          description: 'The ID of the reminder to cancel',
+        },
+      },
+      required: ['reminder_id'],
+    },
+  },
+};
+
+// Browser automation tools
+export const browserNavigateTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'browser_navigate',
+    description: `Navigate a browser to a URL. Use this when you need to visit a webpage for interactive browsing, form filling, or when fetch_url doesn't work (JavaScript-heavy sites, SPAs). Returns page title and URL on success.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'The full URL to navigate to (must start with http:// or https://)',
+        },
+        waitUntil: {
+          type: 'string',
+          enum: ['load', 'domcontentloaded', 'networkidle'],
+          description: 'When to consider navigation complete. Default: domcontentloaded',
+        },
+      },
+      required: ['url'],
+    },
+  },
+};
+
+export const browserScreenshotTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'browser_screenshot',
+    description: `Take a screenshot of a webpage. Use for visual analysis, debugging, or when you need to see what the page looks like. Returns a base64-encoded image.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'The URL to navigate to and screenshot',
+        },
+        fullPage: {
+          type: 'boolean',
+          description: 'If true, capture the entire scrollable page. Default: false (viewport only)',
+        },
+        selector: {
+          type: 'string',
+          description: 'CSS selector to screenshot a specific element instead of the page',
+        },
+      },
+      required: ['url'],
+    },
+  },
+};
+
+export const browserClickTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'browser_click',
+    description: `Click an element on a webpage by CSS selector. Use for buttons, links, or any clickable element.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'The URL to navigate to first',
+        },
+        selector: {
+          type: 'string',
+          description: 'CSS selector for the element to click (e.g., "button.submit", "#login-btn", "a[href*=signup]")',
+        },
+      },
+      required: ['url', 'selector'],
+    },
+  },
+};
+
+export const browserFillTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'browser_fill',
+    description: `Fill a form field with text on a webpage. Clears existing content first. Use for input fields, textareas, and contenteditable elements.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'The URL to navigate to first',
+        },
+        selector: {
+          type: 'string',
+          description: 'CSS selector for the input field (e.g., "input[name=email]", "#username", "textarea.comment")',
+        },
+        value: {
+          type: 'string',
+          description: 'The text to fill into the field',
+        },
+      },
+      required: ['url', 'selector', 'value'],
+    },
+  },
+};
+
+export const browserExtractTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'browser_extract',
+    description: `Extract content from a webpage. Returns page text, title, and links. Better than fetch_url for JavaScript-rendered content.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'The URL to navigate to and extract content from',
+        },
+        selector: {
+          type: 'string',
+          description: 'Optional CSS selector to extract specific elements. If not provided, extracts main page content.',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of elements to return when using selector. Default: 10',
+        },
+      },
+      required: ['url'],
+    },
+  },
+};
+
+export const browserWaitTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'browser_wait',
+    description: `Wait for an element to appear on a webpage. Use after navigation or actions that trigger page changes.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'The URL to navigate to first',
+        },
+        selector: {
+          type: 'string',
+          description: 'CSS selector for the element to wait for',
+        },
+        timeout: {
+          type: 'number',
+          description: 'Maximum time to wait in milliseconds. Default: 10000 (10 seconds)',
+        },
+      },
+      required: ['url', 'selector'],
+    },
+  },
+};
+
+export const browserCloseTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'browser_close',
+    description: `Close the browser session. Use when done with browser automation to free resources.`,
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+};
+
+export const browserRenderHtmlTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'browser_render_html',
+    description: `Render HTML content and display it as a visual page. Use when you want to create and show the user a custom HTML page, visualization, chart, diagram, styled content, or any HTML-based visual. Perfect for creating interactive demonstrations, formatted reports, data visualizations, or presenting information in a visually appealing way. The HTML will be rendered in a browser and shown as an image to the user.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        html: {
+          type: 'string',
+          description: 'Complete HTML content to render. Can include inline CSS and JavaScript. Should be a full HTML document with <html>, <head>, and <body> tags for best results.',
+        },
+        title: {
+          type: 'string',
+          description: 'Optional title for the page (will be shown in the caption)',
+        },
+      },
+      required: ['html'],
+    },
+  },
+};
+
+// Image generation tool
+export const generateImageTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'generate_image',
+    description: `Generate an image based on a text description using AI. Use when the user asks for an image, picture, illustration, artwork, or any visual to be created. Returns an image that will be displayed in chat.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        prompt: {
+          type: 'string',
+          description: 'A detailed description of the image to generate. Be specific about style, colors, composition, and subjects.',
+        },
+      },
+      required: ['prompt'],
+    },
+  },
+};
+
 export function formatSearchResultsForContext(results: SearchResult[]): string {
   if (results.length === 0) return '';
 
@@ -599,6 +1029,10 @@ export default {
   workspaceReadTool,
   sendEmailTool,
   checkEmailTool,
+  readEmailTool,
+  deleteEmailTool,
+  replyEmailTool,
+  markEmailReadTool,
   searchDocumentsTool,
   suggestGoalTool,
   fetchUrlTool,
@@ -606,6 +1040,18 @@ export default {
   createTodoTool,
   completeTodoTool,
   updateTodoTool,
+  sessionNoteTool,
+  createReminderTool,
+  listRemindersTool,
+  cancelReminderTool,
+  browserNavigateTool,
+  browserScreenshotTool,
+  browserClickTool,
+  browserFillTool,
+  browserExtractTool,
+  browserWaitTool,
+  browserCloseTool,
+  generateImageTool,
   formatSearchResultsForContext,
   formatAgentResultForContext,
 };

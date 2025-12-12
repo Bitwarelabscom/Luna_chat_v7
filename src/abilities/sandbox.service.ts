@@ -6,9 +6,9 @@ import * as path from 'path';
 const SANDBOX_CONTAINER = process.env.SANDBOX_CONTAINER || 'luna-sandbox';
 // Point docker CLI to the restricted docker-socket-proxy
 const DOCKER_HOST = process.env.DOCKER_HOST || 'http://docker-proxy:2375';
-const EXECUTION_TIMEOUT = 30000; // 30 seconds for file execution
-const INLINE_EXECUTION_TIMEOUT = 10000; // 10 seconds for inline code
-const MAX_OUTPUT_LENGTH = 10000;
+const EXECUTION_TIMEOUT = 300000; // 5 minutes for file execution
+const INLINE_EXECUTION_TIMEOUT = 300000; // 5 minutes for inline code
+const MAX_OUTPUT_LENGTH = 100000; // 100KB output limit
 
 // Workspace paths
 const SANDBOX_WORKSPACE_ROOT = '/workspace'; // Inside sandbox container
@@ -459,7 +459,7 @@ async function executeFileInContainer(
 
     const timeout = setTimeout(() => {
       proc.kill();
-      reject(new Error('Execution timeout (30s limit)'));
+      reject(new Error('Execution timeout (5 min limit)'));
     }, EXECUTION_TIMEOUT);
 
     proc.on('close', (code) => {

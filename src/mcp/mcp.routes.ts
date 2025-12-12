@@ -34,10 +34,21 @@ router.get('/servers', async (req: Request, res: Response) => {
 
 const createServerSchema = z.object({
   name: z.string().min(1).max(100),
-  url: z.string().url(),
   description: z.string().max(500).optional(),
+  transportType: z.enum(['http', 'stdio']).default('http'),
+  // HTTP transport
+  url: z.string().url().optional(),
   headers: z.record(z.string()).optional(),
-});
+  // Stdio transport
+  commandPath: z.string().min(1).optional(),
+  commandArgs: z.array(z.string()).optional(),
+  envVars: z.record(z.string()).optional(),
+  workingDirectory: z.string().optional(),
+}).refine(data => {
+  if (data.transportType === 'http') return !!data.url;
+  if (data.transportType === 'stdio') return !!data.commandPath;
+  return false;
+}, { message: 'URL required for HTTP transport, commandPath required for stdio transport' });
 
 /**
  * POST /api/mcp/servers
@@ -88,9 +99,17 @@ router.get('/servers/:id', async (req: Request, res: Response) => {
 
 const updateServerSchema = z.object({
   name: z.string().min(1).max(100).optional(),
-  url: z.string().url().optional(),
   description: z.string().max(500).optional(),
+  transportType: z.enum(['http', 'stdio']).optional(),
+  // HTTP transport
+  url: z.string().url().optional(),
   headers: z.record(z.string()).optional(),
+  // Stdio transport
+  commandPath: z.string().min(1).optional(),
+  commandArgs: z.array(z.string()).optional(),
+  envVars: z.record(z.string()).optional(),
+  workingDirectory: z.string().optional(),
+  // Status
   isEnabled: z.boolean().optional(),
 });
 
@@ -213,9 +232,20 @@ router.put('/tools/:id', async (req: Request, res: Response) => {
 // ============================================================================
 
 const testConnectionSchema = z.object({
-  url: z.string().url(),
+  transportType: z.enum(['http', 'stdio']).default('http'),
+  // HTTP transport
+  url: z.string().url().optional(),
   headers: z.record(z.string()).optional(),
-});
+  // Stdio transport
+  commandPath: z.string().min(1).optional(),
+  commandArgs: z.array(z.string()).optional(),
+  envVars: z.record(z.string()).optional(),
+  workingDirectory: z.string().optional(),
+}).refine(data => {
+  if (data.transportType === 'http') return !!data.url;
+  if (data.transportType === 'stdio') return !!data.commandPath;
+  return false;
+}, { message: 'URL required for HTTP transport, commandPath required for stdio transport' });
 
 /**
  * POST /api/mcp/test
@@ -223,8 +253,16 @@ const testConnectionSchema = z.object({
  */
 router.post('/test', async (req: Request, res: Response) => {
   try {
-    const { url, headers } = testConnectionSchema.parse(req.body);
-    const result = await mcpService.testConnection(url, headers || {});
+    const config = testConnectionSchema.parse(req.body);
+    const result = await mcpService.testConnection({
+      transportType: config.transportType,
+      url: config.url,
+      headers: config.headers,
+      commandPath: config.commandPath,
+      commandArgs: config.commandArgs,
+      envVars: config.envVars,
+      workingDirectory: config.workingDirectory,
+    });
     res.json(result);
   } catch (error) {
     if (error instanceof z.ZodError) {

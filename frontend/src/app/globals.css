@@ -537,3 +537,32 @@ body {
     padding-bottom: env(safe-area-inset-bottom);
   }
 }
+
+/* === NOTIFICATION ANIMATIONS === */
+
+/* Bell shake animation for urgent notifications */
+@keyframes shake {
+  0%, 100% { transform: rotate(0deg); }
+  10%, 30%, 50%, 70%, 90% { transform: rotate(-8deg); }
+  20%, 40%, 60%, 80% { transform: rotate(8deg); }
+}
+
+.animate-shake {
+  animation: shake 0.5s ease-in-out;
+}
+
+/* Notification badge pulse */
+@keyframes notification-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 0.8;
+  }
+}
+
+.notification-urgent {
+  animation: notification-pulse 1s ease-in-out infinite;
+}

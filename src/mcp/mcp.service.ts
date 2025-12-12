@@ -1,10 +1,12 @@
 /**
  * MCP (Model Context Protocol) Client Service
  * Connects to external MCP servers to discover and execute tools
+ * Supports both HTTP and stdio transports
  */
 import { pool } from '../db/index.js';
 import logger from '../utils/logger.js';
 import type OpenAI from 'openai';
+import { createTransport, type IMcpTransport } from './transports.js';
 
 // ============================================================================
 // Types
@@ -15,8 +17,16 @@ export interface McpServer {
   userId: string;
   name: string;
   description: string | null;
-  url: string;
+  transportType: 'http' | 'stdio';
+  // HTTP transport
+  url: string | null;
   headers: Record<string, string>;
+  // Stdio transport
+  commandPath: string | null;
+  commandArgs: string[];
+  envVars: Record<string, string>;
+  workingDirectory: string | null;
+  // Status
   isEnabled: boolean;
   isConnected: boolean;
   lastConnectedAt: Date | null;
@@ -44,24 +54,6 @@ export interface McpServerWithTools extends McpServer {
   toolCount: number;
 }
 
-interface JsonRpcRequest {
-  jsonrpc: '2.0';
-  id: number;
-  method: string;
-  params?: Record<string, unknown>;
-}
-
-interface JsonRpcResponse {
-  jsonrpc: '2.0';
-  id: number;
-  result?: unknown;
-  error?: {
-    code: number;
-    message: string;
-    data?: unknown;
-  };
-}
-
 interface McpToolDefinition {
   name: string;
   title?: string;
@@ -80,55 +72,6 @@ interface McpToolCallResult {
 }
 
 // ============================================================================
-// JSON-RPC Client
-// ============================================================================
-
-let requestId = 1;
-
-async function jsonRpcRequest(
-  url: string,
-  method: string,
-  params: Record<string, unknown> = {},
-  headers: Record<string, string> = {}
-): Promise<unknown> {
-  const request: JsonRpcRequest = {
-    jsonrpc: '2.0',
-    id: requestId++,
-    method,
-    params,
-  };
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30000); // 30 second timeout
-
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...headers,
-      },
-      body: JSON.stringify(request),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-
-    const data = await response.json() as JsonRpcResponse;
-
-    if (data.error) {
-      throw new Error(`MCP Error ${data.error.code}: ${data.error.message}`);
-    }
-
-    return data.result;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-// ============================================================================
 // Server Management
 // ============================================================================
 
@@ -136,18 +79,50 @@ export async function createServer(
   userId: string,
   data: {
     name: string;
-    url: string;
     description?: string;
+    transportType?: 'http' | 'stdio';
+    // HTTP transport
+    url?: string;
     headers?: Record<string, string>;
+    // Stdio transport
+    commandPath?: string;
+    commandArgs?: string[];
+    envVars?: Record<string, string>;
+    workingDirectory?: string;
   }
 ): Promise<McpServer> {
-  const { name, url, description, headers = {} } = data;
+  const {
+    name,
+    description,
+    transportType = 'http',
+    url,
+    headers = {},
+    commandPath,
+    commandArgs = [],
+    envVars = {},
+    workingDirectory,
+  } = data;
 
   const result = await pool.query(
-    `INSERT INTO mcp_servers (user_id, name, description, url, headers)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO mcp_servers (
+       user_id, name, description, transport_type,
+       url, headers,
+       command_path, command_args, env_vars, working_directory
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      RETURNING *`,
-    [userId, name, description || null, url, JSON.stringify(headers)]
+    [
+      userId,
+      name,
+      description || null,
+      transportType,
+      url || null,
+      JSON.stringify(headers),
+      commandPath || null,
+      JSON.stringify(commandArgs),
+      JSON.stringify(envVars),
+      workingDirectory || null,
+    ]
   );
 
   return mapServerRow(result.rows[0]);
@@ -205,9 +180,17 @@ export async function updateServer(
   serverId: string,
   updates: Partial<{
     name: string;
-    url: string;
     description: string;
+    transportType: 'http' | 'stdio';
+    // HTTP transport
+    url: string;
     headers: Record<string, string>;
+    // Stdio transport
+    commandPath: string;
+    commandArgs: string[];
+    envVars: Record<string, string>;
+    workingDirectory: string;
+    // Status
     isEnabled: boolean;
   }>
 ): Promise<McpServer | null> {
@@ -219,17 +202,37 @@ export async function updateServer(
     fields.push(`name = $${paramIndex++}`);
     values.push(updates.name);
   }
-  if (updates.url !== undefined) {
-    fields.push(`url = $${paramIndex++}`);
-    values.push(updates.url);
-  }
   if (updates.description !== undefined) {
     fields.push(`description = $${paramIndex++}`);
     values.push(updates.description);
   }
+  if (updates.transportType !== undefined) {
+    fields.push(`transport_type = $${paramIndex++}`);
+    values.push(updates.transportType);
+  }
+  if (updates.url !== undefined) {
+    fields.push(`url = $${paramIndex++}`);
+    values.push(updates.url);
+  }
   if (updates.headers !== undefined) {
     fields.push(`headers = $${paramIndex++}`);
     values.push(JSON.stringify(updates.headers));
+  }
+  if (updates.commandPath !== undefined) {
+    fields.push(`command_path = $${paramIndex++}`);
+    values.push(updates.commandPath);
+  }
+  if (updates.commandArgs !== undefined) {
+    fields.push(`command_args = $${paramIndex++}`);
+    values.push(JSON.stringify(updates.commandArgs));
+  }
+  if (updates.envVars !== undefined) {
+    fields.push(`env_vars = $${paramIndex++}`);
+    values.push(JSON.stringify(updates.envVars));
+  }
+  if (updates.workingDirectory !== undefined) {
+    fields.push(`working_directory = $${paramIndex++}`);
+    values.push(updates.workingDirectory);
   }
   if (updates.isEnabled !== undefined) {
     fields.push(`is_enabled = $${paramIndex++}`);
@@ -275,14 +278,20 @@ export async function discoverTools(serverId: string): Promise<McpTool[]> {
 
   const server = mapServerRow(serverResult.rows[0]);
 
+  // Create appropriate transport
+  const transport = createTransport({
+    transportType: server.transportType,
+    url: server.url,
+    headers: server.headers,
+    commandPath: server.commandPath,
+    commandArgs: server.commandArgs,
+    envVars: server.envVars,
+    workingDirectory: server.workingDirectory,
+  });
+
   try {
     // Call MCP tools/list method
-    const result = await jsonRpcRequest(
-      server.url,
-      'tools/list',
-      {},
-      server.headers
-    ) as { tools: McpToolDefinition[] };
+    const result = await transport.request('tools/list', {}) as { tools: McpToolDefinition[] };
 
     const tools = result.tools || [];
 
@@ -333,6 +342,9 @@ export async function discoverTools(serverId: string): Promise<McpTool[]> {
 
     logger.error('MCP tool discovery failed', { serverId, error: errorMessage });
     throw error;
+  } finally {
+    // Close transport (important for stdio to clean up process)
+    await transport.close();
   }
 }
 
@@ -406,19 +418,25 @@ export async function executeTool(
     return { content: 'MCP server is disabled', isError: true };
   }
 
+  // Create appropriate transport
+  const transport = createTransport({
+    transportType: server.transportType,
+    url: server.url,
+    headers: server.headers,
+    commandPath: server.commandPath,
+    commandArgs: server.commandArgs,
+    envVars: server.envVars,
+    workingDirectory: server.workingDirectory,
+  });
+
   const startTime = Date.now();
 
   try {
     // Call MCP tools/call method
-    const result = await jsonRpcRequest(
-      server.url,
-      'tools/call',
-      {
-        name: toolName,
-        arguments: args,
-      },
-      server.headers
-    ) as McpToolCallResult;
+    const result = await transport.request('tools/call', {
+      name: toolName,
+      arguments: args,
+    }) as McpToolCallResult;
 
     // Update tool usage count
     await pool.query(
@@ -444,6 +462,9 @@ export async function executeTool(
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     logger.error('MCP tool execution failed', { serverId, toolName, error: errorMessage });
     return { content: `Error executing MCP tool: ${errorMessage}`, isError: true };
+  } finally {
+    // Close transport (important for stdio to clean up process)
+    await transport.close();
   }
 }
 
@@ -490,12 +511,33 @@ export function parseMcpToolName(prefixedName: string): { serverId: string; tool
 // ============================================================================
 
 export async function testConnection(
-  url: string,
-  headers: Record<string, string> = {}
+  config: {
+    transportType: 'http' | 'stdio';
+    // HTTP transport
+    url?: string;
+    headers?: Record<string, string>;
+    // Stdio transport
+    commandPath?: string;
+    commandArgs?: string[];
+    envVars?: Record<string, string>;
+    workingDirectory?: string;
+  }
 ): Promise<{ success: boolean; serverInfo?: { name: string; version: string }; toolCount?: number; error?: string }> {
+  let transport: IMcpTransport | null = null;
+
   try {
+    transport = createTransport({
+      transportType: config.transportType,
+      url: config.url || null,
+      headers: config.headers || {},
+      commandPath: config.commandPath || null,
+      commandArgs: config.commandArgs || [],
+      envVars: config.envVars || {},
+      workingDirectory: config.workingDirectory || null,
+    });
+
     // Try to list tools to verify connection
-    const result = await jsonRpcRequest(url, 'tools/list', {}, headers) as { tools: McpToolDefinition[] };
+    const result = await transport.request('tools/list', {}) as { tools: McpToolDefinition[] };
 
     return {
       success: true,
@@ -507,6 +549,10 @@ export async function testConnection(
       success: false,
       error: errorMessage,
     };
+  } finally {
+    if (transport) {
+      await transport.close();
+    }
   }
 }
 
@@ -520,8 +566,20 @@ function mapServerRow(row: Record<string, unknown>): McpServer {
     userId: row.user_id as string,
     name: row.name as string,
     description: row.description as string | null,
-    url: row.url as string,
+    transportType: (row.transport_type as 'http' | 'stdio') || 'http',
+    // HTTP transport
+    url: row.url as string | null,
     headers: typeof row.headers === 'string' ? JSON.parse(row.headers) : (row.headers as Record<string, string>) || {},
+    // Stdio transport
+    commandPath: row.command_path as string | null,
+    commandArgs: typeof row.command_args === 'string'
+      ? JSON.parse(row.command_args)
+      : (row.command_args as string[]) || [],
+    envVars: typeof row.env_vars === 'string'
+      ? JSON.parse(row.env_vars)
+      : (row.env_vars as Record<string, string>) || {},
+    workingDirectory: row.working_directory as string | null,
+    // Status
     isEnabled: row.is_enabled as boolean,
     isConnected: row.is_connected as boolean,
     lastConnectedAt: row.last_connected_at ? new Date(row.last_connected_at as string) : null,

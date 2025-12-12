@@ -1,6 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import { createServer } from 'http';
+import { WebSocketServer, WebSocket } from 'ws';
 import { config } from './config/index.js';
 import logger from './utils/logger.js';
 import { healthCheck as postgresHealth, closePool } from './db/postgres.js';
@@ -10,15 +12,27 @@ import { healthCheck as memorycoreHealth } from './memory/memorycore.client.js';
 import authRoutes from './auth/auth.routes.js';
 import chatRoutes from './chat/chat.routes.js';
 import abilitiesRoutes from './abilities/abilities.routes.js';
+import spotifyOAuthRoutes from './abilities/spotify-oauth.routes.js';
 import settingsRoutes from './settings/settings.routes.js';
 import oauthRoutes from './integrations/oauth.routes.js';
 import localEmailRoutes from './integrations/local-email.routes.js';
 import autonomousRoutes from './autonomous/autonomous.routes.js';
 import triggersRoutes, { telegramWebhookRouter } from './triggers/triggers.routes.js';
+import { clearAllTelegramTimers } from './triggers/telegram.service.js';
 import mcpRoutes from './mcp/mcp.routes.js';
+import tradingRoutes from './trading/trading.routes.js';
+import projectRoutes from './abilities/project.routes.js';
 import { startJobs, stopJobs } from './jobs/job-runner.js';
 import { ipWhitelistMiddleware } from './security/ip-whitelist.middleware.js';
 import { fail2banMiddleware } from './security/fail2ban.middleware.js';
+import {
+  handleClientConnection as handleTradingWsConnection,
+  initializeTradingWebSocket,
+  shutdownTradingWebSocket,
+} from './trading/trading.websocket.js';
+import { handleBrowserWsConnection } from './abilities/browser.websocket.js';
+import { handleEditorWsUpgrade } from './editor/editor.websocket.js';
+import { shutdownHocuspocusServer } from './editor/hocuspocus.server.js';
 
 const app = express();
 
@@ -31,11 +45,14 @@ app.use(ipWhitelistMiddleware);
 // SECURITY: Fail2ban - block IPs with too many failed login attempts
 app.use(fail2banMiddleware);
 
-// SECURITY: HTTPS enforcement in production (skip for health checks and webhooks)
+// SECURITY: HTTPS enforcement in production (skip for health checks, webhooks, and static files)
 if (config.nodeEnv === 'production') {
   app.use((req, res, next) => {
-    // Skip HTTPS redirect for health check and Telegram webhook
-    if (req.path === '/api/health' || req.path === '/api/triggers/telegram/webhook') {
+    // Skip HTTPS redirect for health check, Telegram webhook, and static images
+    // Static files like /api/images/* need to load without redirect for img tags
+    if (req.path === '/api/health' ||
+        req.path === '/api/triggers/telegram/webhook' ||
+        req.path.startsWith('/api/images/')) {
       return next();
     }
     if (req.header('x-forwarded-proto') !== 'https') {
@@ -82,8 +99,12 @@ app.use(cors({
 app.use(express.json({ limit: '1mb' }));
 
 // Static file serving for Luna media (images and videos)
+// Override CORP header to allow images to load in any context
 import path from 'path';
-app.use('/api/images', express.static(path.join(process.cwd(), 'images')));
+app.use('/api/images', (_req, res, next) => {
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  next();
+}, express.static(path.join(process.cwd(), 'images')));
 
 // Request logging
 app.use((req, res, next) => {
@@ -124,6 +145,8 @@ app.get('/api/health', async (_req, res) => {
 // API routes
 app.use('/api/auth', authRoutes);
 app.use('/api/chat', chatRoutes);
+// Spotify OAuth callback - NO AUTH REQUIRED (browser redirect from Spotify)
+app.use('/api/abilities/spotify', spotifyOAuthRoutes);
 app.use('/api/abilities', abilitiesRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/integrations/oauth', oauthRoutes);
@@ -133,6 +156,8 @@ app.use('/api/autonomous', autonomousRoutes);
 app.use('/api/triggers', telegramWebhookRouter);
 app.use('/api/triggers', triggersRoutes);
 app.use('/api/mcp', mcpRoutes);
+app.use('/api/trading', tradingRoutes);
+app.use('/api/projects', projectRoutes);
 
 // 404 handler
 app.use((_req, res) => {
@@ -149,6 +174,9 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 async function shutdown() {
   logger.info('Shutting down...');
   stopJobs();
+  clearAllTelegramTimers();
+  shutdownTradingWebSocket();
+  shutdownHocuspocusServer();
   await closePool();
   await closeRedis();
   process.exit(0);
@@ -157,13 +185,51 @@ async function shutdown() {
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
+// Create HTTP server
+const server = createServer(app);
+
+// Create WebSocket server for trading
+const wss = new WebSocketServer({ noServer: true });
+
+// Create WebSocket server for browser
+const browserWss = new WebSocketServer({ noServer: true });
+
+// Handle WebSocket upgrade requests
+server.on('upgrade', (request, socket, head) => {
+  const pathname = new URL(request.url || '', `http://${request.headers.host}`).pathname;
+
+  if (pathname === '/ws/trading') {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
+  } else if (pathname === '/ws/browser') {
+    browserWss.handleUpgrade(request, socket, head, (ws) => {
+      handleBrowserWsConnection(ws, request);
+    });
+  } else if (pathname === '/ws/editor') {
+    // Hocuspocus handles the upgrade internally
+    handleEditorWsUpgrade(request, socket, head);
+  } else {
+    // Reject unknown WebSocket paths
+    socket.destroy();
+  }
+});
+
+// Handle WebSocket connections
+wss.on('connection', (ws: WebSocket) => {
+  handleTradingWsConnection(ws);
+});
+
 // Start server
-app.listen(config.port, () => {
+server.listen(config.port, () => {
   logger.info(`Luna Chat API running on port ${config.port}`, {
     env: config.nodeEnv,
     memorycore: config.memorycore.enabled ? 'enabled' : 'disabled',
     searxng: config.searxng.enabled ? 'enabled' : 'disabled',
   });
+
+  // Initialize trading WebSocket (connect to Binance)
+  initializeTradingWebSocket();
 
   // Start background jobs
   startJobs();

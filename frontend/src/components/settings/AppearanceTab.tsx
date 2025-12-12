@@ -1,7 +1,8 @@
 'use client';
 
-import { Monitor, Terminal, Sun, Zap, Snowflake, Palette } from 'lucide-react';
+import { Monitor, Terminal, Sun, Zap, Snowflake, Palette, Globe, Clock, Calendar, Ruler, DollarSign } from 'lucide-react';
 import { useThemeStore, type ThemeType } from '@/lib/theme-store';
+import { useLocaleStore, CURRENCIES, TIMEZONES, type DateFormat } from '@/lib/locale-store';
 
 const themes: { id: ThemeType; name: string; description: string; icon: typeof Monitor }[] = [
   {
@@ -44,9 +45,21 @@ const themes: { id: ThemeType; name: string; description: string; icon: typeof M
 
 export default function AppearanceTab() {
   const { theme, crtFlicker, setTheme, setCrtFlicker } = useThemeStore();
+  const {
+    timeFormat,
+    dateFormat,
+    unitSystem,
+    currency,
+    timezone,
+    setTimeFormat,
+    setDateFormat,
+    setUnitSystem,
+    setCurrency,
+    setTimezone,
+  } = useLocaleStore();
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {/* Theme Selection */}
       <div>
         <h3 className="text-sm font-medium text-theme-text-muted uppercase tracking-wider mb-4">
@@ -129,6 +142,130 @@ export default function AppearanceTab() {
                 Hi! How can I help you today?
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Locale Settings */}
+      <div>
+        <h3 className="text-sm font-medium text-theme-text-muted uppercase tracking-wider mb-4 flex items-center gap-2">
+          <Globe className="w-4 h-4" />
+          Locale & Regional Settings
+        </h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Time Format */}
+          <div className="p-4 rounded-lg border border-theme-border">
+            <div className="flex items-center gap-2 mb-3">
+              <Clock className="w-4 h-4 text-theme-accent-primary" />
+              <span className="font-medium text-theme-text-primary">Time Format</span>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setTimeFormat('24h')}
+                className={`flex-1 px-3 py-2 rounded-lg text-sm transition ${
+                  timeFormat === '24h'
+                    ? 'bg-theme-accent-primary text-white'
+                    : 'bg-theme-bg-tertiary text-theme-text-secondary hover:bg-theme-bg-primary'
+                }`}
+              >
+                24-hour (14:30)
+              </button>
+              <button
+                onClick={() => setTimeFormat('12h')}
+                className={`flex-1 px-3 py-2 rounded-lg text-sm transition ${
+                  timeFormat === '12h'
+                    ? 'bg-theme-accent-primary text-white'
+                    : 'bg-theme-bg-tertiary text-theme-text-secondary hover:bg-theme-bg-primary'
+                }`}
+              >
+                12-hour (2:30 PM)
+              </button>
+            </div>
+          </div>
+
+          {/* Date Format */}
+          <div className="p-4 rounded-lg border border-theme-border">
+            <div className="flex items-center gap-2 mb-3">
+              <Calendar className="w-4 h-4 text-theme-accent-primary" />
+              <span className="font-medium text-theme-text-primary">Date Format</span>
+            </div>
+            <select
+              value={dateFormat}
+              onChange={(e) => setDateFormat(e.target.value as DateFormat)}
+              className="w-full px-3 py-2 rounded-lg bg-theme-bg-tertiary text-theme-text-primary border border-theme-border focus:outline-none focus:ring-2 focus:ring-theme-accent-primary"
+            >
+              <option value="YYYY-MM-DD">2024-12-25 (ISO)</option>
+              <option value="DD/MM/YYYY">25/12/2024 (European)</option>
+              <option value="MM/DD/YYYY">12/25/2024 (US)</option>
+            </select>
+          </div>
+
+          {/* Unit System */}
+          <div className="p-4 rounded-lg border border-theme-border">
+            <div className="flex items-center gap-2 mb-3">
+              <Ruler className="w-4 h-4 text-theme-accent-primary" />
+              <span className="font-medium text-theme-text-primary">Unit System</span>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setUnitSystem('metric')}
+                className={`flex-1 px-3 py-2 rounded-lg text-sm transition ${
+                  unitSystem === 'metric'
+                    ? 'bg-theme-accent-primary text-white'
+                    : 'bg-theme-bg-tertiary text-theme-text-secondary hover:bg-theme-bg-primary'
+                }`}
+              >
+                Metric (km, kg, C)
+              </button>
+              <button
+                onClick={() => setUnitSystem('imperial')}
+                className={`flex-1 px-3 py-2 rounded-lg text-sm transition ${
+                  unitSystem === 'imperial'
+                    ? 'bg-theme-accent-primary text-white'
+                    : 'bg-theme-bg-tertiary text-theme-text-secondary hover:bg-theme-bg-primary'
+                }`}
+              >
+                Imperial (mi, lb, F)
+              </button>
+            </div>
+          </div>
+
+          {/* Currency */}
+          <div className="p-4 rounded-lg border border-theme-border">
+            <div className="flex items-center gap-2 mb-3">
+              <DollarSign className="w-4 h-4 text-theme-accent-primary" />
+              <span className="font-medium text-theme-text-primary">Currency</span>
+            </div>
+            <select
+              value={currency}
+              onChange={(e) => setCurrency(e.target.value)}
+              className="w-full px-3 py-2 rounded-lg bg-theme-bg-tertiary text-theme-text-primary border border-theme-border focus:outline-none focus:ring-2 focus:ring-theme-accent-primary"
+            >
+              {CURRENCIES.map((c) => (
+                <option key={c.code} value={c.code}>
+                  {c.code} - {c.name} ({c.symbol})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Timezone */}
+          <div className="p-4 rounded-lg border border-theme-border md:col-span-2">
+            <div className="flex items-center gap-2 mb-3">
+              <Globe className="w-4 h-4 text-theme-accent-primary" />
+              <span className="font-medium text-theme-text-primary">Timezone</span>
+            </div>
+            <select
+              value={timezone}
+              onChange={(e) => setTimezone(e.target.value)}
+              className="w-full px-3 py-2 rounded-lg bg-theme-bg-tertiary text-theme-text-primary border border-theme-border focus:outline-none focus:ring-2 focus:ring-theme-accent-primary"
+            >
+              {TIMEZONES.map((tz) => (
+                <option key={tz.value} value={tz.value}>
+                  {tz.label}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
       </div>

@@ -59,11 +59,23 @@ export async function createCompletion(
       .map(block => (block as Anthropic.TextBlock).text)
       .join('');
 
+    // Extract cache tokens if available (from prompt caching)
+    const usage = response.usage as {
+      input_tokens: number;
+      output_tokens: number;
+      cache_read_input_tokens?: number;
+      cache_creation_input_tokens?: number;
+    };
+    const cacheTokens = (usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0);
+
     return {
       content,
-      tokensUsed: response.usage.input_tokens + response.usage.output_tokens,
+      tokensUsed: usage.input_tokens + usage.output_tokens,
       model,
       provider: 'anthropic',
+      inputTokens: usage.input_tokens,
+      outputTokens: usage.output_tokens,
+      cacheTokens,
     };
   } catch (error) {
     logger.error('Anthropic completion failed', { error: (error as Error).message, model });
@@ -108,9 +120,22 @@ export async function* streamCompletion(
 
     // Get final message for accurate token count
     const finalMessage = await stream.finalMessage();
-    tokensUsed = finalMessage.usage.input_tokens + finalMessage.usage.output_tokens;
+    const finalUsage = finalMessage.usage as {
+      input_tokens: number;
+      output_tokens: number;
+      cache_read_input_tokens?: number;
+      cache_creation_input_tokens?: number;
+    };
+    tokensUsed = finalUsage.input_tokens + finalUsage.output_tokens;
+    const cacheTokens = (finalUsage.cache_read_input_tokens || 0) + (finalUsage.cache_creation_input_tokens || 0);
 
-    yield { type: 'done', tokensUsed };
+    yield {
+      type: 'done',
+      tokensUsed,
+      inputTokens: finalUsage.input_tokens,
+      outputTokens: finalUsage.output_tokens,
+      cacheTokens,
+    };
   } catch (error) {
     logger.error('Anthropic stream failed', { error: (error as Error).message, model });
     throw error;

@@ -426,7 +426,13 @@ export function formatLunaInboxForPrompt(emails: localEmail.EmailMessage[]): str
   const formatted = emails.slice(0, 5).map(email => {
     const date = email.date ? new Date(email.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'unknown';
     let entry = `- ${email.subject}`;
+    if (email.uid) {
+      entry += ` (UID: ${email.uid})`;
+    }
     entry += `\n  From: ${email.from} - ${date}`;
+    if (email.read !== undefined) {
+      entry += ` - ${email.read ? 'Read' : 'Unread'}`;
+    }
     if (email.body) {
       const preview = email.body.slice(0, 150).replace(/\n/g, ' ');
       entry += `\n  "${preview}${email.body.length > 150 ? '...' : ''}"`;
@@ -435,6 +441,42 @@ export function formatLunaInboxForPrompt(emails: localEmail.EmailMessage[]): str
   }).join('\n\n');
 
   return `[Luna's Inbox - luna@bitwarelabs.com]\n${formatted}`;
+}
+
+/**
+ * Fetch a single email by UID
+ */
+export async function fetchEmailByUid(uid: number): Promise<localEmail.EmailMessage | null> {
+  return localEmail.fetchEmailByUid(uid);
+}
+
+/**
+ * Delete an email by UID
+ */
+export async function deleteEmail(uid: number): Promise<boolean> {
+  return localEmail.deleteEmail(uid);
+}
+
+/**
+ * Mark an email as read or unread
+ */
+export async function markEmailRead(uid: number, isRead: boolean): Promise<boolean> {
+  return localEmail.markEmailRead(uid, isRead);
+}
+
+/**
+ * Reply to an email
+ */
+export async function replyToEmail(
+  originalUid: number,
+  replyBody: string
+): Promise<{
+  success: boolean;
+  messageId?: string;
+  error?: string;
+  blockedRecipients?: string[];
+}> {
+  return localEmail.replyToEmail(originalUid, replyBody);
 }
 
 export default {
@@ -454,4 +496,8 @@ export default {
   canLunaEmailRecipient,
   getLunaEmailStatus,
   formatLunaInboxForPrompt,
+  fetchEmailByUid,
+  deleteEmail,
+  markEmailRead,
+  replyToEmail,
 };

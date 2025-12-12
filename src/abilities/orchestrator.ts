@@ -12,6 +12,7 @@ import * as facts from '../memory/facts.service.js';
 import { createCompletion } from '../llm/router.js';
 import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
+import { intentCache } from './intent-cache.service.js';
 
 export interface AbilityContext {
   knowledge: string;
@@ -24,7 +25,7 @@ export interface AbilityContext {
 }
 
 export interface AbilityIntent {
-  type: 'task' | 'knowledge' | 'code' | 'document' | 'calendar' | 'email' | 'agent' | 'tool' | 'smalltalk' | 'weather' | 'status' | 'fact_correction' | 'spotify' | 'none';
+  type: 'task' | 'knowledge' | 'code' | 'document' | 'calendar' | 'email' | 'agent' | 'tool' | 'smalltalk' | 'weather' | 'status' | 'fact_correction' | 'spotify' | 'project' | 'none';
   action?: string;
   params?: Record<string, unknown>;
   confidence: number;
@@ -99,6 +100,44 @@ export function isStatusQuery(message: string): boolean {
   return lower.includes('/status') || lower.includes('system status') ||
          (lower.includes('status') && lower.includes('show')) ||
          lower.includes("what's running") || lower.includes('whats running');
+}
+
+/**
+ * Check if user wants to create a multi-file project
+ * These are requests that warrant the project builder workflow
+ */
+export function isProjectCreationIntent(message: string): boolean {
+  const lower = message.toLowerCase();
+
+  // Multi-file/project keywords
+  const projectKeywords = [
+    'create a website', 'build a website', 'make a website',
+    'create a web page', 'build a web page', 'make a web page',
+    'create a landing page', 'build a landing page', 'make a landing page',
+    'create an app', 'build an app', 'make an app',
+    'create a page', 'build a page', 'make a page',
+    'html page', 'html and css', 'html css js',
+    'with images', 'with pictures', 'generate images for',
+    'portfolio', 'website for', 'web page for',
+    'complete project', 'full project', 'multi-file',
+    'create project', 'start a project', 'new project',
+  ];
+
+  // Check for project-like requests
+  if (projectKeywords.some(k => lower.includes(k))) {
+    return true;
+  }
+
+  // Complex creation patterns that suggest multi-file output
+  const complexPatterns = [
+    /create\s+(a\s+)?(?:full|complete|working)\s+\w+/i,
+    /build\s+(me\s+)?(?:a\s+)?(?:website|app|page|site)/i,
+    /make\s+(me\s+)?(?:a\s+)?(?:website|app|page|site)/i,
+    /(?:website|page|app)\s+(?:with|that has|including)\s+/i,
+    /(?:html|css|javascript|js)\s+(?:and|with|plus)\s+/i,
+  ];
+
+  return complexPatterns.some(p => p.test(lower));
 }
 
 interface ParsedCalendarEvent {
@@ -495,6 +534,56 @@ export function formatAbilityContextForPrompt(context: AbilityContext): string {
 }
 
 /**
+ * Detect if message should be routed directly to a specific coding agent
+ * Returns the preferred agent name or null if no shortcut matches
+ */
+export function detectCodingAgentShortcut(message: string): 'coder-claude' | 'coder-gemini' | null {
+  const lower = message.toLowerCase();
+
+  // Keywords that strongly suggest coder-gemini (large context, high volume)
+  const geminiTriggers = [
+    'huge', 'large', 'massive', 'entire', 'whole',     // Large context indicators
+    'log', 'logs', 'analyze log', 'error log',         // Log analysis
+    'all files', 'entire codebase', 'whole repo',      // Full repo analysis
+    'unit test', 'tests for', 'write tests',           // Test generation
+    'explain this code', 'what does this do',          // Code explanation
+    'simple script', 'quick script', 'utility',        // Simple scripts
+    'boilerplate', 'generate', 'scaffold',             // Code generation
+    'documentation', 'document this', 'comments',      // Documentation
+  ];
+
+  // Keywords that strongly suggest coder-claude (complexity, security)
+  const claudeTriggers = [
+    'refactor', 'restructure', 'redesign',             // Architectural changes
+    'security', 'vulnerability', 'auth', 'authentication', // Security-critical
+    'debug', 'fix bug', 'race condition', 'deadlock',  // Complex debugging
+    'architecture', 'design pattern', 'system design', // Architecture
+    'optimize', 'performance', 'bottleneck',           // Performance optimization
+    'migration', 'upgrade', 'legacy',                  // Complex migrations
+    'critical', 'production', 'production-ready',      // Production code
+    'careful', 'thoroughly', 'edge case',              // Requires deep thinking
+  ];
+
+  // Check for gemini triggers
+  for (const trigger of geminiTriggers) {
+    if (lower.includes(trigger)) {
+      logger.debug('Coding agent shortcut: coder-gemini', { trigger });
+      return 'coder-gemini';
+    }
+  }
+
+  // Check for claude triggers
+  for (const trigger of claudeTriggers) {
+    if (lower.includes(trigger)) {
+      logger.debug('Coding agent shortcut: coder-claude', { trigger });
+      return 'coder-claude';
+    }
+  }
+
+  return null;
+}
+
+/**
  * Detect user intent for abilities
  */
 export function detectAbilityIntent(message: string): AbilityIntent {
@@ -514,6 +603,15 @@ export function detectAbilityIntent(message: string): AbilityIntent {
       type: 'status',
       action: 'show',
       confidence: 0.9,
+    };
+  }
+
+  // Check for project creation intent
+  if (isProjectCreationIntent(message)) {
+    return {
+      type: 'project',
+      action: 'create',
+      confidence: 0.85,
     };
   }
 
@@ -620,8 +718,9 @@ export function detectAbilityIntent(message: string): AbilityIntent {
   }
 
   // Spotify/Music intents
-  if (/\b(play|pause|stop|skip|next|previous|volume|music|song|spotify|track|artist|album|playlist|queue|shuffle|repeat|listen|what.*playing|now playing)\b/i.test(lower)) {
-    const isPlay = /\b(play|put on|start|listen|throw on)\b/i.test(lower);
+  if (/\b(play|pause|stop|skip|next|previous|volume|music|song|spotify|track|artist|album|playlist|queue|shuffle|repeat|listen|what.*playing|now playing|create.*playlist|make.*playlist)\b/i.test(lower)) {
+    const isCreatePlaylist = /\b(create|make)\b.*\bplaylist\b/i.test(lower);
+    const isPlay = /\b(play|put on|start|listen|throw on)\b/i.test(lower) && !isCreatePlaylist;
     const isPause = /\b(pause|stop)\b/i.test(lower);
     const isSkip = /\b(skip|next)\b/i.test(lower);
     const isPrevious = /\b(previous|back|go back)\b/i.test(lower);
@@ -634,7 +733,7 @@ export function detectAbilityIntent(message: string): AbilityIntent {
 
     return {
       type: 'spotify',
-      action: isPlay ? 'play' : isPause ? 'pause' : isSkip ? 'next' : isPrevious ? 'previous' :
+      action: isCreatePlaylist ? 'create_playlist' : isPlay ? 'play' : isPause ? 'pause' : isSkip ? 'next' : isPrevious ? 'previous' :
               isVolume ? 'volume' : isQueue ? 'queue' : isStatus ? 'status' : isDevice ? 'device' :
               isSearch ? 'search' : isRecommend ? 'recommend' : 'query',
       confidence: 0.85,
@@ -652,6 +751,54 @@ export function detectAbilityIntent(message: string): AbilityIntent {
   }
 
   return { type: 'none', confidence: 0 };
+}
+
+/**
+ * Detect ability intent with semantic caching
+ * Uses cached intents for similar queries to skip redundant detection
+ */
+export async function detectAbilityIntentWithCache(
+  message: string
+): Promise<AbilityIntent> {
+  // Skip caching for very short messages
+  if (message.length < 20) {
+    return detectAbilityIntent(message);
+  }
+
+  try {
+    // Check cache first
+    const cached = await intentCache.getCachedIntent(message);
+
+    if (cached && cached.confidence >= 0.8) {
+      logger.debug('Using cached intent', {
+        agentType: cached.agentType,
+        confidence: cached.confidence,
+        cacheAge: Date.now() - cached.timestamp,
+      });
+
+      // Map cached agent type back to AbilityIntent
+      return {
+        type: cached.agentType as AbilityIntent['type'],
+        confidence: cached.confidence,
+      };
+    }
+
+    // Fall back to rule-based detection
+    const intent = detectAbilityIntent(message);
+
+    // Cache the result if confident enough and not 'none' or 'smalltalk'
+    if (intent.confidence >= 0.7 && intent.type !== 'none' && intent.type !== 'smalltalk') {
+      await intentCache.cacheIntent(message, intent.type, intent.confidence);
+    }
+
+    return intent;
+  } catch (error) {
+    // On cache error, fall back to rule-based detection
+    logger.warn('Intent cache error, falling back to rule-based', {
+      error: (error as Error).message,
+    });
+    return detectAbilityIntent(message);
+  }
 }
 
 /**
@@ -841,6 +988,16 @@ export async function executeAbilityAction(
           };
         }
         break;
+      }
+
+      case 'project': {
+        // Project creation is handled separately in chat.service.ts
+        // This case just flags that project mode should be activated
+        return {
+          handled: false, // Let chat service handle the full flow
+          result: '[PROJECT_INTENT_DETECTED]', // Signal to chat service
+          data: { intent: 'create_project', message },
+        };
       }
 
       case 'calendar': {
@@ -1166,20 +1323,48 @@ export async function executeAbilityAction(
           }
 
           case 'queue': {
-            const queueMatch = message.match(/(?:queue|add to queue)\s+(.+)/i);
-            const query = queueMatch?.[1]?.trim();
-            if (!query) {
+            // Extract tracks to queue - handle various phrasings like "queue röyksopp", "queue up röyksopp", "add röyksopp to queue"
+            const queueMatch = message.match(/(?:queue\s+(?:up\s+)?(?:more\s+)?|add\s+(?:to\s+queue\s+)?|play\s+next\s+)(.+)/i) ||
+                               message.match(/(?:add\s+)?(.+?)(?:\s+to\s+(?:the\s+)?queue)/i);
+            const rawQuery = queueMatch?.[1]?.trim();
+
+            if (!rawQuery) {
               return {
                 handled: true,
                 result: "What would you like me to add to the queue?",
                 data: { needsQuery: true },
               };
             }
-            const result = await spotify.addToQueue(userId, query);
+
+            // Split on "and" to handle multiple artists/tracks
+            const queries = rawQuery.split(/\s+and\s+/i).map(q => q.trim()).filter(Boolean);
+            const allAddedTracks: Array<{ name: string; artist: string }> = [];
+
+            for (const query of queries) {
+              // Use addMultipleToQueue to add 5 tracks per query (artist/search term)
+              const result = await spotify.addMultipleToQueue(userId, query, 5);
+              if (result.success && result.tracksAdded.length > 0) {
+                for (const track of result.tracksAdded) {
+                  allAddedTracks.push({ name: track.name, artist: track.artists[0]?.name || 'Unknown' });
+                }
+              }
+            }
+
+            if (allAddedTracks.length === 0) {
+              return {
+                handled: true,
+                result: `Couldn't find tracks for: ${queries.join(', ')}`,
+                data: { success: false },
+              };
+            }
+
+            // Format the track list nicely
+            const trackList = allAddedTracks.map(t => `"${t.name}" by ${t.artist}`).join(', ');
+
             return {
               handled: true,
-              result: result.message,
-              data: { track: result.track, success: result.success },
+              result: `Added ${allAddedTracks.length} tracks to queue: ${trackList}`,
+              data: { tracksAdded: allAddedTracks, count: allAddedTracks.length },
             };
           }
 
@@ -1257,6 +1442,35 @@ export async function executeAbilityAction(
               handled: true,
               result: `${mood ? `Based on your ${mood} mood, ` : ''}here's what I recommend:\n${tracks.slice(0, 5).map((t, i) => `${i + 1}. ${t.name} - ${t.artists[0]?.name}`).join('\n')}\n\n${result.success ? `Now playing: ${firstTrack.name}` : result.message}`,
               data: { tracks, playing: result.track },
+            };
+          }
+
+          case 'create_playlist': {
+            // Extract playlist name and tracks from message
+            const playlistMatch = message.match(/(?:create|make)\s+(?:a\s+)?(?:new\s+)?playlist\s+(?:called\s+|named\s+)?["']?([^"']+?)["']?(?:\s+with\s+(.+))?$/i);
+            const name = playlistMatch?.[1]?.trim();
+
+            if (!name) {
+              return {
+                handled: true,
+                result: "What should I name the playlist?",
+                data: { needsName: true },
+              };
+            }
+
+            // Parse tracks if provided
+            let tracks: string[] | undefined;
+            if (playlistMatch?.[2]) {
+              tracks = playlistMatch[2].split(/,\s*(?:and\s+)?/).map(t => t.trim()).filter(Boolean);
+            }
+
+            const result = await spotify.createPlaylistWithTracks(userId, name, undefined, tracks);
+            return {
+              handled: true,
+              result: result.success
+                ? `${result.message}. ${result.playlistUrl ? `[Open in Spotify](${result.playlistUrl})` : ''}`
+                : result.message,
+              data: { success: result.success, playlistUrl: result.playlistUrl, tracksAdded: result.tracksAdded },
             };
           }
 
@@ -1340,11 +1554,13 @@ export default {
   buildAbilityContext,
   formatAbilityContextForPrompt,
   detectAbilityIntent,
+  detectCodingAgentShortcut,
   executeAbilityAction,
   executeFactCorrection,
   getAbilitySummary,
   isSmallTalk,
   isWeatherQuery,
   isStatusQuery,
+  isProjectCreationIntent,
   getContextOptions,
 };

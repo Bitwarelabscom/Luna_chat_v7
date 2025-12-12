@@ -75,7 +75,7 @@ const CalendarIcon = () => (
   </svg>
 );
 
-type MainTab = 'chat' | 'autonomous' | 'friends' | 'tasks' | 'workspace' | 'email' | 'calendar' | 'settings' | 'activity';
+type MainTab = 'chat' | 'autonomous' | 'friends' | 'tasks' | 'workspace' | 'email' | 'calendar' | 'trading' | 'settings' | 'activity';
 
 interface MobileBottomNavProps {
   activeTab: MainTab;

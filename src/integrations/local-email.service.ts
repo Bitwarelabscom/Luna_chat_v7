@@ -11,6 +11,7 @@ import logger from '../utils/logger.js';
 
 export interface EmailMessage {
   id?: string;
+  uid?: number;
   from: string;
   to: string[];
   cc?: string[];
@@ -20,6 +21,8 @@ export interface EmailMessage {
   date?: Date;
   messageId?: string;
   inReplyTo?: string;
+  references?: string[];
+  read?: boolean;
   attachments?: Array<{
     filename: string;
     contentType: string;
@@ -259,13 +262,23 @@ async function fetchRecentEmailsInternal(limit: number): Promise<EmailMessage[]>
 
           const toFetch = results.slice(-limit);
           let pending = toFetch.length;
-          const fetch = imap.fetch(toFetch, { bodies: '' });
+          const fetch = imap.fetch(toFetch, { bodies: '', struct: true });
 
           fetch.on('message', (msg) => {
+            let attrs: { uid?: number; flags?: string[] } = {};
+
+            msg.on('attributes', (a) => {
+              attrs = a;
+            });
+
             msg.on('body', (stream) => {
               simpleParser(stream as unknown as Source, (err, parsed) => {
                 if (!err) {
-                  emails.push(parsedMailToEmailMessage(parsed));
+                  emails.push({
+                    ...parsedMailToEmailMessage(parsed),
+                    uid: attrs.uid,
+                    read: attrs.flags?.includes('\\Seen') || false,
+                  });
                 }
                 pending--;
                 if (pending === 0) {
@@ -373,13 +386,23 @@ async function fetchUnreadEmailsInternal(): Promise<EmailMessage[]> {
           }
 
           let pending = results.length;
-          const fetch = imap.fetch(results, { bodies: '', markSeen: false });
+          const fetch = imap.fetch(results, { bodies: '', markSeen: false, struct: true });
 
           fetch.on('message', (msg) => {
+            let attrs: { uid?: number; flags?: string[] } = {};
+
+            msg.on('attributes', (a) => {
+              attrs = a;
+            });
+
             msg.on('body', (stream) => {
               simpleParser(stream as unknown as Source, (err, parsed) => {
                 if (!err) {
-                  emails.push(parsedMailToEmailMessage(parsed));
+                  emails.push({
+                    ...parsedMailToEmailMessage(parsed),
+                    uid: attrs.uid,
+                    read: false, // These are unread emails
+                  });
                 }
                 pending--;
                 if (pending === 0) {
@@ -562,10 +585,331 @@ export async function getEmailStatus(): Promise<{
   };
 }
 
+// ============================================
+// Fetch Email by UID
+// ============================================
+
+/**
+ * Fetch a single email by its UID
+ */
+export async function fetchEmailByUid(uid: number): Promise<EmailMessage | null> {
+  if (!config.email.enabled) {
+    return null;
+  }
+
+  const imapConfig: Imap.Config = {
+    user: config.email.imap.user,
+    password: config.email.imap.password || '',
+    host: config.email.imap.host,
+    port: config.email.imap.port,
+    tls: config.email.imap.secure,
+    tlsOptions: { rejectUnauthorized: false },
+    connTimeout: 10000,
+    authTimeout: 10000,
+  };
+
+  const imap = new Imap(imapConfig);
+
+  return new Promise((resolve, reject) => {
+    let resolved = false;
+    let email: EmailMessage | null = null;
+
+    const done = () => {
+      if (!resolved) {
+        resolved = true;
+        try { imap.end(); } catch (_e) { /* ignore */ }
+        resolve(email);
+      }
+    };
+
+    imap.once('ready', () => {
+      imap.openBox('INBOX', true, (err, _box) => {
+        if (err) {
+          if (!resolved) { resolved = true; reject(err); }
+          try { imap.end(); } catch (_e) { /* ignore */ }
+          return;
+        }
+
+        const fetch = imap.fetch([uid], {
+          bodies: '',
+          struct: true,
+          markSeen: false,
+        });
+
+        fetch.on('message', (msg) => {
+          let attrs: { uid?: number; flags?: string[] } = {};
+
+          msg.on('attributes', (a) => {
+            attrs = a;
+          });
+
+          msg.on('body', (stream) => {
+            simpleParser(stream as unknown as Source, (err, parsed) => {
+              if (!err) {
+                email = {
+                  ...parsedMailToEmailMessage(parsed),
+                  uid: attrs.uid,
+                  read: attrs.flags?.includes('\\Seen') || false,
+                };
+              }
+              done();
+            });
+          });
+        });
+
+        fetch.once('error', (err) => {
+          logger.error('Fetch by UID error', { error: err.message, uid });
+          done();
+        });
+
+        fetch.once('end', () => {
+          setTimeout(done, 100);
+        });
+      });
+    });
+
+    imap.once('error', (err: Error) => {
+      logger.error('IMAP error', { error: err.message });
+      if (!resolved) { resolved = true; reject(err); }
+    });
+
+    imap.connect();
+  });
+}
+
+// ============================================
+// Delete Email by UID
+// ============================================
+
+/**
+ * Delete an email by its UID
+ */
+export async function deleteEmail(uid: number): Promise<boolean> {
+  if (!config.email.enabled) {
+    return false;
+  }
+
+  const imapConfig: Imap.Config = {
+    user: config.email.imap.user,
+    password: config.email.imap.password || '',
+    host: config.email.imap.host,
+    port: config.email.imap.port,
+    tls: config.email.imap.secure,
+    tlsOptions: { rejectUnauthorized: false },
+    connTimeout: 10000,
+    authTimeout: 10000,
+  };
+
+  const imap = new Imap(imapConfig);
+
+  return new Promise((resolve, reject) => {
+    let resolved = false;
+
+    imap.once('ready', () => {
+      imap.openBox('INBOX', false, (err, _box) => {
+        if (err) {
+          if (!resolved) { resolved = true; reject(err); }
+          try { imap.end(); } catch (_e) { /* ignore */ }
+          return;
+        }
+
+        // Add \Deleted flag
+        imap.addFlags(uid, ['\\Deleted'], (err) => {
+          if (err) {
+            logger.error('Failed to mark email as deleted', { error: err.message, uid });
+            if (!resolved) { resolved = true; resolve(false); }
+            try { imap.end(); } catch (_e) { /* ignore */ }
+            return;
+          }
+
+          // Expunge to permanently delete
+          imap.expunge((err) => {
+            if (err) {
+              logger.error('Failed to expunge email', { error: err.message, uid });
+            }
+            if (!resolved) {
+              resolved = true;
+              logger.info('Email deleted', { uid });
+              resolve(!err);
+            }
+            try { imap.end(); } catch (_e) { /* ignore */ }
+          });
+        });
+      });
+    });
+
+    imap.once('error', (err: Error) => {
+      logger.error('IMAP error during delete', { error: err.message, uid });
+      if (!resolved) { resolved = true; resolve(false); }
+    });
+
+    imap.connect();
+  });
+}
+
+// ============================================
+// Mark Email as Read/Unread
+// ============================================
+
+/**
+ * Mark an email as read or unread by its UID
+ */
+export async function markEmailRead(uid: number, isRead: boolean): Promise<boolean> {
+  if (!config.email.enabled) {
+    return false;
+  }
+
+  const imapConfig: Imap.Config = {
+    user: config.email.imap.user,
+    password: config.email.imap.password || '',
+    host: config.email.imap.host,
+    port: config.email.imap.port,
+    tls: config.email.imap.secure,
+    tlsOptions: { rejectUnauthorized: false },
+    connTimeout: 10000,
+    authTimeout: 10000,
+  };
+
+  const imap = new Imap(imapConfig);
+
+  return new Promise((resolve, reject) => {
+    let resolved = false;
+
+    imap.once('ready', () => {
+      imap.openBox('INBOX', false, (err, _box) => {
+        if (err) {
+          if (!resolved) { resolved = true; reject(err); }
+          try { imap.end(); } catch (_e) { /* ignore */ }
+          return;
+        }
+
+        const flagOperation = isRead ? imap.addFlags.bind(imap) : imap.delFlags.bind(imap);
+
+        flagOperation(uid, ['\\Seen'], (err: Error | null) => {
+          if (err) {
+            logger.error('Failed to update read status', { error: err.message, uid, isRead });
+            if (!resolved) { resolved = true; resolve(false); }
+          } else {
+            logger.info('Email read status updated', { uid, isRead });
+            if (!resolved) { resolved = true; resolve(true); }
+          }
+          try { imap.end(); } catch (_e) { /* ignore */ }
+        });
+      });
+    });
+
+    imap.once('error', (err: Error) => {
+      logger.error('IMAP error during mark read', { error: err.message, uid });
+      if (!resolved) { resolved = true; resolve(false); }
+    });
+
+    imap.connect();
+  });
+}
+
+// ============================================
+// Reply to Email
+// ============================================
+
+/**
+ * Reply to an email with proper threading headers
+ */
+export async function replyToEmail(
+  originalUid: number,
+  replyBody: string
+): Promise<SendResult> {
+  if (!config.email.enabled) {
+    return { success: false, error: 'Email is disabled' };
+  }
+
+  // First fetch the original email to get headers for threading
+  const original = await fetchEmailByUid(originalUid);
+
+  if (!original) {
+    return { success: false, error: 'Original email not found' };
+  }
+
+  // Parse the sender's email address for reply
+  const fromMatch = original.from.match(/<([^>]+)>/);
+  const replyTo = fromMatch ? fromMatch[1] : original.from;
+
+  // Build references header for proper threading
+  const references: string[] = [];
+  if (original.references) {
+    references.push(...original.references);
+  }
+  if (original.inReplyTo) {
+    references.push(original.inReplyTo);
+  }
+  if (original.messageId && !references.includes(original.messageId)) {
+    references.push(original.messageId);
+  }
+
+  // Create reply subject
+  const replySubject = original.subject.startsWith('Re:')
+    ? original.subject
+    : `Re: ${original.subject}`;
+
+  try {
+    const transport = getSmtpTransport();
+
+    // Check if recipient is approved
+    if (!isRecipientApproved(replyTo)) {
+      logger.warn('Reply recipient not approved', { replyTo });
+      return {
+        success: false,
+        error: `Recipient ${replyTo} is not in the approved list`,
+        blockedRecipients: [replyTo],
+      };
+    }
+
+    const result = await transport.sendMail({
+      from: config.email.from,
+      to: replyTo,
+      subject: replySubject,
+      text: replyBody,
+      inReplyTo: original.messageId,
+      references: references.length > 0 ? references.join(' ') : undefined,
+    });
+
+    logger.info('Reply sent', {
+      messageId: result.messageId,
+      to: replyTo,
+      inReplyTo: original.messageId,
+    });
+
+    await logEmailEvent('sent', {
+      messageId: result.messageId,
+      to: [replyTo],
+      subject: replySubject,
+      isReply: true,
+      originalUid,
+    });
+
+    return {
+      success: true,
+      messageId: result.messageId,
+    };
+  } catch (error) {
+    logger.error('Failed to send reply', {
+      error: (error as Error).message,
+      originalUid,
+    });
+    return {
+      success: false,
+      error: (error as Error).message,
+    };
+  }
+}
+
 export default {
   sendEmail,
   fetchRecentEmails,
   fetchUnreadEmails,
+  fetchEmailByUid,
+  deleteEmail,
+  markEmailRead,
+  replyToEmail,
   getApprovedRecipients,
   isRecipientApproved,
   filterApprovedRecipients,

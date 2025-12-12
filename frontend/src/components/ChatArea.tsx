@@ -9,6 +9,8 @@ import clsx from 'clsx';
 import MessageActions from './MessageActions';
 import MessageMetrics from './MessageMetrics';
 import { useAudioPlayer } from './useAudioPlayer';
+import YouTubeEmbed, { parseMediaBlocks } from './YouTubeEmbed';
+import ImageEmbed from './ImageEmbed';
 import dynamic from 'next/dynamic';
 
 const VoiceChatArea = dynamic(() => import('./VoiceChatArea'), {
@@ -47,6 +49,7 @@ function StandardChatArea() {
     setStreamingContent,
     setStatusMessage,
     setIsLoadingStartup,
+    setBrowserAction,
   } = useChatStore();
 
   const audioPlayer = useAudioPlayer();
@@ -70,7 +73,9 @@ function StandardChatArea() {
   useEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
+      // Max height is 50% of viewport for comfortable viewing of long prompts
+      const maxHeight = typeof window !== 'undefined' ? window.innerHeight * 0.5 : 400;
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, maxHeight)}px`;
     }
   }, [input]);
 
@@ -85,29 +90,24 @@ function StandardChatArea() {
     textareaRef.current?.focus();
   }, [currentSession?.id]);
 
-  // Trigger startup message for empty sessions
-  const startupTriggeredRef = useRef<string | null>(null);
-  useEffect(() => {
-    const sessionId = currentSession?.id;
-    const messages = currentSession?.messages || [];
+  // Startup message trigger DISABLED - wait for user input instead
+  // const startupTriggeredRef = useRef<string | null>(null);
+  // useEffect(() => {
+  //   const sessionId = currentSession?.id;
+  //   const messages = currentSession?.messages || [];
+  //   if (
+  //     sessionId &&
+  //     messages.length === 0 &&
+  //     !isLoadingMessages &&
+  //     !isLoadingStartup &&
+  //     startupTriggeredRef.current !== sessionId
+  //   ) {
+  //     startupTriggeredRef.current = sessionId;
+  //     triggerStartup(sessionId);
+  //   }
+  // }, [currentSession?.id, currentSession?.messages?.length, isLoadingMessages, isLoadingStartup]);
 
-    // Only trigger startup if:
-    // - Session exists and has no messages
-    // - Not already loading messages
-    // - Not already loading startup
-    // - Haven't already triggered for this session
-    if (
-      sessionId &&
-      messages.length === 0 &&
-      !isLoadingMessages &&
-      !isLoadingStartup &&
-      startupTriggeredRef.current !== sessionId
-    ) {
-      startupTriggeredRef.current = sessionId;
-      triggerStartup(sessionId);
-    }
-  }, [currentSession?.id, currentSession?.messages?.length, isLoadingMessages, isLoadingStartup]);
-
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const triggerStartup = async (sessionId: string) => {
     setIsLoadingStartup(true);
     try {
@@ -152,6 +152,9 @@ function StandardChatArea() {
           setStatusMessage(''); // Clear status when content starts
           accumulatedContent += chunk.content;
           appendStreamingContent(chunk.content);
+        } else if (chunk.type === 'browser_action' && chunk.action === 'open') {
+          // Signal to open browser window for visual browsing
+          setBrowserAction({ type: 'open', url: chunk.url });
         } else if (chunk.type === 'done' && chunk.messageId) {
           addAssistantMessage(accumulatedContent, chunk.messageId, chunk.metrics);
           setStreamingContent('');
@@ -240,7 +243,7 @@ function StandardChatArea() {
   const hasMessages = messages.length > 0 || streamingContent;
 
   return (
-    <main className="flex-1 flex flex-col h-screen">
+    <main className="flex-1 flex flex-col h-full overflow-hidden">
       {/* Messages area */}
       <div className="flex-1 overflow-y-auto">
         {isLoadingMessages ? (
@@ -293,8 +296,26 @@ function StandardChatArea() {
                     )}
                   >
                     {msg.role === 'assistant' ? (
-                      <div className="message-content prose prose-invert prose-sm max-w-none">
-                        <ReactMarkdown>{msg.content}</ReactMarkdown>
+                      <div className="message-content prose prose-invert prose-sm max-w-none" data-youtube-test="enabled">
+                        {parseMediaBlocks(msg.content).map((block, idx) => (
+                          block.type === 'youtube' ? (
+                            <YouTubeEmbed
+                              key={`yt-${idx}`}
+                              videoId={block.videoId}
+                              title={block.title}
+                              channel={block.channel}
+                              duration={block.duration}
+                            />
+                          ) : block.type === 'image' ? (
+                            <ImageEmbed
+                              key={`img-${idx}`}
+                              url={block.url}
+                              caption={block.caption}
+                            />
+                          ) : (
+                            <ReactMarkdown key={`md-${idx}`}>{block.content}</ReactMarkdown>
+                          )
+                        ))}
                       </div>
                     ) : (
                       <p className="whitespace-pre-wrap">{msg.content}</p>
@@ -326,7 +347,25 @@ function StandardChatArea() {
               <div className="mb-6">
                 <div className="inline-block max-w-[85%] px-4 py-3 rounded-2xl bg-theme-message-assistant text-theme-message-assistant-text rounded-bl-md border border-theme-border">
                   <div className="message-content prose prose-invert prose-sm max-w-none">
-                    <ReactMarkdown>{streamingContent}</ReactMarkdown>
+                    {parseMediaBlocks(streamingContent).map((block, idx) => (
+                      block.type === 'youtube' ? (
+                        <YouTubeEmbed
+                          key={`yt-stream-${idx}`}
+                          videoId={block.videoId}
+                          title={block.title}
+                          channel={block.channel}
+                          duration={block.duration}
+                        />
+                      ) : block.type === 'image' ? (
+                        <ImageEmbed
+                          key={`img-stream-${idx}`}
+                          url={block.url}
+                          caption={block.caption}
+                        />
+                      ) : (
+                        <ReactMarkdown key={`md-stream-${idx}`}>{block.content}</ReactMarkdown>
+                      )
+                    ))}
                     <span className="typing-cursor" />
                   </div>
                 </div>
@@ -365,7 +404,7 @@ function StandardChatArea() {
               onKeyDown={handleKeyDown}
               placeholder="Message Luna..."
               rows={1}
-              className="flex-1 bg-transparent px-4 py-3 outline-none resize-none max-h-[200px] text-theme-text-primary placeholder-theme-text-muted"
+              className="flex-1 bg-transparent px-4 py-3 outline-none resize-none max-h-[50vh] text-theme-text-primary placeholder-theme-text-muted"
               disabled={isSending}
             />
             <button

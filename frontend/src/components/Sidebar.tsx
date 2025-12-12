@@ -14,6 +14,10 @@ import {
   Check,
   Heart,
   Mic,
+  Archive,
+  RotateCcw,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
 import clsx from 'clsx';
 import UserMenu from './UserMenu';
@@ -24,12 +28,16 @@ export default function Sidebar() {
   const { user, logout } = useAuthStore();
   const {
     sessions,
+    archivedSessions,
     currentSession,
     isLoadingSessions,
     loadSession,
     createSession,
+    archiveSession,
+    restoreSession,
     deleteSession,
     renameSession,
+    loadArchivedSessions,
   } = useChatStore();
 
   const [isOpen, setIsOpen] = useState(true);
@@ -37,7 +45,15 @@ export default function Sidebar() {
   const [editTitle, setEditTitle] = useState('');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [showModeSelector, setShowModeSelector] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
   const modeSelectorRef = useRef<HTMLDivElement>(null);
+
+  // Load archived sessions when expanded
+  useEffect(() => {
+    if (showArchived) {
+      loadArchivedSessions();
+    }
+  }, [showArchived, loadArchivedSessions]);
 
   // Close mode selector when clicking outside
   useEffect(() => {
@@ -70,9 +86,19 @@ export default function Sidebar() {
     }
   };
 
-  const handleDelete = async (e: React.MouseEvent, id: string) => {
+  const handleArchive = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    if (confirm('Delete this conversation?')) {
+    await archiveSession(id);
+  };
+
+  const handleRestore = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    await restoreSession(id);
+  };
+
+  const handlePermanentDelete = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    if (confirm('Permanently delete this conversation? This cannot be undone.')) {
       await deleteSession(id);
     }
   };
@@ -237,20 +263,71 @@ export default function Sidebar() {
                         <button
                           onClick={(e) => handleStartEdit(e, session)}
                           className="p-1 hover:bg-theme-bg-primary rounded"
+                          title="Rename"
                         >
                           <Pencil className="w-3.5 h-3.5" />
                         </button>
                         <button
-                          onClick={(e) => handleDelete(e, session.id)}
-                          className="p-1 hover:bg-theme-bg-primary rounded text-red-400"
+                          onClick={(e) => handleArchive(e, session.id)}
+                          className="p-1 hover:bg-theme-bg-primary rounded text-theme-text-muted hover:text-red-400"
+                          title="Archive"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <X className="w-3.5 h-3.5" />
                         </button>
                       </>
                     )}
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Archived sessions section */}
+          {(sessions.length > 0 || archivedSessions.length > 0) && (
+            <div className="mt-4 border-t border-theme-border pt-2">
+              <button
+                onClick={() => setShowArchived(!showArchived)}
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-theme-text-muted hover:text-theme-text-secondary transition"
+              >
+                {showArchived ? (
+                  <ChevronDown className="w-4 h-4" />
+                ) : (
+                  <ChevronRight className="w-4 h-4" />
+                )}
+                <Archive className="w-4 h-4" />
+                <span>Archived ({archivedSessions.length})</span>
+              </button>
+
+              {showArchived && archivedSessions.length > 0 && (
+                <div className="space-y-1 mt-1">
+                  {archivedSessions.map((session) => (
+                    <div
+                      key={session.id}
+                      onClick={() => handleSelectSession(session.id)}
+                      className="group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition text-theme-text-muted hover:bg-theme-bg-tertiary/50 hover:text-theme-text-secondary opacity-60"
+                    >
+                      {getModeIcon(session.mode)}
+                      <span className="flex-1 truncate text-sm">{session.title}</span>
+                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
+                        <button
+                          onClick={(e) => handleRestore(e, session.id)}
+                          className="p-1 hover:bg-theme-bg-primary rounded text-green-400"
+                          title="Restore"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={(e) => handlePermanentDelete(e, session.id)}
+                          className="p-1 hover:bg-theme-bg-primary rounded text-red-400"
+                          title="Delete permanently"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>

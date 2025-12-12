@@ -365,6 +365,46 @@ router.post('/test', async (req: Request, res: Response) => {
   }
 });
 
+const notificationSchema = z.object({
+  category: z.enum(['trading', 'reminders', 'email', 'autonomous']),
+  title: z.string().min(1).max(100),
+  message: z.string().min(1).max(500),
+  priority: z.number().min(1).max(10).optional(),
+  eventType: z.string().optional(),
+});
+
+/**
+ * POST /api/triggers/notification
+ * Send a notification to the current user (for testing the notification system)
+ */
+router.post('/notification', async (req: Request, res: Response) => {
+  try {
+    const data = notificationSchema.parse(req.body);
+
+    await deliveryService.sendNotification(req.user!.userId, {
+      category: data.category,
+      title: data.title,
+      message: data.message,
+      priority: data.priority || 5,
+      eventType: data.eventType,
+      navigationTarget: {
+        appId: data.category === 'trading' ? 'trading' :
+               data.category === 'reminders' ? 'todo' :
+               data.category === 'email' ? 'email' : 'chat',
+      },
+    });
+
+    res.json({ success: true, message: 'Notification sent' });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: 'Validation error', details: error.errors });
+      return;
+    }
+    logger.error('Failed to send notification', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to send notification' });
+  }
+});
+
 // ============================================
 // Telegram Integration
 // ============================================

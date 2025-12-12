@@ -61,14 +61,21 @@ export const messageSchema = z.object({
 
 export type Message = z.infer<typeof messageSchema>;
 
+export type MessageSource = 'web' | 'telegram' | 'api';
+
 export interface MessageCreate {
   sessionId: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
   tokensUsed?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheTokens?: number;
   model?: string;
+  provider?: string;
   searchResults?: unknown;
   memoryContext?: unknown;
+  source?: MessageSource;
 }
 
 // Auth types
