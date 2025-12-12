@@ -23,6 +23,7 @@ Built with a **Local-First** ethos, Luna integrates deeply with your digital lif
 - [Key Features](#key-features)
 - [Chat Modes](#chat-modes)
 - [Luna's Abilities](#lunas-abilities)
+- [Trading (Trader Luna)](#trading-trader-luna)
 - [Triggers System](#triggers-system)
 - [The Council & Friends](#the-council--friends)
 - [Autonomous Mode](#autonomous-mode)
@@ -68,6 +69,21 @@ Most AI assistants are stateless query engines. Luna is a **stateful companion**
 - **RSS Monitoring**: Autonomous feed checking and summarization
 - **Proactive Insights**: Generates insights from accumulated knowledge
 
+### Trading (Trader Luna)
+- **Binance Integration**: Connect your Binance account for live trading
+- **Portfolio Management**: Real-time portfolio tracking and P&L
+- **Order Execution**: Market and limit orders with TP/SL
+- **Trading Bots**: Grid, DCA, and RSI-based automated strategies
+- **Research Mode**: Technical analysis with RSI, MACD, Bollinger Bands
+- **Paper Trading**: Test strategies without risking real funds
+- **Binance Alpha**: Access to new token listings
+
+### Browser Automation
+- **Visual Browsing**: Navigate websites with live screencast
+- **Screenshots**: Capture and analyze web pages
+- **Form Interaction**: Click buttons, fill forms, extract content
+- **Research Assistant**: Luna can browse the web to answer questions
+
 ### Integrations
 - **Calendar**: CalDAV integration (Google, Outlook, self-hosted Radicale)
 - **Email**: SMTP/IMAP support for sending and receiving
@@ -77,6 +93,8 @@ Most AI assistants are stateless query engines. Luna is a **stateful companion**
 - **Document Processing**: Upload and search PDFs, text files, and more
 - **Web Search**: SearXNG integration for web research
 - **Text-to-Speech**: ElevenLabs integration for voice responses
+- **Spotify**: Music playback control and recommendations
+- **Quick Reminders**: Set reminders via natural language
 
 ### Security
 - **Docker Secrets**: Encrypted credential storage
@@ -213,6 +231,74 @@ Configure MCP servers in Settings > MCP Servers:
 - Add server name, URL, and optional headers
 - Or configure stdio command with arguments and environment variables
 - Luna automatically discovers and uses available tools during chat
+
+---
+
+## Trading (Trader Luna)
+
+Trader Luna is a **separate, specialized trading assistant** focused entirely on cryptocurrency trading via Binance. She operates independently from the main Luna persona with no access to personal data, calendar, or email - purely trading-focused.
+
+### Key Features
+
+| Feature | Description |
+|---------|-------------|
+| **Portfolio View** | Real-time holdings, balances, and P&L |
+| **Order Execution** | Market and limit orders with confirmation |
+| **Take Profit/Stop Loss** | Automatic TP/SL order management |
+| **Trading Bots** | Automated Grid, DCA, and RSI strategies |
+| **Research Mode** | Technical analysis and signal generation |
+| **Paper Trading** | Test strategies without real funds |
+| **Binance Alpha** | Access to new token listings |
+
+### Trading Bots
+
+| Bot Type | Strategy |
+|----------|----------|
+| **Grid Bot** | Buy/sell at price intervals within a range |
+| **DCA Bot** | Dollar-cost averaging at regular intervals |
+| **RSI Bot** | Trade based on RSI oversold/overbought signals |
+
+### Research Mode
+
+Automated technical analysis with configurable indicators:
+- **RSI** (Relative Strength Index) - oversold/overbought detection
+- **MACD** - trend momentum and crossovers
+- **Bollinger Bands** - volatility and price channels
+- **EMA Cross** - moving average crossover signals
+- **Volume Analysis** - volume spike detection
+
+Research mode generates trading signals with confidence scores and can auto-execute or request confirmation.
+
+### Scalping Mode
+
+High-frequency paper trading for strategy testing:
+- Paper mode for risk-free testing
+- Live mode for real execution
+- Position tracking and P&L analytics
+- Configurable entry/exit rules
+
+### Tools Available to Trader Luna
+
+| Tool | Description |
+|------|-------------|
+| `get_portfolio` | View holdings and balances |
+| `get_prices` | Real-time prices for symbols |
+| `place_order` | Execute buy/sell orders |
+| `get_klines` | Candlestick data for analysis |
+| `manage_bot` | Create, start, stop trading bots |
+| `display_content` | Control dashboard display (charts, websites) |
+
+### API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/trading/connect` | Connect Binance API |
+| GET | `/api/trading/portfolio` | Get portfolio |
+| POST | `/api/trading/order` | Place order |
+| GET | `/api/trading/bots` | List trading bots |
+| POST | `/api/trading/bots` | Create bot |
+| GET | `/api/trading/research/signals` | Get research signals |
+| POST | `/api/trading/chat/session/:id/send` | Chat with Trader Luna |
 
 ---
 
@@ -392,19 +478,24 @@ luna-chat/
 |-- src/                    # Backend (Node.js/TypeScript)
 |   |-- abilities/          # Tools and integrations
 |   |   |-- agents.service.ts       # Claude CLI agent orchestration
+|   |   |-- browser.service.ts      # Visual web browsing
 |   |   |-- calendar.service.ts     # CalDAV integration
 |   |   |-- checkins.service.ts     # Check-in scheduling
 |   |   |-- documents.service.ts    # Document management
 |   |   |-- email.service.ts        # Email orchestration
+|   |   |-- image-generation.service.ts  # DALL-E image generation
 |   |   |-- knowledge.service.ts    # Knowledge base
 |   |   |-- luna-media.service.ts   # Mood videos/images
 |   |   |-- mood.service.ts         # Mood tracking
 |   |   |-- orchestrator.ts         # Ability detection
+|   |   |-- reminder.service.ts     # Quick reminders
 |   |   |-- sandbox.service.ts      # Code execution
+|   |   |-- spotify.service.ts      # Spotify playback control
 |   |   |-- tasks.service.ts        # Task management
 |   |   |-- tools.service.ts        # Custom tools
 |   |   |-- vision.service.ts       # Image analysis
 |   |   |-- workspace.service.ts    # File workspace
+|   |   |-- youtube.service.ts      # YouTube search and embed
 |   |-- autonomous/         # Autonomous mode
 |   |   |-- autonomous.service.ts   # Core logic
 |   |   |-- council.service.ts      # Council deliberation
@@ -438,6 +529,14 @@ luna-chat/
 |   |   |-- mcp.service.ts            # MCP client logic
 |   |   |-- mcp.routes.ts             # MCP API endpoints
 |   |   |-- transports.ts             # HTTP and stdio transports
+|   |-- trading/            # Trader Luna (Binance integration)
+|   |   |-- trading.service.ts        # Core trading logic
+|   |   |-- trading.routes.ts         # Trading API endpoints
+|   |   |-- trading.websocket.ts      # Real-time price streaming
+|   |   |-- binance.client.ts         # Binance API client
+|   |   |-- bot-executor.service.ts   # Trading bot execution
+|   |   |-- research.service.ts       # Technical analysis
+|   |   |-- scalping.service.ts       # Scalping strategies
 |-- frontend/               # Next.js web UI
 |   |-- src/
 |   |   |-- components/
@@ -448,8 +547,11 @@ luna-chat/
 |   |   |   |-- settings/
 |   |   |   |   |-- TriggersTab.tsx       # Trigger configuration UI
 |   |   |   |   |-- McpTab.tsx            # MCP servers configuration UI
+|   |   |   |-- trading/
+|   |   |   |   |-- TradingDashboard.tsx  # Trading UI
 |   |   |-- hooks/
 |   |   |   |-- useIsMobile.ts
+|   |   |   |-- useTradingWebSocket.ts    # Real-time price updates
 |-- android/                # Native Android app
 |-- images/                 # Luna media (videos/images)
 |-- secrets/                # Docker secrets
