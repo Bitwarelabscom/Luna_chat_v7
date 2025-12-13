@@ -3,16 +3,57 @@ import * as factsService from './facts.service.js';
 import * as insightsService from '../autonomous/insights.service.js';
 import logger from '../utils/logger.js';
 
+/**
+ * Memory context split into stable (cacheable) and volatile (per-query) parts
+ * This separation enables better Anthropic prompt caching
+ */
 export interface MemoryContext {
-  facts: string;
-  relevantHistory: string;
-  conversationContext: string;
-  learnings: string;
+  // Stable (cacheable) - rarely changes, goes in Tier 2
+  stable: {
+    facts: string;      // User facts - sorted alphabetically for determinism
+    learnings: string;  // Luna's learnings - sorted for determinism
+  };
+  // Volatile (not cached) - changes per query, goes in Tier 4
+  volatile: {
+    relevantHistory: string;      // Semantic search results
+    conversationContext: string;  // Similar conversation summaries
+  };
+}
+
+/**
+ * Format stable memory context for Tier 2 (cacheable)
+ * Contains user facts and learnings that rarely change
+ */
+export function formatStableMemory(context: MemoryContext): string {
+  const parts: string[] = [];
+  if (context.stable.facts) {
+    parts.push(context.stable.facts);
+  }
+  if (context.stable.learnings) {
+    parts.push(context.stable.learnings);
+  }
+  return parts.join('\n\n');
+}
+
+/**
+ * Format volatile memory context for Tier 4 (not cached)
+ * Contains semantic search results that change per query
+ */
+export function formatVolatileMemory(context: MemoryContext): string {
+  const parts: string[] = [];
+  if (context.volatile.relevantHistory) {
+    parts.push(context.volatile.relevantHistory);
+  }
+  if (context.volatile.conversationContext) {
+    parts.push(context.volatile.conversationContext);
+  }
+  return parts.join('\n\n');
 }
 
 /**
  * Build complete memory context for a conversation
  * OPTIMIZED: Runs all queries in parallel for better performance
+ * Returns split stable/volatile context for cache optimization
  */
 export async function buildMemoryContext(
   userId: string,
@@ -44,9 +85,16 @@ export async function buildMemoryContext(
       insightsService.getActiveLearningsForContext(userId, 10),
     ]);
 
+    // Format facts with alphabetical sorting for cache determinism
     const factsPrompt = factsService.formatFactsForPrompt(facts);
 
-    // Format relevant history
+    // Format learnings (stable)
+    let learnings = '';
+    if (learningsContext) {
+      learnings = `[Luna's Learnings - Apply these insights to personalize responses]\n${learningsContext}`;
+    }
+
+    // Format relevant history (volatile - changes per query)
     let relevantHistory = '';
     if (similarMessages.length > 0) {
       const historyItems = similarMessages.map(m => {
@@ -56,7 +104,7 @@ export async function buildMemoryContext(
       relevantHistory = `[Relevant Past Conversations]\n${historyItems.join('\n')}`;
     }
 
-    // Format conversation context
+    // Format conversation context (volatile - changes per query)
     let conversationContext = '';
     if (similarConversations.length > 0) {
       const contextItems = similarConversations.map(c =>
@@ -65,47 +113,49 @@ export async function buildMemoryContext(
       conversationContext = `[Related Past Topics]\n${contextItems.join('\n')}`;
     }
 
-    // Format learnings
-    let learnings = '';
-    if (learningsContext) {
-      learnings = `[Luna's Learnings - Apply these insights to personalize responses]\n${learningsContext}`;
-    }
-
     return {
-      facts: factsPrompt,
-      relevantHistory,
-      conversationContext,
-      learnings,
+      stable: {
+        facts: factsPrompt,
+        learnings,
+      },
+      volatile: {
+        relevantHistory,
+        conversationContext,
+      },
     };
   } catch (error) {
     logger.error('Failed to build memory context', {
       error: (error as Error).message,
       userId
     });
-    return { facts: '', relevantHistory: '', conversationContext: '', learnings: '' };
+    return {
+      stable: { facts: '', learnings: '' },
+      volatile: { relevantHistory: '', conversationContext: '' }
+    };
   }
 }
 
 /**
- * Format memory context for system prompt
+ * Format memory context for system prompt (legacy - combines all parts)
+ * @deprecated Use formatStableMemory and formatVolatileMemory for cache optimization
  */
 export function formatMemoryForPrompt(context: MemoryContext): string {
   const parts: string[] = [];
 
-  if (context.facts) {
-    parts.push(context.facts);
+  // Stable parts
+  if (context.stable.facts) {
+    parts.push(context.stable.facts);
+  }
+  if (context.stable.learnings) {
+    parts.push(context.stable.learnings);
   }
 
-  if (context.relevantHistory) {
-    parts.push(context.relevantHistory);
+  // Volatile parts
+  if (context.volatile.relevantHistory) {
+    parts.push(context.volatile.relevantHistory);
   }
-
-  if (context.conversationContext) {
-    parts.push(context.conversationContext);
-  }
-
-  if (context.learnings) {
-    parts.push(context.learnings);
+  if (context.volatile.conversationContext) {
+    parts.push(context.volatile.conversationContext);
   }
 
   if (parts.length === 0) return '';
@@ -174,6 +224,8 @@ export async function processConversationMemory(
 export default {
   buildMemoryContext,
   formatMemoryForPrompt,
+  formatStableMemory,
+  formatVolatileMemory,
   processMessageMemory,
   processConversationMemory,
 };

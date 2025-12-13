@@ -1,12 +1,13 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { X, MessageSquare, BarChart3, Database, Cpu, Palette, Link2, FolderOpen, CheckSquare, Brain, Sparkles, Bell, Plug } from 'lucide-react';
+import { X, MessageSquare, BarChart3, Database, Cpu, Palette, Link2, FolderOpen, CheckSquare, Brain, Sparkles, Bell, Plug, Code } from 'lucide-react';
 import AppearanceTab from './settings/AppearanceTab';
 import PromptsTab from './settings/PromptsTab';
 import StatsTab from './settings/StatsTab';
 import DataTab from './settings/DataTab';
 import ModelsTab from './settings/ModelsTab';
+import CoderTab from './settings/CoderTab';
 import IntegrationsTab from './settings/IntegrationsTab';
 import WorkspaceTab from './settings/WorkspaceTab';
 import TasksTab from './settings/TasksTab';
@@ -20,12 +21,13 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
-type TabId = 'appearance' | 'prompts' | 'models' | 'integrations' | 'mcpconfig' | 'workspace' | 'tasks' | 'memory' | 'autonomous' | 'triggers' | 'stats' | 'data';
+type TabId = 'appearance' | 'prompts' | 'models' | 'coder' | 'integrations' | 'mcpconfig' | 'workspace' | 'tasks' | 'memory' | 'autonomous' | 'triggers' | 'stats' | 'data';
 
 const SETTINGS_TABS: Array<{ id: TabId; label: string; icon: typeof MessageSquare }> = [
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'prompts', label: 'Prompts', icon: MessageSquare },
   { id: 'models', label: 'Models', icon: Cpu },
+  { id: 'coder', label: 'Coder', icon: Code },
   { id: 'integrations', label: 'Integrations', icon: Link2 },
   { id: 'mcpconfig', label: 'MCP Servers', icon: Plug },
   { id: 'workspace', label: 'Workspace', icon: FolderOpen },
@@ -105,6 +107,7 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           {activeTab === 'appearance' && <AppearanceTab />}
           {activeTab === 'prompts' && <PromptsTab />}
           {activeTab === 'models' && <ModelsTab />}
+          {activeTab === 'coder' && <CoderTab />}
           {activeTab === 'integrations' && <IntegrationsTab />}
           {activeTab === 'mcpconfig' && <McpTab />}
           {activeTab === 'workspace' && <WorkspaceTab />}

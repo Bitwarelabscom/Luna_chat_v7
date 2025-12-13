@@ -435,6 +435,26 @@ export interface TtsSettings {
   openaiVoice: OpenAIVoice;
 }
 
+// Coder Settings Types
+export type ProviderId = 'openai' | 'groq' | 'anthropic' | 'xai' | 'openrouter' | 'ollama' | 'google';
+
+export interface TriggerWords {
+  claude: string[];
+  gemini: string[];
+  api: string[];
+}
+
+export interface CoderSettings {
+  userId: string;
+  claudeCliEnabled: boolean;
+  geminiCliEnabled: boolean;
+  coderApiEnabled: boolean;
+  coderApiProvider: ProviderId | null;
+  coderApiModel: string | null;
+  triggerWords: TriggerWords;
+  defaultCoder: 'claude' | 'gemini' | 'api';
+}
+
 export type ThemeType = 'dark' | 'retro' | 'light' | 'cyberpunk' | 'nord' | 'solarized';
 
 export type TimeFormat = '12h' | '24h';
@@ -549,7 +569,13 @@ export const settingsApi = {
 
   // Model Configuration
   getAvailableModels: () =>
+    api<{ providers: LLMProvider[]; tasks: TaskModelConfig[]; source?: string }>('/api/settings/models/live'),
+
+  getStaticModels: () =>
     api<{ providers: LLMProvider[]; tasks: TaskModelConfig[] }>('/api/settings/models/available'),
+
+  refreshModels: () =>
+    api<{ success: boolean; providers: LLMProvider[]; tasks: TaskModelConfig[] }>('/api/settings/models/refresh', { method: 'POST' }),
 
   getUserModelConfigs: () =>
     api<{ configs: UserModelConfig[] }>('/api/settings/models'),
@@ -569,6 +595,16 @@ export const settingsApi = {
 
   updateTtsSettings: (settings: Partial<TtsSettings>) =>
     api<{ success: boolean; settings: TtsSettings }>('/api/settings/tts', { method: 'PUT', body: settings }),
+
+  // Coder Settings
+  getCoderSettings: () =>
+    api<CoderSettings>('/api/settings/coder'),
+
+  updateCoderSettings: (updates: Partial<Omit<CoderSettings, 'userId'>>) =>
+    api<CoderSettings>('/api/settings/coder', { method: 'PUT', body: updates }),
+
+  resetCoderSettings: () =>
+    api<{ success: boolean }>('/api/settings/coder', { method: 'DELETE' }),
 };
 
 // Integrations API

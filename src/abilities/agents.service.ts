@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, copyFileSync } from 'fs';
 import { homedir } from 'os';
 import path from 'path';
 import * as workspace from './workspace.service.js';
+import * as coderSettings from './coder-settings.service.js';
 import { DAGExecutor } from './dag-executor.js';
 import { config } from '../config/index.js';
 
@@ -296,6 +297,34 @@ IMPORTANT - EXECUTE YOUR CODE:
 - If the script generates files (like charts), mention where they are saved
 - DO NOT just save scripts - EXECUTE them and show results${EM_DASH_RULE}`,
     model: 'gemini-cli',
+    temperature: 0.2,
+    tools: ['code_execution', 'workspace'],
+    isDefault: false,
+  },
+  'coder-api': {
+    name: 'coder-api',
+    description: 'Flexible Coder - Uses your configured API provider/model for coding tasks',
+    systemPrompt: `You are a skilled software developer. Your job is to help with coding tasks.
+
+YOUR CAPABILITIES:
+- Writing clean, maintainable code
+- Debugging and fixing issues
+- Code review and optimization
+- Writing tests and documentation
+- Explaining complex code
+
+YOUR APPROACH:
+- Write production-ready, maintainable code
+- Follow best practices and coding standards
+- Provide clear explanations when needed
+- Consider edge cases and error handling
+- Document complex logic
+
+OUTPUT FORMAT:
+- Use markdown code blocks with filename annotation for files: \`\`\`language:filename.ext
+- Include clear explanations of your changes
+- Highlight important considerations or trade-offs${EM_DASH_RULE}`,
+    model: 'coder-api', // Placeholder - actual model comes from user settings
     temperature: 0.2,
     tools: ['code_execution', 'workspace'],
     isDefault: false,
@@ -645,6 +674,9 @@ export async function executeAgentTask(
     } else if (task.agentName === 'coder-gemini') {
       // Gemini CLI for rapid prototyper agent
       return executeWithGeminiCLI(task.agentName, systemPrompt, userMessage, startTime, userId);
+    } else if (task.agentName === 'coder-api') {
+      // User-configured API provider/model for coding tasks
+      return executeWithCoderAPI(task.agentName, systemPrompt, userMessage, startTime, userId);
     } else if (task.agentName === 'researcher') {
       return executeResearcherWithWebSearch(task.agentName, systemPrompt, userMessage, startTime);
     } else {
@@ -1052,6 +1084,94 @@ ${userMessage}`;
     logger.error('Gemini CLI execution failed', {
       error: (error as Error).message,
       agentName
+    });
+    return {
+      agentName,
+      success: false,
+      result: `Error: ${(error as Error).message}`,
+      executionTimeMs: Date.now() - startTime,
+    };
+  }
+}
+
+/**
+ * Execute task with user-configured API provider/model (for coder-api agent)
+ * Uses the provider and model from user's coder settings
+ * Automatically extracts and saves code files to workspace
+ */
+async function executeWithCoderAPI(
+  agentName: string,
+  systemPrompt: string,
+  userMessage: string,
+  startTime: number,
+  userId: string
+): Promise<AgentResult> {
+  try {
+    // Get user's coder settings for provider/model
+    const settings = await coderSettings.getCoderSettings(userId);
+
+    if (!settings.coderApiProvider || !settings.coderApiModel) {
+      return {
+        agentName,
+        success: false,
+        result: 'Coder API is not configured. Please set a provider and model in Settings > Coder.',
+        executionTimeMs: Date.now() - startTime,
+      };
+    }
+
+    logger.info('Executing agent task via Coder API', {
+      agentName,
+      provider: settings.coderApiProvider,
+      model: settings.coderApiModel,
+    });
+
+    // Execute with the user's configured provider/model
+    const completion = await createChatCompletion({
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userMessage }
+      ],
+      provider: settings.coderApiProvider,
+      model: settings.coderApiModel,
+    });
+
+    let result = completion.content || 'No response generated';
+
+    // Extract and save any files from the output
+    const extractedFiles = extractFilesFromOutput(result);
+    const savedFileNames: string[] = [];
+
+    if (extractedFiles.length > 0) {
+      const savedFiles = await saveExtractedFiles(userId, extractedFiles);
+      savedFileNames.push(...savedFiles.map(f => f.name));
+
+      // Append saved file info to the result
+      if (savedFiles.length > 0) {
+        result += `\n\n📁 **Saved to workspace:** ${savedFiles.map(f => f.name).join(', ')}`;
+      }
+    }
+
+    logger.info('Coder API task completed', {
+      agentName,
+      provider: settings.coderApiProvider,
+      model: settings.coderApiModel,
+      executionTimeMs: Date.now() - startTime,
+      savedFiles: savedFileNames.length,
+      tokensUsed: completion.tokensUsed,
+    });
+
+    return {
+      agentName,
+      success: true,
+      result,
+      executionTimeMs: Date.now() - startTime,
+      savedFiles: savedFileNames.length > 0 ? savedFileNames : undefined,
+    };
+  } catch (error) {
+    logger.error('Coder API execution failed', {
+      error: (error as Error).message,
+      agentName,
+      userId,
     });
     return {
       agentName,

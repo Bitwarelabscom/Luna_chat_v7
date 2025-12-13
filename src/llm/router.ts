@@ -2,6 +2,7 @@ import type { ProviderId, ChatMessage, CompletionResult, StreamChunk } from './t
 import * as openaiProvider from './providers/openai.provider.js';
 import * as groqProvider from './providers/groq.provider.js';
 import * as anthropicProvider from './providers/anthropic.provider.js';
+import type { CacheableSystemBlock } from './providers/anthropic.provider.js';
 import * as xaiProvider from './providers/xai.provider.js';
 import * as openrouterProvider from './providers/openrouter.provider.js';
 import * as ollamaProvider from './providers/ollama.provider.js';
@@ -12,12 +13,12 @@ interface ProviderModule {
   createCompletion: (
     model: string,
     messages: ChatMessage[],
-    options?: { temperature?: number; maxTokens?: number }
+    options?: { temperature?: number; maxTokens?: number; systemBlocks?: CacheableSystemBlock[] }
   ) => Promise<CompletionResult>;
   streamCompletion: (
     model: string,
     messages: ChatMessage[],
-    options?: { temperature?: number; maxTokens?: number }
+    options?: { temperature?: number; maxTokens?: number; systemBlocks?: CacheableSystemBlock[] }
   ) => AsyncGenerator<StreamChunk>;
   isConfigured: () => boolean;
 }
@@ -45,12 +46,13 @@ function getProvider(providerId: ProviderId): ProviderModule {
 
 /**
  * Create a chat completion using the specified provider and model
+ * For Anthropic, systemBlocks can be passed for prompt caching
  */
 export async function createCompletion(
   providerId: ProviderId,
   model: string,
   messages: ChatMessage[],
-  options: { temperature?: number; maxTokens?: number } = {}
+  options: { temperature?: number; maxTokens?: number; systemBlocks?: CacheableSystemBlock[] } = {}
 ): Promise<CompletionResult> {
   const provider = getProvider(providerId);
 
@@ -65,12 +67,13 @@ export async function createCompletion(
 
 /**
  * Stream a chat completion using the specified provider and model
+ * For Anthropic, systemBlocks can be passed for prompt caching
  */
 export async function* streamCompletion(
   providerId: ProviderId,
   model: string,
   messages: ChatMessage[],
-  options: { temperature?: number; maxTokens?: number } = {}
+  options: { temperature?: number; maxTokens?: number; systemBlocks?: CacheableSystemBlock[] } = {}
 ): AsyncGenerator<StreamChunk> {
   const provider = getProvider(providerId);
 
@@ -93,6 +96,9 @@ export function isProviderAvailable(providerId: ProviderId): boolean {
 export function getAvailableProviders(): ProviderId[] {
   return (Object.keys(providers) as ProviderId[]).filter(id => providers[id].isConfigured());
 }
+
+// Re-export CacheableSystemBlock for convenience
+export type { CacheableSystemBlock };
 
 export default {
   createCompletion,

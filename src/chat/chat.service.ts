@@ -77,9 +77,12 @@ import * as browser from '../abilities/browser.service.js';
 import * as imageGeneration from '../abilities/image-generation.service.js';
 import * as projectService from '../abilities/project.service.js';
 import * as memoryService from '../memory/memory.service.js';
+// Note: formatStableMemory, formatVolatileMemory available for cache-optimized prompts
+// Full tool-calling cache integration requires extending openai.client.ts
 import * as preferencesService from '../memory/preferences.service.js';
 import * as abilities from '../abilities/orchestrator.js';
 import { buildContextualPrompt } from '../persona/luna.persona.js';
+// Note: buildCacheOptimizedPrompt available for Anthropic cache blocks via router
 import * as sessionService from './session.service.js';
 import * as contextCompression from './context-compression.service.js';
 import * as sessionLogService from './session-log.service.js';
@@ -127,7 +130,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     // Get conversation history (higher limit for compression to work with)
     sessionService.getSessionMessages(sessionId, { limit: 50 }),
     // Build memory context - skip for pure smalltalk
-    isSmallTalkMessage ? Promise.resolve({ facts: '', relevantHistory: '', conversationContext: '', learnings: '' }) : memoryService.buildMemoryContext(userId, message, sessionId),
+    isSmallTalkMessage ? Promise.resolve({ stable: { facts: '', learnings: '' }, volatile: { relevantHistory: '', conversationContext: '' } }) : memoryService.buildMemoryContext(userId, message, sessionId),
     // Build ability context - uses contextOptions for selective loading
     abilities.buildAbilityContext(userId, message, sessionId, contextOptions),
     // Get personalization preferences - lightweight, always load
@@ -2018,7 +2021,7 @@ export async function* streamMessage(
     // Get conversation history (higher limit for compression to work with)
     sessionService.getSessionMessages(sessionId, { limit: 50 }),
     // Build memory context - skip for pure smalltalk
-    isSmallTalkMessage ? Promise.resolve({ facts: '', relevantHistory: '', conversationContext: '', learnings: '' }) : memoryService.buildMemoryContext(userId, message, sessionId),
+    isSmallTalkMessage ? Promise.resolve({ stable: { facts: '', learnings: '' }, volatile: { relevantHistory: '', conversationContext: '' } }) : memoryService.buildMemoryContext(userId, message, sessionId),
     // Build ability context - uses contextOptions for selective loading
     abilities.buildAbilityContext(userId, message, sessionId, contextOptions),
     // Get personalization preferences - lightweight, always load

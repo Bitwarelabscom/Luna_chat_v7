@@ -9,6 +9,7 @@ import * as calendar from './calendar.service.js';
 import * as email from './email.service.js';
 import * as spotify from './spotify.service.js';
 import * as facts from '../memory/facts.service.js';
+import * as coderSettings from './coder-settings.service.js';
 import { createCompletion } from '../llm/router.js';
 import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
@@ -515,19 +516,54 @@ export async function buildAbilityContext(
 
 /**
  * Format ability context for inclusion in system prompt
+ * Uses deterministic ordering and consistent headers for cache optimization
  */
 export function formatAbilityContextForPrompt(context: AbilityContext): string {
   const sections: string[] = [];
 
-  if (context.knowledge) sections.push(context.knowledge);
-  if (context.tasks) sections.push(context.tasks);
-  if (context.calendar) sections.push(context.calendar);
-  if (context.email) sections.push(context.email);
-  if (context.mood) sections.push(context.mood);
-  if (context.spotify) sections.push(context.spotify);
+  // Always include sections in consistent order for cache determinism
+  // Use consistent headers even when content is empty
 
+  // Calendar section - always present
+  if (context.calendar) {
+    sections.push(context.calendar);
+  } else {
+    sections.push('[Calendar]\n(No upcoming events)');
+  }
+
+  // Tasks section - always present
+  if (context.tasks) {
+    sections.push(context.tasks);
+  } else {
+    sections.push('[Tasks]\n(No pending tasks)');
+  }
+
+  // Email section - always present
+  if (context.email) {
+    sections.push(context.email);
+  } else {
+    sections.push('[Email]\n(No new mail)');
+  }
+
+  // Mood section - only if available (not critical for consistency)
+  if (context.mood) {
+    sections.push(context.mood);
+  }
+
+  // Spotify section - only if available
+  if (context.spotify) {
+    sections.push(context.spotify);
+  }
+
+  // Knowledge section - only if relevant documents found
+  if (context.knowledge) {
+    sections.push(context.knowledge);
+  }
+
+  // Tools section - sort for determinism
   if (context.tools.length > 0) {
-    sections.push(`[Available Tools]\n${context.tools.join(', ')}`);
+    const sortedTools = [...context.tools].sort();
+    sections.push(`[Available Tools]\n${sortedTools.join(', ')}`);
   }
 
   return sections.join('\n\n');
@@ -536,6 +572,8 @@ export function formatAbilityContextForPrompt(context: AbilityContext): string {
 /**
  * Detect if message should be routed directly to a specific coding agent
  * Returns the preferred agent name or null if no shortcut matches
+ *
+ * @deprecated Use detectCodingAgentWithSettings for user-aware routing
  */
 export function detectCodingAgentShortcut(message: string): 'coder-claude' | 'coder-gemini' | null {
   const lower = message.toLowerCase();
@@ -581,6 +619,54 @@ export function detectCodingAgentShortcut(message: string): 'coder-claude' | 'co
   }
 
   return null;
+}
+
+/**
+ * Detect coding agent with user-aware routing
+ *
+ * Routing priority:
+ * 1. Explicit override (@coder-claude, "use coder-gemini", etc.)
+ * 2. If only one coder enabled, use it for all tasks
+ * 3. Match against user's custom trigger words
+ * 4. Use user's default coder setting
+ *
+ * Returns null if no coders are enabled or no match found
+ */
+export async function detectCodingAgentWithSettings(
+  userId: string,
+  message: string
+): Promise<coderSettings.CoderType | null> {
+  try {
+    // Get user's coder settings
+    const settings = await coderSettings.getCoderSettings(userId);
+
+    // Check for explicit override in message (@coder-claude, "use coder-gemini", etc.)
+    const explicitOverride = coderSettings.parseExplicitOverride(message);
+
+    if (explicitOverride) {
+      logger.debug('Explicit coder override detected', { override: explicitOverride, userId });
+    }
+
+    // Use the routing logic from coder-settings service
+    const selectedCoder = coderSettings.selectCoderForTask(settings, message, explicitOverride);
+
+    if (selectedCoder) {
+      logger.debug('Selected coder agent', {
+        coder: selectedCoder,
+        userId,
+        hadExplicitOverride: !!explicitOverride,
+      });
+    }
+
+    return selectedCoder;
+  } catch (error) {
+    logger.error('Failed to detect coding agent with settings', {
+      error: (error as Error).message,
+      userId,
+    });
+    // Fall back to legacy detection
+    return detectCodingAgentShortcut(message);
+  }
 }
 
 /**
@@ -1555,6 +1641,7 @@ export default {
   formatAbilityContextForPrompt,
   detectAbilityIntent,
   detectCodingAgentShortcut,
+  detectCodingAgentWithSettings,
   executeAbilityAction,
   executeFactCorrection,
   getAbilitySummary,

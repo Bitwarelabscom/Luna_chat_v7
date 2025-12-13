@@ -45,3 +45,6 @@ workspace-backup/
 # Generated images
 images/generated/
 images/moods/
+
+# Internal documentation
+prompting.md

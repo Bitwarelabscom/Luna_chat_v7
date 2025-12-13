@@ -483,6 +483,211 @@ This message was sent via the API (programmatic access).`);
   return sections.join('\n\n');
 }
 
+/**
+ * Interface for cache-optimized prompt blocks
+ * Used by Anthropic provider for prompt caching
+ */
+export interface CacheableSystemBlock {
+  text: string;
+  cache: boolean;
+}
+
+/**
+ * Format MCP tools for system prompt
+ */
+function formatMcpTools(mcpTools: Array<{ name: string; serverName: string; description: string }>): string {
+  const toolsByServer = mcpTools.reduce((acc, tool) => {
+    if (!acc[tool.serverName]) acc[tool.serverName] = [];
+    acc[tool.serverName].push(tool);
+    return acc;
+  }, {} as Record<string, typeof mcpTools>);
+
+  let mcpSection = `[MCP Tools - Model Context Protocol Extensions]
+You have access to additional tools via MCP (Model Context Protocol). These extend your capabilities:`;
+
+  // Sort server names for determinism
+  const sortedServers = Object.keys(toolsByServer).sort();
+  for (const serverName of sortedServers) {
+    const tools = toolsByServer[serverName];
+    mcpSection += `\n\n${serverName} (${tools.length} tools):`;
+    // Sort tools by name for determinism
+    const sortedTools = [...tools].sort((a, b) => a.name.localeCompare(b.name));
+    const displayTools = sortedTools.slice(0, 8);
+    for (const tool of displayTools) {
+      mcpSection += `\n- ${tool.name}: ${tool.description}`;
+    }
+    if (tools.length > 8) {
+      mcpSection += `\n- ... and ${tools.length - 8} more tools`;
+    }
+  }
+
+  mcpSection += `\n\nUse these tools when the user asks about server status, Docker containers, system monitoring, logs, or related topics.`;
+  return mcpSection;
+}
+
+/**
+ * Get source-specific context instructions
+ */
+function getSourceContext(source: 'telegram' | 'api'): string {
+  if (source === 'telegram') {
+    return `[Conversation Source]
+The user is chatting via Telegram (mobile messaging app).
+- Keep responses concise and mobile-friendly
+- Use shorter paragraphs
+- Avoid complex formatting like tables
+- Prefer simple bullet points over numbered lists
+- Be mindful that the user may be on-the-go`;
+  } else {
+    return `[Conversation Source]
+This message was sent via the API (programmatic access).`;
+  }
+}
+
+/**
+ * Normalize text for cache consistency
+ * - Trim trailing whitespace on each line
+ * - Normalize to single newlines
+ * - Ensure exactly one blank line between sections
+ */
+function normalizePromptText(text: string): string {
+  return text
+    .split('\n')
+    .map(line => line.trimEnd())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/**
+ * Build cache-optimized system prompt as structured blocks
+ *
+ * PROMPT STRUCTURE (optimized for Anthropic prompt caching):
+ * =====================================================
+ * TIER 1a - Base Prompt (CACHED)
+ *   - Core persona + mode-specific instructions (~5000 tokens)
+ *
+ * TIER 1b - MCP Tools (CACHED, separate block)
+ *   - Tool documentation (stable after load)
+ *
+ * TIER 2 - User Stable (CACHED)
+ *   - User name, preferences, stable facts, learnings
+ *
+ * TIER 3 - Session Summary (CACHED)
+ *   - Rolling conversation summary (updates every ~10 msgs)
+ *
+ * TIER 4 - Dynamic (NOT CACHED)
+ *   - Session history, volatile memory (RAG), abilities
+ *   - Search results, date/time, source context
+ * =====================================================
+ */
+export function buildCacheOptimizedPrompt(
+  mode: 'assistant' | 'companion' | 'voice',
+  options: {
+    userName?: string;
+    stableMemory?: string;      // Facts + Learnings (Tier 2)
+    preferences?: string;        // User preferences (Tier 2)
+    conversationSummary?: string; // Rolling summary (Tier 3)
+    sessionHistory?: string;     // Recent session logs (Tier 4)
+    volatileMemory?: string;     // RAG results (Tier 4)
+    abilityContext?: string;     // Tasks, calendar, email (Tier 4)
+    searchResults?: string;      // Web search results (Tier 4)
+    sessionContext?: string;     // Session notes (Tier 4)
+    mcpTools?: Array<{ name: string; serverName: string; description: string }>;
+    source?: 'web' | 'telegram' | 'api';
+  }
+): CacheableSystemBlock[] {
+  const blocks: CacheableSystemBlock[] = [];
+
+  // ============================================
+  // TIER 1a: Base Prompt (CACHED)
+  // ============================================
+  blocks.push({
+    text: normalizePromptText(getBasePrompt(mode)),
+    cache: true
+  });
+
+  // ============================================
+  // TIER 1b: MCP Tools (CACHED, separate block)
+  // ============================================
+  if (options.mcpTools && options.mcpTools.length > 0) {
+    blocks.push({
+      text: normalizePromptText(formatMcpTools(options.mcpTools)),
+      cache: true
+    });
+  }
+
+  // ============================================
+  // TIER 2: User Stable (CACHED)
+  // ============================================
+  const tier2Parts: string[] = [];
+
+  if (options.userName) {
+    tier2Parts.push(`[User Profile]\nThe user's name is ${options.userName}. Address them by name when appropriate.`);
+  }
+  if (options.preferences) {
+    tier2Parts.push(options.preferences);
+  }
+  if (options.stableMemory) {
+    tier2Parts.push(options.stableMemory);
+  }
+
+  if (tier2Parts.length > 0) {
+    blocks.push({
+      text: normalizePromptText(tier2Parts.join('\n\n')),
+      cache: true
+    });
+  }
+
+  // ============================================
+  // TIER 3: Session Summary (CACHED)
+  // ============================================
+  if (options.conversationSummary) {
+    blocks.push({
+      text: normalizePromptText(`[Conversation Summary]\n${options.conversationSummary}`),
+      cache: true
+    });
+  }
+
+  // ============================================
+  // TIER 4: Dynamic (NOT CACHED)
+  // ============================================
+  const tier4Parts: string[] = [];
+
+  if (options.sessionHistory) {
+    tier4Parts.push(options.sessionHistory);
+  }
+  if (options.volatileMemory) {
+    tier4Parts.push(options.volatileMemory);
+  }
+  if (options.abilityContext) {
+    tier4Parts.push(options.abilityContext);
+  }
+  if (options.sessionContext) {
+    tier4Parts.push(`[Session Notes]\n${options.sessionContext}`);
+  }
+  if (options.searchResults) {
+    tier4Parts.push(`[Web Search Results - Use these to provide current information]\n${options.searchResults}`);
+  }
+
+  // Date/time (rounded to 15-min for some determinism)
+  const { date, time } = getDateTime();
+  tier4Parts.push(`[Current Time]\n${date} at ${time} (CET+1)`);
+
+  // Source context
+  if (options.source && options.source !== 'web') {
+    tier4Parts.push(getSourceContext(options.source));
+  }
+
+  if (tier4Parts.length > 0) {
+    blocks.push({
+      text: normalizePromptText(tier4Parts.join('\n\n')),
+      cache: false  // NOT cached - changes every message
+    });
+  }
+
+  return blocks;
+}
+
 export default {
   LUNA_BASE_PROMPT,
   ASSISTANT_MODE_PROMPT,
@@ -491,4 +696,5 @@ export default {
   getBasePrompt,
   getSystemPrompt,
   buildContextualPrompt,
+  buildCacheOptimizedPrompt,
 };

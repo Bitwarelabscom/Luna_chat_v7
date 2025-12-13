@@ -7,6 +7,8 @@ import * as authService from '../auth/auth.service.js';
 import * as modelConfigService from '../llm/model-config.service.js';
 import * as ttsService from '../llm/tts.service.js';
 import { PROVIDERS, CONFIGURABLE_TASKS } from '../llm/types.js';
+import { getCachedModels, clearModelCache } from '../llm/model-fetcher.service.js';
+import * as coderSettingsService from '../abilities/coder-settings.service.js';
 import { LUNA_BASE_PROMPT, ASSISTANT_MODE_PROMPT, COMPANION_MODE_PROMPT } from '../persona/luna.persona.js';
 import logger from '../utils/logger.js';
 
@@ -410,12 +412,50 @@ router.delete('/all-data', async (req: Request, res: Response) => {
 
 // === MODEL CONFIGURATION ===
 
-// Get available providers and models
+// Get available providers and models (static list)
 router.get('/models/available', (_req: Request, res: Response) => {
   res.json({
     providers: PROVIDERS,
     tasks: CONFIGURABLE_TASKS,
   });
+});
+
+// Get live models from all provider APIs (dynamic - fetches real-time data)
+router.get('/models/live', async (_req: Request, res: Response) => {
+  try {
+    const providers = await getCachedModels();
+    res.json({
+      providers,
+      tasks: CONFIGURABLE_TASKS,
+      source: 'live',
+      cachedUntil: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+    });
+  } catch (error) {
+    logger.error('Failed to fetch live models', { error: (error as Error).message });
+    // Fall back to static list
+    res.json({
+      providers: PROVIDERS,
+      tasks: CONFIGURABLE_TASKS,
+      source: 'static',
+      error: 'Failed to fetch live models, using static list',
+    });
+  }
+});
+
+// Refresh the models cache
+router.post('/models/refresh', async (_req: Request, res: Response) => {
+  try {
+    clearModelCache();
+    const providers = await getCachedModels();
+    res.json({
+      success: true,
+      providers,
+      tasks: CONFIGURABLE_TASKS,
+    });
+  } catch (error) {
+    logger.error('Failed to refresh models cache', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to refresh models cache' });
+  }
 });
 
 // Get user's model configurations
@@ -461,6 +501,63 @@ router.delete('/models', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to reset model configs', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to reset model configurations' });
+  }
+});
+
+// === CODER SETTINGS ===
+
+// Get coder settings
+router.get('/coder', async (req: Request, res: Response) => {
+  try {
+    const settings = await coderSettingsService.getCoderSettings(req.user!.userId);
+    res.json({
+      settings,
+      defaultTriggerWords: coderSettingsService.getDefaultTriggerWords(),
+    });
+  } catch (error) {
+    logger.error('Failed to get coder settings', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get coder settings' });
+  }
+});
+
+// Update coder settings
+const updateCoderSettingsSchema = z.object({
+  claudeCliEnabled: z.boolean().optional(),
+  geminiCliEnabled: z.boolean().optional(),
+  coderApiEnabled: z.boolean().optional(),
+  coderApiProvider: z.enum(['openai', 'groq', 'anthropic', 'xai', 'openrouter', 'ollama', 'google']).nullable().optional(),
+  coderApiModel: z.string().nullable().optional(),
+  triggerWords: z.object({
+    claude: z.array(z.string()),
+    gemini: z.array(z.string()),
+    api: z.array(z.string()),
+  }).optional(),
+  defaultCoder: z.enum(['claude', 'gemini', 'api']).optional(),
+});
+
+router.put('/coder', async (req: Request, res: Response) => {
+  try {
+    const data = updateCoderSettingsSchema.parse(req.body);
+    const settings = await coderSettingsService.updateCoderSettings(req.user!.userId, data);
+    res.json({ success: true, settings });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: 'Validation error', details: error.errors });
+      return;
+    }
+    logger.error('Failed to update coder settings', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to update coder settings' });
+  }
+});
+
+// Reset coder settings to defaults
+router.delete('/coder', async (req: Request, res: Response) => {
+  try {
+    await coderSettingsService.resetCoderSettings(req.user!.userId);
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Failed to reset coder settings', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to reset coder settings' });
   }
 });
 

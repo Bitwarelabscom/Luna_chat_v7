@@ -184,6 +184,7 @@ export async function getUserFacts(
 
 /**
  * Format facts for inclusion in prompt
+ * Uses deterministic ordering (sorted by category and key) for cache optimization
  */
 export function formatFactsForPrompt(facts: UserFact[]): string {
   if (facts.length === 0) return '';
@@ -194,9 +195,14 @@ export function formatFactsForPrompt(facts: UserFact[]): string {
     return acc;
   }, {} as Record<string, string[]>);
 
-  const sections = Object.entries(grouped).map(([category, items]) =>
-    `${category.charAt(0).toUpperCase() + category.slice(1)}:\n${items.map(i => `  - ${i}`).join('\n')}`
-  );
+  // Sort categories alphabetically for cache determinism
+  const sortedCategories = Object.keys(grouped).sort();
+
+  const sections = sortedCategories.map(category => {
+    // Sort items within each category for determinism
+    const sortedItems = grouped[category].sort();
+    return `${category.charAt(0).toUpperCase() + category.slice(1)}:\n${sortedItems.map(i => `  - ${i}`).join('\n')}`;
+  });
 
   return `[Known Facts About User]\n${sections.join('\n\n')}`;
 }

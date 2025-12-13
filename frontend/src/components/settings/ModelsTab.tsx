@@ -1,15 +1,17 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { RotateCcw, Loader2, Check, ChevronDown } from 'lucide-react';
+import { RotateCcw, Loader2, Check, ChevronDown, RefreshCw } from 'lucide-react';
 import { settingsApi, type LLMProvider, type TaskModelConfig, type UserModelConfig } from '@/lib/api';
 
 export default function ModelsTab() {
   const [providers, setProviders] = useState<LLMProvider[]>([]);
   const [tasks, setTasks] = useState<TaskModelConfig[]>([]);
   const [configs, setConfigs] = useState<UserModelConfig[]>([]);
+  const [modelSource, setModelSource] = useState<string>('');
 
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSaving, setIsSaving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -29,10 +31,27 @@ export default function ModelsTab() {
       setProviders(availableRes.providers);
       setTasks(availableRes.tasks);
       setConfigs(configsRes.configs);
+      setModelSource(availableRes.source || 'live');
     } catch {
       setError('Failed to load model configurations');
     } finally {
       setIsLoading(false);
+    }
+  }
+
+  async function handleRefreshModels() {
+    setIsRefreshing(true);
+    setError(null);
+    try {
+      const result = await settingsApi.refreshModels();
+      setProviders(result.providers);
+      setTasks(result.tasks);
+      setModelSource('live');
+      showSuccess('Models refreshed from providers');
+    } catch {
+      setError('Failed to refresh models');
+    } finally {
+      setIsRefreshing(false);
     }
   }
 
@@ -154,35 +173,53 @@ export default function ModelsTab() {
           <p className="text-sm text-theme-text-muted mt-1">
             Configure which AI models to use for different tasks
           </p>
+          <p className="text-xs text-theme-text-muted mt-1">
+            {providers.length} providers, {providers.reduce((acc, p) => acc + p.models.length, 0)} models available
+            {modelSource && <span className="ml-2 text-theme-accent-secondary">({modelSource})</span>}
+          </p>
         </div>
-        <button
-          onClick={handleReset}
-          disabled={isSaving !== null}
-          className="flex items-center gap-2 px-3 py-1.5 text-sm text-theme-text-muted hover:text-theme-text-primary hover:bg-theme-bg-tertiary rounded-lg transition disabled:opacity-50"
-        >
-          <RotateCcw className="w-4 h-4" />
-          Reset to Defaults
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleRefreshModels}
+            disabled={isRefreshing || isSaving !== null}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm text-theme-text-muted hover:text-theme-text-primary hover:bg-theme-bg-tertiary rounded-lg transition disabled:opacity-50"
+            title="Refresh models from provider APIs"
+          >
+            <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+          <button
+            onClick={handleReset}
+            disabled={isSaving !== null}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm text-theme-text-muted hover:text-theme-text-primary hover:bg-theme-bg-tertiary rounded-lg transition disabled:opacity-50"
+          >
+            <RotateCcw className="w-4 h-4" />
+            Reset to Defaults
+          </button>
+        </div>
       </div>
 
       {/* Provider Legend */}
       <div className="flex flex-wrap gap-3 p-3 bg-theme-bg-tertiary/50 rounded-lg">
-        {providers.map(provider => (
-          <div key={provider.id} className="flex items-center gap-2">
-            <div
-              className={`w-2.5 h-2.5 rounded-full ${
-                provider.id === 'openai'
-                  ? 'bg-green-500'
-                  : provider.id === 'groq'
-                    ? 'bg-orange-500'
-                    : provider.id === 'anthropic'
-                      ? 'bg-purple-500'
-                      : 'bg-blue-500'
-              }`}
-            />
-            <span className="text-sm text-theme-text-secondary">{provider.name}</span>
-          </div>
-        ))}
+        {providers.map(provider => {
+          const colorMap: Record<string, string> = {
+            openai: 'bg-green-500',
+            anthropic: 'bg-purple-500',
+            google: 'bg-blue-500',
+            xai: 'bg-cyan-500',
+            groq: 'bg-orange-500',
+            openrouter: 'bg-pink-500',
+            ollama: 'bg-gray-500',
+          };
+          return (
+            <div key={provider.id} className="flex items-center gap-2">
+              <div className={`w-2.5 h-2.5 rounded-full ${colorMap[provider.id] || 'bg-gray-500'}`} />
+              <span className="text-sm text-theme-text-secondary">
+                {provider.name} <span className="text-theme-text-muted">({provider.models.length})</span>
+              </span>
+            </div>
+          );
+        })}
       </div>
 
       {/* Task Configurations */}
