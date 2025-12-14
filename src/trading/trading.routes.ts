@@ -958,8 +958,7 @@ router.get('/alpha/prices', async (req: Request, res: Response) => {
 // Get combined portfolio (Spot + Alpha)
 router.get('/portfolio/combined', async (req: Request, res: Response) => {
   try {
-    const userId = req.headers['x-user-id'] as string || 'default';
-    const combined = await tradingService.getCombinedPortfolio(userId);
+    const combined = await tradingService.getCombinedPortfolio(getUserId(req));
     res.json(combined);
   } catch (error) {
     logger.error('Failed to get combined portfolio', { error: (error as Error).message });
