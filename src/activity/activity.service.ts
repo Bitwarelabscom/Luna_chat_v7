@@ -141,6 +141,11 @@ export async function logActivityAndBroadcast(input: ActivityLogInput): Promise<
   // Broadcast to user's SSE subscribers
   if (broadcastActivity) {
     try {
+      logger.info('Broadcasting activity to SSE', {
+        userId: input.userId,
+        activityId: activity.id,
+        category: activity.category,
+      });
       broadcastActivity(input.userId, activity);
     } catch (error) {
       logger.warn('Failed to broadcast activity', {
@@ -148,6 +153,8 @@ export async function logActivityAndBroadcast(input: ActivityLogInput): Promise<
         activityId: activity.id,
       });
     }
+  } else {
+    logger.warn('Broadcast function not set, cannot push activity');
   }
 
   return activity;

@@ -551,6 +551,20 @@ export async function sendAutonomousNotification(
  * Broadcast an activity event to user's subscribers (for Activity Window)
  */
 export function broadcastActivity(userId: string, activity: ActivityPayload): void {
+  const subscribers = userSubscribers.get(userId);
+  const subscriberCount = subscribers?.size || 0;
+
+  logger.info('Broadcasting activity event', {
+    userId,
+    activityId: activity.id,
+    category: activity.category,
+    subscriberCount,
+  });
+
+  if (subscriberCount === 0) {
+    return; // No subscribers, nothing to broadcast
+  }
+
   const event: TriggerEvent = {
     type: 'activity',
     timestamp: new Date(),
