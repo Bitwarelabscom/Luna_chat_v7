@@ -3,6 +3,7 @@ import { BinanceClient, type TickerPrice, type Ticker24hr, type Kline, formatQua
 import { alphaClient, type AlphaToken } from './binance-alpha.client.js';
 import { logger } from '../utils/logger.js';
 import { encryptToken, decryptToken } from '../utils/encryption.js';
+import * as tradeNotification from './trade-notification.service.js';
 
 // Types
 export interface TradingSettings {
@@ -398,8 +399,12 @@ export async function getPortfolio(userId: string): Promise<Portfolio | null> {
     let dailyPnlPct = 0;
     if (snapshotResult.rows.length > 0) {
       const lastValue = parseFloat(snapshotResult.rows[0].total_value_usdt);
-      dailyPnl = totalValueUsdt - lastValue;
-      dailyPnlPct = (dailyPnl / lastValue) * 100;
+      if (lastValue > 0) {
+        dailyPnl = totalValueUsdt - lastValue;
+        dailyPnlPct = (dailyPnl / lastValue) * 100;
+        // Clamp to avoid DB overflow - DECIMAL(12,4) max is 99999999.9999
+        dailyPnlPct = Math.max(-99999999, Math.min(99999999, dailyPnlPct));
+      }
     }
 
     // Save snapshot
@@ -661,6 +666,32 @@ export async function placeOrder(
       orderId: binanceOrder.orderId,
     });
 
+    // Send Telegram notification
+    const tradeRecord = result.rows[0];
+    const isFilled = tradeRecord.status === 'filled';
+    if (isFilled) {
+      tradeNotification.notifyOrderFilled(userId, {
+        id: tradeRecord.id,
+        symbol: tradeRecord.symbol,
+        side: tradeRecord.side,
+        quantity: parseFloat(tradeRecord.quantity),
+        filledPrice: tradeRecord.filled_price ? parseFloat(tradeRecord.filled_price) : undefined,
+        total: tradeRecord.total ? parseFloat(tradeRecord.total) : undefined,
+        stopLossPrice: tradeRecord.stop_loss_price ? parseFloat(tradeRecord.stop_loss_price) : undefined,
+        takeProfitPrice: tradeRecord.take_profit_price ? parseFloat(tradeRecord.take_profit_price) : undefined,
+      }).catch((err) => logger.error('Failed to send trade notification', { error: err }));
+    } else {
+      tradeNotification.notifyOrderPlaced(userId, {
+        id: tradeRecord.id,
+        symbol: tradeRecord.symbol,
+        side: tradeRecord.side,
+        quantity: parseFloat(tradeRecord.quantity),
+        price: tradeRecord.price ? parseFloat(tradeRecord.price) : undefined,
+        stopLossPrice: tradeRecord.stop_loss_price ? parseFloat(tradeRecord.stop_loss_price) : undefined,
+        takeProfitPrice: tradeRecord.take_profit_price ? parseFloat(tradeRecord.take_profit_price) : undefined,
+      }).catch((err) => logger.error('Failed to send trade notification', { error: err }));
+    }
+
     return {
       id: result.rows[0].id,
       userId: result.rows[0].user_id,
@@ -720,6 +751,10 @@ export async function cancelOrder(userId: string, tradeId: string): Promise<void
   );
 
   logger.info('Order cancelled', { userId, tradeId });
+
+  // Send Telegram notification
+  tradeNotification.notifyOrderCancelled(userId, tradeId, symbol, 'unknown', null, 'cancelled')
+    .catch((err) => logger.error('Failed to send cancel notification', { error: err }));
 }
 
 // Bot management functions

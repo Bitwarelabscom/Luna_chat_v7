@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { TrendingUp, BarChart3, Wallet, History, Bot, Settings, AlertCircle, RefreshCw, Wifi, WifiOff, X, ExternalLink, MessageCircle, Activity, ListChecks } from 'lucide-react';
-import { tradingApi, type TradingSettings, type Portfolio, type PriceData, type TradeRecord, type BotConfig, type AlphaHolding, type BotType } from '@/lib/api';
+import { tradingApi, type TradingSettings, type Portfolio, type PriceData, type TradeRecord, type BotConfig, type BotType } from '@/lib/api';
 import type { DisplayContent } from '@/types/display';
 import PriceChart from './PriceChart';
 import TradingChat from './TradingChat';
@@ -21,7 +21,6 @@ type TabType = 'chart' | 'portfolio' | 'trades' | 'bots' | 'rules' | 'research' 
 export default function TradingDashboard() {
   const [settings, setSettings] = useState<TradingSettings | null>(null);
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
-  const [alphaHoldings, setAlphaHoldings] = useState<AlphaHolding[]>([]);
   const [prices, setPrices] = useState<PriceData[]>([]);
   const [trades, setTrades] = useState<TradeRecord[]>([]);
   const [bots, setBots] = useState<BotConfig[]>([]);
@@ -78,17 +77,6 @@ export default function TradingDashboard() {
         setPortfolio(portfolioData);
         setTrades(tradesData);
         setBots(botsData);
-
-        // Try to fetch combined portfolio with Alpha holdings
-        try {
-          const combinedData = await tradingApi.getCombinedPortfolio();
-          if (combinedData.alpha && combinedData.alpha.length > 0) {
-            setAlphaHoldings(combinedData.alpha);
-          }
-        } catch (err) {
-          // Alpha portfolio not available, ignore
-          console.debug('Alpha portfolio not available:', err);
-        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load trading data');
@@ -425,7 +413,6 @@ export default function TradingDashboard() {
           <div style={{ height: '100%', background: '#111827', borderRadius: '8px', overflow: 'hidden' }}>
             <Holdings
               holdings={portfolio?.holdings || []}
-              alphaHoldings={alphaHoldings}
               onSelectSymbol={(symbol) => {
                 setSelectedSymbol(symbol);
                 setDisplayContent({ type: 'chart', symbol });

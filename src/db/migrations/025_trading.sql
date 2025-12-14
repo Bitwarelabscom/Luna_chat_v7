@@ -148,7 +148,7 @@ CREATE TABLE IF NOT EXISTS portfolio_snapshots (
   total_value_usdt DECIMAL(20,2) NOT NULL,
   holdings JSONB NOT NULL,                             -- Snapshot of all holdings
   daily_pnl DECIMAL(20,2),
-  daily_pnl_pct DECIMAL(8,4),
+  daily_pnl_pct DECIMAL(12,4),
   snapshot_time TIMESTAMPTZ DEFAULT NOW()
 );
 

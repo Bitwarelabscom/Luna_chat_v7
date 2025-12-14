@@ -857,6 +857,12 @@ async function handleCallbackQuery(callback: NonNullable<TelegramUpdate['callbac
     return;
   }
 
+  // Handle trade actions
+  if (data.startsWith('trade:')) {
+    await handleTradeCallback(callback.id, chatId, messageId, connection.userId, data);
+    return;
+  }
+
   // Handle actions - route through chat
   if (data.startsWith('act:')) {
     const actionMessages: Record<string, string> = {
@@ -984,6 +990,153 @@ function mapConnectionRow(row: Record<string, unknown>): TelegramConnection {
   };
 }
 
+// ============================================
+// Trade Notification Support
+// ============================================
+
+/**
+ * Send trade message with inline buttons (exported for trade-notification.service)
+ */
+export async function sendTradeMessageWithButtons(
+  chatId: number,
+  text: string,
+  buttons: Array<{ text: string; callback: string }>
+): Promise<boolean> {
+  return sendMessageWithButtons(chatId, text, buttons, 2);
+}
+
+/**
+ * Handle trade callback actions
+ */
+async function handleTradeCallback(
+  callbackId: string,
+  chatId: number,
+  messageId: number | undefined,
+  userId: string,
+  data: string
+): Promise<void> {
+  const parts = data.split(':');
+  const action = parts[1];
+  const tradeId = parts[2];
+
+  if (!tradeId) {
+    await answerCallbackQuery(callbackId, 'Invalid trade ID');
+    return;
+  }
+
+  try {
+    if (action === 'close') {
+      // Close position at market
+      const result = await pool.query(
+        `SELECT symbol, side, quantity FROM trades
+         WHERE id = $1 AND user_id = $2 AND closed_at IS NULL AND status = 'filled'`,
+        [tradeId, userId]
+      );
+
+      if (result.rows.length === 0) {
+        await answerCallbackQuery(callbackId, 'Position already closed');
+        return;
+      }
+
+      const trade = result.rows[0];
+
+      // Import and execute close position
+      const orderMonitor = await import('../trading/order-monitor.service.js');
+      await orderMonitor.executeClosePosition(
+        userId,
+        tradeId,
+        trade.symbol,
+        trade.side,
+        parseFloat(trade.quantity),
+        'manual_telegram'
+      );
+
+      await answerCallbackQuery(callbackId, 'Position closed!');
+      await sendTelegramMessage(chatId, `Position ${trade.symbol} closed at market.`);
+    } else if (action === 'modsl') {
+      // Show SL modification options
+      const result = await pool.query(
+        `SELECT symbol FROM trades WHERE id = $1 AND user_id = $2 AND closed_at IS NULL`,
+        [tradeId, userId]
+      );
+
+      if (result.rows.length === 0) {
+        await answerCallbackQuery(callbackId, 'Position not found');
+        return;
+      }
+
+      const symbol = result.rows[0].symbol;
+      const slButtons = [
+        { text: 'SL -1%', callback: `trade:sl:${tradeId}:1` },
+        { text: 'SL -2%', callback: `trade:sl:${tradeId}:2` },
+        { text: 'SL -3%', callback: `trade:sl:${tradeId}:3` },
+        { text: 'SL -5%', callback: `trade:sl:${tradeId}:5` },
+        { text: 'Cancel', callback: `trade:slcancel:${tradeId}` },
+      ];
+
+      if (messageId) {
+        await editMessageButtons(chatId, messageId, `Set Stop Loss for ${symbol}:`, slButtons, 3);
+      }
+      await answerCallbackQuery(callbackId);
+    } else if (action === 'sl') {
+      // Set stop loss at percentage
+      const pct = parseFloat(parts[3]);
+      if (isNaN(pct)) {
+        await answerCallbackQuery(callbackId, 'Invalid percentage');
+        return;
+      }
+
+      // Get current price and update SL
+      const result = await pool.query(
+        `SELECT symbol, side FROM trades WHERE id = $1 AND user_id = $2 AND closed_at IS NULL`,
+        [tradeId, userId]
+      );
+
+      if (result.rows.length === 0) {
+        await answerCallbackQuery(callbackId, 'Position not found');
+        return;
+      }
+
+      const trade = result.rows[0];
+
+      // Get current price from Binance
+      const { BinanceClient } = await import('../trading/binance.client.js');
+      const client = new BinanceClient({ apiKey: '', apiSecret: '' });
+      const ticker = await client.getTickerPrice(trade.symbol) as { symbol: string; price: string };
+      const currentPrice = parseFloat(ticker.price);
+
+      // Calculate new SL based on side
+      const newSL = trade.side === 'buy'
+        ? currentPrice * (1 - pct / 100)
+        : currentPrice * (1 + pct / 100);
+
+      // Update database
+      await pool.query(
+        `UPDATE trades SET stop_loss_price = $1 WHERE id = $2`,
+        [newSL, tradeId]
+      );
+
+      await answerCallbackQuery(callbackId, `SL set to $${newSL.toFixed(2)}`);
+      await sendTelegramMessage(chatId, `Stop loss updated to $${newSL.toFixed(2)} (-${pct}% from current)`);
+    } else if (action === 'slcancel') {
+      // Cancel SL modification
+      await answerCallbackQuery(callbackId, 'Cancelled');
+      if (messageId) {
+        await editMessageButtons(chatId, messageId, 'Modification cancelled.', [], 1);
+      }
+    } else if (action === 'cancel') {
+      // Cancel pending order
+      const tradingService = await import('../trading/trading.service.js');
+      await tradingService.cancelOrder(userId, tradeId);
+      await answerCallbackQuery(callbackId, 'Order cancelled');
+      await sendTelegramMessage(chatId, 'Order cancelled.');
+    }
+  } catch (error) {
+    logger.error('Trade callback error', { action, tradeId, error: (error as Error).message });
+    await answerCallbackQuery(callbackId, 'Failed. Try via app.');
+  }
+}
+
 /**
  * Check if Telegram is configured
  */
@@ -1016,6 +1169,7 @@ export function getSetupInstructions(): string {
 
 export default {
   sendTelegramMessage,
+  sendTradeMessageWithButtons,
   getBotInfo,
   generateLinkCode,
   validateLinkCode,

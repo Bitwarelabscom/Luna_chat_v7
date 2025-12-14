@@ -13,6 +13,7 @@ import { pool } from '../db/index.js';
 import { BinanceClient, type Ticker24hr } from './binance.client.js';
 import { decryptToken } from '../utils/encryption.js';
 import * as deliveryService from '../triggers/delivery.service.js';
+import * as tradeNotification from './trade-notification.service.js';
 import logger from '../utils/logger.js';
 
 // Cache for Binance clients
@@ -152,6 +153,18 @@ export async function checkTakeProfitStopLoss(): Promise<{ triggered: number; er
             stopLoss,
             takeProfit,
           });
+
+          // Send Telegram notification
+          tradeNotification.notifyTpSlTriggered(
+            trade.user_id,
+            trade.id,
+            trade.symbol,
+            trade.side,
+            reason as 'stop_loss' | 'take_profit',
+            parseFloat(trade.filled_price),
+            currentPrice,
+            parseFloat(trade.quantity)
+          ).catch((err) => logger.error('Failed to send TP/SL notification', { error: err }));
         } catch (err) {
           errors++;
           logger.error('Failed to execute TP/SL close', {
@@ -223,6 +236,16 @@ export async function updateTrailingStops(): Promise<{ updated: number; triggere
             [highestPrice, trailingStopPrice, trade.id]
           );
           updated++;
+
+          // Send trailing stop update notification (rate limited)
+          tradeNotification.notifyTrailingStopUpdate(
+            trade.user_id,
+            trade.id,
+            trade.symbol,
+            trailingStopPrice,
+            highestPrice,
+            trailingPct
+          ).catch((err) => logger.error('Failed to send trailing update notification', { error: err }));
         } else if (trailingStopPrice && currentPrice <= trailingStopPrice) {
           // Trailing stop triggered
           try {
@@ -235,6 +258,17 @@ export async function updateTrailingStops(): Promise<{ updated: number; triggere
               trailingStopPrice,
               highestPrice,
             });
+
+            // Send trailing stop triggered notification
+            tradeNotification.notifyTrailingStopTriggered(
+              trade.user_id,
+              trade.id,
+              trade.symbol,
+              trade.side,
+              parseFloat(trade.filled_price),
+              currentPrice,
+              parseFloat(trade.quantity)
+            ).catch((err) => logger.error('Failed to send trailing triggered notification', { error: err }));
           } catch (err) {
             errors++;
             logger.error('Failed to execute trailing stop close', {
@@ -254,10 +288,31 @@ export async function updateTrailingStops(): Promise<{ updated: number; triggere
             [highestPrice, trailingStopPrice, trade.id]
           );
           updated++;
+
+          // Send trailing stop update notification (rate limited)
+          tradeNotification.notifyTrailingStopUpdate(
+            trade.user_id,
+            trade.id,
+            trade.symbol,
+            trailingStopPrice,
+            highestPrice,
+            trailingPct
+          ).catch((err) => logger.error('Failed to send trailing update notification', { error: err }));
         } else if (trailingStopPrice && currentPrice >= trailingStopPrice) {
           try {
             await executeClosePosition(trade.user_id, trade.id, trade.symbol, trade.side, parseFloat(trade.quantity), 'trailing_stop');
             triggered++;
+
+            // Send trailing stop triggered notification
+            tradeNotification.notifyTrailingStopTriggered(
+              trade.user_id,
+              trade.id,
+              trade.symbol,
+              trade.side,
+              parseFloat(trade.filled_price),
+              currentPrice,
+              parseFloat(trade.quantity)
+            ).catch((err) => logger.error('Failed to send trailing triggered notification', { error: err }));
           } catch (err) {
             errors++;
           }
@@ -286,9 +341,14 @@ export async function checkPendingOrders(): Promise<{ filled: number; cancelled:
       id: string;
       user_id: string;
       symbol: string;
+      side: string;
+      quantity: string;
+      price: string | null;
       binance_order_id: string;
+      stop_loss_price: string | null;
+      take_profit_price: string | null;
     }>(`
-      SELECT id, user_id, symbol, binance_order_id
+      SELECT id, user_id, symbol, side, quantity, price, binance_order_id, stop_loss_price, take_profit_price
       FROM trades
       WHERE status = 'pending'
         AND binance_order_id IS NOT NULL
@@ -351,6 +411,18 @@ export async function checkPendingOrders(): Promise<{ filled: number; cancelled:
               filledPrice,
               total: totalValue,
             });
+
+            // Send Telegram notification for filled order
+            tradeNotification.notifyOrderFilled(userId, {
+              id: order.id,
+              symbol: order.symbol,
+              side: order.side,
+              quantity: parseFloat(order.quantity),
+              filledPrice,
+              total: totalValue,
+              stopLossPrice: order.stop_loss_price ? parseFloat(order.stop_loss_price) : undefined,
+              takeProfitPrice: order.take_profit_price ? parseFloat(order.take_profit_price) : undefined,
+            }).catch((err) => logger.error('Failed to send fill notification', { error: err }));
           } else if (binanceOrder.status === 'CANCELED' || binanceOrder.status === 'EXPIRED') {
             await pool.query(
               `UPDATE trades SET status = 'cancelled', cancelled_at = NOW() WHERE id = $1`,
@@ -361,6 +433,17 @@ export async function checkPendingOrders(): Promise<{ filled: number; cancelled:
               tradeId: order.id,
               status: binanceOrder.status,
             });
+
+            // Send Telegram notification for cancelled order
+            const reason = binanceOrder.status === 'EXPIRED' ? 'expired' : 'cancelled';
+            tradeNotification.notifyOrderCancelled(
+              userId,
+              order.id,
+              order.symbol,
+              order.side,
+              order.price ? parseFloat(order.price) : null,
+              reason
+            ).catch((err) => logger.error('Failed to send cancel notification', { error: err }));
           }
         } catch (err) {
           errors++;
@@ -381,8 +464,9 @@ export async function checkPendingOrders(): Promise<{ filled: number; cancelled:
 
 /**
  * Execute a position close (market sell for buys, market buy for sells)
+ * Exported for use by Telegram trade callbacks
  */
-async function executeClosePosition(
+export async function executeClosePosition(
   userId: string,
   tradeId: string,
   symbol: string,
