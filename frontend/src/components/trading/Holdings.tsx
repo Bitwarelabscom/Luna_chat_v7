@@ -9,13 +9,12 @@ type ViewMode = 'all' | 'spot' | 'alpha';
 interface HoldingsProps {
   holdings: PortfolioHolding[];
   alphaHoldings?: AlphaHolding[];
+  showAlphaTabs?: boolean;
   onSelectSymbol: (symbol: string) => void;
 }
 
-export default function Holdings({ holdings, alphaHoldings = [], onSelectSymbol }: HoldingsProps) {
+export default function Holdings({ holdings, alphaHoldings = [], showAlphaTabs = true, onSelectSymbol }: HoldingsProps) {
   const [viewMode, setViewMode] = useState<ViewMode>('all');
-
-  const hasAlpha = alphaHoldings.length > 0;
 
   // Filter based on view mode
   const filteredSpot = viewMode === 'alpha' ? [] : holdings;
@@ -40,12 +39,12 @@ export default function Holdings({ holdings, alphaHoldings = [], onSelectSymbol 
         borderBottom: '1px solid #2a3545',
         background: 'rgba(42, 53, 69, 0.3)',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: hasAlpha ? '12px' : 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: showAlphaTabs ? '12px' : 0 }}>
           <h3 style={{ margin: 0, fontSize: '13px', fontWeight: 500, color: '#fff' }}>Holdings</h3>
         </div>
 
-        {/* Tabs - only show if we have alpha tokens */}
-        {hasAlpha && (
+        {/* Tabs - show when showAlphaTabs is true */}
+        {showAlphaTabs && (
           <div style={{
             display: 'flex',
             gap: '4px',
