@@ -46,5 +46,8 @@ workspace-backup/
 images/generated/
 images/moods/
 
+# Video files (too large for git)
+*.mp4
+
 # Internal documentation
 prompting.md
