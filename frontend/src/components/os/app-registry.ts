@@ -167,7 +167,7 @@ export const appConfig: Record<AppId, AppConfig> = {
     icon: Activity,
     color: 'from-purple-400 to-indigo-500',
     defaultSize: { width: 400, height: 500 },
-    showInDock: false,
+    showInDock: true,
   },
 };
 
@@ -186,6 +186,7 @@ export const dockApps: AppId[] = [
   'friends',
   'music',
   'trading',
+  'activity',
 ];
 
 export default appConfig;

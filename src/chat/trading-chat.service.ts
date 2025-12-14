@@ -1092,12 +1092,29 @@ Order Type: ${args.orderType || 'market'}`;
     });
   }
 
+  // Handle empty response gracefully
+  let responseContent = completion.content;
+  if (!responseContent || responseContent.trim() === '') {
+    logger.warn('Empty response from trading LLM', { sessionId, userId });
+    // Provide a fallback response based on the last tool call
+    if (completion.toolCalls && completion.toolCalls.length > 0) {
+      const lastTool = completion.toolCalls[completion.toolCalls.length - 1];
+      if (lastTool.function.name === 'place_order') {
+        responseContent = 'Order has been executed. Check your portfolio for the updated position.';
+      } else {
+        responseContent = 'Action completed successfully.';
+      }
+    } else {
+      responseContent = 'I processed your request but couldn\'t generate a detailed response. Please try again or rephrase your question.';
+    }
+  }
+
   // Save assistant response
-  const assistantMessageId = await addMessage(sessionId, 'assistant', completion.content);
+  const assistantMessageId = await addMessage(sessionId, 'assistant', responseContent);
 
   return {
     messageId: assistantMessageId,
-    content: completion.content,
+    content: responseContent,
     tokensUsed: completion.tokensUsed || 0,
     display: pendingDisplay,
   };
