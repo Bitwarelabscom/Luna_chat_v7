@@ -225,10 +225,12 @@ async function applyPreferences(
   if (extracted.feedbackSignals?.length > 0) {
     for (const signal of extracted.feedbackSignals) {
       if (signal.type && signal.content) {
+        // Truncate signal_type to fit varchar(50) column
+        const signalType = String(signal.type).substring(0, 50);
         await pool.query(
           `INSERT INTO user_feedback_signals (user_id, session_id, signal_type, signal_content)
            VALUES ($1, $2, $3, $4)`,
-          [userId, sessionId, signal.type, signal.content.substring(0, 500)]
+          [userId, sessionId, signalType, signal.content.substring(0, 500)]
         );
       }
     }

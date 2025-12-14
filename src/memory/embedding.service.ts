@@ -149,7 +149,7 @@ export function getEmbeddingCacheStats(): { size: number; maxSize: number; ttlMs
 }
 
 /**
- * Store message embedding in database
+ * Store message embedding in database with retry for FK race condition
  */
 export async function storeMessageEmbedding(
   messageId: string,
@@ -158,26 +158,46 @@ export async function storeMessageEmbedding(
   content: string,
   role: string
 ): Promise<void> {
-  try {
-    const { embedding } = await generateEmbedding(content);
+  const maxRetries = 3;
+  const retryDelayMs = 500;
 
-    // Format embedding as PostgreSQL vector string
-    const vectorString = `[${embedding.join(',')}]`;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const { embedding } = await generateEmbedding(content);
 
-    await pool.query(
-      `INSERT INTO message_embeddings (message_id, user_id, session_id, content, role, embedding)
-       VALUES ($1, $2, $3, $4, $5, $6::vector)
-       ON CONFLICT DO NOTHING`,
-      [messageId, userId, sessionId, content, role, vectorString]
-    );
+      // Format embedding as PostgreSQL vector string
+      const vectorString = `[${embedding.join(',')}]`;
 
-    logger.debug('Stored message embedding', { messageId, userId });
-  } catch (error) {
-    logger.error('Failed to store message embedding', {
-      error: (error as Error).message,
-      messageId
-    });
-    // Don't throw - embedding storage is not critical
+      await pool.query(
+        `INSERT INTO message_embeddings (message_id, user_id, session_id, content, role, embedding)
+         VALUES ($1, $2, $3, $4, $5, $6::vector)
+         ON CONFLICT DO NOTHING`,
+        [messageId, userId, sessionId, content, role, vectorString]
+      );
+
+      logger.debug('Stored message embedding', { messageId, userId });
+      return; // Success - exit function
+    } catch (error) {
+      const errorMessage = (error as Error).message;
+
+      // Check if it's a foreign key violation (message not yet committed)
+      if (errorMessage.includes('foreign key constraint') && attempt < maxRetries) {
+        logger.debug('Message not yet committed, retrying embedding storage', {
+          messageId,
+          attempt,
+          nextRetryMs: retryDelayMs
+        });
+        await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+        continue;
+      }
+
+      // Log error but don't throw - embedding storage is not critical
+      logger.error('Failed to store memory', {
+        error: errorMessage,
+        messageId
+      });
+      return;
+    }
   }
 }
 
