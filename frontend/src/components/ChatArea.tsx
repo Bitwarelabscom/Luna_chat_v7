@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useChatStore } from '@/lib/store';
 import { streamMessage, regenerateMessage, chatApi } from '@/lib/api';
-import { Send, Moon, Loader2 } from 'lucide-react';
+import { Send, Moon, Loader2, MessageSquare, Bot, Mic } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import clsx from 'clsx';
 import MessageActions from './MessageActions';
@@ -270,6 +270,57 @@ function StandardChatArea() {
                   Preparing a personalized greeting for you.
                 </p>
               </>
+            ) : !currentSession ? (
+              <>
+                <div className="w-20 h-20 rounded-full bg-theme-accent-primary/20 flex items-center justify-center mb-6">
+                  <Moon className="w-10 h-10 text-theme-accent-primary" />
+                </div>
+                <h2 className="text-2xl font-semibold text-theme-text-primary mb-2">Hello! I&apos;m Luna</h2>
+                <p className="text-theme-text-muted text-center max-w-md mb-8">
+                  Choose how you&apos;d like to chat with me today.
+                </p>
+                <div className="flex flex-wrap justify-center gap-4 max-w-2xl">
+                  <button
+                    onClick={async () => {
+                      const session = await createSession('assistant');
+                      await loadSession(session.id);
+                    }}
+                    className="flex flex-col items-center p-6 rounded-xl border border-theme-border bg-theme-bg-secondary hover:bg-theme-bg-tertiary hover:border-blue-500/50 transition-all min-w-[160px] group"
+                  >
+                    <div className="w-12 h-12 rounded-full bg-blue-500/20 flex items-center justify-center mb-3 group-hover:bg-blue-500/30 transition-colors">
+                      <MessageSquare className="w-6 h-6 text-blue-400" />
+                    </div>
+                    <span className="text-lg font-medium text-theme-text-primary mb-1">Assistant</span>
+                    <span className="text-sm text-theme-text-muted text-center">Task-focused help</span>
+                  </button>
+                  <button
+                    onClick={async () => {
+                      const session = await createSession('companion');
+                      await loadSession(session.id);
+                    }}
+                    className="flex flex-col items-center p-6 rounded-xl border border-theme-border bg-theme-bg-secondary hover:bg-theme-bg-tertiary hover:border-pink-500/50 transition-all min-w-[160px] group"
+                  >
+                    <div className="w-12 h-12 rounded-full bg-pink-500/20 flex items-center justify-center mb-3 group-hover:bg-pink-500/30 transition-colors">
+                      <Bot className="w-6 h-6 text-pink-400" />
+                    </div>
+                    <span className="text-lg font-medium text-theme-text-primary mb-1">Companion</span>
+                    <span className="text-sm text-theme-text-muted text-center">Friendly conversation</span>
+                  </button>
+                  <button
+                    onClick={async () => {
+                      const session = await createSession('voice');
+                      await loadSession(session.id);
+                    }}
+                    className="flex flex-col items-center p-6 rounded-xl border border-theme-border bg-theme-bg-secondary hover:bg-theme-bg-tertiary hover:border-green-500/50 transition-all min-w-[160px] group"
+                  >
+                    <div className="w-12 h-12 rounded-full bg-green-500/20 flex items-center justify-center mb-3 group-hover:bg-green-500/30 transition-colors">
+                      <Mic className="w-6 h-6 text-green-400" />
+                    </div>
+                    <span className="text-lg font-medium text-theme-text-primary mb-1">Voice</span>
+                    <span className="text-sm text-theme-text-muted text-center">Talk with Luna</span>
+                  </button>
+                </div>
+              </>
             ) : (
               <>
                 <div className="w-20 h-20 rounded-full bg-theme-accent-primary/20 flex items-center justify-center mb-6">
@@ -416,37 +467,39 @@ function StandardChatArea() {
         )}
       </div>
 
-      {/* Input area */}
-      <div className="border-t border-theme-border p-4">
-        <div className="max-w-3xl mx-auto">
-          <div className="relative flex items-end gap-2 bg-theme-bg-secondary rounded-xl border border-theme-border focus-within:border-theme-border-focus transition">
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Message Luna..."
-              rows={1}
-              className="flex-1 bg-transparent px-4 py-3 outline-none resize-none max-h-[50vh] text-theme-text-primary placeholder-theme-text-muted"
-              disabled={isSending}
-            />
-            <button
-              onClick={handleSend}
-              disabled={!input.trim() || isSending}
-              className="p-3 m-1 bg-theme-accent-primary hover:bg-theme-accent-hover disabled:bg-theme-bg-tertiary disabled:cursor-not-allowed rounded-lg transition text-theme-text-primary"
-            >
-              {isSending ? (
-                <Loader2 className="w-5 h-5 animate-spin" />
-              ) : (
-                <Send className="w-5 h-5" />
-              )}
-            </button>
+      {/* Input area - hidden when no session (user must pick mode first) */}
+      {currentSession && (
+        <div className="border-t border-theme-border p-4">
+          <div className="max-w-3xl mx-auto">
+            <div className="relative flex items-end gap-2 bg-theme-bg-secondary rounded-xl border border-theme-border focus-within:border-theme-border-focus transition">
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Message Luna..."
+                rows={1}
+                className="flex-1 bg-transparent px-4 py-3 outline-none resize-none max-h-[50vh] text-theme-text-primary placeholder-theme-text-muted"
+                disabled={isSending}
+              />
+              <button
+                onClick={handleSend}
+                disabled={!input.trim() || isSending}
+                className="p-3 m-1 bg-theme-accent-primary hover:bg-theme-accent-hover disabled:bg-theme-bg-tertiary disabled:cursor-not-allowed rounded-lg transition text-theme-text-primary"
+              >
+                {isSending ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : (
+                  <Send className="w-5 h-5" />
+                )}
+              </button>
+            </div>
+            <p className="text-xs text-theme-text-muted text-center mt-2">
+              Luna can make mistakes. Consider checking important information.
+            </p>
           </div>
-          <p className="text-xs text-theme-text-muted text-center mt-2">
-            Luna can make mistakes. Consider checking important information.
-          </p>
         </div>
-      </div>
+      )}
 
       {/* Regenerate confirmation dialog */}
       {showRegenerateConfirm && (

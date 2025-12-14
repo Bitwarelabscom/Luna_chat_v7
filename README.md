@@ -96,6 +96,11 @@ Most AI assistants are stateless query engines. Luna is a **stateful companion**
 - **Spotify**: Music playback control and recommendations
 - **Quick Reminders**: Set reminders via natural language
 
+### Developer Tools
+- **Activity Window**: Real-time activity logging for debugging
+- **System Monitoring**: CPU, memory, and process monitoring
+- **Session Logs**: Detailed logs per conversation turn
+
 ### Security
 - **Docker Secrets**: Encrypted credential storage
 - **AES-256-GCM**: OAuth tokens encrypted at rest
@@ -106,6 +111,8 @@ Most AI assistants are stateless query engines. Luna is a **stateful companion**
 ---
 
 ## Chat Modes
+
+When starting a new chat, you'll see a mode selection screen with three options. Each mode tailors Luna's personality and response style.
 
 Luna adapts her communication style based on the conversation mode:
 
@@ -249,6 +256,7 @@ Trader Luna is a **separate, specialized trading assistant** focused entirely on
 | **Research Mode** | Technical analysis and signal generation |
 | **Paper Trading** | Test strategies without real funds |
 | **Binance Alpha** | Access to new token listings |
+| **Trade Notifications** | Telegram alerts for orders, fills, and bot activity |
 
 ### Trading Bots
 
@@ -410,24 +418,39 @@ Luna can operate independently with self-directed capabilities:
 
 ## Memory System
 
-Luna's memory system enables true long-term relationships:
+Luna's memory system enables true long-term relationships through sophisticated fact extraction, semantic search, and preference learning.
 
-### Facts
-- **Automatic Extraction**: Luna extracts facts from conversations
-- **Categories**: Personal, work, preference, hobby, relationship, goal, context
-- **Confidence Scoring**: Facts rated 0.6-1.0 confidence
-- **Corrections**: Track fact updates over time
+> **Deep Dive**: See [docs/MEMORY.md](docs/MEMORY.md) for comprehensive documentation on how Luna's memory works.
 
-### Semantic Memory
-- **Vector Embeddings**: Find similar past conversations
-- **Conversation Context**: Remember topics and summaries
-- **Active Learnings**: Apply insights from autonomous sessions
+### Memory Types
+
+| Type | Description | Storage |
+|------|-------------|---------|
+| **Facts** | Personal info extracted from conversations | PostgreSQL with confidence scoring |
+| **Embeddings** | Vector representations for semantic search | pgvector (1024 dimensions) |
+| **Summaries** | High-level conversation summaries | Topics, key points, sentiment |
+| **Preferences** | Learned communication style | Verbosity, technicality, warmth |
+| **Learnings** | Insights from autonomous sessions | Applied during responses |
+
+### Fact Categories
+- **Personal**: Name, age, birthday, location, timezone
+- **Work**: Job title, company, profession, industry
+- **Preference**: Likes, dislikes, favorites
+- **Hobby**: Interests, activities, skills
+- **Relationship**: Family, friends, pets
+- **Goal**: Plans, aspirations, dreams
+- **Context**: Current situation, ongoing projects
 
 ### How Memory Works
-1. **During Chat**: Luna extracts facts and stores them
-2. **On New Message**: Luna retrieves relevant facts and history
-3. **Semantic Search**: Similar past conversations inform responses
-4. **Active Learnings**: Insights from autonomous sessions personalize behavior
+1. **During Chat**: Luna detects feedback signals ("shorter please", "explain more")
+2. **On Each Message**: Retrieves relevant facts, similar past conversations, and learnings
+3. **Semantic Search**: Finds related discussions using vector similarity (threshold: 0.75)
+4. **Post-Processing**: Extracts facts and generates summaries asynchronously
+5. **Preference Learning**: Adapts response style based on implicit feedback
+
+### Cache-Optimized Retrieval
+
+Memory is split into stable (facts, learnings) and volatile (semantic search) tiers for optimal prompt caching with Anthropic's API.
 
 ---
 
@@ -537,6 +560,10 @@ luna-chat/
 |   |   |-- bot-executor.service.ts   # Trading bot execution
 |   |   |-- research.service.ts       # Technical analysis
 |   |   |-- scalping.service.ts       # Scalping strategies
+|   |   |-- trade-notification.service.ts  # Telegram trade alerts
+|   |-- activity/           # Activity logging
+|   |   |-- activity.service.ts       # Real-time activity log
+|   |   |-- activity.routes.ts        # Activity API endpoints
 |-- frontend/               # Next.js web UI
 |   |-- src/
 |   |   |-- components/
@@ -549,8 +576,12 @@ luna-chat/
 |   |   |   |   |-- McpTab.tsx            # MCP servers configuration UI
 |   |   |   |-- trading/
 |   |   |   |   |-- TradingDashboard.tsx  # Trading UI
+|   |   |   |-- os/apps/
+|   |   |   |   |-- ActivityWindow.tsx    # Real-time activity viewer
+|   |   |   |   |-- ChatWindow.tsx        # Chat with mode selection
 |   |   |-- hooks/
 |   |   |   |-- useIsMobile.ts
+|   |   |   |-- useActivityStream.ts      # Activity SSE hook
 |   |   |   |-- useTradingWebSocket.ts    # Real-time price updates
 |-- android/                # Native Android app
 |-- images/                 # Luna media (videos/images)
@@ -703,6 +734,13 @@ npm start
 | GET | `/api/mcp/servers/:id/tools` | List tools from a server |
 | PUT | `/api/mcp/servers/:serverId/tools/:toolId` | Update tool settings |
 | POST | `/api/mcp/execute` | Execute an MCP tool |
+
+### Activity Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/activity` | Get recent activity logs |
+| GET | `/api/activity/stream` | SSE stream for real-time activity |
 
 ### Auth Endpoints
 

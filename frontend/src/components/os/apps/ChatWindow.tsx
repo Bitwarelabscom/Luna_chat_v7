@@ -1,11 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useChatStore } from '@/lib/store';
 import ChatArea from '@/components/ChatArea';
 import {
   MessageSquare, Plus, ChevronLeft, ChevronRight,
-  Trash2, MoreVertical, Mic, Bot, Heart
+  Trash2, MoreVertical, Mic, Bot
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -26,13 +26,28 @@ function SessionSidebar({
   } = useChatStore();
 
   const [showMenu, setShowMenu] = useState<string | null>(null);
+  const [showModeSelector, setShowModeSelector] = useState(false);
+  const modeSelectorRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     loadSessions();
   }, [loadSessions]);
 
-  const handleNewChat = async () => {
-    await createSession('assistant');
+  // Close mode selector when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (modeSelectorRef.current && !modeSelectorRef.current.contains(event.target as Node)) {
+        setShowModeSelector(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const handleNewChat = async (mode: 'assistant' | 'companion' | 'voice') => {
+    const session = await createSession(mode);
+    await loadSession(session.id);
+    setShowModeSelector(false);
   };
 
   const handleDeleteSession = async (e: React.MouseEvent, sessionId: string) => {
@@ -48,9 +63,9 @@ function SessionSidebar({
       case 'voice':
         return <Mic className="w-3.5 h-3.5" />;
       case 'companion':
-        return <Heart className="w-3.5 h-3.5" />;
+        return <Bot className="w-3.5 h-3.5 text-pink-400" />;
       default:
-        return <Bot className="w-3.5 h-3.5" />;
+        return <MessageSquare className="w-3.5 h-3.5" />;
     }
   };
 
@@ -68,7 +83,7 @@ function SessionSidebar({
   if (isCollapsed) {
     return (
       <div
-        className="w-10 flex-shrink-0 flex flex-col items-center py-2 border-r"
+        className="w-10 flex-shrink-0 flex flex-col items-center py-2 border-r relative"
         style={{
           background: 'var(--theme-bg-secondary)',
           borderColor: 'var(--theme-border)'
@@ -81,13 +96,55 @@ function SessionSidebar({
         >
           <ChevronRight className="w-4 h-4" style={{ color: 'var(--theme-text-secondary)' }} />
         </button>
-        <button
-          onClick={handleNewChat}
-          className="mt-2 p-2 rounded-lg hover:bg-white/10 transition-colors"
-          title="New chat"
-        >
-          <Plus className="w-4 h-4" style={{ color: 'var(--theme-text-secondary)' }} />
-        </button>
+        <div className="relative" ref={isCollapsed ? modeSelectorRef : undefined}>
+          <button
+            onClick={() => setShowModeSelector(!showModeSelector)}
+            className="mt-2 p-2 rounded-lg hover:bg-white/10 transition-colors"
+            title="New chat"
+          >
+            <Plus className="w-4 h-4" style={{ color: 'var(--theme-text-secondary)' }} />
+          </button>
+          {showModeSelector && (
+            <div
+              className="absolute left-full top-0 ml-2 py-1 rounded-lg shadow-xl border min-w-[160px] z-50"
+              style={{
+                background: 'var(--theme-bg-tertiary)',
+                borderColor: 'var(--theme-border)'
+              }}
+            >
+              <button
+                onClick={() => handleNewChat('assistant')}
+                className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/10 transition-colors"
+              >
+                <MessageSquare className="w-4 h-4 text-blue-400" />
+                <div className="text-left">
+                  <div style={{ color: 'var(--theme-text-primary)' }}>Assistant</div>
+                  <div style={{ color: 'var(--theme-text-muted)' }}>Task-focused help</div>
+                </div>
+              </button>
+              <button
+                onClick={() => handleNewChat('companion')}
+                className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/10 transition-colors"
+              >
+                <Bot className="w-4 h-4 text-pink-400" />
+                <div className="text-left">
+                  <div style={{ color: 'var(--theme-text-primary)' }}>Companion</div>
+                  <div style={{ color: 'var(--theme-text-muted)' }}>Friendly conversation</div>
+                </div>
+              </button>
+              <button
+                onClick={() => handleNewChat('voice')}
+                className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/10 transition-colors"
+              >
+                <Mic className="w-4 h-4 text-green-400" />
+                <div className="text-left">
+                  <div style={{ color: 'var(--theme-text-primary)' }}>Voice</div>
+                  <div style={{ color: 'var(--theme-text-muted)' }}>Talk with Luna</div>
+                </div>
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     );
   }
@@ -106,13 +163,55 @@ function SessionSidebar({
           Chats
         </span>
         <div className="flex items-center gap-1">
-          <button
-            onClick={handleNewChat}
-            className="p-1.5 rounded-lg hover:bg-white/10 transition-colors"
-            title="New chat"
-          >
-            <Plus className="w-4 h-4" style={{ color: 'var(--theme-text-secondary)' }} />
-          </button>
+          <div className="relative" ref={!isCollapsed ? modeSelectorRef : undefined}>
+            <button
+              onClick={() => setShowModeSelector(!showModeSelector)}
+              className="p-1.5 rounded-lg hover:bg-white/10 transition-colors"
+              title="New chat"
+            >
+              <Plus className="w-4 h-4" style={{ color: 'var(--theme-text-secondary)' }} />
+            </button>
+            {showModeSelector && (
+              <div
+                className="absolute right-0 top-full mt-1 py-1 rounded-lg shadow-xl border min-w-[180px] z-50"
+                style={{
+                  background: 'var(--theme-bg-tertiary)',
+                  borderColor: 'var(--theme-border)'
+                }}
+              >
+                <button
+                  onClick={() => handleNewChat('assistant')}
+                  className="w-full flex items-center gap-3 px-3 py-2 hover:bg-white/10 transition-colors"
+                >
+                  <MessageSquare className="w-4 h-4 text-blue-400" />
+                  <div className="text-left">
+                    <div className="text-sm" style={{ color: 'var(--theme-text-primary)' }}>Assistant</div>
+                    <div className="text-xs" style={{ color: 'var(--theme-text-muted)' }}>Task-focused help</div>
+                  </div>
+                </button>
+                <button
+                  onClick={() => handleNewChat('companion')}
+                  className="w-full flex items-center gap-3 px-3 py-2 hover:bg-white/10 transition-colors"
+                >
+                  <Bot className="w-4 h-4 text-pink-400" />
+                  <div className="text-left">
+                    <div className="text-sm" style={{ color: 'var(--theme-text-primary)' }}>Companion</div>
+                    <div className="text-xs" style={{ color: 'var(--theme-text-muted)' }}>Friendly conversation</div>
+                  </div>
+                </button>
+                <button
+                  onClick={() => handleNewChat('voice')}
+                  className="w-full flex items-center gap-3 px-3 py-2 hover:bg-white/10 transition-colors"
+                >
+                  <Mic className="w-4 h-4 text-green-400" />
+                  <div className="text-left">
+                    <div className="text-sm" style={{ color: 'var(--theme-text-primary)' }}>Voice</div>
+                    <div className="text-xs" style={{ color: 'var(--theme-text-muted)' }}>Talk with Luna</div>
+                  </div>
+                </button>
+              </div>
+            )}
+          </div>
           <button
             onClick={onToggle}
             className="p-1.5 rounded-lg hover:bg-white/10 transition-colors"
