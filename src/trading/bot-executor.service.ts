@@ -68,6 +68,69 @@ export interface RSIBotConfig {
   amountPerTrade: number;
   cooldownMinutes: number;
   lastTradeAt?: Date;
+  trailingStopPct?: number;
+}
+
+export interface MACrossBotConfig {
+  symbol: string;
+  interval: string;
+  fastPeriod: number;
+  slowPeriod: number;
+  maType: 'sma' | 'ema';
+  amountPerTrade: number;
+  cooldownMinutes: number;
+  lastTradeAt?: Date;
+  lastCrossDirection?: 'up' | 'down';
+  trailingStopPct?: number;
+}
+
+export interface MACDBotConfig {
+  symbol: string;
+  interval: string;
+  fastPeriod: number;
+  slowPeriod: number;
+  signalPeriod: number;
+  amountPerTrade: number;
+  cooldownMinutes: number;
+  lastTradeAt?: Date;
+  lastSignalDirection?: 'bullish' | 'bearish';
+  trailingStopPct?: number;
+}
+
+export interface BreakoutBotConfig {
+  symbol: string;
+  interval: string;
+  lookbackPeriod: number;
+  breakoutThreshold: number;
+  volumeMultiplier: number;
+  amountPerTrade: number;
+  cooldownMinutes: number;
+  lastTradeAt?: Date;
+  trailingStopPct?: number;
+}
+
+export interface MeanReversionBotConfig {
+  symbol: string;
+  interval: string;
+  maPeriod: number;
+  deviationThreshold: number;
+  amountPerTrade: number;
+  cooldownMinutes: number;
+  lastTradeAt?: Date;
+  trailingStopPct?: number;
+}
+
+export interface MomentumBotConfig {
+  symbol: string;
+  interval: string;
+  rsiPeriod: number;
+  momentumThreshold: number;
+  volumeConfirmation: boolean;
+  amountPerTrade: number;
+  cooldownMinutes: number;
+  lastTradeAt?: Date;
+  lastDirection?: 'long' | 'short';
+  trailingStopPct?: number;
 }
 
 // ============================================
@@ -701,6 +764,690 @@ export async function executeRSIBot(botId: string): Promise<{ traded: boolean; s
 }
 
 // ============================================
+// MA Crossover Bot Execution
+// ============================================
+
+/**
+ * Calculate EMA
+ */
+function calculateEMA(prices: number[], period: number): number[] {
+  const ema: number[] = [];
+  const multiplier = 2 / (period + 1);
+
+  // First EMA is SMA
+  let sum = 0;
+  for (let i = 0; i < period && i < prices.length; i++) {
+    sum += prices[i];
+  }
+  ema.push(sum / period);
+
+  // Calculate rest of EMAs
+  for (let i = period; i < prices.length; i++) {
+    ema.push((prices[i] - ema[ema.length - 1]) * multiplier + ema[ema.length - 1]);
+  }
+
+  return ema;
+}
+
+/**
+ * Calculate SMA
+ */
+function calculateSMA(prices: number[], period: number): number[] {
+  const sma: number[] = [];
+  for (let i = period - 1; i < prices.length; i++) {
+    let sum = 0;
+    for (let j = 0; j < period; j++) {
+      sum += prices[i - j];
+    }
+    sma.push(sum / period);
+  }
+  return sma;
+}
+
+/**
+ * Execute MA Crossover bot logic
+ */
+export async function executeMACrossBot(botId: string): Promise<{ traded: boolean; signal?: string }> {
+  const botResult = await pool.query(
+    `SELECT * FROM trading_bots WHERE id = $1 AND type = 'ma_crossover' AND status = 'running'`,
+    [botId]
+  );
+
+  if (botResult.rows.length === 0) return { traded: false };
+
+  const bot = botResult.rows[0];
+  const config = bot.config as MACrossBotConfig;
+  const userId = bot.user_id;
+
+  // Check cooldown
+  if (config.lastTradeAt) {
+    const lastTrade = new Date(config.lastTradeAt);
+    const cooldownMs = config.cooldownMinutes * 60 * 1000;
+    if (Date.now() - lastTrade.getTime() < cooldownMs) {
+      return { traded: false };
+    }
+  }
+
+  // Get enough klines for MA calculation
+  const klines = await tradingService.getKlines(config.symbol, config.interval, config.slowPeriod + 5);
+  if (klines.length < config.slowPeriod) return { traded: false };
+
+  const closes = klines.map(k => parseFloat(k.close));
+
+  // Calculate MAs
+  const fastMA = config.maType === 'ema'
+    ? calculateEMA(closes, config.fastPeriod)
+    : calculateSMA(closes, config.fastPeriod);
+  const slowMA = config.maType === 'ema'
+    ? calculateEMA(closes, config.slowPeriod)
+    : calculateSMA(closes, config.slowPeriod);
+
+  if (fastMA.length < 2 || slowMA.length < 2) return { traded: false };
+
+  // Check for crossover
+  const currentFast = fastMA[fastMA.length - 1];
+  const prevFast = fastMA[fastMA.length - 2];
+  const currentSlow = slowMA[slowMA.length - 1];
+  const prevSlow = slowMA[slowMA.length - 2];
+
+  let signal: string | undefined;
+  let traded = false;
+  let crossDirection: 'up' | 'down' | undefined;
+
+  // Golden cross: fast crosses above slow
+  if (prevFast <= prevSlow && currentFast > currentSlow) {
+    crossDirection = 'up';
+    if (config.lastCrossDirection !== 'up') {
+      signal = 'buy';
+    }
+  }
+  // Death cross: fast crosses below slow
+  else if (prevFast >= prevSlow && currentFast < currentSlow) {
+    crossDirection = 'down';
+    if (config.lastCrossDirection !== 'down') {
+      signal = 'sell';
+    }
+  }
+
+  if (signal === 'buy') {
+    try {
+      await tradingService.placeOrder(userId, {
+        symbol: config.symbol,
+        side: 'buy',
+        type: 'market',
+        quoteAmount: config.amountPerTrade,
+        trailingStopPct: config.trailingStopPct,
+        notes: `MA Cross bot ${botId} golden cross - Fast: ${currentFast.toFixed(2)}, Slow: ${currentSlow.toFixed(2)}`,
+      });
+      traded = true;
+
+      const newConfig = { ...config, lastTradeAt: new Date().toISOString(), lastCrossDirection: crossDirection };
+      await pool.query(
+        `UPDATE trading_bots SET config = $1, total_trades = total_trades + 1 WHERE id = $2`,
+        [JSON.stringify(newConfig), botId]
+      );
+
+      logger.info('MA Cross bot buy executed', { botId, fastMA: currentFast, slowMA: currentSlow });
+    } catch (err) {
+      logger.error('MA Cross bot buy failed', { botId, error: (err as Error).message });
+    }
+  } else if (signal === 'sell') {
+    const portfolio = await tradingService.getPortfolio(userId);
+    if (portfolio) {
+      const asset = config.symbol.replace(/USD[TC]$/, '');
+      const holding = portfolio.holdings.find(h => h.asset === asset);
+      if (holding && holding.amount > 0) {
+        const sellValue = Math.min(holding.valueUsdt, config.amountPerTrade);
+        const sellQty = sellValue / holding.price;
+
+        try {
+          await tradingService.placeOrder(userId, {
+            symbol: config.symbol,
+            side: 'sell',
+            type: 'market',
+            quantity: sellQty,
+            notes: `MA Cross bot ${botId} death cross - Fast: ${currentFast.toFixed(2)}, Slow: ${currentSlow.toFixed(2)}`,
+          });
+          traded = true;
+
+          const newConfig = { ...config, lastTradeAt: new Date().toISOString(), lastCrossDirection: crossDirection };
+          await pool.query(
+            `UPDATE trading_bots SET config = $1, total_trades = total_trades + 1 WHERE id = $2`,
+            [JSON.stringify(newConfig), botId]
+          );
+
+          logger.info('MA Cross bot sell executed', { botId, fastMA: currentFast, slowMA: currentSlow });
+        } catch (err) {
+          logger.error('MA Cross bot sell failed', { botId, error: (err as Error).message });
+        }
+      }
+    }
+  } else if (crossDirection) {
+    // Update last cross direction even if we didn't trade
+    const newConfig = { ...config, lastCrossDirection: crossDirection };
+    await pool.query(
+      `UPDATE trading_bots SET config = $1 WHERE id = $2`,
+      [JSON.stringify(newConfig), botId]
+    );
+  }
+
+  return { traded, signal };
+}
+
+// ============================================
+// MACD Bot Execution
+// ============================================
+
+/**
+ * Execute MACD bot logic
+ */
+export async function executeMACDBot(botId: string): Promise<{ traded: boolean; signal?: string }> {
+  const botResult = await pool.query(
+    `SELECT * FROM trading_bots WHERE id = $1 AND type = 'macd' AND status = 'running'`,
+    [botId]
+  );
+
+  if (botResult.rows.length === 0) return { traded: false };
+
+  const bot = botResult.rows[0];
+  const config = bot.config as MACDBotConfig;
+  const userId = bot.user_id;
+
+  // Check cooldown
+  if (config.lastTradeAt) {
+    const lastTrade = new Date(config.lastTradeAt);
+    const cooldownMs = config.cooldownMinutes * 60 * 1000;
+    if (Date.now() - lastTrade.getTime() < cooldownMs) {
+      return { traded: false };
+    }
+  }
+
+  // Get enough klines for MACD calculation
+  const klines = await tradingService.getKlines(config.symbol, config.interval, config.slowPeriod + config.signalPeriod + 10);
+  if (klines.length < config.slowPeriod + config.signalPeriod) return { traded: false };
+
+  const closes = klines.map(k => parseFloat(k.close));
+
+  // Calculate MACD
+  const fastEMA = calculateEMA(closes, config.fastPeriod);
+  const slowEMA = calculateEMA(closes, config.slowPeriod);
+
+  // MACD line = fast EMA - slow EMA
+  const macdLine: number[] = [];
+  const startIdx = Math.max(config.fastPeriod, config.slowPeriod) - Math.min(config.fastPeriod, config.slowPeriod);
+  for (let i = 0; i < Math.min(fastEMA.length, slowEMA.length - startIdx); i++) {
+    macdLine.push(fastEMA[i] - slowEMA[i + startIdx]);
+  }
+
+  if (macdLine.length < config.signalPeriod + 2) return { traded: false };
+
+  // Signal line = EMA of MACD line
+  const signalLine = calculateEMA(macdLine, config.signalPeriod);
+
+  if (signalLine.length < 2) return { traded: false };
+
+  // Check for crossover
+  const currentMACD = macdLine[macdLine.length - 1];
+  const prevMACD = macdLine[macdLine.length - 2];
+  const currentSignal = signalLine[signalLine.length - 1];
+  const prevSignal = signalLine[signalLine.length - 2];
+
+  let signal: string | undefined;
+  let traded = false;
+  let signalDirection: 'bullish' | 'bearish' | undefined;
+
+  // Bullish: MACD crosses above signal line
+  if (prevMACD <= prevSignal && currentMACD > currentSignal) {
+    signalDirection = 'bullish';
+    if (config.lastSignalDirection !== 'bullish') {
+      signal = 'buy';
+    }
+  }
+  // Bearish: MACD crosses below signal line
+  else if (prevMACD >= prevSignal && currentMACD < currentSignal) {
+    signalDirection = 'bearish';
+    if (config.lastSignalDirection !== 'bearish') {
+      signal = 'sell';
+    }
+  }
+
+  if (signal === 'buy') {
+    try {
+      await tradingService.placeOrder(userId, {
+        symbol: config.symbol,
+        side: 'buy',
+        type: 'market',
+        quoteAmount: config.amountPerTrade,
+        trailingStopPct: config.trailingStopPct,
+        notes: `MACD bot ${botId} bullish crossover - MACD: ${currentMACD.toFixed(4)}, Signal: ${currentSignal.toFixed(4)}`,
+      });
+      traded = true;
+
+      const newConfig = { ...config, lastTradeAt: new Date().toISOString(), lastSignalDirection: signalDirection };
+      await pool.query(
+        `UPDATE trading_bots SET config = $1, total_trades = total_trades + 1 WHERE id = $2`,
+        [JSON.stringify(newConfig), botId]
+      );
+
+      logger.info('MACD bot buy executed', { botId, macd: currentMACD, signal: currentSignal });
+    } catch (err) {
+      logger.error('MACD bot buy failed', { botId, error: (err as Error).message });
+    }
+  } else if (signal === 'sell') {
+    const portfolio = await tradingService.getPortfolio(userId);
+    if (portfolio) {
+      const asset = config.symbol.replace(/USD[TC]$/, '');
+      const holding = portfolio.holdings.find(h => h.asset === asset);
+      if (holding && holding.amount > 0) {
+        const sellValue = Math.min(holding.valueUsdt, config.amountPerTrade);
+        const sellQty = sellValue / holding.price;
+
+        try {
+          await tradingService.placeOrder(userId, {
+            symbol: config.symbol,
+            side: 'sell',
+            type: 'market',
+            quantity: sellQty,
+            notes: `MACD bot ${botId} bearish crossover - MACD: ${currentMACD.toFixed(4)}, Signal: ${currentSignal.toFixed(4)}`,
+          });
+          traded = true;
+
+          const newConfig = { ...config, lastTradeAt: new Date().toISOString(), lastSignalDirection: signalDirection };
+          await pool.query(
+            `UPDATE trading_bots SET config = $1, total_trades = total_trades + 1 WHERE id = $2`,
+            [JSON.stringify(newConfig), botId]
+          );
+
+          logger.info('MACD bot sell executed', { botId, macd: currentMACD, signal: currentSignal });
+        } catch (err) {
+          logger.error('MACD bot sell failed', { botId, error: (err as Error).message });
+        }
+      }
+    }
+  } else if (signalDirection) {
+    const newConfig = { ...config, lastSignalDirection: signalDirection };
+    await pool.query(
+      `UPDATE trading_bots SET config = $1 WHERE id = $2`,
+      [JSON.stringify(newConfig), botId]
+    );
+  }
+
+  return { traded, signal };
+}
+
+// ============================================
+// Breakout Bot Execution
+// ============================================
+
+/**
+ * Execute Breakout bot logic
+ */
+export async function executeBreakoutBot(botId: string): Promise<{ traded: boolean; signal?: string }> {
+  const botResult = await pool.query(
+    `SELECT * FROM trading_bots WHERE id = $1 AND type = 'breakout' AND status = 'running'`,
+    [botId]
+  );
+
+  if (botResult.rows.length === 0) return { traded: false };
+
+  const bot = botResult.rows[0];
+  const config = bot.config as BreakoutBotConfig;
+  const userId = bot.user_id;
+
+  // Check cooldown
+  if (config.lastTradeAt) {
+    const lastTrade = new Date(config.lastTradeAt);
+    const cooldownMs = config.cooldownMinutes * 60 * 1000;
+    if (Date.now() - lastTrade.getTime() < cooldownMs) {
+      return { traded: false };
+    }
+  }
+
+  // Get klines for range calculation
+  const klines = await tradingService.getKlines(config.symbol, config.interval, config.lookbackPeriod + 1);
+  if (klines.length < config.lookbackPeriod) return { traded: false };
+
+  // Calculate range from lookback period (excluding current candle)
+  const lookbackKlines = klines.slice(0, -1);
+  const highs = lookbackKlines.map(k => parseFloat(k.high));
+  const lows = lookbackKlines.map(k => parseFloat(k.low));
+  const volumes = lookbackKlines.map(k => parseFloat(k.volume));
+
+  const rangeHigh = Math.max(...highs);
+  const rangeLow = Math.min(...lows);
+  const avgVolume = volumes.reduce((a, b) => a + b, 0) / volumes.length;
+
+  // Current candle
+  const currentKline = klines[klines.length - 1];
+  const currentClose = parseFloat(currentKline.close);
+  const currentVolume = parseFloat(currentKline.volume);
+
+  // Check for breakout
+  const breakoutUpThreshold = rangeHigh * (1 + config.breakoutThreshold / 100);
+  const breakoutDownThreshold = rangeLow * (1 - config.breakoutThreshold / 100);
+  const volumeConfirmed = currentVolume >= avgVolume * config.volumeMultiplier;
+
+  let signal: string | undefined;
+  let traded = false;
+
+  // Bullish breakout
+  if (currentClose > breakoutUpThreshold && volumeConfirmed) {
+    signal = 'buy';
+    try {
+      await tradingService.placeOrder(userId, {
+        symbol: config.symbol,
+        side: 'buy',
+        type: 'market',
+        quoteAmount: config.amountPerTrade,
+        trailingStopPct: config.trailingStopPct,
+        notes: `Breakout bot ${botId} bullish breakout above ${rangeHigh.toFixed(2)} - Volume: ${(currentVolume / avgVolume).toFixed(1)}x avg`,
+      });
+      traded = true;
+
+      const newConfig = { ...config, lastTradeAt: new Date().toISOString() };
+      await pool.query(
+        `UPDATE trading_bots SET config = $1, total_trades = total_trades + 1 WHERE id = $2`,
+        [JSON.stringify(newConfig), botId]
+      );
+
+      logger.info('Breakout bot buy executed', { botId, price: currentClose, rangeHigh });
+    } catch (err) {
+      logger.error('Breakout bot buy failed', { botId, error: (err as Error).message });
+    }
+  }
+  // Bearish breakout
+  else if (currentClose < breakoutDownThreshold && volumeConfirmed) {
+    signal = 'sell';
+    const portfolio = await tradingService.getPortfolio(userId);
+    if (portfolio) {
+      const asset = config.symbol.replace(/USD[TC]$/, '');
+      const holding = portfolio.holdings.find(h => h.asset === asset);
+      if (holding && holding.amount > 0) {
+        const sellValue = Math.min(holding.valueUsdt, config.amountPerTrade);
+        const sellQty = sellValue / holding.price;
+
+        try {
+          await tradingService.placeOrder(userId, {
+            symbol: config.symbol,
+            side: 'sell',
+            type: 'market',
+            quantity: sellQty,
+            notes: `Breakout bot ${botId} bearish breakout below ${rangeLow.toFixed(2)} - Volume: ${(currentVolume / avgVolume).toFixed(1)}x avg`,
+          });
+          traded = true;
+
+          const newConfig = { ...config, lastTradeAt: new Date().toISOString() };
+          await pool.query(
+            `UPDATE trading_bots SET config = $1, total_trades = total_trades + 1 WHERE id = $2`,
+            [JSON.stringify(newConfig), botId]
+          );
+
+          logger.info('Breakout bot sell executed', { botId, price: currentClose, rangeLow });
+        } catch (err) {
+          logger.error('Breakout bot sell failed', { botId, error: (err as Error).message });
+        }
+      }
+    }
+  }
+
+  return { traded, signal };
+}
+
+// ============================================
+// Mean Reversion Bot Execution
+// ============================================
+
+/**
+ * Execute Mean Reversion bot logic
+ */
+export async function executeMeanReversionBot(botId: string): Promise<{ traded: boolean; signal?: string }> {
+  const botResult = await pool.query(
+    `SELECT * FROM trading_bots WHERE id = $1 AND type = 'mean_reversion' AND status = 'running'`,
+    [botId]
+  );
+
+  if (botResult.rows.length === 0) return { traded: false };
+
+  const bot = botResult.rows[0];
+  const config = bot.config as MeanReversionBotConfig;
+  const userId = bot.user_id;
+
+  // Check cooldown
+  if (config.lastTradeAt) {
+    const lastTrade = new Date(config.lastTradeAt);
+    const cooldownMs = config.cooldownMinutes * 60 * 1000;
+    if (Date.now() - lastTrade.getTime() < cooldownMs) {
+      return { traded: false };
+    }
+  }
+
+  // Get klines for MA calculation
+  const klines = await tradingService.getKlines(config.symbol, config.interval, config.maPeriod + 5);
+  if (klines.length < config.maPeriod) return { traded: false };
+
+  const closes = klines.map(k => parseFloat(k.close));
+  const currentPrice = closes[closes.length - 1];
+
+  // Calculate MA (mean)
+  const ma = calculateSMA(closes, config.maPeriod);
+  if (ma.length === 0) return { traded: false };
+
+  const currentMA = ma[ma.length - 1];
+  const deviation = ((currentPrice - currentMA) / currentMA) * 100;
+
+  let signal: string | undefined;
+  let traded = false;
+
+  // Price significantly below MA - buy signal
+  if (deviation <= -config.deviationThreshold) {
+    signal = 'buy';
+    try {
+      await tradingService.placeOrder(userId, {
+        symbol: config.symbol,
+        side: 'buy',
+        type: 'market',
+        quoteAmount: config.amountPerTrade,
+        trailingStopPct: config.trailingStopPct,
+        notes: `Mean Reversion bot ${botId} buy - Price ${deviation.toFixed(2)}% below MA(${config.maPeriod})`,
+      });
+      traded = true;
+
+      const newConfig = { ...config, lastTradeAt: new Date().toISOString() };
+      await pool.query(
+        `UPDATE trading_bots SET config = $1, total_trades = total_trades + 1 WHERE id = $2`,
+        [JSON.stringify(newConfig), botId]
+      );
+
+      logger.info('Mean Reversion bot buy executed', { botId, deviation: deviation.toFixed(2), ma: currentMA });
+    } catch (err) {
+      logger.error('Mean Reversion bot buy failed', { botId, error: (err as Error).message });
+    }
+  }
+  // Price significantly above MA - sell signal
+  else if (deviation >= config.deviationThreshold) {
+    signal = 'sell';
+    const portfolio = await tradingService.getPortfolio(userId);
+    if (portfolio) {
+      const asset = config.symbol.replace(/USD[TC]$/, '');
+      const holding = portfolio.holdings.find(h => h.asset === asset);
+      if (holding && holding.amount > 0) {
+        const sellValue = Math.min(holding.valueUsdt, config.amountPerTrade);
+        const sellQty = sellValue / holding.price;
+
+        try {
+          await tradingService.placeOrder(userId, {
+            symbol: config.symbol,
+            side: 'sell',
+            type: 'market',
+            quantity: sellQty,
+            notes: `Mean Reversion bot ${botId} sell - Price ${deviation.toFixed(2)}% above MA(${config.maPeriod})`,
+          });
+          traded = true;
+
+          const newConfig = { ...config, lastTradeAt: new Date().toISOString() };
+          await pool.query(
+            `UPDATE trading_bots SET config = $1, total_trades = total_trades + 1 WHERE id = $2`,
+            [JSON.stringify(newConfig), botId]
+          );
+
+          logger.info('Mean Reversion bot sell executed', { botId, deviation: deviation.toFixed(2), ma: currentMA });
+        } catch (err) {
+          logger.error('Mean Reversion bot sell failed', { botId, error: (err as Error).message });
+        }
+      }
+    }
+  }
+
+  return { traded, signal };
+}
+
+// ============================================
+// Momentum Bot Execution
+// ============================================
+
+/**
+ * Calculate RSI
+ */
+function calculateRSI(closes: number[], period: number): number {
+  if (closes.length < period + 1) return 50;
+
+  let gains = 0, losses = 0;
+  for (let i = closes.length - period; i < closes.length; i++) {
+    const change = closes[i] - closes[i - 1];
+    if (change > 0) gains += change;
+    else losses -= change;
+  }
+
+  const avgGain = gains / period;
+  const avgLoss = losses / period;
+  const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+  return 100 - (100 / (1 + rs));
+}
+
+/**
+ * Execute Momentum bot logic
+ */
+export async function executeMomentumBot(botId: string): Promise<{ traded: boolean; signal?: string }> {
+  const botResult = await pool.query(
+    `SELECT * FROM trading_bots WHERE id = $1 AND type = 'momentum' AND status = 'running'`,
+    [botId]
+  );
+
+  if (botResult.rows.length === 0) return { traded: false };
+
+  const bot = botResult.rows[0];
+  const config = bot.config as MomentumBotConfig;
+  const userId = bot.user_id;
+
+  // Check cooldown
+  if (config.lastTradeAt) {
+    const lastTrade = new Date(config.lastTradeAt);
+    const cooldownMs = config.cooldownMinutes * 60 * 1000;
+    if (Date.now() - lastTrade.getTime() < cooldownMs) {
+      return { traded: false };
+    }
+  }
+
+  // Get klines
+  const klines = await tradingService.getKlines(config.symbol, config.interval, config.rsiPeriod + 10);
+  if (klines.length < config.rsiPeriod + 2) return { traded: false };
+
+  const closes = klines.map(k => parseFloat(k.close));
+  const volumes = klines.map(k => parseFloat(k.volume));
+
+  // Calculate RSI
+  const currentRSI = calculateRSI(closes, config.rsiPeriod);
+  const prevRSI = calculateRSI(closes.slice(0, -1), config.rsiPeriod);
+
+  // Volume confirmation
+  const currentVolume = volumes[volumes.length - 1];
+  const avgVolume = volumes.slice(0, -1).reduce((a, b) => a + b, 0) / (volumes.length - 1);
+  const volumeOK = !config.volumeConfirmation || currentVolume > avgVolume;
+
+  let signal: string | undefined;
+  let traded = false;
+  let direction: 'long' | 'short' | undefined;
+
+  // Bullish momentum: RSI above threshold and rising
+  if (currentRSI >= config.momentumThreshold && currentRSI > prevRSI && volumeOK) {
+    direction = 'long';
+    if (config.lastDirection !== 'long') {
+      signal = 'buy';
+    }
+  }
+  // Bearish momentum: RSI below inverse threshold and falling
+  else if (currentRSI <= (100 - config.momentumThreshold) && currentRSI < prevRSI && volumeOK) {
+    direction = 'short';
+    if (config.lastDirection !== 'short') {
+      signal = 'sell';
+    }
+  }
+
+  if (signal === 'buy') {
+    try {
+      await tradingService.placeOrder(userId, {
+        symbol: config.symbol,
+        side: 'buy',
+        type: 'market',
+        quoteAmount: config.amountPerTrade,
+        trailingStopPct: config.trailingStopPct,
+        notes: `Momentum bot ${botId} bullish momentum - RSI: ${currentRSI.toFixed(2)}`,
+      });
+      traded = true;
+
+      const newConfig = { ...config, lastTradeAt: new Date().toISOString(), lastDirection: direction };
+      await pool.query(
+        `UPDATE trading_bots SET config = $1, total_trades = total_trades + 1 WHERE id = $2`,
+        [JSON.stringify(newConfig), botId]
+      );
+
+      logger.info('Momentum bot buy executed', { botId, rsi: currentRSI.toFixed(2) });
+    } catch (err) {
+      logger.error('Momentum bot buy failed', { botId, error: (err as Error).message });
+    }
+  } else if (signal === 'sell') {
+    const portfolio = await tradingService.getPortfolio(userId);
+    if (portfolio) {
+      const asset = config.symbol.replace(/USD[TC]$/, '');
+      const holding = portfolio.holdings.find(h => h.asset === asset);
+      if (holding && holding.amount > 0) {
+        const sellValue = Math.min(holding.valueUsdt, config.amountPerTrade);
+        const sellQty = sellValue / holding.price;
+
+        try {
+          await tradingService.placeOrder(userId, {
+            symbol: config.symbol,
+            side: 'sell',
+            type: 'market',
+            quantity: sellQty,
+            notes: `Momentum bot ${botId} bearish momentum - RSI: ${currentRSI.toFixed(2)}`,
+          });
+          traded = true;
+
+          const newConfig = { ...config, lastTradeAt: new Date().toISOString(), lastDirection: direction };
+          await pool.query(
+            `UPDATE trading_bots SET config = $1, total_trades = total_trades + 1 WHERE id = $2`,
+            [JSON.stringify(newConfig), botId]
+          );
+
+          logger.info('Momentum bot sell executed', { botId, rsi: currentRSI.toFixed(2) });
+        } catch (err) {
+          logger.error('Momentum bot sell failed', { botId, error: (err as Error).message });
+        }
+      }
+    }
+  } else if (direction) {
+    const newConfig = { ...config, lastDirection: direction };
+    await pool.query(
+      `UPDATE trading_bots SET config = $1 WHERE id = $2`,
+      [JSON.stringify(newConfig), botId]
+    );
+  }
+
+  return { traded, signal };
+}
+
+// ============================================
 // Main Bot Runner
 // ============================================
 
@@ -712,12 +1459,22 @@ export async function runAllBots(): Promise<{
   grid: { trades: number };
   dca: { purchases: number };
   rsi: { trades: number };
+  ma_crossover: { trades: number };
+  macd: { trades: number };
+  breakout: { trades: number };
+  mean_reversion: { trades: number };
+  momentum: { trades: number };
 }> {
   const results = {
     conditional: { executed: 0, errors: 0 },
     grid: { trades: 0 },
     dca: { purchases: 0 },
     rsi: { trades: 0 },
+    ma_crossover: { trades: 0 },
+    macd: { trades: 0 },
+    breakout: { trades: 0 },
+    mean_reversion: { trades: 0 },
+    momentum: { trades: 0 },
   };
 
   // Run conditional orders
@@ -746,6 +1503,31 @@ export async function runAllBots(): Promise<{
           if (r.traded) results.rsi.trades++;
           break;
         }
+        case 'ma_crossover': {
+          const r = await executeMACrossBot(bot.id);
+          if (r.traded) results.ma_crossover.trades++;
+          break;
+        }
+        case 'macd': {
+          const r = await executeMACDBot(bot.id);
+          if (r.traded) results.macd.trades++;
+          break;
+        }
+        case 'breakout': {
+          const r = await executeBreakoutBot(bot.id);
+          if (r.traded) results.breakout.trades++;
+          break;
+        }
+        case 'mean_reversion': {
+          const r = await executeMeanReversionBot(bot.id);
+          if (r.traded) results.mean_reversion.trades++;
+          break;
+        }
+        case 'momentum': {
+          const r = await executeMomentumBot(bot.id);
+          if (r.traded) results.momentum.trades++;
+          break;
+        }
       }
     } catch (err) {
       logger.error('Bot execution failed', { botId: bot.id, type: bot.type, error: (err as Error).message });
@@ -763,5 +1545,10 @@ export default {
   executeGridBot,
   executeDCABot,
   executeRSIBot,
+  executeMACrossBot,
+  executeMACDBot,
+  executeBreakoutBot,
+  executeMeanReversionBot,
+  executeMomentumBot,
   runAllBots,
 };

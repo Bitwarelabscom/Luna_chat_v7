@@ -35,6 +35,7 @@ function StandardChatArea() {
     isLoadingMessages,
     isSending,
     streamingContent,
+    reasoningContent,
     statusMessage,
     isLoadingStartup,
     loadSessions,
@@ -45,8 +46,10 @@ function StandardChatArea() {
     updateMessage,
     removeMessagesFrom,
     appendStreamingContent,
+    appendReasoningContent,
     setIsSending,
     setStreamingContent,
+    setReasoningContent,
     setStatusMessage,
     setIsLoadingStartup,
     setBrowserAction,
@@ -140,6 +143,7 @@ function StandardChatArea() {
     addUserMessage(message);
     setIsSending(true);
     setStreamingContent('');
+    setReasoningContent('');  // Clear previous reasoning
     setStatusMessage('');
 
     try {
@@ -148,6 +152,9 @@ function StandardChatArea() {
       for await (const chunk of streamMessage(sessionId, message)) {
         if (chunk.type === 'status' && chunk.status) {
           setStatusMessage(chunk.status);
+        } else if (chunk.type === 'reasoning' && chunk.content) {
+          // xAI Grok thinking output - accumulate separately
+          appendReasoningContent(chunk.content);
         } else if (chunk.type === 'content' && chunk.content) {
           setStatusMessage(''); // Clear status when content starts
           accumulatedContent += chunk.content;
@@ -158,6 +165,7 @@ function StandardChatArea() {
         } else if (chunk.type === 'done' && chunk.messageId) {
           addAssistantMessage(accumulatedContent, chunk.messageId, chunk.metrics);
           setStreamingContent('');
+          setReasoningContent('');  // Clear reasoning after done
           setStatusMessage('');
         }
       }
@@ -341,6 +349,21 @@ function StandardChatArea() {
                 </div>
               </div>
             ))}
+
+            {/* Reasoning content (xAI Grok thinking) */}
+            {reasoningContent && (
+              <div className="mb-4">
+                <details className="inline-block max-w-[85%]" open>
+                  <summary className="cursor-pointer px-3 py-2 rounded-lg bg-theme-surface-secondary text-theme-text-secondary text-sm flex items-center gap-2 hover:bg-theme-surface-tertiary transition-colors">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Thinking...</span>
+                  </summary>
+                  <div className="mt-2 px-3 py-2 rounded-lg bg-theme-surface-secondary border border-theme-border text-theme-text-secondary text-sm font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
+                    {reasoningContent}
+                  </div>
+                </details>
+              </div>
+            )}
 
             {/* Streaming message */}
             {streamingContent && (

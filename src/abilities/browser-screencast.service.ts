@@ -136,6 +136,36 @@ const { chromium } = require('/usr/lib/node_modules/playwright');
       } else if (cmd.action === 'keypress' && cmd.key) {
         await page.keyboard.press(cmd.key);
         console.log(JSON.stringify({ type: 'keypressed', key: cmd.key }));
+      } else if (cmd.action === 'clickSelector' && cmd.selector) {
+        // Click element by CSS selector
+        try {
+          await page.click(cmd.selector, { timeout: 10000 });
+          console.log(JSON.stringify({ type: 'clicked', selector: cmd.selector }));
+        } catch (e) {
+          console.log(JSON.stringify({ type: 'error', error: 'Selector not found: ' + cmd.selector }));
+        }
+      } else if (cmd.action === 'fillSelector' && cmd.selector && cmd.value !== undefined) {
+        // Fill input by CSS selector
+        try {
+          await page.fill(cmd.selector, cmd.value, { timeout: 10000 });
+          console.log(JSON.stringify({ type: 'filled', selector: cmd.selector }));
+        } catch (e) {
+          console.log(JSON.stringify({ type: 'error', error: 'Selector not found: ' + cmd.selector }));
+        }
+      } else if (cmd.action === 'waitForSelector' && cmd.selector) {
+        // Wait for element to appear
+        try {
+          await page.waitForSelector(cmd.selector, { timeout: cmd.timeout || 10000 });
+          console.log(JSON.stringify({ type: 'found', selector: cmd.selector }));
+        } catch (e) {
+          console.log(JSON.stringify({ type: 'error', error: 'Timeout waiting for: ' + cmd.selector }));
+        }
+      } else if (cmd.action === 'getContent') {
+        // Get page content
+        const title = await page.title();
+        const url = page.url();
+        const content = await page.evaluate(() => document.body.innerText.slice(0, 5000));
+        console.log(JSON.stringify({ type: 'content', title, url, content }));
       } else if (cmd.action === 'close') {
         await browser.close();
         process.exit(0);
@@ -250,6 +280,9 @@ export async function sendBrowserCommand(userId: string, command: {
   deltaY?: number;
   text?: string;
   key?: string;
+  selector?: string;
+  value?: string;
+  timeout?: number;
 }): Promise<void> {
   const session = activeSessions.get(userId);
   if (!session || !session.process || !session.isActive) {

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { authenticate } from '../auth/auth.middleware.js';
 import * as tradingService from './trading.service.js';
 import * as botExecutorService from './bot-executor.service.js';
+import { getAllBotTemplates, getBotTemplate, getRecommendedSettings, type BotType } from './bot-templates.js';
 import logger from '../utils/logger.js';
 
 // Helper to get userId from authenticated request
@@ -236,9 +237,10 @@ router.get('/bots', async (req: Request, res: Response) => {
 // Create bot
 const createBotSchema = z.object({
   name: z.string().min(1, 'Name is required').max(100),
-  type: z.enum(['grid', 'dca', 'rsi', 'ma_crossover', 'custom']),
+  type: z.enum(['grid', 'dca', 'rsi', 'ma_crossover', 'macd', 'breakout', 'mean_reversion', 'momentum', 'custom']),
   symbol: z.string().min(1, 'Symbol is required'),
   config: z.record(z.unknown()),
+  marketType: z.enum(['spot', 'alpha']).optional().default('spot'),
 });
 
 router.post('/bots', async (req: Request, res: Response) => {
@@ -284,6 +286,79 @@ router.delete('/bots/:botId', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to delete bot', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to delete bot' });
+  }
+});
+
+// ============================================
+// BOT TEMPLATES
+// ============================================
+
+// Get all bot templates
+router.get('/bots/templates', async (_req: Request, res: Response) => {
+  try {
+    const templates = getAllBotTemplates();
+    res.json({
+      templates: templates.map(t => ({
+        type: t.type,
+        name: t.name,
+        icon: t.icon,
+        shortDescription: t.shortDescription,
+        description: t.description,
+        bestFor: t.bestFor,
+        risks: t.risks,
+      })),
+      count: templates.length,
+    });
+  } catch (error) {
+    logger.error('Failed to get bot templates', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get bot templates' });
+  }
+});
+
+// Get specific bot template with full details
+router.get('/bots/templates/:type', async (req: Request, res: Response) => {
+  try {
+    const template = getBotTemplate(req.params.type as BotType);
+    if (!template) {
+      res.status(404).json({ error: 'Bot template not found' });
+      return;
+    }
+    res.json(template);
+  } catch (error) {
+    logger.error('Failed to get bot template', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get bot template' });
+  }
+});
+
+// Get recommended settings for a bot type
+const recommendedSettingsSchema = z.object({
+  type: z.enum(['grid', 'dca', 'rsi', 'ma_crossover', 'macd', 'breakout', 'mean_reversion', 'momentum']),
+  riskProfile: z.enum(['conservative', 'moderate', 'aggressive']).optional().default('moderate'),
+});
+
+router.post('/bots/recommended', async (req: Request, res: Response) => {
+  try {
+    const body = recommendedSettingsSchema.parse(req.body);
+    const template = getBotTemplate(body.type);
+    if (!template) {
+      res.status(404).json({ error: 'Bot type not found' });
+      return;
+    }
+
+    const settings = getRecommendedSettings(body.type, body.riskProfile);
+    res.json({
+      type: body.type,
+      riskProfile: body.riskProfile,
+      settings,
+      parameters: template.parameters,
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: error.errors[0].message });
+      return;
+    }
+    logger.error('Failed to get recommended settings', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get recommended settings' });
   }
 });
 

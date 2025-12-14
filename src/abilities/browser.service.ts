@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import { validateExternalUrl } from '../utils/url-validator.js';
 import logger from '../utils/logger.js';
+import * as browserScreencast from './browser-screencast.service.js';
 
 const SANDBOX_CONTAINER = process.env.SANDBOX_CONTAINER || 'luna-sandbox';
 const DOCKER_HOST = process.env.DOCKER_HOST || 'http://docker-proxy:2375';
@@ -273,6 +274,29 @@ export async function navigate(
     };
   }
 
+  // If there's an active screencast session, use it instead of creating a new one
+  if (browserScreencast.hasActiveSession(userId)) {
+    try {
+      await browserScreencast.sendBrowserCommand(userId, {
+        action: 'navigate',
+        url,
+      });
+      logger.info('Browser navigate via screencast', { userId, url });
+      return {
+        success: true,
+        pageUrl: url,
+        executionTimeMs: Date.now() - startTime,
+      };
+    } catch (error) {
+      logger.error('Browser navigate via screencast failed', { userId, url, error: (error as Error).message });
+      return {
+        success: false,
+        error: (error as Error).message,
+        executionTimeMs: Date.now() - startTime,
+      };
+    }
+  }
+
   const script = wrapPlaywrightScript(`
     const response = await page.goto(${JSON.stringify(url)}, {
       waitUntil: ${JSON.stringify(waitUntil)},
@@ -479,6 +503,29 @@ export async function click(
     };
   }
 
+  // If there's an active screencast session, use it instead of creating a new one
+  if (browserScreencast.hasActiveSession(userId)) {
+    try {
+      await browserScreencast.sendBrowserCommand(userId, {
+        action: 'clickSelector',
+        selector,
+      });
+      logger.info('Browser click via screencast', { userId, selector });
+      return {
+        success: true,
+        data: { message: `Clicked element: ${selector}` },
+        executionTimeMs: Date.now() - startTime,
+      };
+    } catch (error) {
+      logger.error('Browser click via screencast failed', { userId, selector, error: (error as Error).message });
+      return {
+        success: false,
+        error: (error as Error).message,
+        executionTimeMs: Date.now() - startTime,
+      };
+    }
+  }
+
   const script = wrapPlaywrightScript(`
     await page.goto(${JSON.stringify(url)}, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
@@ -558,6 +605,30 @@ export async function fill(
       error: `URL validation failed: ${(error as Error).message}`,
       executionTimeMs: Date.now() - startTime,
     };
+  }
+
+  // If there's an active screencast session, use it instead of creating a new one
+  if (browserScreencast.hasActiveSession(userId)) {
+    try {
+      await browserScreencast.sendBrowserCommand(userId, {
+        action: 'fillSelector',
+        selector,
+        value,
+      });
+      logger.info('Browser fill via screencast', { userId, selector });
+      return {
+        success: true,
+        data: { message: `Filled field: ${selector}` },
+        executionTimeMs: Date.now() - startTime,
+      };
+    } catch (error) {
+      logger.error('Browser fill via screencast failed', { userId, selector, error: (error as Error).message });
+      return {
+        success: false,
+        error: (error as Error).message,
+        executionTimeMs: Date.now() - startTime,
+      };
+    }
   }
 
   const script = wrapPlaywrightScript(`

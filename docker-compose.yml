@@ -69,6 +69,7 @@ services:
       - "127.0.0.1:3005:3003"
     environment:
       - NODE_ENV=production
+      - AGENT_ENGINE=${AGENT_ENGINE:-legacy}
       - PORT=3003
       - POSTGRES_HOST=luna-postgres
       - POSTGRES_PORT=5432
@@ -190,6 +191,7 @@ services:
       - ./src/db/migrations/005_workspace.sql:/docker-entrypoint-initdb.d/005_workspace.sql
       - ./src/db/migrations/006_clear_refresh_tokens.sql:/docker-entrypoint-initdb.d/006_clear_refresh_tokens.sql
       - ./src/db/migrations/012_fail2ban.sql:/docker-entrypoint-initdb.d/012_fail2ban.sql
+      - ./src/db/migrations/038_layered_agent.sql:/docker-entrypoint-initdb.d/038_layered_agent.sql
     networks:
       - luna-network
     # SECURITY: Container hardening

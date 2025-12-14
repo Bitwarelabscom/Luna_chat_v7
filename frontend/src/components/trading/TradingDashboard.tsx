@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { TrendingUp, BarChart3, Wallet, History, Bot, Settings, AlertCircle, RefreshCw, Wifi, WifiOff, X, ExternalLink, MessageCircle, Activity, ListChecks } from 'lucide-react';
-import { tradingApi, type TradingSettings, type Portfolio, type PriceData, type TradeRecord, type BotConfig } from '@/lib/api';
+import { tradingApi, type TradingSettings, type Portfolio, type PriceData, type TradeRecord, type BotConfig, type AlphaHolding, type BotType } from '@/lib/api';
 import type { DisplayContent } from '@/types/display';
 import PriceChart from './PriceChart';
 import TradingChat from './TradingChat';
@@ -11,6 +11,9 @@ import RecentTrades from './RecentTrades';
 import TradingSettingsModal from './TradingSettingsModal';
 import ResearchTab from './ResearchTab';
 import RulesTab from './RulesTab';
+import BotManager from './BotManager';
+import BotInfoDrawer from './BotInfoDrawer';
+import BotCreationModal from './BotCreationModal';
 import { useTradingWebSocket, type PriceUpdate } from '@/hooks/useTradingWebSocket';
 
 type TabType = 'chart' | 'portfolio' | 'trades' | 'bots' | 'rules' | 'research' | 'settings';
@@ -18,6 +21,7 @@ type TabType = 'chart' | 'portfolio' | 'trades' | 'bots' | 'rules' | 'research' 
 export default function TradingDashboard() {
   const [settings, setSettings] = useState<TradingSettings | null>(null);
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
+  const [alphaHoldings, setAlphaHoldings] = useState<AlphaHolding[]>([]);
   const [prices, setPrices] = useState<PriceData[]>([]);
   const [trades, setTrades] = useState<TradeRecord[]>([]);
   const [bots, setBots] = useState<BotConfig[]>([]);
@@ -28,6 +32,11 @@ export default function TradingDashboard() {
   const [chatOpen, setChatOpen] = useState(false);
   const [displayContent, setDisplayContent] = useState<DisplayContent>({ type: 'chart', symbol: 'BTCUSDC' });
   const [activeTab, setActiveTab] = useState<TabType>('chart');
+
+  // Bot modal states
+  const [showBotHelp, setShowBotHelp] = useState(false);
+  const [selectedBotHelpType, setSelectedBotHelpType] = useState<BotType | undefined>(undefined);
+  const [showBotCreation, setShowBotCreation] = useState(false);
 
   // WebSocket for real-time price updates
   const { connected: wsConnected } = useTradingWebSocket({
@@ -69,6 +78,17 @@ export default function TradingDashboard() {
         setPortfolio(portfolioData);
         setTrades(tradesData);
         setBots(botsData);
+
+        // Try to fetch combined portfolio with Alpha holdings
+        try {
+          const combinedData = await tradingApi.getCombinedPortfolio();
+          if (combinedData.alpha && combinedData.alpha.length > 0) {
+            setAlphaHoldings(combinedData.alpha);
+          }
+        } catch (err) {
+          // Alpha portfolio not available, ignore
+          console.debug('Alpha portfolio not available:', err);
+        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load trading data');
@@ -115,6 +135,44 @@ export default function TradingDashboard() {
       setActiveTab('chart');
     }
   }, []);
+
+  // Bot action handlers
+  const handleStartBot = async (botId: string) => {
+    try {
+      await tradingApi.updateBotStatus(botId, 'running');
+      setBots(prev => prev.map(b => b.id === botId ? { ...b, status: 'running' } : b));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to start bot');
+    }
+  };
+
+  const handleStopBot = async (botId: string) => {
+    try {
+      await tradingApi.updateBotStatus(botId, 'stopped');
+      setBots(prev => prev.map(b => b.id === botId ? { ...b, status: 'stopped' } : b));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to stop bot');
+    }
+  };
+
+  const handleDeleteBot = async (botId: string) => {
+    try {
+      await tradingApi.deleteBot(botId);
+      setBots(prev => prev.filter(b => b.id !== botId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete bot');
+    }
+  };
+
+  const handleBotCreated = () => {
+    // Refresh bots list
+    tradingApi.getBots().then(setBots).catch(console.error);
+  };
+
+  const handleOpenBotHelp = (type?: BotType) => {
+    setSelectedBotHelpType(type);
+    setShowBotHelp(true);
+  };
 
   const runningBots = bots.filter(b => b.status === 'running').length;
 
@@ -367,6 +425,7 @@ export default function TradingDashboard() {
           <div style={{ height: '100%', background: '#111827', borderRadius: '8px', overflow: 'hidden' }}>
             <Holdings
               holdings={portfolio?.holdings || []}
+              alphaHoldings={alphaHoldings}
               onSelectSymbol={(symbol) => {
                 setSelectedSymbol(symbol);
                 setDisplayContent({ type: 'chart', symbol });
@@ -385,46 +444,16 @@ export default function TradingDashboard() {
 
         {/* Bots Tab */}
         {activeTab === 'bots' && (
-          <div style={{ height: '100%', background: '#111827', borderRadius: '8px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-            <div style={{ padding: '16px', borderBottom: '1px solid #2a3545' }}>
-              <h3 style={{ margin: 0, fontSize: '14px', color: '#fff', fontWeight: 500 }}>Trading Bots</h3>
-            </div>
-            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '40px' }}>
-              {bots.length === 0 ? (
-                <div style={{ textAlign: 'center' }}>
-                  <Bot style={{ width: 48, height: 48, color: '#2a3545', marginBottom: '16px' }} />
-                  <p style={{ color: '#8892a0', fontSize: '14px', marginBottom: '8px' }}>No bots configured</p>
-                  <p style={{ color: '#607080', fontSize: '12px' }}>Ask Trader Luna to help you set up a trading bot</p>
-                </div>
-              ) : (
-                <div style={{ width: '100%' }}>
-                  {bots.map(bot => (
-                    <div key={bot.id} style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '12px 16px',
-                      borderBottom: '1px solid #2a3545',
-                    }}>
-                      <div>
-                        <div style={{ fontSize: '14px', color: '#fff', fontWeight: 500 }}>{bot.name}</div>
-                        <div style={{ fontSize: '12px', color: '#8892a0' }}>{bot.symbol} - {bot.type}</div>
-                      </div>
-                      <div style={{
-                        padding: '4px 10px',
-                        borderRadius: '4px',
-                        fontSize: '11px',
-                        fontWeight: 500,
-                        background: bot.status === 'running' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(107, 114, 128, 0.2)',
-                        color: bot.status === 'running' ? '#10b981' : '#6b7280',
-                      }}>
-                        {bot.status}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+          <div style={{ height: '100%', background: '#111827', borderRadius: '8px', overflow: 'hidden' }}>
+            <BotManager
+              bots={bots}
+              onCreateBot={() => setShowBotCreation(true)}
+              onStartBot={handleStartBot}
+              onStopBot={handleStopBot}
+              onDeleteBot={handleDeleteBot}
+              onOpenHelp={() => handleOpenBotHelp()}
+              onOpenBotHelp={(type) => handleOpenBotHelp(type)}
+            />
           </div>
         )}
 
@@ -639,6 +668,25 @@ export default function TradingDashboard() {
           onSettingsUpdate={loadData}
         />
       )}
+
+      {/* Bot Info Drawer */}
+      <BotInfoDrawer
+        isOpen={showBotHelp}
+        onClose={() => {
+          setShowBotHelp(false);
+          setSelectedBotHelpType(undefined);
+        }}
+        selectedBotType={selectedBotHelpType}
+        onSelectBotType={(type) => setSelectedBotHelpType(type)}
+      />
+
+      {/* Bot Creation Modal */}
+      <BotCreationModal
+        isOpen={showBotCreation}
+        onClose={() => setShowBotCreation(false)}
+        onCreated={handleBotCreated}
+        preselectedSymbol={selectedSymbol}
+      />
 
       <style>{`
         @keyframes spin {

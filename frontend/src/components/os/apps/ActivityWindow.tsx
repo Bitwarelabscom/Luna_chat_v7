@@ -1,93 +1,168 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { Activity, RefreshCw, Filter, Trash2, AlertCircle, CheckCircle, Info, AlertTriangle, Clock } from 'lucide-react';
+import { useMemo } from 'react';
+import {
+  Activity,
+  RefreshCw,
+  Filter,
+  Trash2,
+  AlertCircle,
+  CheckCircle,
+  Info,
+  AlertTriangle,
+  Clock,
+  Brain,
+  Wrench,
+  Database,
+  Layers,
+  Settings,
+  Wifi,
+  WifiOff,
+  DollarSign,
+  Zap,
+} from 'lucide-react';
+import { useActivityStream } from '@/hooks/useActivityStream';
+import {
+  useActivityStore,
+  type Activity as ActivityType,
+  type ActivityCategory,
+  type ActivityLevel,
+  categoryConfig,
+  levelConfig,
+} from '@/lib/activity-store';
 
-type LogLevel = 'info' | 'success' | 'warn' | 'error';
+// Icon mapping for categories
+const categoryIcons: Record<ActivityCategory, typeof Brain> = {
+  llm_call: Brain,
+  tool_invoke: Wrench,
+  memory_op: Database,
+  state_event: Layers,
+  error: AlertCircle,
+  background: Activity,
+  system: Settings,
+};
 
-interface ActivityLog {
-  id: string;
-  level: LogLevel;
-  message: string;
-  timestamp: Date;
-  details?: string;
-}
-
-const levelConfig: Record<LogLevel, { icon: typeof Info; color: string; bg: string }> = {
-  info: { icon: Info, color: 'text-blue-400', bg: 'bg-blue-400/10' },
-  success: { icon: CheckCircle, color: 'text-green-400', bg: 'bg-green-400/10' },
-  warn: { icon: AlertTriangle, color: 'text-yellow-400', bg: 'bg-yellow-400/10' },
-  error: { icon: AlertCircle, color: 'text-red-400', bg: 'bg-red-400/10' },
+// Icon mapping for levels
+const levelIcons: Record<ActivityLevel, typeof Info> = {
+  info: Info,
+  success: CheckCircle,
+  warn: AlertTriangle,
+  error: AlertCircle,
 };
 
 export default function ActivityWindow() {
-  const [logs, setLogs] = useState<ActivityLog[]>([]);
-  const [filter, setFilter] = useState<LogLevel | 'all'>('all');
-  const [search, setSearch] = useState('');
-  const [loading] = useState(false);
-  const [autoRefresh, setAutoRefresh] = useState(true);
+  const {
+    isConnected,
+    error,
+    isLoading,
+    refresh,
+    clearAll,
+    todayStats,
+  } = useActivityStream();
 
-  // Generate some sample activity logs for demonstration
-  const generateSampleLogs = useCallback((): ActivityLog[] => {
-    const sampleMessages: { level: LogLevel; message: string; details?: string }[] = [
-      { level: 'info', message: 'Session started', details: 'New chat session initialized' },
-      { level: 'success', message: 'Message sent successfully' },
-      { level: 'info', message: 'Processing request...' },
-      { level: 'success', message: 'Response generated', details: 'Tokens: 150 input, 320 output' },
-      { level: 'info', message: 'Tool call: search_emails', details: 'Searching for recent emails' },
-      { level: 'success', message: 'Tool completed: search_emails', details: 'Found 5 results' },
-      { level: 'warn', message: 'Rate limit approaching', details: '80% of hourly quota used' },
-      { level: 'info', message: 'Memory updated', details: 'New fact stored about user preferences' },
-      { level: 'success', message: 'Calendar event created', details: 'Meeting tomorrow at 3pm' },
-      { level: 'info', message: 'Spotify: Now playing', details: 'Artist - Song Title' },
-      { level: 'error', message: 'Connection timeout', details: 'Retrying in 5 seconds...' },
-      { level: 'success', message: 'Connection restored' },
-    ];
+  const activities = useActivityStore((state) => state.activities);
+  const activeFilter = useActivityStore((state) => state.activeFilter);
+  const levelFilter = useActivityStore((state) => state.levelFilter);
+  const searchQuery = useActivityStore((state) => state.searchQuery);
+  const setActiveFilter = useActivityStore((state) => state.setActiveFilter);
+  const setLevelFilter = useActivityStore((state) => state.setLevelFilter);
+  const setSearchQuery = useActivityStore((state) => state.setSearchQuery);
 
-    const now = Date.now();
-    return sampleMessages.map((msg, idx) => ({
-      id: `log-${idx}`,
-      ...msg,
-      timestamp: new Date(now - idx * 30000), // 30 seconds apart
-    }));
-  }, []);
+  // Filter activities
+  const filteredActivities = useMemo(() => {
+    return activities.filter((activity) => {
+      // Category filter
+      if (activeFilter !== 'all' && activity.category !== activeFilter) {
+        return false;
+      }
+      // Level filter
+      if (levelFilter !== 'all' && activity.level !== levelFilter) {
+        return false;
+      }
+      // Search filter
+      if (searchQuery) {
+        const query = searchQuery.toLowerCase();
+        const matchTitle = activity.title.toLowerCase().includes(query);
+        const matchMessage = activity.message?.toLowerCase().includes(query);
+        const matchSource = activity.source?.toLowerCase().includes(query);
+        if (!matchTitle && !matchMessage && !matchSource) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [activities, activeFilter, levelFilter, searchQuery]);
 
-  useEffect(() => {
-    // Load initial logs
-    setLogs(generateSampleLogs());
-  }, [generateSampleLogs]);
-
-  useEffect(() => {
-    if (!autoRefresh) return;
-
-    const interval = setInterval(() => {
-      // In a real implementation, this would fetch from an API
-      // For now, just update the timestamps to simulate real-time activity
-      setLogs(prev => {
-        if (prev.length === 0) return generateSampleLogs();
-        return prev;
-      });
-    }, 5000);
-
-    return () => clearInterval(interval);
-  }, [autoRefresh, generateSampleLogs]);
-
-  const handleClearLogs = () => {
+  const handleClearLogs = async () => {
     if (confirm('Clear all activity logs?')) {
-      setLogs([]);
+      await clearAll();
     }
   };
 
-  const filteredLogs = logs.filter(log => {
-    if (filter !== 'all' && log.level !== filter) return false;
-    if (search && !log.message.toLowerCase().includes(search.toLowerCase())) return false;
-    return true;
-  });
-
   const formatTime = (date: Date) => {
-    return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    return date.toLocaleTimeString(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
   };
 
+  const formatCost = (cost: number) => {
+    if (cost < 0.01) return `$${cost.toFixed(4)}`;
+    return `$${cost.toFixed(2)}`;
+  };
+
+  const formatTokens = (tokens: number) => {
+    if (tokens >= 1000000) return `${(tokens / 1000000).toFixed(1)}M`;
+    if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}K`;
+    return tokens.toString();
+  };
+
+  // Render activity details based on category
+  const renderDetails = (activity: ActivityType) => {
+    const details = activity.details;
+    if (!details) return null;
+
+    if (activity.category === 'llm_call') {
+      const inputTokens = details.inputTokens as number | undefined;
+      const outputTokens = details.outputTokens as number | undefined;
+      const cost = details.cost as number | undefined;
+      const model = details.model as string | undefined;
+
+      return (
+        <div className="flex flex-wrap items-center gap-2 mt-1 text-xs" style={{ color: 'var(--theme-text-muted)' }}>
+          {model && <span className="px-1.5 py-0.5 rounded" style={{ background: 'var(--theme-bg-tertiary)' }}>{model}</span>}
+          {inputTokens !== undefined && <span>{formatTokens(inputTokens)} in</span>}
+          {outputTokens !== undefined && <span>{formatTokens(outputTokens)} out</span>}
+          {cost !== undefined && <span className="text-green-400">{formatCost(cost)}</span>}
+          {activity.durationMs && <span>{activity.durationMs}ms</span>}
+        </div>
+      );
+    }
+
+    if (activity.category === 'tool_invoke') {
+      const toolName = details.toolName as string | undefined;
+      const success = details.success as boolean | undefined;
+      return (
+        <div className="flex items-center gap-2 mt-1 text-xs" style={{ color: 'var(--theme-text-muted)' }}>
+          {toolName && <span className="px-1.5 py-0.5 rounded" style={{ background: 'var(--theme-bg-tertiary)' }}>{toolName}</span>}
+          {success !== undefined && (
+            <span className={success ? 'text-green-400' : 'text-red-400'}>
+              {success ? 'Success' : 'Failed'}
+            </span>
+          )}
+          {activity.durationMs && <span>{activity.durationMs}ms</span>}
+        </div>
+      );
+    }
+
+    // Generic details display
+    return (
+      <p className="text-xs mt-0.5 truncate" style={{ color: 'var(--theme-text-muted)' }}>
+        {activity.message || JSON.stringify(details)}
+      </p>
+    );
+  };
 
   return (
     <div className="h-full flex flex-col" style={{ background: 'var(--theme-bg-primary)' }}>
@@ -98,19 +173,33 @@ export default function ActivityWindow() {
       >
         <div className="flex items-center gap-2">
           <Activity className="w-5 h-5" style={{ color: 'var(--theme-accent-primary)' }} />
-          <span className="font-medium" style={{ color: 'var(--theme-text-primary)' }}>Activity Log</span>
-          <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'var(--theme-bg-tertiary)', color: 'var(--theme-text-muted)' }}>
-            {filteredLogs.length} entries
+          <span className="font-medium" style={{ color: 'var(--theme-text-primary)' }}>Activity</span>
+          <span
+            className="text-xs px-2 py-0.5 rounded-full"
+            style={{ background: 'var(--theme-bg-tertiary)', color: 'var(--theme-text-muted)' }}
+          >
+            {filteredActivities.length}
           </span>
+          {/* Connection status */}
+          {isConnected ? (
+            <span title="Connected">
+              <Wifi className="w-3.5 h-3.5 text-green-400" />
+            </span>
+          ) : (
+            <span title={error || 'Disconnected'}>
+              <WifiOff className="w-3.5 h-3.5 text-red-400" />
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setAutoRefresh(!autoRefresh)}
-            className={`p-1.5 rounded transition ${autoRefresh ? 'text-[var(--theme-accent-primary)]' : ''}`}
-            style={{ color: autoRefresh ? undefined : 'var(--theme-text-muted)' }}
-            title={autoRefresh ? 'Auto-refresh on' : 'Auto-refresh off'}
+            onClick={refresh}
+            className={`p-1.5 rounded transition hover:bg-[var(--theme-bg-tertiary)] ${isLoading ? 'animate-spin' : ''}`}
+            style={{ color: 'var(--theme-text-muted)' }}
+            title="Refresh"
+            disabled={isLoading}
           >
-            <RefreshCw className={`w-4 h-4 ${autoRefresh ? 'animate-spin' : ''}`} style={{ animationDuration: '3s' }} />
+            <RefreshCw className="w-4 h-4" />
           </button>
           <button
             onClick={handleClearLogs}
@@ -123,6 +212,25 @@ export default function ActivityWindow() {
         </div>
       </div>
 
+      {/* Today's Stats Bar */}
+      <div
+        className="flex items-center gap-4 px-4 py-2 border-b text-xs"
+        style={{ borderColor: 'var(--theme-border-default)', background: 'var(--theme-bg-tertiary)' }}
+      >
+        <div className="flex items-center gap-1.5" style={{ color: 'var(--theme-text-muted)' }}>
+          <Brain className="w-3.5 h-3.5" style={{ color: 'var(--theme-accent-primary)' }} />
+          <span>{todayStats.llmCalls} calls</span>
+        </div>
+        <div className="flex items-center gap-1.5" style={{ color: 'var(--theme-text-muted)' }}>
+          <Zap className="w-3.5 h-3.5 text-yellow-400" />
+          <span>{formatTokens(todayStats.totalTokens)} tokens</span>
+        </div>
+        <div className="flex items-center gap-1.5" style={{ color: 'var(--theme-text-muted)' }}>
+          <DollarSign className="w-3.5 h-3.5 text-green-400" />
+          <span>{formatCost(todayStats.totalCost)} today</span>
+        </div>
+      </div>
+
       {/* Filters */}
       <div
         className="flex items-center gap-3 px-4 py-2 border-b"
@@ -131,8 +239,8 @@ export default function ActivityWindow() {
         <div className="flex items-center gap-1">
           <Filter className="w-4 h-4" style={{ color: 'var(--theme-text-muted)' }} />
           <select
-            value={filter}
-            onChange={(e) => setFilter(e.target.value as LogLevel | 'all')}
+            value={activeFilter}
+            onChange={(e) => setActiveFilter(e.target.value as ActivityCategory | 'all')}
             className="text-sm py-1 px-2 rounded focus:outline-none"
             style={{
               background: 'var(--theme-bg-tertiary)',
@@ -140,18 +248,37 @@ export default function ActivityWindow() {
               border: '1px solid var(--theme-border-default)',
             }}
           >
-            <option value="all">All</option>
-            <option value="info">Info</option>
-            <option value="success">Success</option>
-            <option value="warn">Warning</option>
-            <option value="error">Error</option>
+            <option value="all">All Types</option>
+            <option value="llm_call">LLM Calls</option>
+            <option value="tool_invoke">Tools</option>
+            <option value="memory_op">Memory</option>
+            <option value="state_event">State</option>
+            <option value="error">Errors</option>
+            <option value="background">Background</option>
+            <option value="system">System</option>
           </select>
         </div>
+        <select
+          value={levelFilter}
+          onChange={(e) => setLevelFilter(e.target.value as ActivityLevel | 'all')}
+          className="text-sm py-1 px-2 rounded focus:outline-none"
+          style={{
+            background: 'var(--theme-bg-tertiary)',
+            color: 'var(--theme-text-primary)',
+            border: '1px solid var(--theme-border-default)',
+          }}
+        >
+          <option value="all">All Levels</option>
+          <option value="info">Info</option>
+          <option value="success">Success</option>
+          <option value="warn">Warning</option>
+          <option value="error">Error</option>
+        </select>
         <input
           type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search logs..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search..."
           className="flex-1 text-sm py-1.5 px-3 rounded focus:outline-none"
           style={{
             background: 'var(--theme-bg-input)',
@@ -161,19 +288,26 @@ export default function ActivityWindow() {
         />
       </div>
 
-      {/* Log List */}
+      {/* Activity List */}
       <div className="flex-1 overflow-auto">
-        {loading ? (
+        {isLoading && activities.length === 0 ? (
           <div className="flex items-center justify-center h-32">
             <RefreshCw className="w-6 h-6 animate-spin" style={{ color: 'var(--theme-accent-primary)' }} />
           </div>
-        ) : filteredLogs.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full" style={{ color: 'var(--theme-text-muted)' }}>
+        ) : filteredActivities.length === 0 ? (
+          <div
+            className="flex flex-col items-center justify-center h-full"
+            style={{ color: 'var(--theme-text-muted)' }}
+          >
             <Activity className="w-12 h-12 mb-3 opacity-30" />
             <p className="text-sm">No activity logs</p>
-            {(filter !== 'all' || search) && (
+            {(activeFilter !== 'all' || levelFilter !== 'all' || searchQuery) && (
               <button
-                onClick={() => { setFilter('all'); setSearch(''); }}
+                onClick={() => {
+                  setActiveFilter('all');
+                  setLevelFilter('all');
+                  setSearchQuery('');
+                }}
                 className="text-sm mt-2 underline"
                 style={{ color: 'var(--theme-accent-primary)' }}
               >
@@ -183,31 +317,51 @@ export default function ActivityWindow() {
           </div>
         ) : (
           <div className="divide-y" style={{ borderColor: 'var(--theme-border-default)' }}>
-            {filteredLogs.map((log) => {
-              const config = levelConfig[log.level];
-              const Icon = config.icon;
+            {filteredActivities.map((activity) => {
+              const levelCfg = levelConfig[activity.level];
+              const LevelIcon = levelIcons[activity.level];
+              const CategoryIcon = categoryIcons[activity.category];
+              const categoryCfg = categoryConfig[activity.category];
+
               return (
                 <div
-                  key={log.id}
+                  key={activity.id}
                   className="px-4 py-3 hover:bg-[var(--theme-bg-tertiary)] transition"
                 >
                   <div className="flex items-start gap-3">
-                    <div className={`p-1 rounded ${config.bg}`}>
-                      <Icon className={`w-4 h-4 ${config.color}`} />
+                    {/* Level indicator */}
+                    <div className={`p-1 rounded ${levelCfg.bg}`}>
+                      <LevelIcon className={`w-4 h-4 ${levelCfg.color}`} />
                     </div>
+                    {/* Content */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-medium" style={{ color: 'var(--theme-text-primary)' }}>
-                          {log.message}
-                        </span>
-                        <span className="flex items-center gap-1 text-xs flex-shrink-0" style={{ color: 'var(--theme-text-muted)' }}>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <CategoryIcon
+                            className="w-3.5 h-3.5 flex-shrink-0"
+                            style={{ color: `var(--theme-${categoryCfg.color}-500, var(--theme-text-muted))` }}
+                          />
+                          <span
+                            className="text-sm font-medium truncate"
+                            style={{ color: 'var(--theme-text-primary)' }}
+                          >
+                            {activity.title}
+                          </span>
+                        </div>
+                        <span
+                          className="flex items-center gap-1 text-xs flex-shrink-0"
+                          style={{ color: 'var(--theme-text-muted)' }}
+                        >
                           <Clock className="w-3 h-3" />
-                          {formatTime(log.timestamp)}
+                          {formatTime(activity.createdAt)}
                         </span>
                       </div>
-                      {log.details && (
+                      {/* Details */}
+                      {renderDetails(activity)}
+                      {/* Source */}
+                      {activity.source && !activity.details && (
                         <p className="text-xs mt-0.5" style={{ color: 'var(--theme-text-muted)' }}>
-                          {log.details}
+                          {activity.source}
                         </p>
                       )}
                     </div>
@@ -225,10 +379,10 @@ export default function ActivityWindow() {
         style={{ borderColor: 'var(--theme-border-default)', color: 'var(--theme-text-muted)' }}
       >
         <span>
-          {autoRefresh ? 'Auto-refreshing every 5s' : 'Auto-refresh paused'}
+          {isConnected ? 'Real-time updates active' : error || 'Connecting...'}
         </span>
         <span>
-          Last updated: {formatTime(new Date())}
+          {activities.length} total entries
         </span>
       </div>
     </div>

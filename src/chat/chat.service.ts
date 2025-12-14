@@ -1,3 +1,5 @@
+import { config } from '../config/index.js';
+import * as layeredAgent from '../layered-agent/index.js';
 import {
   createChatCompletion,
   searchTool,
@@ -109,6 +111,50 @@ export interface ChatOutput {
 
 export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   const { sessionId, userId, message, mode, source = 'web' } = input;
+
+  // Feature flag: Use layered agent architecture if enabled
+  // EXCEPTION: Browser intents fall through to legacy path (which has tool execution)
+  if (config.agentEngine === 'layered_v1' && !abilities.isBrowserIntent(message)) {
+    // Save user message first
+    await sessionService.addMessage({
+      sessionId,
+      role: 'user',
+      content: message,
+      tokensUsed: 0,
+      source,
+    });
+
+    const result = await layeredAgent.processLayeredAgent({
+      sessionId,
+      userId,
+      message,
+      mode,
+      source,
+    });
+
+    // Save assistant message
+    const assistantMessage = await sessionService.addMessage({
+      sessionId,
+      role: 'assistant',
+      content: result.content,
+      tokensUsed: result.metrics?.promptTokens && result.metrics?.completionTokens
+        ? result.metrics.promptTokens + result.metrics.completionTokens
+        : 0,
+      inputTokens: result.metrics?.promptTokens || 0,
+      outputTokens: result.metrics?.completionTokens || 0,
+      model: result.metrics?.model || 'layered-agent',
+      provider: 'layered-agent',
+      source,
+    });
+
+    return {
+      messageId: assistantMessage.id,
+      content: result.content,
+      tokensUsed: result.metrics?.promptTokens && result.metrics?.completionTokens
+        ? result.metrics.promptTokens + result.metrics.completionTokens
+        : 0,
+    };
+  }
 
   // INTENT GATING: Detect if this is smalltalk FIRST
   const isSmallTalkMessage = abilities.isSmallTalk(message);
@@ -1772,12 +1818,92 @@ export interface StreamMetrics {
   tokensPerSecond: number;
   toolsUsed: string[];
   model: string;
+  // Layered agent breakdown
+  llmBreakdown?: Array<{
+    node: string;
+    model: string;
+    provider: string;
+    inputTokens: number;
+    outputTokens: number;
+    cacheTokens?: number;
+    cost: number;
+    durationMs?: number;
+  }>;
+  totalCost?: number;
 }
 
 export async function* streamMessage(
   input: ChatInput
 ): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action'; content?: string; status?: string; messageId?: string; tokensUsed?: number; metrics?: StreamMetrics; action?: string; url?: string }> {
   const { sessionId, userId, message, mode, source = 'web' } = input;
+
+  // Feature flag: Use layered agent architecture if enabled
+  // EXCEPTION: Browser intents fall through to legacy path (which has tool execution)
+  if (config.agentEngine === 'layered_v1' && !abilities.isBrowserIntent(message)) {
+    const startTime = Date.now();
+
+    // Save user message first
+    await sessionService.addMessage({
+      sessionId,
+      role: 'user',
+      content: message,
+      tokensUsed: 0,
+      source,
+    });
+
+    let assistantContent = '';
+
+    for await (const chunk of layeredAgent.streamLayeredAgent({
+      sessionId,
+      userId,
+      message,
+      mode,
+      source,
+    })) {
+      if (chunk.type === 'status') {
+        yield { type: 'status', status: chunk.content };
+      } else if (chunk.type === 'content') {
+        assistantContent += chunk.content || '';
+        yield { type: 'content', content: chunk.content };
+      } else if (chunk.type === 'done') {
+        // Save assistant message
+        const assistantMessage = await sessionService.addMessage({
+          sessionId,
+          role: 'assistant',
+          content: assistantContent,
+          tokensUsed: chunk.tokensUsed || 0,
+          inputTokens: chunk.metrics?.promptTokens || 0,
+          outputTokens: chunk.metrics?.completionTokens || 0,
+          model: chunk.metrics?.model || 'layered-agent',
+          provider: 'layered-agent',
+          source,
+        });
+
+        const processingTimeMs = Date.now() - startTime;
+        const tokensPerSecond = processingTimeMs > 0 && chunk.metrics?.completionTokens
+          ? (chunk.metrics.completionTokens / (processingTimeMs / 1000))
+          : 0;
+
+        yield {
+          type: 'done',
+          messageId: assistantMessage.id,
+          tokensUsed: chunk.tokensUsed,
+          metrics: chunk.metrics ? {
+            promptTokens: chunk.metrics.promptTokens,
+            completionTokens: chunk.metrics.completionTokens,
+            processingTimeMs,
+            tokensPerSecond: Math.round(tokensPerSecond * 10) / 10,
+            toolsUsed: chunk.metrics.toolsUsed || [],
+            model: chunk.metrics.model,
+            llmBreakdown: chunk.metrics.llmBreakdown,
+            totalCost: chunk.metrics.totalCost,
+          } : undefined,
+        };
+      }
+    }
+    return;
+  }
+
   const startTime = Date.now();
   const toolsUsed: string[] = [];
 
@@ -2655,7 +2781,9 @@ export async function* streamMessage(
       } else if (toolCall.function.name === 'browser_navigate') {
         // Browser navigate tool
         const args = JSON.parse(toolCall.function.arguments);
-        logger.info('Browser navigate', { userId, url: args.url });
+        // Signal frontend to open browser window
+        yield { type: 'browser_action', action: 'open', url: args.url };
+        logger.info('Browser navigate (stream)', { userId, url: args.url });
         try {
           const result = await browser.navigate(userId, args.url, {
             waitUntil: args.waitUntil || 'domcontentloaded',
@@ -2666,7 +2794,7 @@ export async function* streamMessage(
             content: browser.formatBrowserResultForPrompt(result),
           } as ChatMessage);
         } catch (error) {
-          logger.error('Browser navigate failed', { error: (error as Error).message });
+          logger.error('Browser navigate failed (stream)', { error: (error as Error).message });
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
@@ -2676,7 +2804,9 @@ export async function* streamMessage(
       } else if (toolCall.function.name === 'browser_screenshot') {
         // Browser screenshot tool - takes screenshot and saves to disk for display
         const args = JSON.parse(toolCall.function.arguments);
-        logger.info('Browser screenshot', { userId, url: args.url, fullPage: args.fullPage });
+        // Signal frontend to open browser window
+        yield { type: 'browser_action', action: 'open', url: args.url };
+        logger.info('Browser screenshot (stream)', { userId, url: args.url, fullPage: args.fullPage });
         try {
           const result = await browser.screenshot(userId, args.url, {
             fullPage: args.fullPage,
@@ -2701,7 +2831,7 @@ export async function* streamMessage(
               } as ChatMessage);
             } else {
               // Save failed - don't claim we have a displayable image
-              logger.warn('Screenshot save failed', { userId, url: args.url, error: saveResult.error });
+              logger.warn('Screenshot save failed (stream)', { userId, url: args.url, error: saveResult.error });
               messages.push({
                 role: 'tool',
                 tool_call_id: toolCall.id,
@@ -2717,7 +2847,7 @@ export async function* streamMessage(
             } as ChatMessage);
           }
         } catch (error) {
-          logger.error('Browser screenshot failed', { error: (error as Error).message });
+          logger.error('Browser screenshot failed (stream)', { error: (error as Error).message });
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
@@ -2727,7 +2857,9 @@ export async function* streamMessage(
       } else if (toolCall.function.name === 'browser_click') {
         // Browser click tool
         const args = JSON.parse(toolCall.function.arguments);
-        logger.info('Browser click', { userId, url: args.url, selector: args.selector });
+        // Signal frontend to open browser window
+        yield { type: 'browser_action', action: 'open', url: args.url };
+        logger.info('Browser click (stream)', { userId, url: args.url, selector: args.selector });
         try {
           const result = await browser.click(userId, args.url, args.selector);
           messages.push({
@@ -2736,7 +2868,7 @@ export async function* streamMessage(
             content: browser.formatBrowserResultForPrompt(result),
           } as ChatMessage);
         } catch (error) {
-          logger.error('Browser click failed', { error: (error as Error).message });
+          logger.error('Browser click failed (stream)', { error: (error as Error).message });
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
@@ -2746,7 +2878,9 @@ export async function* streamMessage(
       } else if (toolCall.function.name === 'browser_fill') {
         // Browser fill tool
         const args = JSON.parse(toolCall.function.arguments);
-        logger.info('Browser fill', { userId, url: args.url, selector: args.selector });
+        // Signal frontend to open browser window
+        yield { type: 'browser_action', action: 'open', url: args.url };
+        logger.info('Browser fill (stream)', { userId, url: args.url, selector: args.selector });
         try {
           const result = await browser.fill(userId, args.url, args.selector, args.value);
           messages.push({
@@ -2755,7 +2889,7 @@ export async function* streamMessage(
             content: browser.formatBrowserResultForPrompt(result),
           } as ChatMessage);
         } catch (error) {
-          logger.error('Browser fill failed', { error: (error as Error).message });
+          logger.error('Browser fill failed (stream)', { error: (error as Error).message });
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
@@ -2765,7 +2899,9 @@ export async function* streamMessage(
       } else if (toolCall.function.name === 'browser_extract') {
         // Browser extract tool
         const args = JSON.parse(toolCall.function.arguments);
-        logger.info('Browser extract', { userId, url: args.url, selector: args.selector });
+        // Signal frontend to open browser window
+        yield { type: 'browser_action', action: 'open', url: args.url };
+        logger.info('Browser extract (stream)', { userId, url: args.url, selector: args.selector });
         try {
           const result = args.selector
             ? await browser.extractElements(userId, args.url, args.selector, args.limit)
@@ -2776,7 +2912,7 @@ export async function* streamMessage(
             content: browser.formatBrowserResultForPrompt(result),
           } as ChatMessage);
         } catch (error) {
-          logger.error('Browser extract failed', { error: (error as Error).message });
+          logger.error('Browser extract failed (stream)', { error: (error as Error).message });
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
@@ -2786,7 +2922,9 @@ export async function* streamMessage(
       } else if (toolCall.function.name === 'browser_wait') {
         // Browser wait tool
         const args = JSON.parse(toolCall.function.arguments);
-        logger.info('Browser wait', { userId, url: args.url, selector: args.selector });
+        // Signal frontend to open browser window
+        yield { type: 'browser_action', action: 'open', url: args.url };
+        logger.info('Browser wait (stream)', { userId, url: args.url, selector: args.selector });
         try {
           const result = await browser.waitFor(userId, args.url, args.selector, args.timeout);
           messages.push({
@@ -3238,6 +3376,12 @@ export async function* streamMessage(
   const processingTimeMs = Date.now() - startTime;
   const tokensPerSecond = processingTimeMs > 0 ? (completionTokens / (processingTimeMs / 1000)) : 0;
 
+  // Update session log with tools used (for layered agent context continuity)
+  const uniqueToolsUsed = [...new Set(toolsUsed)];
+  if (uniqueToolsUsed.length > 0) {
+    sessionLogService.updateSessionLog(sessionId, { toolsUsed: uniqueToolsUsed }).catch(() => {});
+  }
+
   yield {
     type: 'done',
     messageId: assistantMessage.id,
@@ -3247,7 +3391,7 @@ export async function* streamMessage(
       completionTokens,
       processingTimeMs,
       tokensPerSecond: Math.round(tokensPerSecond * 10) / 10,
-      toolsUsed: [...new Set(toolsUsed)], // dedupe
+      toolsUsed: uniqueToolsUsed,
       model: modelConfig.model,
     },
   };

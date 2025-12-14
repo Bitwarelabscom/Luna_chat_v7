@@ -33,6 +33,9 @@ RUN npm ci --only=production
 
 COPY --from=builder /app/dist ./dist
 
+# Copy config files (YAML, etc.) that aren't compiled
+COPY --from=builder --chown=node:node /app/src/config/*.yaml ./src/config/
+
 USER node
 
 EXPOSE 3003

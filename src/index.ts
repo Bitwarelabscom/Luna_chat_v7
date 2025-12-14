@@ -22,7 +22,10 @@ import { clearAllTelegramTimers } from './triggers/telegram.service.js';
 import mcpRoutes from './mcp/mcp.routes.js';
 import tradingRoutes from './trading/trading.routes.js';
 import projectRoutes from './abilities/project.routes.js';
+import activityRoutes from './activity/activity.routes.js';
 import { startJobs, stopJobs } from './jobs/job-runner.js';
+import { setBroadcastFunction } from './activity/activity.service.js';
+import { broadcastActivity, type ActivityPayload } from './triggers/delivery.service.js';
 import { ipWhitelistMiddleware } from './security/ip-whitelist.middleware.js';
 import { fail2banMiddleware } from './security/fail2ban.middleware.js';
 import {
@@ -158,6 +161,12 @@ app.use('/api/triggers', triggersRoutes);
 app.use('/api/mcp', mcpRoutes);
 app.use('/api/trading', tradingRoutes);
 app.use('/api/projects', projectRoutes);
+app.use('/api/activity', activityRoutes);
+
+// Connect activity service to delivery service's SSE broadcast
+setBroadcastFunction((userId: string, activity) => {
+  broadcastActivity(userId, activity as ActivityPayload);
+});
 
 // 404 handler
 app.use((_req, res) => {

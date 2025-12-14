@@ -94,6 +94,83 @@ export function isWeatherQuery(message: string): boolean {
 }
 
 /**
+ * Check if message requires tools (should use legacy path, not layered_v1)
+ * Layered_v1 has NO tools - it's only for pure conversation/smalltalk
+ * This function returns TRUE if we need tools (use legacy path)
+ */
+export function isBrowserIntent(message: string): boolean {
+  const lower = message.toLowerCase();
+
+  // ALL tool-requiring keywords - comprehensive list
+  const toolKeywords = [
+    // Browser
+    'browse', 'browser', 'open website', 'go to', 'visit', 'navigate to',
+    'open url', 'web page', 'webpage', 'website', 'click', 'fill form',
+    'screenshot', 'scrape', 'extract', 'scroll', 'on the page', 'on page',
+    'press button', 'submit', 'popup', 'cookie', 'refresh', 'reload',
+    // Search
+    'search', 'look up', 'find', 'google', 'bing',
+    'what is', 'what are', 'what was', 'what were',
+    'who is', 'who are', 'who was', 'who were',
+    'when did', 'when was', 'when is', 'when will',
+    'where is', 'where are', 'where was', 'where can',
+    'how to', 'how do', 'how does', 'how can', 'how much', 'how many',
+    'why is', 'why are', 'why did', 'why does',
+    // YouTube
+    'youtube', 'video', 'videos', 'watch', 'stream',
+    // Wikipedia
+    'wikipedia', 'wiki',
+    // Email
+    'email', 'mail', 'inbox', 'send to', 'compose', 'draft',
+    // Calendar
+    'calendar', 'schedule', 'meeting', 'appointment', 'event', 'busy', 'free time',
+    // Reminders
+    'remind', 'reminder', 'alert me', 'notify me', 'don\'t forget',
+    // Todos/Tasks
+    'todo', 'to-do', 'task', 'tasks', 'checklist', 'add to list',
+    // Weather
+    'weather', 'forecast', 'temperature', 'rain', 'sunny', 'cloudy', 'snow',
+    // Image generation
+    'generate image', 'create image', 'draw', 'picture of', 'image of', 'visualize',
+    // Code/sandbox
+    'run code', 'execute', 'python', 'javascript', 'script', 'compile',
+    // Spotify/Music
+    'play music', 'spotify', 'song', 'playlist', 'album', 'artist', 'track',
+    'pause', 'skip', 'next song', 'previous',
+    // Documents/Files
+    'document', 'file', 'pdf', 'upload', 'download', 'attachment',
+    'read file', 'open file', 'workspace',
+    // Coder agents
+    'write code', 'fix bug', 'refactor', 'debug', 'implement', 'coding',
+    'coder', 'claude', 'gemini',
+    // Projects
+    'project', 'create project', 'new project', 'build',
+    // Writing
+    'write', 'draft', 'compose', 'article', 'blog', 'essay', 'story',
+    // Status/System
+    'status', 'system', 'running', 'check',
+    // Trading (if applicable)
+    'trade', 'trading', 'buy', 'sell', 'stock', 'crypto', 'bitcoin', 'price',
+    // News
+    'news', 'headline', 'latest', 'current events',
+  ];
+
+  // URLs always need tools
+  const urlPattern = /https?:\/\/[^\s]+/i;
+
+  // Domain names (e.g., "google.com", "youtube.com")
+  const domainPattern = /\b\w+\.(com|org|net|io|se|uk|de|fr|app|dev|ai)\b/i;
+
+  // Action verbs that imply tool use
+  const actionVerbs = /\b(show|get|fetch|check|open|send|create|make|set|add|remove|delete|update|list|play|stop|pause|skip)\s+\w+/i;
+
+  return toolKeywords.some(k => lower.includes(k)) ||
+         urlPattern.test(message) ||
+         domainPattern.test(message) ||
+         actionVerbs.test(message);
+}
+
+/**
  * Check if user is asking for status
  */
 export function isStatusQuery(message: string): boolean {

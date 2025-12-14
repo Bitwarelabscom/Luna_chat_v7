@@ -69,6 +69,7 @@ export interface ChatCompletionOptions {
   stream?: boolean;
   provider?: ProviderId;
   model?: string;
+  reasoning?: boolean;  // For xAI Grok 4.1 Fast reasoning models
 }
 
 export interface ChatCompletionResult {
@@ -90,6 +91,7 @@ export async function createChatCompletion(
     maxTokens = 4096,
     provider = 'openai',
     model,
+    reasoning,
   } = options;
 
   const client = getClient(provider);
@@ -102,6 +104,10 @@ export async function createChatCompletion(
     const tokenParam = provider === 'openai'
       ? { max_completion_tokens: maxTokens }
       : { max_tokens: maxTokens };
+
+    // xAI Grok 4.1 Fast supports reasoning mode
+    const isXAIReasoning = provider === 'xai' &&
+      (modelToUse.includes('fast') || modelToUse.includes('reasoning'));
 
     // Format messages for OpenAI API (handle tool calls and tool results)
     const formattedMessages = messages.map(m => {
@@ -120,7 +126,9 @@ export async function createChatCompletion(
       tools,
       ...(skipTemperature ? {} : { temperature }),
       ...tokenParam,
-    });
+      // Add reasoning for xAI fast/reasoning models (enabled by default, can be disabled)
+      ...(isXAIReasoning && { reasoning: { enabled: reasoning !== false } }),
+    } as any);
 
     const choice = response.choices[0];
 

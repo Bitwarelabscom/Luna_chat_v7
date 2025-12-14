@@ -1,5 +1,6 @@
 import { pool } from '../db/index.js';
 import { BinanceClient, type TickerPrice, type Ticker24hr, type Kline, formatQuantity } from './binance.client.js';
+import { alphaClient, type AlphaToken } from './binance-alpha.client.js';
 import { logger } from '../utils/logger.js';
 import { encryptToken, decryptToken } from '../utils/encryption.js';
 
@@ -59,7 +60,7 @@ export interface BotConfig {
   id: string;
   userId: string;
   name: string;
-  type: 'grid' | 'dca' | 'rsi' | 'ma_crossover' | 'custom';
+  type: 'grid' | 'dca' | 'rsi' | 'ma_crossover' | 'macd' | 'breakout' | 'mean_reversion' | 'momentum' | 'custom';
   symbol: string;
   config: Record<string, unknown>;
   status: 'running' | 'stopped' | 'error' | 'paused';
@@ -71,6 +72,27 @@ export interface BotConfig {
   updatedAt: Date;
   startedAt: Date | null;
   stoppedAt: Date | null;
+  marketType?: 'spot' | 'alpha';
+}
+
+// Alpha token holding
+export interface AlphaHolding {
+  symbol: string;
+  name: string;
+  amount: number;
+  valueUsdt: number;
+  price: number;
+  priceChange24h: number;
+  chain: string;
+  marketCap: number;
+  liquidity: number;
+}
+
+// Combined portfolio with Spot and Alpha
+export interface CombinedPortfolio {
+  spot: Portfolio | null;
+  alpha: AlphaHolding[];
+  totalValueUsdt: number;
 }
 
 // Binance client cache per user
@@ -862,3 +884,137 @@ export async function getTradingStats(
     largestLoss: parseFloat(row.largest_loss),
   };
 }
+
+// ============================================
+// Alpha Token Functions
+// ============================================
+
+/**
+ * Get list of available Alpha tokens with prices
+ */
+export async function getAlphaTokens(limit: number = 50): Promise<AlphaToken[]> {
+  try {
+    const tokens = await alphaClient.getTokenList();
+    // Sort by volume and return top tokens
+    return tokens
+      .sort((a, b) => parseFloat(b.volume24h) - parseFloat(a.volume24h))
+      .slice(0, limit);
+  } catch (error) {
+    logger.error('Failed to get Alpha tokens', { error });
+    return [];
+  }
+}
+
+/**
+ * Get Alpha token prices for specific symbols
+ */
+export async function getAlphaPrices(symbols: string[]): Promise<Array<{
+  symbol: string;
+  name: string;
+  price: number;
+  change24h: number;
+  volume24h: number;
+  marketCap: number;
+  liquidity: number;
+  chain: string;
+}>> {
+  try {
+    return await alphaClient.getTokenPrices(symbols);
+  } catch (error) {
+    logger.error('Failed to get Alpha prices', { symbols, error });
+    return [];
+  }
+}
+
+/**
+ * Search Alpha tokens by name or symbol
+ */
+export async function searchAlphaTokens(query: string): Promise<AlphaToken[]> {
+  try {
+    return await alphaClient.searchTokens(query);
+  } catch (error) {
+    logger.error('Failed to search Alpha tokens', { query, error });
+    return [];
+  }
+}
+
+/**
+ * Get Alpha token klines/candlestick data
+ */
+export async function getAlphaKlines(
+  symbol: string,
+  interval: string,
+  limit: number = 100
+): Promise<Array<{
+  openTime: number;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  volume: string;
+}>> {
+  try {
+    const klines = await alphaClient.getKlines(symbol, interval, limit);
+    return klines.map(k => ({
+      openTime: k.openTime,
+      open: k.open,
+      high: k.high,
+      low: k.low,
+      close: k.close,
+      volume: k.volume,
+    }));
+  } catch (error) {
+    logger.error('Failed to get Alpha klines', { symbol, error });
+    return [];
+  }
+}
+
+/**
+ * Get hot/trending Alpha tokens
+ */
+export async function getHotAlphaTokens(): Promise<AlphaToken[]> {
+  try {
+    return await alphaClient.getHotTokens();
+  } catch (error) {
+    logger.error('Failed to get hot Alpha tokens', { error });
+    return [];
+  }
+}
+
+/**
+ * Get top Alpha tokens by volume
+ */
+export async function getTopAlphaByVolume(limit: number = 20): Promise<AlphaToken[]> {
+  try {
+    return await alphaClient.getTopTokensByVolume(limit);
+  } catch (error) {
+    logger.error('Failed to get top Alpha tokens by volume', { error });
+    return [];
+  }
+}
+
+/**
+ * Get combined portfolio (Spot + Alpha holdings)
+ * Note: Alpha holdings require manual tracking as Binance Alpha doesn't have a wallet API
+ */
+export async function getCombinedPortfolio(userId: string): Promise<CombinedPortfolio> {
+  // Get spot portfolio
+  const spotPortfolio = await getPortfolio(userId);
+
+  // For Alpha tokens, we would need to track holdings manually
+  // Currently Alpha tokens are traded on-chain and don't have a centralized wallet API
+  // This is a placeholder for future integration
+  const alphaHoldings: AlphaHolding[] = [];
+
+  const spotValue = spotPortfolio?.totalValueUsdt || 0;
+  const alphaValue = alphaHoldings.reduce((sum, h) => sum + h.valueUsdt, 0);
+
+  return {
+    spot: spotPortfolio,
+    alpha: alphaHoldings,
+    totalValueUsdt: spotValue + alphaValue,
+  };
+}
+
+// Re-export Alpha client for direct access
+export { alphaClient };

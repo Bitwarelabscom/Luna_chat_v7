@@ -46,7 +46,7 @@ export interface CompletionResult {
 }
 
 export interface StreamChunk {
-  type: 'content' | 'done';
+  type: 'content' | 'done' | 'reasoning';  // 'reasoning' for xAI Grok thinking output
   content?: string;
   tokensUsed?: number;
   inputTokens?: number;

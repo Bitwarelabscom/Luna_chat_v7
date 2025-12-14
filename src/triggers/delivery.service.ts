@@ -32,14 +32,30 @@ export interface NotificationPayload {
   navigationTarget?: NotificationNavigationTarget;
 }
 
+// Activity payload for activity window
+export interface ActivityPayload {
+  id: string;
+  category: string;
+  eventType: string;
+  level: string;
+  title: string;
+  message?: string;
+  details?: Record<string, unknown>;
+  source?: string;
+  durationMs?: number;
+  createdAt: Date;
+}
+
 export interface TriggerEvent {
-  type: 'new_message' | 'trigger_delivered' | 'ping' | 'notification';
+  type: 'new_message' | 'trigger_delivered' | 'ping' | 'notification' | 'activity';
   triggerId?: string;
   sessionId?: string;
   message?: string;
   timestamp: Date;
   // Enhanced notification data
   notification?: NotificationPayload;
+  // Activity data for activity window
+  activity?: ActivityPayload;
 }
 
 // ============================================
@@ -531,11 +547,25 @@ export async function sendAutonomousNotification(
   });
 }
 
+/**
+ * Broadcast an activity event to user's subscribers (for Activity Window)
+ */
+export function broadcastActivity(userId: string, activity: ActivityPayload): void {
+  const event: TriggerEvent = {
+    type: 'activity',
+    timestamp: new Date(),
+    activity,
+  };
+
+  broadcastToUser(userId, event);
+}
+
 export default {
   addUserSubscriber,
   removeUserSubscriber,
   isUserOnline,
   broadcastToUser,
+  broadcastActivity,
   deliverTrigger,
   processTriggerQueue,
   sendDirectMessage,

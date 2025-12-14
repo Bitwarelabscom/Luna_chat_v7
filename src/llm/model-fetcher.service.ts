@@ -78,6 +78,10 @@ const MODEL_PRICING: Record<string, { input: number; output: number }> = {
   'gemini-1.5-flash': { input: 0.000075, output: 0.0003 },
   'gemini-2.0-flash': { input: 0.0001, output: 0.0004 },
   // xAI
+  'grok-4.1-fast': { input: 0.0002, output: 0.0005 },
+  'grok-4.1': { input: 0.002, output: 0.005 },
+  'grok-4-fast': { input: 0.0002, output: 0.0005 },
+  'grok-4': { input: 0.002, output: 0.005 },
   'grok-2': { input: 0.002, output: 0.01 },
   'grok-2-mini': { input: 0.0002, output: 0.001 },
   'grok-beta': { input: 0.005, output: 0.015 },
@@ -463,7 +467,9 @@ function getContextWindow(modelId: string): number {
   if (id.includes('gemini-1.5') || id.includes('gemini-2')) return 1048576;
   if (id.includes('gemini')) return 32000;
 
-  // xAI
+  // xAI - Grok 4.1 Fast has 2M context
+  if (id.includes('grok-4.1') || id.includes('grok-4-fast')) return 2000000;
+  if (id.includes('grok-4')) return 131072;
   if (id.includes('grok')) return 131072;
 
   // Default
@@ -488,7 +494,8 @@ function getMaxOutputTokens(modelId: string): number {
   if (id.includes('gemini-1.5-pro') || id.includes('gemini-2')) return 8192;
   if (id.includes('gemini-1.5-flash')) return 8192;
 
-  // xAI
+  // xAI - Grok 4.1 Fast has 30K max output
+  if (id.includes('grok-4.1-fast') || id.includes('grok-4-fast')) return 30000;
   if (id.includes('grok')) return 32768;
 
   // Default

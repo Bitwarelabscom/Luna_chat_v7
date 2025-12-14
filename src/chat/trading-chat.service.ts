@@ -13,6 +13,7 @@ import { getUserModelConfig } from '../llm/model-config.service.js';
 import { getTradingPrompt } from '../persona/trading.persona.js';
 import * as tradingService from '../trading/trading.service.js';
 import * as botExecutorService from '../trading/bot-executor.service.js';
+import { search as searxngSearch } from '../search/searxng.client.js';
 import { pool as db } from '../db/index.js';
 import logger from '../utils/logger.js';
 import type { Portfolio } from '../trading/trading.service.js';
@@ -301,6 +302,96 @@ Call this tool when the user asks to see something specific or when you want to 
   },
 };
 
+// Alpha token tools
+const getAlphaTokensTool = {
+  type: 'function' as const,
+  function: {
+    name: 'get_alpha_tokens',
+    description: 'Get list of available Binance Alpha tokens with prices, market cap, and volume. Alpha tokens are early-stage tokens on various chains.',
+    parameters: {
+      type: 'object',
+      properties: {
+        limit: {
+          type: 'number',
+          description: 'Maximum number of tokens to return (default: 20, max: 50)',
+        },
+        sortBy: {
+          type: 'string',
+          enum: ['volume', 'marketCap', 'change24h'],
+          description: 'Sort tokens by this field (default: volume)',
+        },
+      },
+      required: [],
+    },
+  },
+};
+
+const getAlphaPricesTool = {
+  type: 'function' as const,
+  function: {
+    name: 'get_alpha_prices',
+    description: 'Get current prices for specific Binance Alpha tokens',
+    parameters: {
+      type: 'object',
+      properties: {
+        symbols: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Alpha token symbols (e.g., ["RAVE", "MUBARAK"])',
+        },
+      },
+      required: ['symbols'],
+    },
+  },
+};
+
+const searchAlphaTokensTool = {
+  type: 'function' as const,
+  function: {
+    name: 'search_alpha_tokens',
+    description: 'Search for Alpha tokens by name or symbol',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Search query (e.g., "pepe" or "meme")',
+        },
+      },
+      required: ['query'],
+    },
+  },
+};
+
+// Web search tool for market news
+const searchMarketNewsTool = {
+  type: 'function' as const,
+  function: {
+    name: 'search_market_news',
+    description: `Search the web for cryptocurrency market news, events, and analysis.
+Use this when asked about:
+- Recent news or events affecting crypto prices
+- Market analysis and predictions
+- Regulatory updates
+- Comparing price movements to real-world events
+- Any information you don't have from built-in tools`,
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Search query for market news (e.g., "Bitcoin ETF approval news", "Ethereum merge impact")',
+        },
+        maxResults: {
+          type: 'number',
+          description: 'Maximum number of results (default: 5, max: 10)',
+        },
+      },
+      required: ['query'],
+    },
+  },
+};
+
 const tradingTools = [
   getPortfolioTool,
   getPricesTool,
@@ -311,6 +402,10 @@ const tradingTools = [
   listConditionalOrdersTool,
   cancelConditionalOrderTool,
   displayContentTool,
+  getAlphaTokensTool,
+  getAlphaPricesTool,
+  searchAlphaTokensTool,
+  searchMarketNewsTool,
 ];
 
 export interface TradingChatInput {
@@ -856,6 +951,115 @@ Order Type: ${args.orderType || 'market'}`;
 
               default:
                 toolResult = `Unknown display action: ${action}`;
+            }
+            break;
+          }
+
+          case 'get_alpha_tokens': {
+            const limit = Math.min(args.limit || 20, 50);
+            const tokens = await tradingService.getAlphaTokens(limit);
+
+            if (tokens.length === 0) {
+              toolResult = 'No Alpha tokens found or service unavailable';
+            } else {
+              const sortBy = args.sortBy || 'volume';
+              let sorted = [...tokens];
+
+              if (sortBy === 'marketCap') {
+                sorted.sort((a, b) => parseFloat(b.marketCap) - parseFloat(a.marketCap));
+              } else if (sortBy === 'change24h') {
+                sorted.sort((a, b) => parseFloat(b.percentChange24h) - parseFloat(a.percentChange24h));
+              }
+              // Already sorted by volume by default
+
+              const tokenList = sorted.slice(0, limit).map((t, i) =>
+                `${i + 1}. ${t.symbol} (${t.name}) - $${parseFloat(t.price).toFixed(6)} | ` +
+                `24h: ${parseFloat(t.percentChange24h).toFixed(2)}% | ` +
+                `Vol: $${(parseFloat(t.volume24h) / 1e6).toFixed(2)}M | ` +
+                `Chain: ${t.chainName}`
+              ).join('\n');
+
+              toolResult = `Top ${Math.min(limit, sorted.length)} Alpha Tokens (by ${sortBy}):\n${tokenList}`;
+            }
+            break;
+          }
+
+          case 'get_alpha_prices': {
+            const symbols = args.symbols as string[];
+            if (!symbols || symbols.length === 0) {
+              toolResult = 'Error: symbols array is required';
+              break;
+            }
+
+            const prices = await tradingService.getAlphaPrices(symbols);
+
+            if (prices.length === 0) {
+              toolResult = `No prices found for: ${symbols.join(', ')}`;
+            } else {
+              const priceList = prices.map(p =>
+                `${p.symbol} (${p.name}): $${p.price.toFixed(6)} | ` +
+                `24h: ${p.change24h >= 0 ? '+' : ''}${p.change24h.toFixed(2)}% | ` +
+                `Vol: $${(p.volume24h / 1e6).toFixed(2)}M | ` +
+                `MCap: $${(p.marketCap / 1e6).toFixed(2)}M | ` +
+                `Chain: ${p.chain}`
+              ).join('\n');
+
+              toolResult = `Alpha Token Prices:\n${priceList}`;
+            }
+            break;
+          }
+
+          case 'search_alpha_tokens': {
+            const query = args.query as string;
+            if (!query) {
+              toolResult = 'Error: search query is required';
+              break;
+            }
+
+            const results = await tradingService.searchAlphaTokens(query);
+
+            if (results.length === 0) {
+              toolResult = `No Alpha tokens found matching "${query}"`;
+            } else {
+              const searchResults = results.slice(0, 10).map((t, i) =>
+                `${i + 1}. ${t.symbol} (${t.name}) - $${parseFloat(t.price).toFixed(6)} | ` +
+                `24h: ${parseFloat(t.percentChange24h).toFixed(2)}% | ` +
+                `Chain: ${t.chainName}`
+              ).join('\n');
+
+              toolResult = `Alpha tokens matching "${query}":\n${searchResults}`;
+            }
+            break;
+          }
+
+          case 'search_market_news': {
+            const query = args.query as string;
+            if (!query) {
+              toolResult = 'Error: search query is required';
+              break;
+            }
+
+            const maxResults = Math.min(args.maxResults || 5, 10);
+
+            try {
+              const searchResults = await searxngSearch(query, {
+                engines: ['google', 'bing', 'duckduckgo'],
+                categories: ['news', 'general'],
+                maxResults,
+              });
+
+              if (searchResults.length === 0) {
+                toolResult = `No news results found for "${query}". Try a different search term.`;
+              } else {
+                const resultList = searchResults.map((r, i) =>
+                  `${i + 1}. **${r.title}**\n   ${r.snippet || 'No description'}\n   Source: ${r.url}`
+                ).join('\n\n');
+
+                toolResult = `Search results for "${query}":\n\n${resultList}\n\n` +
+                  `Found ${searchResults.length} result(s). Use this information to answer the user's question about market news or events.`;
+              }
+            } catch (error) {
+              toolResult = `Search failed: ${(error as Error).message}. Web search may be unavailable.`;
             }
             break;
           }

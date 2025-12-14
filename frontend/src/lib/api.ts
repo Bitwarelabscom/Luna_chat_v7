@@ -107,6 +107,17 @@ export interface Session {
   updatedAt: string;
 }
 
+export interface LLMCallBreakdown {
+  node: string;      // plan, draft, critique, repair
+  model: string;
+  provider: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheTokens?: number;
+  cost: number;
+  durationMs?: number;
+}
+
 export interface MessageMetrics {
   promptTokens: number;
   completionTokens: number;
@@ -114,6 +125,9 @@ export interface MessageMetrics {
   tokensPerSecond: number;
   toolsUsed: string[];
   model: string;
+  // Layered agent breakdown
+  llmBreakdown?: LLMCallBreakdown[];
+  totalCost?: number;
 }
 
 export interface Message {
@@ -173,7 +187,7 @@ export const chatApi = {
 export async function* streamMessage(
   sessionId: string,
   message: string
-): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action'; content?: string; status?: string; messageId?: string; metrics?: MessageMetrics; action?: string; url?: string }> {
+): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'reasoning'; content?: string; status?: string; messageId?: string; metrics?: MessageMetrics; action?: string; url?: string }> {
   const response = await fetch(`${API_URL}${API_PREFIX}/api/chat/sessions/${sessionId}/send`, {
     method: 'POST',
     headers: {
@@ -221,7 +235,7 @@ export async function* streamMessage(
 export async function* regenerateMessage(
   sessionId: string,
   messageId: string
-): AsyncGenerator<{ type: 'content' | 'done' | 'status'; content?: string; status?: string; messageId?: string; metrics?: MessageMetrics }> {
+): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'reasoning'; content?: string; status?: string; messageId?: string; metrics?: MessageMetrics }> {
   const response = await fetch(`${API_URL}${API_PREFIX}/api/chat/sessions/${sessionId}/messages/${messageId}/regenerate`, {
     method: 'POST',
     headers: {
@@ -1861,11 +1875,13 @@ export interface TradeRecord {
   filledAt: Date | null;
 }
 
+export type BotType = 'grid' | 'dca' | 'rsi' | 'ma_crossover' | 'macd' | 'breakout' | 'mean_reversion' | 'momentum' | 'custom';
+
 export interface BotConfig {
   id: string;
   userId: string;
   name: string;
-  type: 'grid' | 'dca' | 'rsi' | 'ma_crossover' | 'custom';
+  type: BotType;
   symbol: string;
   config: Record<string, unknown>;
   status: 'running' | 'stopped' | 'error' | 'paused';
@@ -1873,10 +1889,85 @@ export interface BotConfig {
   totalProfit: number;
   totalTrades: number;
   winRate: number;
+  marketType: 'spot' | 'alpha';
   createdAt: Date;
   updatedAt: Date;
   startedAt: Date | null;
   stoppedAt: Date | null;
+}
+
+// Alpha Token Types
+export interface AlphaToken {
+  symbol: string;
+  name: string;
+  price: number;
+  priceChange24h: number;
+  volume24h: number;
+  marketCap: number;
+  liquidity: number;
+  chain: string;
+  contractAddress?: string;
+  logoUrl?: string;
+}
+
+export interface AlphaHolding {
+  symbol: string;
+  name: string;
+  amount: number;
+  valueUsdt: number;
+  price: number;
+  priceChange24h: number;
+  chain: string;
+  marketCap: number;
+  liquidity: number;
+}
+
+export interface CombinedPortfolio {
+  spot: Portfolio | null;
+  alpha: AlphaHolding[];
+  totalValueUsdt: number;
+}
+
+// Bot Template Types
+export interface BotParameterDefinition {
+  name: string;
+  label: string;
+  type: 'number' | 'string' | 'boolean' | 'select';
+  required: boolean;
+  default?: unknown;
+  min?: number;
+  max?: number;
+  step?: number;
+  options?: Array<{ value: string | number; label: string }>;
+  description: string;
+  helpText?: string;
+}
+
+export interface BotExampleScenario {
+  title: string;
+  description: string;
+  config: Record<string, unknown>;
+  expectedOutcome: string;
+}
+
+export interface BotTemplate {
+  type: BotType;
+  name: string;
+  icon: string;
+  shortDescription: string;
+  description: string;
+  howItWorks: string;
+  bestFor: string[];
+  risks: string[];
+  parameters: BotParameterDefinition[];
+  examples: BotExampleScenario[];
+  tips: string[];
+  warnings: string[];
+  recommendedSettings: {
+    conservative: Record<string, unknown>;
+    moderate: Record<string, unknown>;
+    aggressive: Record<string, unknown>;
+  };
 }
 
 export interface ResearchSettings {
@@ -2078,9 +2169,10 @@ export const tradingApi = {
 
   createBot: (config: {
     name: string;
-    type: BotConfig['type'];
+    type: BotType;
     symbol: string;
     config: Record<string, unknown>;
+    marketType?: 'spot' | 'alpha';
   }) =>
     api<BotConfig>('/api/trading/bots', { method: 'POST', body: config }),
 
@@ -2089,6 +2181,39 @@ export const tradingApi = {
 
   deleteBot: (botId: string) =>
     api<{ success: boolean }>(`/api/trading/bots/${botId}`, { method: 'DELETE' }),
+
+  // Bot Templates
+  getBotTemplates: () =>
+    api<{ templates: BotTemplate[] }>('/api/trading/bots/templates'),
+
+  getBotTemplate: (type: BotType) =>
+    api<{ template: BotTemplate }>(`/api/trading/bots/templates/${type}`),
+
+  getRecommendedBotSettings: (type: BotType, symbol: string, riskProfile?: 'conservative' | 'moderate' | 'aggressive') =>
+    api<{ settings: Record<string, unknown>; analysis: string }>('/api/trading/bots/recommended', {
+      method: 'POST',
+      body: { type, symbol, riskProfile },
+    }),
+
+  // Alpha Tokens
+  getAlphaTokens: (limit?: number) =>
+    api<{ tokens: AlphaToken[] }>(`/api/trading/alpha/tokens${limit ? `?limit=${limit}` : ''}`),
+
+  getAlphaPrices: (symbols: string[]) =>
+    api<{ prices: Array<{ symbol: string; price: number; change24h: number }> }>(`/api/trading/alpha/prices?symbols=${symbols.join(',')}`),
+
+  searchAlphaTokens: (query: string) =>
+    api<{ tokens: AlphaToken[] }>(`/api/trading/alpha/search?q=${encodeURIComponent(query)}`),
+
+  getHotAlphaTokens: () =>
+    api<{ tokens: AlphaToken[] }>('/api/trading/alpha/hot'),
+
+  getTopAlphaByVolume: (limit?: number) =>
+    api<{ tokens: AlphaToken[] }>(`/api/trading/alpha/top-volume${limit ? `?limit=${limit}` : ''}`),
+
+  // Combined Portfolio (Spot + Alpha)
+  getCombinedPortfolio: () =>
+    api<CombinedPortfolio>('/api/trading/portfolio/combined'),
 
   // Trading Chat
   createChatSession: () =>

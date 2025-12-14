@@ -30,6 +30,9 @@ const configSchema = z.object({
   port: z.coerce.number().default(3003),
   nodeEnv: z.enum(['development', 'production', 'test']).default('development'),
 
+  // Layered Agent Architecture feature flag
+  agentEngine: z.enum(['legacy', 'layered_v1']).default('legacy'),
+
   postgres: z.object({
     host: z.string().default('localhost'),
     port: z.coerce.number().default(5432),
@@ -175,6 +178,7 @@ const configSchema = z.object({
 const rawConfig = {
   port: process.env.PORT,
   nodeEnv: process.env.NODE_ENV,
+  agentEngine: process.env.AGENT_ENGINE,
 
   postgres: {
     host: process.env.POSTGRES_HOST,
