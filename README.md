@@ -13,6 +13,20 @@
 
 ---
 
+## Screenshots
+
+<div align="center">
+
+![Luna Desktop - Chat Mode Selection](images/screenshot-desktop.png)
+*OS-style desktop with Spotlight launcher, notifications, and chat mode selection*
+
+![Luna Apps - Tasks, Files, Editor, Friends](images/screenshot-apps.png)
+*Multi-window workspace with Tasks, Files, Editor, and AI Friends panel*
+
+</div>
+
+---
+
 Luna Chat v7 is a comprehensive AI Operating System designed for privacy and autonomy. Unlike standard chatbots, Luna features a **Council Architecture** where multiple sub-agents (Polaris, Aurora, Vega, Sol) deliberate in the background to provide thoughtful, well-rounded responses.
 
 Built with a **Local-First** ethos, Luna integrates deeply with your digital life via a native Android app, code execution sandbox, CalDAV, and SMTP - all while keeping your data private. She doesn't just chat; she has a job.
