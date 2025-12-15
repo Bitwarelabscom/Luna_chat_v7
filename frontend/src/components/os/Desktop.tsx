@@ -7,6 +7,8 @@ import { Window } from './Window';
 import { NewFileDialog } from './NewFileDialog';
 import { useWindowStore } from '@/lib/window-store';
 import { useChatStore } from '@/lib/store';
+import { useBackgroundStore } from '@/lib/background-store';
+import { getMediaUrl, backgroundApi } from '@/lib/api';
 import { type AppId, appConfig } from './app-registry';
 
 // App Components
@@ -79,8 +81,36 @@ export function Desktop() {
   const browserAction = useChatStore((state) => state.browserAction);
   const setBrowserAction = useChatStore((state) => state.setBrowserAction);
 
+  const { activeBackground, setActiveBackground } = useBackgroundStore();
+
   const [spotlightOpen, setSpotlightOpen] = useState(false);
   const [newFileDialogOpen, setNewFileDialogOpen] = useState(false);
+
+  // Fetch active background on mount and on refresh events
+  const fetchActiveBackground = useCallback(() => {
+    backgroundApi.getActiveBackground()
+      .then((result) => {
+        setActiveBackground(result.background);
+      })
+      .catch((err) => {
+        console.error('Failed to fetch active background:', err);
+      });
+  }, [setActiveBackground]);
+
+  useEffect(() => {
+    fetchActiveBackground();
+  }, [fetchActiveBackground]);
+
+  // Listen for background refresh events (triggered by Luna chat)
+  useEffect(() => {
+    const handleBackgroundRefresh = () => {
+      fetchActiveBackground();
+    };
+    window.addEventListener('luna:background-refresh', handleBackgroundRefresh);
+    return () => {
+      window.removeEventListener('luna:background-refresh', handleBackgroundRefresh);
+    };
+  }, [fetchActiveBackground]);
 
   // Open chat by default on first load
   useEffect(() => {
@@ -140,24 +170,37 @@ export function Desktop() {
     console.log('Creating new file:', filename);
   }, [openApp]);
 
+  // Compute background style
+  const defaultGradient = 'linear-gradient(135deg, #0a0a1a 0%, #0d1025 50%, #0a0a1a 100%)';
+  const backgroundStyle = activeBackground?.imageUrl
+    ? {
+        backgroundImage: `url(${getMediaUrl(activeBackground.imageUrl)})`,
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+        backgroundRepeat: 'no-repeat' as const,
+      }
+    : {
+        background: defaultGradient,
+      };
+
   return (
     <div
       className="h-screen w-screen flex flex-col overflow-hidden"
-      style={{
-        background: 'linear-gradient(135deg, #0a0a1a 0%, #0d1025 50%, #0a0a1a 100%)',
-      }}
+      style={backgroundStyle}
     >
-      {/* Ambient Background Effects */}
-      <div className="fixed inset-0 pointer-events-none">
-        <div
-          className="absolute top-1/4 left-1/4 w-96 h-96 rounded-full blur-[100px]"
-          style={{ background: 'var(--theme-accent-primary)', opacity: 0.05 }}
-        />
-        <div
-          className="absolute bottom-1/4 right-1/4 w-96 h-96 rounded-full blur-[100px]"
-          style={{ background: 'var(--theme-accent-secondary)', opacity: 0.05 }}
-        />
-      </div>
+      {/* Ambient Background Effects - only show when using default gradient */}
+      {!activeBackground && (
+        <div className="fixed inset-0 pointer-events-none">
+          <div
+            className="absolute top-1/4 left-1/4 w-96 h-96 rounded-full blur-[100px]"
+            style={{ background: 'var(--theme-accent-primary)', opacity: 0.05 }}
+          />
+          <div
+            className="absolute bottom-1/4 right-1/4 w-96 h-96 rounded-full blur-[100px]"
+            style={{ background: 'var(--theme-accent-secondary)', opacity: 0.05 }}
+          />
+        </div>
+      )}
 
       {/* System Bar */}
       <SystemBar

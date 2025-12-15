@@ -21,10 +21,13 @@ import triggersRoutes, { telegramWebhookRouter } from './triggers/triggers.route
 import { clearAllTelegramTimers } from './triggers/telegram.service.js';
 import mcpRoutes from './mcp/mcp.routes.js';
 import tradingRoutes from './trading/trading.routes.js';
+import voiceRoutes from './voice/voice.routes.js';
 import projectRoutes from './abilities/project.routes.js';
 import activityRoutes from './activity/activity.routes.js';
+import backgroundRoutes from './abilities/background.routes.js';
 import { startJobs, stopJobs } from './jobs/job-runner.js';
 import { setBroadcastFunction } from './activity/activity.service.js';
+import { initializeCritiqueQueue, shutdownCritiqueQueue } from './layered-agent/services/critique-queue.service.js';
 import { broadcastActivity, type ActivityPayload } from './triggers/delivery.service.js';
 import { ipWhitelistMiddleware } from './security/ip-whitelist.middleware.js';
 import { fail2banMiddleware } from './security/fail2ban.middleware.js';
@@ -160,8 +163,10 @@ app.use('/api/triggers', telegramWebhookRouter);
 app.use('/api/triggers', triggersRoutes);
 app.use('/api/mcp', mcpRoutes);
 app.use('/api/trading', tradingRoutes);
+app.use('/api/voice', voiceRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/activity', activityRoutes);
+app.use('/api/backgrounds', backgroundRoutes);
 
 // Connect activity service to delivery service's SSE broadcast
 setBroadcastFunction((userId: string, activity) => {
@@ -186,6 +191,7 @@ async function shutdown() {
   clearAllTelegramTimers();
   shutdownTradingWebSocket();
   shutdownHocuspocusServer();
+  await shutdownCritiqueQueue();
   await closePool();
   await closeRedis();
   process.exit(0);
@@ -239,6 +245,9 @@ server.listen(config.port, () => {
 
   // Initialize trading WebSocket (connect to Binance)
   initializeTradingWebSocket();
+
+  // Initialize background critique queue (fast path feature)
+  initializeCritiqueQueue();
 
   // Start background jobs
   startJobs();

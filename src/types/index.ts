@@ -47,6 +47,18 @@ export interface SessionCreate {
 }
 
 // Message types
+// Metrics for message token tracking
+export const messageMetricsSchema = z.object({
+  promptTokens: z.number(),
+  completionTokens: z.number(),
+  processingTimeMs: z.number(),
+  tokensPerSecond: z.number(),
+  toolsUsed: z.array(z.string()),
+  model: z.string(),
+}).optional();
+
+export type MessageMetrics = z.infer<typeof messageMetricsSchema>;
+
 export const messageSchema = z.object({
   id: z.string().uuid(),
   sessionId: z.string().uuid(),
@@ -57,6 +69,7 @@ export const messageSchema = z.object({
   searchResults: z.unknown().nullable(),
   memoryContext: z.unknown().nullable(),
   createdAt: z.date(),
+  metrics: messageMetricsSchema,
 });
 
 export type Message = z.infer<typeof messageSchema>;

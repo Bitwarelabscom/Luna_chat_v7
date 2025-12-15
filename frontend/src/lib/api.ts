@@ -1,9 +1,9 @@
 import type { DisplayContent } from '@/types/display';
 
-// In production (empty NEXT_PUBLIC_API_URL), API calls go through nginx at /luna-chat/api
+// In production (empty NEXT_PUBLIC_API_URL), API calls go through nginx at /api
 // In development, API calls go directly to the backend
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
-const API_PREFIX = API_URL ? '' : '/luna-chat';
+const API_PREFIX = '';
 
 // Export prefix for static media URLs
 export const getMediaUrl = (path: string): string => {
@@ -187,7 +187,7 @@ export const chatApi = {
 export async function* streamMessage(
   sessionId: string,
   message: string
-): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'reasoning'; content?: string; status?: string; messageId?: string; metrics?: MessageMetrics; action?: string; url?: string }> {
+): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'reasoning' | 'background_refresh'; content?: string; status?: string; messageId?: string; metrics?: MessageMetrics; action?: string; url?: string }> {
   const response = await fetch(`${API_URL}${API_PREFIX}/api/chat/sessions/${sessionId}/send`, {
     method: 'POST',
     headers: {
@@ -1663,6 +1663,19 @@ export const triggersApi = {
 
   sendTelegramTest: () =>
     api<{ success: boolean; message: string }>('/api/triggers/telegram/test', { method: 'POST' }),
+
+  // Trading Telegram (separate bot for Trader Luna)
+  getTradingTelegramStatus: () =>
+    api<TelegramStatus>('/api/triggers/trading-telegram/status'),
+
+  generateTradingTelegramLinkCode: () =>
+    api<TelegramLinkCode>('/api/triggers/trading-telegram/link', { method: 'POST' }),
+
+  unlinkTradingTelegram: () =>
+    api<{ success: boolean; message: string }>('/api/triggers/trading-telegram/unlink', { method: 'DELETE' }),
+
+  sendTradingTelegramTest: () =>
+    api<{ success: boolean; message: string }>('/api/triggers/trading-telegram/test', { method: 'POST' }),
 };
 
 // MCP (Model Context Protocol) API
@@ -2223,7 +2236,7 @@ export const tradingApi = {
     api<Array<{ role: string; content: string }>>(`/api/trading/chat/session/${sessionId}/messages`),
 
   sendChatMessage: (sessionId: string, message: string) =>
-    api<{ messageId: string; content: string; tokensUsed: number; display?: DisplayContent }>(
+    api<{ messageId: string; content: string; tokensUsed: number; display?: DisplayContent; tradeExecuted?: boolean }>(
       `/api/trading/chat/session/${sessionId}/send`,
       { method: 'POST', body: { message } }
     ),
@@ -2275,6 +2288,39 @@ export const tradingApi = {
 
   cancelRule: (id: string) =>
     api<{ success: boolean }>(`/api/trading/rules/${id}`, { method: 'DELETE' }),
+};
+
+// Voice Luna API (Fast voice chat - bypasses layered agent)
+export interface VoiceMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface VoiceChatResponse {
+  messageId: string;
+  content: string;
+  tokensUsed: number;
+}
+
+export const voiceApi = {
+  // Create or get existing voice session
+  createSession: () =>
+    api<{ sessionId: string }>('/api/voice/session', { method: 'POST' }),
+
+  // Get session messages
+  getMessages: (sessionId: string, limit = 50) =>
+    api<VoiceMessage[]>(`/api/voice/session/${sessionId}/messages?limit=${limit}`),
+
+  // Send message (non-streaming for fast TTS)
+  sendMessage: (sessionId: string, message: string) =>
+    api<VoiceChatResponse>(`/api/voice/session/${sessionId}/send`, {
+      method: 'POST',
+      body: { message },
+    }),
+
+  // Delete session
+  deleteSession: (sessionId: string) =>
+    api<{ success: boolean }>(`/api/voice/session/${sessionId}`, { method: 'DELETE' }),
 };
 
 // Spotify API
@@ -2483,5 +2529,69 @@ export const projectsApi = {
   delete: (id: string) =>
     api<{ success: boolean }>(`/api/projects/${id}`, { method: 'DELETE' }),
 };
+
+// Background API
+export interface Background {
+  id: string;
+  userId: string;
+  name: string;
+  description: string | null;
+  imageUrl: string;
+  thumbnailUrl: string | null;
+  backgroundType: 'generated' | 'uploaded' | 'preset';
+  style: string | null;
+  prompt: string | null;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export const backgroundApi = {
+  // Get all backgrounds for user
+  getBackgrounds: () =>
+    api<{ backgrounds: Background[] }>('/api/backgrounds'),
+
+  // Get active background
+  getActiveBackground: () =>
+    api<{ background: Background | null }>('/api/backgrounds/active'),
+
+  // Generate a new background
+  generate: (prompt: string, style: string = 'custom', setActive: boolean = false) =>
+    api<{ background: Background }>('/api/backgrounds/generate', {
+      method: 'POST',
+      body: { prompt, style, setActive },
+    }),
+
+  // Activate a background
+  activate: (id: string) =>
+    api<{ success: boolean; background: Background }>(`/api/backgrounds/${id}/activate`, { method: 'PUT' }),
+
+  // Reset to default (no active background)
+  reset: () =>
+    api<{ success: boolean }>('/api/backgrounds/reset', { method: 'PUT' }),
+
+  // Delete a background
+  delete: (id: string) =>
+    api<{ success: boolean }>(`/api/backgrounds/${id}`, { method: 'DELETE' }),
+};
+
+// Upload background image using FormData
+export async function uploadBackgroundImage(file: File): Promise<Background> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch(`${API_URL}${API_PREFIX}/api/backgrounds/upload`, {
+    method: 'POST',
+    credentials: 'include',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Upload failed' }));
+    throw new ApiError(response.status, error.error || 'Upload failed');
+  }
+
+  const data = await response.json();
+  return data.background;
+}
 
 export { ApiError };

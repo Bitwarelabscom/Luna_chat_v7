@@ -38,7 +38,7 @@ export function useActivityStream(options: UseActivityStreamOptions = {}) {
   const {
     autoConnect = true,
     fetchHistory = true,
-    historyLimit = 50,
+    historyLimit = 200, // Increased from 50 for better history visibility
   } = options;
 
   const {

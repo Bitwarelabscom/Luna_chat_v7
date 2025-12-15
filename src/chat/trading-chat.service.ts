@@ -13,6 +13,7 @@ import { getUserModelConfig } from '../llm/model-config.service.js';
 import { getTradingPrompt } from '../persona/trading.persona.js';
 import * as tradingService from '../trading/trading.service.js';
 import * as botExecutorService from '../trading/bot-executor.service.js';
+import * as tradingTelegramService from '../triggers/trading-telegram.service.js';
 import { search as searxngSearch } from '../search/searxng.client.js';
 import { pool as db } from '../db/index.js';
 import logger from '../utils/logger.js';
@@ -412,6 +413,7 @@ export interface TradingChatInput {
   sessionId: string;
   userId: string;
   message: string;
+  source?: 'web' | 'telegram';  // Where the message originated from
 }
 
 // Display content types that Luna can control
@@ -426,6 +428,7 @@ export interface TradingChatOutput {
   tokensUsed: number;
   portfolio?: Portfolio;
   display?: DisplayContent;
+  tradeExecuted?: boolean;  // True when an order was placed or a conditional order was created
 }
 
 /**
@@ -495,7 +498,7 @@ async function addMessage(
  * Process a trading chat message
  */
 export async function processMessage(input: TradingChatInput): Promise<TradingChatOutput> {
-  const { sessionId, userId, message } = input;
+  const { sessionId, userId, message, source = 'web' } = input;
 
   // Get model config (use main chat config for trading)
   const modelConfig = await getUserModelConfig(userId, 'main_chat');
@@ -571,10 +574,14 @@ ${topHoldings}`;
     model: modelConfig.model,
   });
 
-  // Handle tool calls
+  // Handle tool calls - loop until no more tool calls
   let pendingDisplay: DisplayContent | undefined;
+  let tradeExecuted = false;  // Track if any trading action was performed
+  let toolCallIterations = 0;
+  const maxToolCallIterations = 5;  // Prevent infinite loops
 
-  if (completion.toolCalls && completion.toolCalls.length > 0) {
+  while (completion.toolCalls && completion.toolCalls.length > 0 && toolCallIterations < maxToolCallIterations) {
+    toolCallIterations++;
     // Add assistant message with tool calls
     messages.push({
       role: 'assistant',
@@ -670,6 +677,7 @@ RSI(14): ${rsi}
           }
 
           case 'place_order': {
+            logger.info('place_order tool called', { userId, source, args });
             // Normalize symbol to match allowed symbols
             let tradingSymbol = args.symbol?.toUpperCase() || '';
             // Extract base currency (remove common quote currencies)
@@ -692,17 +700,43 @@ RSI(14): ${rsi}
               tradingSymbol = `${tradingSymbol}USDC`;
             }
 
-            // Execute the order
-            const order = await tradingService.placeOrder(userId, {
-              symbol: tradingSymbol,
-              side: args.side,
-              type: args.type,
-              quantity: args.quantity,
-              price: args.price,
-            });
+            // Only require Telegram confirmation when message came FROM Telegram
+            if (source === 'telegram') {
+              // Create pending order for Telegram confirmation
+              const pendingOrder = await tradingTelegramService.createPendingOrder(userId, {
+                symbol: tradingSymbol,
+                side: args.side,
+                orderType: args.type,
+                quantity: args.quantity,
+                price: args.price,
+              });
 
-            if (order) {
-              toolResult = `Order placed successfully!
+              if (pendingOrder) {
+                toolResult = `Order sent for confirmation!
+
+Symbol: ${tradingSymbol}
+Side: ${args.side}
+Type: ${args.type}
+Quantity: ${args.quantity}
+${args.price ? `Price: $${args.price}` : 'Price: Market'}
+
+Please tap "Yes, Execute" below to confirm (expires in 5 minutes).`;
+              } else {
+                toolResult = 'Failed to create pending order. Please try again.';
+              }
+            } else {
+              // Web chat - execute directly
+              const order = await tradingService.placeOrder(userId, {
+                symbol: tradingSymbol,
+                side: args.side,
+                type: args.type,
+                quantity: args.quantity,
+                price: args.price,
+              });
+
+              if (order) {
+                tradeExecuted = true;  // Signal frontend to refresh portfolio/trades
+                toolResult = `Order placed successfully!
 Order ID: ${order.binanceOrderId}
 Symbol: ${order.symbol}
 Side: ${order.side}
@@ -710,8 +744,9 @@ Type: ${order.orderType}
 Quantity: ${order.quantity}
 ${order.price ? `Price: $${order.price}` : 'Price: Market'}
 Status: ${order.status}`;
-            } else {
-              toolResult = 'Failed to place order. Please check connection and try again.';
+              } else {
+                toolResult = 'Failed to place order. Please check connection and try again.';
+              }
             }
             break;
           }
@@ -829,6 +864,8 @@ Total Profit: $${bot.totalProfit.toFixed(2)}`;
                 expiresInHours: args.expiresInHours,
               }
             );
+
+            tradeExecuted = true;  // Signal frontend to refresh rules/trades
 
             // Build response
             let orderDetails = `Conditional Order Created!
@@ -1095,15 +1132,13 @@ Order Type: ${args.orderType || 'market'}`;
   // Handle empty response gracefully
   let responseContent = completion.content;
   if (!responseContent || responseContent.trim() === '') {
-    logger.warn('Empty response from trading LLM', { sessionId, userId });
-    // Provide a fallback response based on the last tool call
-    if (completion.toolCalls && completion.toolCalls.length > 0) {
-      const lastTool = completion.toolCalls[completion.toolCalls.length - 1];
-      if (lastTool.function.name === 'place_order') {
-        responseContent = 'Order has been executed. Check your portfolio for the updated position.';
-      } else {
-        responseContent = 'Action completed successfully.';
-      }
+    logger.warn('Empty response from trading LLM', { sessionId, userId, toolCallIterations, tradeExecuted });
+    // Provide a fallback response based on what happened
+    if (tradeExecuted) {
+      // Trade was actually executed during tool processing
+      responseContent = 'Order has been executed. Check your portfolio for the updated position.';
+    } else if (toolCallIterations > 0) {
+      responseContent = 'I processed your request. Is there anything else you need?';
     } else {
       responseContent = 'I processed your request but couldn\'t generate a detailed response. Please try again or rephrase your question.';
     }
@@ -1117,6 +1152,7 @@ Order Type: ${args.orderType || 'market'}`;
     content: responseContent,
     tokensUsed: completion.tokensUsed || 0,
     display: pendingDisplay,
+    tradeExecuted,
   };
 }
 

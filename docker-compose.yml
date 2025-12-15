@@ -54,7 +54,7 @@ services:
     tmpfs:
       - /tmp:size=64m
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000/luna-chat"]
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000/"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -113,8 +113,9 @@ services:
       - ELEVENLABS_ENABLED=${ELEVENLABS_ENABLED:-true}
       - ELEVENLABS_VOICE_ID=${ELEVENLABS_VOICE_ID:-l4Coq6695JDX9xtLqXDE}
       - ELEVENLABS_MODEL=${ELEVENLABS_MODEL:-eleven_v3}
-      # Telegram Bot
+      # Telegram Bots
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TRADING_TELEGRAM_BOT_TOKEN=${TRADING_TELEGRAM_BOT_TOKEN}
       # OAuth callback URLs
       - OAUTH_CALLBACK_BASE_URL=https://luna.bitwarelabs.com
       - FRONTEND_URL=https://luna.bitwarelabs.com
@@ -192,6 +193,8 @@ services:
       - ./src/db/migrations/006_clear_refresh_tokens.sql:/docker-entrypoint-initdb.d/006_clear_refresh_tokens.sql
       - ./src/db/migrations/012_fail2ban.sql:/docker-entrypoint-initdb.d/012_fail2ban.sql
       - ./src/db/migrations/038_layered_agent.sql:/docker-entrypoint-initdb.d/038_layered_agent.sql
+      - ./src/db/migrations/042_trading_telegram.sql:/docker-entrypoint-initdb.d/042_trading_telegram.sql
+      - ./src/db/migrations/043_desktop_backgrounds.sql:/docker-entrypoint-initdb.d/043_desktop_backgrounds.sql
     networks:
       - luna-network
     # SECURITY: Container hardening

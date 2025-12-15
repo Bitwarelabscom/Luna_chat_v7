@@ -707,8 +707,41 @@ const MODEL_COSTS: Record<string, { input: number; output: number }> = {
 };
 
 function calculateCost(model: string, inputTokens: number, outputTokens: number): number {
-  const costs = MODEL_COSTS[model];
-  if (!costs) return 0; // Free tier or unknown model
+  let costs = MODEL_COSTS[model];
+
+  // If exact model not found, try to estimate based on model name patterns
+  if (!costs) {
+    // Anthropic Claude models
+    if (model.includes('claude-opus') || model.includes('opus')) {
+      costs = { input: 0.005, output: 0.025 };
+    } else if (model.includes('claude-sonnet') || model.includes('sonnet')) {
+      costs = { input: 0.003, output: 0.015 };
+    } else if (model.includes('claude-haiku') || model.includes('haiku')) {
+      costs = { input: 0.001, output: 0.005 };
+    }
+    // OpenAI GPT models
+    else if (model.includes('gpt-4o-mini')) {
+      costs = { input: 0.00015, output: 0.0006 };
+    } else if (model.includes('gpt-4o') || model.includes('gpt-4')) {
+      costs = { input: 0.0025, output: 0.01 };
+    } else if (model.includes('gpt-5') || model.includes('gpt-5.1')) {
+      costs = { input: 0.00125, output: 0.01 };
+    }
+    // xAI Grok models
+    else if (model.includes('grok-4') || model.includes('grok-3')) {
+      costs = { input: 0.003, output: 0.015 };
+    }
+    // Google Gemini models
+    else if (model.includes('gemini')) {
+      costs = { input: 0.001, output: 0.005 };
+    }
+    // Default fallback for layered-agent or unknown models - use mid-tier pricing
+    else if (model === 'layered-agent' || model === 'unknown') {
+      costs = { input: 0.002, output: 0.01 }; // Mid-tier estimate
+    }
+  }
+
+  if (!costs) return 0; // Free tier or truly unknown model
   return (inputTokens / 1000) * costs.input + (outputTokens / 1000) * costs.output;
 }
 

@@ -5,6 +5,7 @@ import * as triggerService from './trigger.service.js';
 import * as deliveryService from './delivery.service.js';
 import * as checkinsService from '../abilities/checkins.service.js';
 import * as telegramService from './telegram.service.js';
+import * as tradingTelegramService from './trading-telegram.service.js';
 import logger from '../utils/logger.js';
 
 const router = Router();
@@ -516,6 +517,116 @@ router.post('/telegram/test', async (req: Request, res: Response) => {
 });
 
 // ============================================
+// Trading Telegram Integration (Separate Bot)
+// ============================================
+
+/**
+ * GET /api/triggers/trading-telegram/status
+ * Get Trading Telegram connection status and bot info
+ */
+router.get('/trading-telegram/status', async (req: Request, res: Response) => {
+  try {
+    const isConfigured = tradingTelegramService.isConfigured();
+    const connection = await tradingTelegramService.getConnection(req.user!.userId);
+    const botInfo = isConfigured ? await tradingTelegramService.getBotInfo() : null;
+
+    res.json({
+      isConfigured,
+      connection: connection ? {
+        chatId: connection.chatId,
+        username: connection.username,
+        firstName: connection.firstName,
+        isActive: connection.isActive,
+        linkedAt: connection.linkedAt,
+        lastMessageAt: connection.lastMessageAt,
+      } : null,
+      botInfo,
+      setupInstructions: !isConfigured ? tradingTelegramService.getSetupInstructions() : null,
+    });
+  } catch (error) {
+    logger.error('Failed to get Trading Telegram status', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get Trading Telegram status' });
+  }
+});
+
+/**
+ * POST /api/triggers/trading-telegram/link
+ * Generate a link code for connecting Trading Telegram
+ */
+router.post('/trading-telegram/link', async (req: Request, res: Response) => {
+  try {
+    if (!tradingTelegramService.isConfigured()) {
+      res.status(400).json({
+        error: 'Trading Telegram not configured',
+        setupInstructions: tradingTelegramService.getSetupInstructions(),
+      });
+      return;
+    }
+
+    const code = await tradingTelegramService.generateLinkCode(req.user!.userId);
+    const botInfo = await tradingTelegramService.getBotInfo();
+
+    res.json({
+      code,
+      expiresInMinutes: 10,
+      botUsername: botInfo?.username,
+      linkUrl: botInfo ? `https://t.me/${botInfo.username}?start=${code}` : null,
+    });
+  } catch (error) {
+    logger.error('Failed to generate Trading Telegram link code', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to generate link code' });
+  }
+});
+
+/**
+ * DELETE /api/triggers/trading-telegram/unlink
+ * Unlink Trading Telegram from user account
+ */
+router.delete('/trading-telegram/unlink', async (req: Request, res: Response) => {
+  try {
+    const unlinked = await tradingTelegramService.unlinkTelegram(req.user!.userId);
+
+    if (unlinked) {
+      res.json({ success: true, message: 'Trading Telegram unlinked successfully' });
+    } else {
+      res.status(404).json({ error: 'No Trading Telegram connection found' });
+    }
+  } catch (error) {
+    logger.error('Failed to unlink Trading Telegram', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to unlink Trading Telegram' });
+  }
+});
+
+/**
+ * POST /api/triggers/trading-telegram/test
+ * Send a test message via Trading Telegram
+ */
+router.post('/trading-telegram/test', async (req: Request, res: Response) => {
+  try {
+    const connection = await tradingTelegramService.getConnection(req.user!.userId);
+
+    if (!connection) {
+      res.status(404).json({ error: 'No Trading Telegram connection found' });
+      return;
+    }
+
+    const success = await tradingTelegramService.sendMessage(
+      connection.chatId,
+      'This is a test message from Trader Luna! Your Trading Telegram connection is working correctly.'
+    );
+
+    if (success) {
+      res.json({ success: true, message: 'Test message sent' });
+    } else {
+      res.status(500).json({ error: 'Failed to send test message' });
+    }
+  } catch (error) {
+    logger.error('Failed to send Trading Telegram test message', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to send test message' });
+  }
+});
+
+// ============================================
 // Telegram Webhook (no auth - comes from Telegram)
 // ============================================
 
@@ -535,6 +646,23 @@ telegramWebhookRouter.post('/telegram/webhook', async (req: Request, res: Respon
     await telegramService.processUpdate(req.body);
   } catch (error) {
     logger.error('Failed to process Telegram webhook', { error: (error as Error).message });
+    // Still return 200 to prevent Telegram from retrying
+  }
+});
+
+/**
+ * POST /api/triggers/trading-telegram/webhook
+ * Receive updates from Trading Telegram bot (no authentication)
+ */
+telegramWebhookRouter.post('/trading-telegram/webhook', async (req: Request, res: Response) => {
+  try {
+    // Always respond 200 OK quickly to Telegram
+    res.status(200).json({ ok: true });
+
+    // Process update asynchronously
+    await tradingTelegramService.processUpdate(req.body);
+  } catch (error) {
+    logger.error('Failed to process Trading Telegram webhook', { error: (error as Error).message });
     // Still return 200 to prevent Telegram from retrying
   }
 });

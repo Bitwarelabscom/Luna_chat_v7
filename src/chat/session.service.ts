@@ -45,6 +45,18 @@ function mapDbSession(row: DbSession): Session {
 }
 
 function mapDbMessage(row: DbMessage): Message {
+  // Reconstruct metrics from stored token fields for assistant messages
+  const metrics = row.role === 'assistant' && (row.input_tokens > 0 || row.output_tokens > 0)
+    ? {
+        promptTokens: row.input_tokens || 0,
+        completionTokens: row.output_tokens || 0,
+        processingTimeMs: 0, // Not stored per-message
+        tokensPerSecond: 0,  // Not stored per-message
+        toolsUsed: [] as string[],
+        model: row.model || 'unknown',
+      }
+    : undefined;
+
   return {
     id: row.id,
     sessionId: row.session_id,
@@ -55,6 +67,7 @@ function mapDbMessage(row: DbMessage): Message {
     searchResults: row.search_results,
     memoryContext: row.memory_context,
     createdAt: row.created_at,
+    metrics,
   };
 }
 

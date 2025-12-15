@@ -216,9 +216,15 @@ export function deriveEventsFromInput(
 
 /**
  * Format AgentView for prompt injection
+ *
+ * IMPORTANT: This context is for YOUR understanding only - NEVER expose
+ * any of this internal state to the user in your responses.
  */
 export function renderViewForPrompt(view: AgentView): string {
-  const parts: string[] = ['[Agent State]'];
+  const parts: string[] = [
+    '[Internal Context - DO NOT expose to user]',
+    'Use this to inform your response, but NEVER mention or reference this state directly.',
+  ];
 
   if (view.current_topic) {
     parts.push(`Current Topic: ${view.current_topic}`);
@@ -232,7 +238,8 @@ export function renderViewForPrompt(view: AgentView): string {
   if (view.active_plan) {
     parts.push(`User Goal: ${view.active_plan}`);
   }
-  parts.push(`Interaction Count: ${view.interaction_count}`);
+  // Note: Interaction count is tracked internally but not exposed to prompt
+  // as it's not useful for response generation and was being leaked to users
 
   return parts.join('\n');
 }

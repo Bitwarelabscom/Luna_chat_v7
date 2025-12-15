@@ -46,6 +46,8 @@ export type EdgeFunction = (state: GraphState) => NodeName;
 export interface ExecutorOptions {
   maxAttempts?: number;
   timeoutMs?: number;
+  /** Fast path: skip critique loop, queue for background processing (default: true) */
+  fastPath?: boolean;
   onNodeStart?: (node: NodeName, state: GraphState) => void;
   onNodeEnd?: (node: NodeName, state: GraphState, durationMs: number) => void;
   onError?: (node: NodeName, error: Error, state: GraphState) => void;

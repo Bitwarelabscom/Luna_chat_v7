@@ -9,7 +9,7 @@
  */
 
 import type { GraphState } from '../schemas/graph-state.js';
-import { renderNormsForPrompt, renderStyleForPrompt } from '../schemas/identity.js';
+import { renderNormsForPrompt, renderStyleForPrompt, renderSharedSpineForPrompt, renderModeForPrompt } from '../schemas/identity.js';
 import { renderViewForPrompt } from '../schemas/events.js';
 import { createCompletion } from '../../llm/router.js';
 import { getUserModelConfig } from '../../llm/model-config.service.js';
@@ -35,24 +35,49 @@ export interface PlannerOutput {
 
 const PLANNER_SYSTEM_PROMPT = `You are a planning assistant. Your job is to create a brief, actionable plan for responding to the user's message.
 
-Create a plan with 3-6 clear steps. Each step should be:
+CRITICAL RULES:
+- NEVER plan responses that sound like a chatbot or service agent
+- NEVER include steps like "offer to assist" or "ask how you can help"
+- For casual greetings/smalltalk: plan 1-2 steps MAX, keep it natural and human
+- For complex requests: plan 3-6 steps
+
+Create a plan that is:
 - Concrete and actionable
 - Focused on what to include in the response
 - Considerate of the user's current state and context
+- Natural and conversational, not robotic
 
 Output ONLY the plan as a bulleted list. No preamble, no explanation.
 
-Example:
-- Acknowledge the user's frustration empathetically
-- Explain the root cause of the issue briefly
-- Provide 2-3 specific solutions they can try
-- Offer to help further if needed`;
+Example for complex request:
+- Acknowledge the user's frustration briefly
+- Explain the root cause
+- Provide 2-3 specific solutions
+
+Example for casual greeting ("hello", "hey", "how are you"):
+- Respond casually like a friend would
+(That's it - one step. Don't overcomplicate greetings.)`;
 
 /**
  * Build the planner prompt with context
  */
 function buildPlannerPrompt(state: GraphState): string {
   const parts: string[] = [];
+
+  // Current mode - IMPORTANT for planning style
+  parts.push(`[Current Mode: ${state.mode.toUpperCase()}]`);
+
+  // Shared spine - critical rules that apply to ALL responses
+  const spine = renderSharedSpineForPrompt(state.identity);
+  if (spine) {
+    parts.push(`[Core Rules - MUST Follow]\n${spine}`);
+  }
+
+  // Mode-specific guidelines
+  const modeGuidelines = renderModeForPrompt(state.identity, state.mode);
+  if (modeGuidelines) {
+    parts.push(`[Mode Guidelines]\n${modeGuidelines}`);
+  }
 
   // Identity norms
   const norms = renderNormsForPrompt(state.identity);
@@ -80,7 +105,13 @@ function buildPlannerPrompt(state: GraphState): string {
   // User input
   parts.push(`[User Message]\n${state.user_input}`);
 
-  parts.push(`[Task]\nCreate a 3-6 step plan for responding to this message.`);
+  // Task - adapt based on message complexity
+  const isSimpleGreeting = /^(hi|hello|hey|hej|morning|afternoon|evening|yo|sup|how are you|what's up|whats up)\s*[!?.]*$/i.test(state.user_input.trim());
+  if (isSimpleGreeting && state.mode === 'companion') {
+    parts.push(`[Task]\nThis is casual smalltalk. Plan 1 step: respond naturally like a friend. Keep it brief and human.`);
+  } else {
+    parts.push(`[Task]\nCreate a plan for responding. Use 1-2 steps for simple messages, 3-6 for complex ones.`);
+  }
 
   return parts.join('\n\n');
 }

@@ -17,7 +17,7 @@ import * as tokenTracker from './services/token-tracker.service.js';
 import logger from '../utils/logger.js';
 
 // Default identity file path
-const DEFAULT_IDENTITY_PATH = join(process.cwd(), 'src/config/identity_luna_v12.yaml');
+const DEFAULT_IDENTITY_PATH = join(process.cwd(), 'src/config/identity_luna_v13.yaml');
 
 export interface LayeredAgentInput {
   sessionId: string;
@@ -111,6 +111,13 @@ export async function processLayeredAgent(
     let metrics: LayeredAgentMetrics | undefined;
     try {
       const summary = await tokenTracker.getTurnSummary(turnId);
+      logger.info('Token summary result for metrics', {
+        turnId,
+        mode,
+        hasSummary: !!summary,
+        llmCallCount: summary?.llmCallCount || 0,
+        totalTokens: summary?.totalTokens || 0,
+      });
       if (summary && summary.llmCallCount > 0) {
         const tokensPerSecond = executionTimeMs > 0
           ? (summary.totalOutputTokens / (executionTimeMs / 1000))

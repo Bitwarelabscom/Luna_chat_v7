@@ -39,6 +39,10 @@ export const GraphStateSchema = z.object({
 
   // Timing
   started_at: z.date(),
+
+  // Fast path - hint injection and self-correction
+  injected_hints: z.string().nullable().optional(),
+  correction_prompt: z.string().nullable().optional(),
 });
 export type GraphState = z.infer<typeof GraphStateSchema>;
 
@@ -99,7 +103,8 @@ export interface AgentTurnRow {
 export function createInitialState(
   input: GraphStateInput,
   identity: IdentityProfile,
-  agentView: AgentView
+  agentView: AgentView,
+  options?: { injectedHints?: string | null; correctionPrompt?: string | null }
 ): GraphState {
   return {
     session_id: input.session_id,
@@ -115,6 +120,8 @@ export function createInitialState(
     attempts: 0,
     final_output: null,
     started_at: new Date(),
+    injected_hints: options?.injectedHints ?? null,
+    correction_prompt: options?.correctionPrompt ?? null,
   };
 }
 

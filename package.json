@@ -28,6 +28,7 @@
   "license": "AGPL-3.0",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.0",
+    "bullmq": "^5.1.0",
     "@hocuspocus/server": "^2.15.0",
     "@types/dockerode": "^3.3.47",
     "@types/multer": "^2.0.0",

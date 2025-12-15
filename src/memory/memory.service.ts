@@ -136,6 +136,47 @@ export async function buildMemoryContext(
 }
 
 /**
+ * Build only stable memory (facts + learnings) for companion mode smalltalk
+ * This is a lightweight version that skips expensive semantic searches
+ * but still gives Luna knowledge of who she's talking to
+ */
+export async function buildStableMemoryOnly(userId: string): Promise<MemoryContext> {
+  try {
+    const [facts, learningsContext] = await Promise.all([
+      factsService.getUserFacts(userId, { limit: 30 }),
+      insightsService.getActiveLearningsForContext(userId, 10),
+    ]);
+
+    const factsPrompt = factsService.formatFactsForPrompt(facts);
+
+    let learnings = '';
+    if (learningsContext) {
+      learnings = `[Luna's Learnings - Apply these insights to personalize responses]\n${learningsContext}`;
+    }
+
+    return {
+      stable: {
+        facts: factsPrompt,
+        learnings,
+      },
+      volatile: {
+        relevantHistory: '',
+        conversationContext: '',
+      },
+    };
+  } catch (error) {
+    logger.error('Failed to build stable memory', {
+      error: (error as Error).message,
+      userId
+    });
+    return {
+      stable: { facts: '', learnings: '' },
+      volatile: { relevantHistory: '', conversationContext: '' }
+    };
+  }
+}
+
+/**
  * Format memory context for system prompt (legacy - combines all parts)
  * @deprecated Use formatStableMemory and formatVolatileMemory for cache optimization
  */

@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
-import { X, Key, Shield, AlertTriangle, Check } from 'lucide-react';
-import { tradingApi, type TradingSettings } from '@/lib/api';
+import React, { useState, useEffect } from 'react';
+import { X, Key, Shield, AlertTriangle, Check, MessageCircle, ExternalLink, Copy } from 'lucide-react';
+import { tradingApi, triggersApi, type TradingSettings, type TelegramStatus, type TelegramLinkCode } from '@/lib/api';
 
 interface TradingSettingsModalProps {
   settings: TradingSettings | null;
@@ -17,7 +17,7 @@ export default function TradingSettingsModal({
   onConnect,
   onSettingsUpdate,
 }: TradingSettingsModalProps) {
-  const [tab, setTab] = useState<'connect' | 'risk' | 'symbols'>('connect');
+  const [tab, setTab] = useState<'connect' | 'risk' | 'telegram'>('connect');
   const [apiKey, setApiKey] = useState('');
   const [apiSecret, setApiSecret] = useState('');
   const [connecting, setConnecting] = useState(false);
@@ -31,6 +31,71 @@ export default function TradingSettingsModal({
   const [defaultStopLossPct, setDefaultStopLossPct] = useState(settings?.defaultStopLossPct || 2);
   const [riskTolerance, setRiskTolerance] = useState(settings?.riskTolerance || 'moderate');
   const [allowedSymbols, setAllowedSymbols] = useState(settings?.allowedSymbols?.join(', ') || 'BTCUSDT, ETHUSDT');
+
+  // Trading Telegram
+  const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null);
+  const [telegramLinkCode, setTelegramLinkCode] = useState<TelegramLinkCode | null>(null);
+  const [telegramLoading, setTelegramLoading] = useState(false);
+
+  useEffect(() => {
+    if (tab === 'telegram') {
+      loadTelegramStatus();
+    }
+  }, [tab]);
+
+  const loadTelegramStatus = async () => {
+    try {
+      const status = await triggersApi.getTradingTelegramStatus();
+      setTelegramStatus(status);
+    } catch (err) {
+      console.error('Failed to load trading telegram status:', err);
+    }
+  };
+
+  const handleGenerateLinkCode = async () => {
+    setTelegramLoading(true);
+    setError(null);
+    try {
+      const code = await triggersApi.generateTradingTelegramLinkCode();
+      setTelegramLinkCode(code);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to generate link code');
+    } finally {
+      setTelegramLoading(false);
+    }
+  };
+
+  const handleUnlinkTelegram = async () => {
+    setTelegramLoading(true);
+    setError(null);
+    try {
+      await triggersApi.unlinkTradingTelegram();
+      setTelegramStatus(prev => prev ? { ...prev, connection: null } : null);
+      setSuccess('Trading Telegram unlinked');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to unlink');
+    } finally {
+      setTelegramLoading(false);
+    }
+  };
+
+  const handleTestTelegram = async () => {
+    setTelegramLoading(true);
+    setError(null);
+    try {
+      await triggersApi.sendTradingTelegramTest();
+      setSuccess('Test message sent!');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to send test');
+    } finally {
+      setTelegramLoading(false);
+    }
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setSuccess('Copied to clipboard!');
+  };
 
   const handleConnect = async () => {
     if (!apiKey.trim() || !apiSecret.trim()) {
@@ -129,11 +194,12 @@ export default function TradingSettingsModal({
         }}>
           {[
             { id: 'connect', label: 'Connection', icon: Key },
-            { id: 'risk', label: 'Risk Management', icon: Shield },
+            { id: 'risk', label: 'Risk', icon: Shield },
+            { id: 'telegram', label: 'Telegram', icon: MessageCircle },
           ].map((t) => (
             <button
               key={t.id}
-              onClick={() => setTab(t.id as 'connect' | 'risk')}
+              onClick={() => setTab(t.id as 'connect' | 'risk' | 'telegram')}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -435,6 +501,182 @@ export default function TradingSettingsModal({
               >
                 Save Risk Settings
               </button>
+            </div>
+          )}
+
+          {tab === 'telegram' && (
+            <div>
+              {!telegramStatus?.isConfigured ? (
+                <div style={{
+                  background: 'rgba(239, 68, 68, 0.1)',
+                  border: '1px solid #ef4444',
+                  borderRadius: '8px',
+                  padding: '16px',
+                }}>
+                  <p style={{ color: '#ef4444', fontSize: '13px', margin: 0 }}>
+                    Trading Telegram bot is not configured on the server.
+                  </p>
+                </div>
+              ) : telegramStatus?.connection ? (
+                <div>
+                  <div style={{
+                    background: 'rgba(16, 185, 129, 0.1)',
+                    border: '1px solid #10b981',
+                    borderRadius: '8px',
+                    padding: '16px',
+                    marginBottom: '16px',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                      <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#10b981' }} />
+                      <span style={{ color: '#10b981', fontSize: '14px', fontWeight: 500 }}>
+                        Connected to Trading Telegram
+                      </span>
+                    </div>
+                    <p style={{ color: '#8892a0', fontSize: '12px', margin: 0 }}>
+                      {telegramStatus.connection.firstName && `Hi ${telegramStatus.connection.firstName}! `}
+                      Linked {telegramStatus.connection.username ? `@${telegramStatus.connection.username}` : ''} on {new Date(telegramStatus.connection.linkedAt).toLocaleDateString()}
+                    </p>
+                  </div>
+
+                  <p style={{ color: '#8892a0', fontSize: '13px', marginBottom: '16px', lineHeight: 1.6 }}>
+                    You can chat with Trader Luna, receive trade notifications, and confirm orders via Telegram.
+                  </p>
+
+                  <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+                    <button
+                      onClick={handleTestTelegram}
+                      disabled={telegramLoading}
+                      style={{
+                        flex: 1,
+                        padding: '10px',
+                        background: '#1e293b',
+                        border: '1px solid #2a3545',
+                        borderRadius: '6px',
+                        color: '#c0c8d0',
+                        fontSize: '12px',
+                        cursor: telegramLoading ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      Send Test
+                    </button>
+                    <button
+                      onClick={handleUnlinkTelegram}
+                      disabled={telegramLoading}
+                      style={{
+                        flex: 1,
+                        padding: '10px',
+                        background: 'transparent',
+                        border: '1px solid #ef4444',
+                        borderRadius: '6px',
+                        color: '#ef4444',
+                        fontSize: '12px',
+                        cursor: telegramLoading ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      Unlink
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <p style={{ color: '#8892a0', fontSize: '13px', marginBottom: '16px', lineHeight: 1.6 }}>
+                    Connect Telegram to chat with Trader Luna, receive trade notifications, and confirm orders with buttons.
+                  </p>
+
+                  {telegramLinkCode ? (
+                    <div>
+                      <div style={{
+                        background: '#0a0f18',
+                        border: '1px solid #2a3545',
+                        borderRadius: '8px',
+                        padding: '16px',
+                        marginBottom: '16px',
+                        textAlign: 'center',
+                      }}>
+                        <p style={{ color: '#607080', fontSize: '11px', marginBottom: '8px' }}>
+                          Your link code (expires in {telegramLinkCode.expiresInMinutes} min)
+                        </p>
+                        <div style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '8px',
+                        }}>
+                          <code style={{
+                            fontSize: '24px',
+                            fontWeight: 'bold',
+                            color: '#00ff9f',
+                            letterSpacing: '2px',
+                          }}>
+                            {telegramLinkCode.code}
+                          </code>
+                          <button
+                            onClick={() => copyToClipboard(telegramLinkCode.code)}
+                            style={{
+                              background: 'none',
+                              border: 'none',
+                              color: '#607080',
+                              cursor: 'pointer',
+                              padding: '4px',
+                            }}
+                          >
+                            <Copy style={{ width: 16, height: 16 }} />
+                          </button>
+                        </div>
+                      </div>
+
+                      {telegramLinkCode.linkUrl && (
+                        <a
+                          href={telegramLinkCode.linkUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '8px',
+                            width: '100%',
+                            padding: '12px',
+                            background: '#0088cc',
+                            border: 'none',
+                            borderRadius: '8px',
+                            color: '#fff',
+                            fontSize: '13px',
+                            fontWeight: 600,
+                            textDecoration: 'none',
+                            marginBottom: '12px',
+                          }}
+                        >
+                          <ExternalLink style={{ width: 16, height: 16 }} />
+                          Open @{telegramLinkCode.botUsername}
+                        </a>
+                      )}
+
+                      <p style={{ color: '#607080', fontSize: '11px', textAlign: 'center' }}>
+                        Or send <code style={{ color: '#00ff9f' }}>/start {telegramLinkCode.code}</code> to @{telegramLinkCode.botUsername}
+                      </p>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={handleGenerateLinkCode}
+                      disabled={telegramLoading}
+                      style={{
+                        width: '100%',
+                        padding: '12px',
+                        background: telegramLoading ? '#2a3545' : '#00ff9f',
+                        border: 'none',
+                        borderRadius: '8px',
+                        color: telegramLoading ? '#607080' : '#000',
+                        fontSize: '13px',
+                        fontWeight: 600,
+                        cursor: telegramLoading ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {telegramLoading ? 'Generating...' : 'Link Trading Telegram'}
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>

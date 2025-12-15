@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { X, MessageSquare, BarChart3, Database, Cpu, Palette, Link2, FolderOpen, CheckSquare, Brain, Sparkles, Bell, Plug, Code } from 'lucide-react';
+import { X, MessageSquare, BarChart3, Database, Cpu, Palette, Link2, FolderOpen, CheckSquare, Brain, Sparkles, Bell, Plug, Code, Image } from 'lucide-react';
 import AppearanceTab from './settings/AppearanceTab';
 import PromptsTab from './settings/PromptsTab';
 import StatsTab from './settings/StatsTab';
@@ -15,16 +15,18 @@ import AutonomousTab from './settings/AutonomousTab';
 import MemoryTab from './settings/MemoryTab';
 import TriggersTab from './settings/TriggersTab';
 import McpTab from './settings/McpTab';
+import BackgroundTab from './settings/BackgroundTab';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-type TabId = 'appearance' | 'prompts' | 'models' | 'coder' | 'integrations' | 'mcpconfig' | 'workspace' | 'tasks' | 'memory' | 'autonomous' | 'triggers' | 'stats' | 'data';
+type TabId = 'appearance' | 'background' | 'prompts' | 'models' | 'coder' | 'integrations' | 'mcpconfig' | 'workspace' | 'tasks' | 'memory' | 'autonomous' | 'triggers' | 'stats' | 'data';
 
 const SETTINGS_TABS: Array<{ id: TabId; label: string; icon: typeof MessageSquare }> = [
   { id: 'appearance', label: 'Appearance', icon: Palette },
+  { id: 'background', label: 'Background', icon: Image },
   { id: 'prompts', label: 'Prompts', icon: MessageSquare },
   { id: 'models', label: 'Models', icon: Cpu },
   { id: 'coder', label: 'Coder', icon: Code },
@@ -105,6 +107,7 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6">
           {activeTab === 'appearance' && <AppearanceTab />}
+          {activeTab === 'background' && <BackgroundTab />}
           {activeTab === 'prompts' && <PromptsTab />}
           {activeTab === 'models' && <ModelsTab />}
           {activeTab === 'coder' && <CoderTab />}

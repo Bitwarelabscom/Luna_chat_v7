@@ -450,10 +450,76 @@ export function getDefaultConfig(): CompressionConfig {
   return { ...DEFAULT_CONFIG };
 }
 
+// ============================================
+// Background Summarization Helpers
+// ============================================
+
+/**
+ * Get count of messages since the last summarization
+ * Used by background summarization to determine if threshold is met
+ */
+export async function getMessageCountSinceSummary(sessionId: string): Promise<number> {
+  const summaryInfo = await getSessionSummaryInfo(sessionId);
+
+  if (!summaryInfo.summaryCutoffMessageId) {
+    // No summary yet - count all messages
+    return await getMessageCount(sessionId);
+  }
+
+  // Count messages after the cutoff
+  const result = await queryOne<{ count: string }>(
+    `SELECT COUNT(*) as count FROM messages
+     WHERE session_id = $1
+     AND created_at > (SELECT created_at FROM messages WHERE id = $2)`,
+    [sessionId, summaryInfo.summaryCutoffMessageId]
+  );
+
+  return parseInt(result?.count || '0', 10);
+}
+
+/**
+ * Estimate token count from messages
+ * Uses rough approximation: ~4 characters per token for English text
+ */
+export function estimateTokenCount(messages: Message[]): number {
+  const CHARS_PER_TOKEN = 4;
+  const totalChars = messages.reduce((sum, m) => sum + m.content.length, 0);
+  return Math.ceil(totalChars / CHARS_PER_TOKEN);
+}
+
+/**
+ * Check if forced synchronous summarization is needed
+ * Returns true if estimated tokens exceed safety threshold (80% of context window)
+ */
+export async function shouldForceSummarization(
+  sessionId: string,
+  messages: Message[],
+  contextWindow: number
+): Promise<boolean> {
+  const SAFETY_MARGIN = 0.8; // Use 80% of context window before forcing
+  const estimatedTokens = estimateTokenCount(messages);
+  const threshold = contextWindow * SAFETY_MARGIN;
+
+  if (estimatedTokens > threshold) {
+    logger.warn('Context limit approaching - forcing summarization', {
+      sessionId,
+      estimatedTokens,
+      threshold: Math.round(threshold),
+      contextWindow,
+    });
+    return true;
+  }
+
+  return false;
+}
+
 export default {
   buildCompressedContext,
   updateRollingSummary,
   compressMessage,
   selectRelevantHistory,
   getDefaultConfig,
+  getMessageCountSinceSummary,
+  estimateTokenCount,
+  shouldForceSummarization,
 };

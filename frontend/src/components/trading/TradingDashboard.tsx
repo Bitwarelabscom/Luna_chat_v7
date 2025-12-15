@@ -124,6 +124,20 @@ export default function TradingDashboard() {
     }
   }, []);
 
+  // Refresh portfolio, trades, and rules when a trade is executed via chat
+  const handleTradeExecuted = useCallback(async () => {
+    try {
+      const [portfolioData, tradesData] = await Promise.all([
+        tradingApi.getPortfolio(),
+        tradingApi.getTrades(50),
+      ]);
+      setPortfolio(portfolioData);
+      setTrades(tradesData);
+    } catch (err) {
+      console.error('Failed to refresh after trade execution:', err);
+    }
+  }, []);
+
   // Bot action handlers
   const handleStartBot = async (botId: string) => {
     try {
@@ -597,6 +611,7 @@ export default function TradingDashboard() {
             isExpanded={false}
             onToggleExpand={() => setChatOpen(false)}
             onDisplayChange={handleDisplayChange}
+            onTradeExecuted={handleTradeExecuted}
           />
         </div>
       )}

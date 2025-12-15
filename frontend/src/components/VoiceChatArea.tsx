@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useChatStore } from '@/lib/store';
-import { streamMessage, synthesizeSpeech } from '@/lib/api';
+import { voiceApi, synthesizeSpeech } from '@/lib/api';
 import { Send, Mic, MicOff, Volume2, VolumeX, Loader2 } from 'lucide-react';
 import clsx from 'clsx';
 import { useSpeechToText } from './useSpeechToText';
@@ -14,12 +14,8 @@ export default function VoiceChatArea() {
     isSending,
     streamingContent,
     statusMessage,
-    loadSessions,
-    createSession,
-    loadSession,
     addUserMessage,
     addAssistantMessage,
-    appendStreamingContent,
     setIsSending,
     setStreamingContent,
     setStatusMessage,
@@ -29,10 +25,24 @@ export default function VoiceChatArea() {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [autoPlayEnabled, setAutoPlayEnabled] = useState(true);
   const [isLoadingAudio, setIsLoadingAudio] = useState(false);
+  const [voiceSessionId, setVoiceSessionId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const speechToText = useSpeechToText();
+
+  // Initialize voice session on mount
+  useEffect(() => {
+    const initSession = async () => {
+      try {
+        const { sessionId } = await voiceApi.createSession();
+        setVoiceSessionId(sessionId);
+      } catch (error) {
+        console.error('Failed to initialize voice session:', error);
+      }
+    };
+    initSession();
+  }, []);
 
   // Clean up audio on unmount
   useEffect(() => {
@@ -106,14 +116,14 @@ export default function VoiceChatArea() {
     setInput('');
     speechToText.resetTranscript();
 
-    let sessionId = currentSession?.id;
+    let sessionId = voiceSessionId;
 
     // Create a voice session if one doesn't exist
     if (!sessionId) {
       try {
-        const session = await createSession('voice');
-        sessionId = session.id;
-        await loadSession(sessionId);
+        const { sessionId: newSessionId } = await voiceApi.createSession();
+        sessionId = newSessionId;
+        setVoiceSessionId(newSessionId);
       } catch (error) {
         console.error('Failed to create voice session:', error);
         return;
@@ -123,26 +133,19 @@ export default function VoiceChatArea() {
     addUserMessage(message);
     setIsSending(true);
     setStreamingContent('');
-    setStatusMessage('');
+    setStatusMessage('Thinking...');
 
     try {
-      let accumulatedContent = '';
-      for await (const chunk of streamMessage(sessionId, message)) {
-        if (chunk.type === 'status' && chunk.status) {
-          setStatusMessage(chunk.status);
-        } else if (chunk.type === 'content' && chunk.content) {
-          setStatusMessage('');
-          accumulatedContent += chunk.content;
-          appendStreamingContent(chunk.content);
-        } else if (chunk.type === 'done' && chunk.messageId) {
-          addAssistantMessage(accumulatedContent, chunk.messageId, chunk.metrics);
-          setStreamingContent('');
-          setStatusMessage('');
-          playAudio(accumulatedContent);
-        }
-      }
+      // Use fast voice API - no streaming, direct response
+      const response = await voiceApi.sendMessage(sessionId, message);
 
-      loadSessions();
+      // Add the assistant response
+      addAssistantMessage(response.content, response.messageId);
+      setStreamingContent('');
+      setStatusMessage('');
+
+      // Play the audio response
+      playAudio(response.content);
     } catch (error) {
       console.error('Failed to send message:', error);
       addAssistantMessage(
@@ -151,6 +154,7 @@ export default function VoiceChatArea() {
       );
     } finally {
       setIsSending(false);
+      setStatusMessage('');
     }
   };
 

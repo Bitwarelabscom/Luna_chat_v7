@@ -2,8 +2,9 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { useChatStore } from '@/lib/store';
+import { useActivityStore } from '@/lib/activity-store';
 import { streamMessage, regenerateMessage, chatApi } from '@/lib/api';
-import { Send, Moon, Loader2, MessageSquare, Bot, Mic } from 'lucide-react';
+import { Send, Moon, Loader2, MessageSquare, Bot, Mic, Sparkles } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import clsx from 'clsx';
 import MessageActions from './MessageActions';
@@ -54,6 +55,47 @@ function StandardChatArea() {
     setIsLoadingStartup,
     setBrowserAction,
   } = useChatStore();
+
+  // Track background reflection status
+  const activities = useActivityStore((state) => state.activities);
+  const [waitingForReview, setWaitingForReview] = useState(false);
+  const lastMessageTimeRef = useRef<number>(0);
+
+  // When message send completes, start waiting for review
+  useEffect(() => {
+    if (!isSending && lastMessageTimeRef.current > 0) {
+      // Message just completed - start showing reflection indicator
+      setWaitingForReview(true);
+      // Auto-hide after 15 seconds if no review comes in
+      const timer = setTimeout(() => setWaitingForReview(false), 15000);
+      return () => clearTimeout(timer);
+    }
+  }, [isSending]);
+
+  // Track when we start sending
+  useEffect(() => {
+    if (isSending) {
+      lastMessageTimeRef.current = Date.now();
+    }
+  }, [isSending]);
+
+  // When a response_review activity comes in, stop showing reflection
+  useEffect(() => {
+    if (!currentSession?.id || !waitingForReview) return;
+    const hasRecentReview = activities.some(
+      (a) =>
+        a.category === 'background' &&
+        a.eventType === 'response_review' &&
+        a.sessionId === currentSession.id &&
+        new Date(a.createdAt).getTime() > lastMessageTimeRef.current
+    );
+    if (hasRecentReview) {
+      setWaitingForReview(false);
+    }
+  }, [activities, currentSession?.id, waitingForReview]);
+
+  // Show reflection indicator when waiting for review
+  const isReflecting = waitingForReview;
 
   const audioPlayer = useAudioPlayer();
   const [showRegenerateConfirm, setShowRegenerateConfirm] = useState<{
@@ -162,6 +204,9 @@ function StandardChatArea() {
         } else if (chunk.type === 'browser_action' && chunk.action === 'open') {
           // Signal to open browser window for visual browsing
           setBrowserAction({ type: 'open', url: chunk.url });
+        } else if (chunk.type === 'background_refresh') {
+          // Signal to refresh desktop background (after Luna generates/changes it)
+          window.dispatchEvent(new CustomEvent('luna:background-refresh'));
         } else if (chunk.type === 'done' && chunk.messageId) {
           addAssistantMessage(accumulatedContent, chunk.messageId, chunk.metrics);
           setStreamingContent('');
@@ -466,6 +511,16 @@ function StandardChatArea() {
           </div>
         )}
       </div>
+
+      {/* Reflection indicator - shows when Luna is processing in background */}
+      {isReflecting && !isSending && (
+        <div className="px-4 py-2 border-t border-theme-border/50 bg-theme-bg-secondary/30">
+          <div className="max-w-3xl mx-auto flex items-center gap-2 text-sm text-theme-text-secondary">
+            <Sparkles className="w-4 h-4 text-purple-400 animate-pulse" />
+            <span>Luna is reflecting...</span>
+          </div>
+        </div>
+      )}
 
       {/* Input area - hidden when no session (user must pick mode first) */}
       {currentSession && (

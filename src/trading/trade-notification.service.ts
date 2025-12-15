@@ -6,7 +6,7 @@
  */
 
 import { pool } from '../db/index.js';
-import * as telegramService from '../triggers/telegram.service.js';
+import * as tradingTelegramService from '../triggers/trading-telegram.service.js';
 import logger from '../utils/logger.js';
 
 // Rate limiting for trailing stop updates (max 1 per 5 minutes per trade)
@@ -27,18 +27,18 @@ interface TradeInfo {
 }
 
 /**
- * Get Telegram chat ID for a user
+ * Get Trading Telegram chat ID for a user
  */
 async function getUserTelegramChatId(userId: string): Promise<number | null> {
   try {
     const result = await pool.query(
-      `SELECT chat_id FROM telegram_connections
+      `SELECT chat_id FROM trading_telegram_connections
        WHERE user_id = $1`,
       [userId]
     );
     return result.rows[0]?.chat_id || null;
   } catch (error) {
-    logger.error('Failed to get Telegram chat ID', { userId, error: (error as Error).message });
+    logger.error('Failed to get Trading Telegram chat ID', { userId, error: (error as Error).message });
     return null;
   }
 }
@@ -78,7 +78,7 @@ function buildPositionButtons(tradeId: string): Array<{ text: string; callback: 
 }
 
 /**
- * Send trade notification via Telegram
+ * Send trade notification via Trading Telegram
  */
 async function sendTradeNotification(
   userId: string,
@@ -88,13 +88,14 @@ async function sendTradeNotification(
   try {
     const chatId = await getUserTelegramChatId(userId);
     if (!chatId) {
-      return false; // User not connected to Telegram - silently skip
+      return false; // User not connected to Trading Telegram - silently skip
     }
 
     if (buttons && buttons.length > 0) {
-      return await telegramService.sendTradeMessageWithButtons(chatId, message, buttons);
+      const result = await tradingTelegramService.sendMessageWithButtons(chatId, message, buttons);
+      return result.success;
     } else {
-      return await telegramService.sendTelegramMessage(chatId, message);
+      return await tradingTelegramService.sendMessage(chatId, message);
     }
   } catch (error) {
     logger.error('Failed to send trade notification', { userId, error: (error as Error).message });

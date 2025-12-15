@@ -37,6 +37,7 @@ import {
   browserCloseTool,
   browserRenderHtmlTool,
   generateImageTool,
+  generateBackgroundTool,
   formatSearchResultsForContext,
   formatAgentResultForContext,
   type ChatMessage,
@@ -77,6 +78,7 @@ import * as tasksService from '../abilities/tasks.service.js';
 import * as reminderService from '../abilities/reminder.service.js';
 import * as browser from '../abilities/browser.service.js';
 import * as imageGeneration from '../abilities/image-generation.service.js';
+import * as backgroundService from '../abilities/background.service.js';
 import * as projectService from '../abilities/project.service.js';
 import * as memoryService from '../memory/memory.service.js';
 // Note: formatStableMemory, formatVolatileMemory available for cache-optimized prompts
@@ -87,6 +89,7 @@ import { buildContextualPrompt } from '../persona/luna.persona.js';
 // Note: buildCacheOptimizedPrompt available for Anthropic cache blocks via router
 import * as sessionService from './session.service.js';
 import * as contextCompression from './context-compression.service.js';
+import * as backgroundSummarization from './background-summarization.service.js';
 import * as sessionLogService from './session-log.service.js';
 import * as authService from '../auth/auth.service.js';
 import logger from '../utils/logger.js';
@@ -113,8 +116,13 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   const { sessionId, userId, message, mode, source = 'web' } = input;
 
   // Feature flag: Use layered agent architecture if enabled
-  // EXCEPTION: Browser intents fall through to legacy path (which has tool execution)
-  if (config.agentEngine === 'layered_v1' && !abilities.isBrowserIntent(message)) {
+  // EXCEPTIONS that fall through to legacy (faster) path:
+  // - Browser intents (need tool execution)
+  // - Simple companion messages (5 LLM calls is overkill for casual chat)
+  const isSmallTalk = abilities.isSmallTalk(message);
+  const isSimpleCompanion = mode === 'companion' && abilities.isSimpleCompanionMessage(message);
+  const skipLayeredAgent = isSmallTalk || isSimpleCompanion;
+  if (config.agentEngine === 'layered_v1' && !abilities.isBrowserIntent(message) && !skipLayeredAgent) {
     // Save user message first
     await sessionService.addMessage({
       sessionId,
@@ -175,20 +183,34 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     authService.getUserById(userId),
     // Get conversation history (higher limit for compression to work with)
     sessionService.getSessionMessages(sessionId, { limit: 50 }),
-    // Build memory context - skip for pure smalltalk
-    isSmallTalkMessage ? Promise.resolve({ stable: { facts: '', learnings: '' }, volatile: { relevantHistory: '', conversationContext: '' } }) : memoryService.buildMemoryContext(userId, message, sessionId),
+    // Build memory context - skip volatile parts for smalltalk, but load stable facts in companion mode
+    isSmallTalkMessage
+      ? (mode === 'companion' ? memoryService.buildStableMemoryOnly(userId) : Promise.resolve({ stable: { facts: '', learnings: '' }, volatile: { relevantHistory: '', conversationContext: '' } }))
+      : memoryService.buildMemoryContext(userId, message, sessionId),
     // Build ability context - uses contextOptions for selective loading
     abilities.buildAbilityContext(userId, message, sessionId, contextOptions),
     // Get personalization preferences - lightweight, always load
     preferencesService.getResponseGuidelines(userId),
   ]);
 
+  // Check if forced sync summarization is needed (context approaching limit)
+  const modelInfo = (await import('../llm/types.js')).getModel(modelConfig.provider, modelConfig.model);
+  const contextWindow = modelInfo?.contextWindow || 128000; // Default to 128k if unknown
+  let historyForContext = rawHistory;
+
+  if (await contextCompression.shouldForceSummarization(sessionId, rawHistory, contextWindow)) {
+    logger.info('Forcing sync summarization before context build', { sessionId, messageCount: rawHistory.length });
+    await contextCompression.updateRollingSummary(sessionId, userId);
+    // Re-fetch history after summarization (now compressed)
+    historyForContext = await sessionService.getSessionMessages(sessionId, { limit: 50 });
+  }
+
   // Build compressed context from history
   const compressedCtx = await contextCompression.buildCompressedContext(
     sessionId,
     userId,
     message,
-    rawHistory
+    historyForContext
   );
 
   const userName = user?.displayName || undefined;
@@ -285,7 +307,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
 
   // TOOL GATING: For smalltalk, don't expose tools at all to prevent eager tool calling
   const mcpToolsForLLM = mcpService.formatMcpToolsForLLM(mcpUserTools.map(t => ({ ...t, serverId: t.serverId })));
-  const allTools = [searchTool, youtubeSearchTool, browserVisualSearchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, readEmailTool, deleteEmailTool, replyEmailTool, markEmailReadTool, sendTelegramTool, searchDocumentsTool, suggestGoalTool, fetchUrlTool, listTodosTool, createTodoTool, completeTodoTool, updateTodoTool, sessionNoteTool, createReminderTool, listRemindersTool, cancelReminderTool, browserNavigateTool, browserScreenshotTool, browserClickTool, browserFillTool, browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool, generateImageTool, ...sysmonTools, ...mcpToolsForLLM];
+  const allTools = [searchTool, youtubeSearchTool, browserVisualSearchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, readEmailTool, deleteEmailTool, replyEmailTool, markEmailReadTool, sendTelegramTool, searchDocumentsTool, suggestGoalTool, fetchUrlTool, listTodosTool, createTodoTool, completeTodoTool, updateTodoTool, sessionNoteTool, createReminderTool, listRemindersTool, cancelReminderTool, browserNavigateTool, browserScreenshotTool, browserClickTool, browserFillTool, browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool, generateImageTool, generateBackgroundTool, ...sysmonTools, ...mcpToolsForLLM];
   const availableTools = isSmallTalkMessage ? [] : allTools;
   let searchResults: SearchResult[] | undefined;
   let agentResults: Array<{ agent: string; result: string; success: boolean }> = [];
@@ -1109,6 +1131,46 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
             content: `Image generation error: ${(error as Error).message}`,
           } as ChatMessage);
         }
+      } else if (toolCall.function.name === 'generate_desktop_background') {
+        // Desktop background generation tool
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Generate desktop background', { userId, promptLength: args.prompt?.length, style: args.style });
+        try {
+          const result = await backgroundService.generateBackground(
+            userId,
+            args.prompt,
+            args.style || 'custom'
+          );
+          if (result.success && result.background) {
+            // Optionally set as active (default true)
+            const setActive = args.setActive !== false;
+            if (setActive) {
+              await backgroundService.setActiveBackground(userId, result.background.id);
+            }
+            const imageBlock = imageGeneration.formatImageForChat(
+              result.background.imageUrl,
+              `Desktop background: ${result.background.name}`
+            );
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Desktop background generated successfully!${setActive ? ' It is now set as your active background.' : ' You can set it as active in Settings > Background.'}\n\n${imageBlock}`,
+            } as ChatMessage);
+          } else {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Failed to generate background: ${result.error || 'Unknown error'}`,
+            } as ChatMessage);
+          }
+        } catch (error) {
+          logger.error('Background generation failed', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Background generation error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
       } else if (toolCall.function.name.startsWith('system_') ||
                  toolCall.function.name.startsWith('network_') ||
                  toolCall.function.name.startsWith('process_') ||
@@ -1209,11 +1271,12 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     memoryService.processConversationMemory(userId, sessionId, allMessages).catch(() => {});
     // Also learn preferences from conversation
     preferencesService.learnFromConversation(userId, sessionId, allMessages).catch(() => {});
+  }
 
-    // Trigger rolling summary update if conversation is long enough
-    if (totalMessages > 10) {
-      contextCompression.updateRollingSummary(sessionId, userId).catch(() => {});
-    }
+  // Trigger background summarization if threshold met (non-blocking)
+  const messagesSinceSummary = await contextCompression.getMessageCountSinceSummary(sessionId);
+  if (messagesSinceSummary >= backgroundSummarization.BACKGROUND_SUMMARY_THRESHOLD) {
+    backgroundSummarization.triggerBackgroundSummarization(sessionId, userId);
   }
 
   // Update session title if this is the first message AND not a special session
@@ -1834,12 +1897,17 @@ export interface StreamMetrics {
 
 export async function* streamMessage(
   input: ChatInput
-): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action'; content?: string; status?: string; messageId?: string; tokensUsed?: number; metrics?: StreamMetrics; action?: string; url?: string }> {
+): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'background_refresh'; content?: string; status?: string; messageId?: string; tokensUsed?: number; metrics?: StreamMetrics; action?: string; url?: string }> {
   const { sessionId, userId, message, mode, source = 'web' } = input;
 
   // Feature flag: Use layered agent architecture if enabled
-  // EXCEPTION: Browser intents fall through to legacy path (which has tool execution)
-  if (config.agentEngine === 'layered_v1' && !abilities.isBrowserIntent(message)) {
+  // EXCEPTIONS that fall through to legacy (faster) path:
+  // - Browser intents (need tool execution)
+  // - Simple companion messages (5 LLM calls is overkill for casual chat)
+  const isSmallTalk = abilities.isSmallTalk(message);
+  const isSimpleCompanion = mode === 'companion' && abilities.isSimpleCompanionMessage(message);
+  const skipLayeredAgent = isSmallTalk || isSimpleCompanion;
+  if (config.agentEngine === 'layered_v1' && !abilities.isBrowserIntent(message) && !skipLayeredAgent) {
     const startTime = Date.now();
 
     // Save user message first
@@ -1883,6 +1951,13 @@ export async function* streamMessage(
         const tokensPerSecond = processingTimeMs > 0 && chunk.metrics?.completionTokens
           ? (chunk.metrics.completionTokens / (processingTimeMs / 1000))
           : 0;
+
+        logger.info('Yielding done with metrics', {
+          mode,
+          hasMetrics: !!chunk.metrics,
+          promptTokens: chunk.metrics?.promptTokens,
+          completionTokens: chunk.metrics?.completionTokens,
+        });
 
         yield {
           type: 'done',
@@ -2146,20 +2221,34 @@ export async function* streamMessage(
     authService.getUserById(userId),
     // Get conversation history (higher limit for compression to work with)
     sessionService.getSessionMessages(sessionId, { limit: 50 }),
-    // Build memory context - skip for pure smalltalk
-    isSmallTalkMessage ? Promise.resolve({ stable: { facts: '', learnings: '' }, volatile: { relevantHistory: '', conversationContext: '' } }) : memoryService.buildMemoryContext(userId, message, sessionId),
+    // Build memory context - skip volatile parts for smalltalk, but load stable facts in companion mode
+    isSmallTalkMessage
+      ? (mode === 'companion' ? memoryService.buildStableMemoryOnly(userId) : Promise.resolve({ stable: { facts: '', learnings: '' }, volatile: { relevantHistory: '', conversationContext: '' } }))
+      : memoryService.buildMemoryContext(userId, message, sessionId),
     // Build ability context - uses contextOptions for selective loading
     abilities.buildAbilityContext(userId, message, sessionId, contextOptions),
     // Get personalization preferences - lightweight, always load
     preferencesService.getResponseGuidelines(userId),
   ]);
 
+  // Check if forced sync summarization is needed (context approaching limit)
+  const modelInfo = (await import('../llm/types.js')).getModel(modelConfig.provider, modelConfig.model);
+  const contextWindow = modelInfo?.contextWindow || 128000; // Default to 128k if unknown
+  let historyForContext = rawHistory;
+
+  if (await contextCompression.shouldForceSummarization(sessionId, rawHistory, contextWindow)) {
+    logger.info('Forcing sync summarization before context build', { sessionId, messageCount: rawHistory.length });
+    await contextCompression.updateRollingSummary(sessionId, userId);
+    // Re-fetch history after summarization (now compressed)
+    historyForContext = await sessionService.getSessionMessages(sessionId, { limit: 50 });
+  }
+
   // Build compressed context from history
   const compressedCtx = await contextCompression.buildCompressedContext(
     sessionId,
     userId,
     message,
-    rawHistory
+    historyForContext
   );
 
   if (!isSmallTalkMessage) {
@@ -2260,7 +2349,7 @@ export async function* streamMessage(
   // TOOL GATING: For smalltalk, don't expose tools at all to prevent eager tool calling
   // For other messages, provide relevant tools
   const mcpToolsForLLM = mcpService.formatMcpToolsForLLM(mcpUserTools.map(t => ({ ...t, serverId: t.serverId })));
-  const allTools = [searchTool, youtubeSearchTool, browserVisualSearchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, readEmailTool, deleteEmailTool, replyEmailTool, markEmailReadTool, sendTelegramTool, searchDocumentsTool, suggestGoalTool, fetchUrlTool, listTodosTool, createTodoTool, completeTodoTool, updateTodoTool, sessionNoteTool, createReminderTool, listRemindersTool, cancelReminderTool, browserNavigateTool, browserScreenshotTool, browserClickTool, browserFillTool, browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool, generateImageTool, ...sysmonTools, ...mcpToolsForLLM];
+  const allTools = [searchTool, youtubeSearchTool, browserVisualSearchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, readEmailTool, deleteEmailTool, replyEmailTool, markEmailReadTool, sendTelegramTool, searchDocumentsTool, suggestGoalTool, fetchUrlTool, listTodosTool, createTodoTool, completeTodoTool, updateTodoTool, sessionNoteTool, createReminderTool, listRemindersTool, cancelReminderTool, browserNavigateTool, browserScreenshotTool, browserClickTool, browserFillTool, browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool, generateImageTool, generateBackgroundTool, ...sysmonTools, ...mcpToolsForLLM];
   const availableTools = isSmallTalkMessage ? [] : allTools;
   let searchResults: SearchResult[] | undefined;
 
@@ -3041,6 +3130,49 @@ export async function* streamMessage(
             content: `Image generation error: ${(error as Error).message}`,
           } as ChatMessage);
         }
+      } else if (toolCall.function.name === 'generate_desktop_background') {
+        // Desktop background generation tool (streaming)
+        const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'status', status: 'Generating desktop background...' };
+        logger.info('Generate desktop background (stream)', { userId, promptLength: args.prompt?.length, style: args.style });
+        try {
+          const result = await backgroundService.generateBackground(
+            userId,
+            args.prompt,
+            args.style || 'custom'
+          );
+          if (result.success && result.background) {
+            // Optionally set as active (default true)
+            const setActive = args.setActive !== false;
+            if (setActive) {
+              await backgroundService.setActiveBackground(userId, result.background.id);
+              // Signal frontend to refresh background
+              yield { type: 'background_refresh' };
+            }
+            const imageBlock = imageGeneration.formatImageForChat(
+              result.background.imageUrl,
+              `Desktop background: ${result.background.name}`
+            );
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Desktop background generated successfully!${setActive ? ' It is now set as your active background.' : ' You can set it as active in Settings > Background.'}\n\n${imageBlock}`,
+            } as ChatMessage);
+          } else {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Failed to generate background: ${result.error || 'Unknown error'}`,
+            } as ChatMessage);
+          }
+        } catch (error) {
+          logger.error('Background generation failed (stream)', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Background generation error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
       } else if (toolCall.function.name.startsWith('system_') ||
                  toolCall.function.name.startsWith('network_') ||
                  toolCall.function.name.startsWith('process_') ||
@@ -3358,11 +3490,12 @@ export async function* streamMessage(
     memoryService.processConversationMemory(userId, sessionId, allMessages).catch(() => {});
     // Also learn preferences from conversation
     preferencesService.learnFromConversation(userId, sessionId, allMessages).catch(() => {});
+  }
 
-    // Trigger rolling summary update if conversation is long enough
-    if (totalMessages > 10) {
-      contextCompression.updateRollingSummary(sessionId, userId).catch(() => {});
-    }
+  // Trigger background summarization if threshold met (non-blocking)
+  const messagesSinceSummary = await contextCompression.getMessageCountSinceSummary(sessionId);
+  if (messagesSinceSummary >= backgroundSummarization.BACKGROUND_SUMMARY_THRESHOLD) {
+    backgroundSummarization.triggerBackgroundSummarization(sessionId, userId);
   }
 
   // Update session title if first message

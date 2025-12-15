@@ -1008,6 +1008,34 @@ export const generateImageTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   },
 };
 
+// Desktop background generation tool
+export const generateBackgroundTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'generate_desktop_background',
+    description: `Generate a desktop background/wallpaper image for Luna's UI. Use when the user asks for a new background, wallpaper, or wants to change/customize their desktop background. The generated background will be saved and can be set as active.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        prompt: {
+          type: 'string',
+          description: 'A description of the background to generate. Examples: "sunset over mountains", "abstract purple and blue gradients", "minimalist geometric pattern".',
+        },
+        style: {
+          type: 'string',
+          enum: ['abstract', 'nature', 'artistic', 'custom'],
+          description: 'The style of background: abstract (gradients, shapes), nature (landscapes, scenery), artistic (illustrations, creative), or custom (user-defined).',
+        },
+        setActive: {
+          type: 'boolean',
+          description: 'Whether to immediately set this as the active desktop background. Default is true.',
+        },
+      },
+      required: ['prompt'],
+    },
+  },
+};
+
 export function formatSearchResultsForContext(results: SearchResult[]): string {
   if (results.length === 0) return '';
 
@@ -1060,6 +1088,7 @@ export default {
   browserWaitTool,
   browserCloseTool,
   generateImageTool,
+  generateBackgroundTool,
   formatSearchResultsForContext,
   formatAgentResultForContext,
 };

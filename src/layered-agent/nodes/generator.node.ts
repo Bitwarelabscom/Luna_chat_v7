@@ -86,6 +86,11 @@ function buildDraftPrompt(state: GraphState): { system: string; user: string } {
     systemParts.push(`\n[Capabilities]\n${capabilities}`);
   }
 
+  // Inject personality tuning hints (from background critique feedback)
+  if (state.injected_hints) {
+    systemParts.push(`\n${state.injected_hints}`);
+  }
+
   const userParts: string[] = [];
 
   // Agent view
@@ -102,6 +107,11 @@ function buildDraftPrompt(state: GraphState): { system: string; user: string } {
   // Plan
   if (state.plan) {
     userParts.push(`[Response Plan]\n${state.plan}`);
+  }
+
+  // Inject self-correction prompt if needed (from previous critique findings)
+  if (state.correction_prompt) {
+    userParts.push(state.correction_prompt);
   }
 
   // User input

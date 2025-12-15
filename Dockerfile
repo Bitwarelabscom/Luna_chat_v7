@@ -25,8 +25,8 @@ RUN npm install -g @anthropic-ai/claude-code @google/gemini-cli
 # Create credential directories for CLI tools (will be mounted)
 RUN mkdir -p /home/node/.claude /home/node/.gemini && chown node:node /home/node/.claude /home/node/.gemini
 
-# Create workspace and documents directories with proper ownership
-RUN mkdir -p /app/workspace /app/documents && chown -R node:node /app/workspace /app/documents
+# Create workspace, documents, and images directories with proper ownership
+RUN mkdir -p /app/workspace /app/documents /app/images/backgrounds/generated /app/images/backgrounds/uploaded && chown -R node:node /app/workspace /app/documents /app/images
 
 COPY package*.json ./
 RUN npm ci --only=production

@@ -11,6 +11,7 @@ interface TradingChatProps {
   isExpanded: boolean;
   onToggleExpand: () => void;
   onDisplayChange: (display: DisplayContent) => void;
+  onTradeExecuted?: () => void;  // Called when a trade or conditional order is placed
 }
 
 interface Message {
@@ -26,6 +27,7 @@ export default function TradingChat({
   isExpanded: _isExpanded,
   onToggleExpand,
   onDisplayChange,
+  onTradeExecuted,
 }: TradingChatProps) {
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -122,6 +124,11 @@ What would you like to know about the markets today?`,
       // Handle display content changes from Luna
       if (response.display) {
         onDisplayChange(response.display);
+      }
+
+      // Notify parent to refresh data if a trade was executed
+      if (response.tradeExecuted && onTradeExecuted) {
+        onTradeExecuted();
       }
     } catch (err) {
       console.error('Failed to send trading chat message:', err);

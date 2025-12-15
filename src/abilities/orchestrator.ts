@@ -63,6 +63,44 @@ export function isSmallTalk(message: string): boolean {
 }
 
 /**
+ * Check if a message is simple enough for companion mode fast path
+ * More permissive than isSmallTalk - catches casual conversation that
+ * doesn't need the full layered agent pipeline (5 LLM calls)
+ */
+export function isSimpleCompanionMessage(message: string): boolean {
+  const lower = message.toLowerCase().trim();
+
+  // Identity/personality questions - common in companion mode
+  const identityPatterns = [
+    'who are you', 'what are you', 'tell me about you', 'tell me about yourself',
+    'what do you do', 'what can you do', 'describe yourself', 'introduce yourself',
+    'your name', 'your purpose', 'what should i call you',
+  ];
+  if (identityPatterns.some(p => lower.includes(p))) {
+    return true;
+  }
+
+  // Casual conversation patterns
+  const casualPatterns = [
+    "what's on your mind", 'what do you think', 'how do you feel',
+    'tell me something', 'say something', 'talk to me',
+    'i feel', 'i think', 'i want to', "i'm feeling", "i'm thinking",
+    'just wanted to', 'just saying', 'you know what',
+  ];
+  if (casualPatterns.some(p => lower.includes(p))) {
+    return true;
+  }
+
+  // Short messages without tool keywords are likely casual chat
+  // More permissive than isSmallTalk: 80 chars vs 20, allows ?
+  if (lower.length < 80 && !hasActionKeywords(lower)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Check if message contains action keywords that suggest tool usage
  */
 function hasActionKeywords(message: string): boolean {
@@ -1723,6 +1761,7 @@ export default {
   executeFactCorrection,
   getAbilitySummary,
   isSmallTalk,
+  isSimpleCompanionMessage,
   isWeatherQuery,
   isStatusQuery,
   isProjectCreationIntent,

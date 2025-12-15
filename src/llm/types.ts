@@ -769,7 +769,9 @@ export type ConfigurableTask =
   | 'agent:analyst'
   | 'agent:planner'
   | 'friend'
-  | 'smalltalk';
+  | 'smalltalk'
+  | 'fast_plan'
+  | 'fast_draft';
 
 export interface TaskModelConfig {
   taskType: ConfigurableTask;
@@ -842,6 +844,20 @@ export const CONFIGURABLE_TASKS: TaskModelConfig[] = [
     description: 'Simple greetings, acknowledgments, and casual chat',
     defaultProvider: 'xai',
     defaultModel: 'grok-4-1-fast-non-reasoning-latest',
+  },
+  {
+    taskType: 'fast_plan',
+    displayName: 'Fast Planner',
+    description: 'Quick planning for sub-5s responses (fast path)',
+    defaultProvider: 'google',
+    defaultModel: 'gemini-2.5-flash',
+  },
+  {
+    taskType: 'fast_draft',
+    displayName: 'Fast Generator',
+    description: 'Quick draft generation for sub-5s responses (fast path)',
+    defaultProvider: 'xai',
+    defaultModel: 'grok-4-1-fast',
   },
 ];
 

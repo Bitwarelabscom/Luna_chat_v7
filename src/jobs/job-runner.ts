@@ -12,6 +12,9 @@ import * as botExecutorService from '../trading/bot-executor.service.js';
 import * as scalpingService from '../trading/scalping.service.js';
 import * as calendarReminderService from '../abilities/calendar-reminder.service.js';
 import * as reminderService from '../abilities/reminder.service.js';
+import * as hintInjection from '../layered-agent/services/hint-injection.service.js';
+import * as selfCorrection from '../layered-agent/services/self-correction.service.js';
+import { activityHelpers } from '../activity/activity.service.js';
 import logger from '../utils/logger.js';
 
 // ============================================
@@ -152,6 +155,21 @@ const jobs: Job[] = [
     enabled: true,
     running: false,
     handler: runScalpingBot,
+  },
+  // Layered agent hint/correction jobs
+  {
+    name: 'hintWeightDecay',
+    intervalMs: 24 * 60 * 60 * 1000, // Daily
+    enabled: true,
+    running: false,
+    handler: decayHintWeights,
+  },
+  {
+    name: 'critiqueDataCleanup',
+    intervalMs: 24 * 60 * 60 * 1000, // Daily
+    enabled: true,
+    running: false,
+    handler: cleanupCritiqueData,
   },
 ];
 
@@ -381,11 +399,20 @@ async function fetchRssFeeds(): Promise<void> {
           userId: row.user_id,
           newArticles: articlesCount
         });
+        // Log activity if new articles found
+        if (articlesCount > 0) {
+          activityHelpers.logBackgroundJob(row.user_id, 'RSS Fetch', 'completed', {
+            newArticles: articlesCount,
+          }).catch(() => {}); // Non-blocking
+        }
       } catch (err) {
         logger.error('Failed to fetch feeds for user', {
           error: (err as Error).message,
           userId: row.user_id
         });
+        activityHelpers.logBackgroundJob(row.user_id, 'RSS Fetch', 'failed', {
+          error: (err as Error).message,
+        }).catch(() => {}); // Non-blocking
       }
     }
 
@@ -496,6 +523,7 @@ async function processTriggers(): Promise<void> {
         },
         delivered: deliveredCount,
       });
+      // Note: Activity logging for triggers happens per-user in delivery service
     } else {
       logger.debug('Trigger processor job completed - no triggers to process');
     }
@@ -702,6 +730,53 @@ async function runScalpingBot(): Promise<void> {
     }
   } catch (error) {
     logger.error('Scalping bot job failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+// ============================================
+// Layered Agent Hint/Correction Job Handlers
+// ============================================
+
+/**
+ * Decay user hint weights over time
+ * Hints that haven't been triggered recently will gradually lose influence
+ */
+async function decayHintWeights(): Promise<void> {
+  try {
+    const updated = await hintInjection.decayUserHintWeights(7); // 7 day decay period
+    if (updated > 0) {
+      logger.info('Hint weight decay completed', { updated });
+    }
+  } catch (error) {
+    logger.error('Hint weight decay job failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+/**
+ * Clean up old critique data (processed corrections, old queue logs)
+ */
+async function cleanupCritiqueData(): Promise<void> {
+  try {
+    const correctionsDeleted = await selfCorrection.cleanupOldCorrections(7);
+
+    // Also cleanup queue logs directly
+    const queueLogResult = await pool.query(
+      `DELETE FROM critique_queue_log WHERE created_at < NOW() - INTERVAL '7 days'`
+    );
+    const queueLogsDeleted = queueLogResult.rowCount || 0;
+
+    if (correctionsDeleted > 0 || queueLogsDeleted > 0) {
+      logger.info('Critique data cleanup completed', {
+        correctionsDeleted,
+        queueLogsDeleted,
+      });
+    }
+  } catch (error) {
+    logger.error('Critique data cleanup job failed', {
       error: (error as Error).message,
     });
   }

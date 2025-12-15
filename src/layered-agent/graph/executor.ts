@@ -29,6 +29,9 @@ import { draftNode, repairNode, type TokenUsage } from '../nodes/generator.node.
 import { supervisorNode } from '../nodes/supervisor.node.js';
 import * as stateStore from '../stores/state.store.js';
 import * as tokenTracker from '../services/token-tracker.service.js';
+import * as hintInjection from '../services/hint-injection.service.js';
+import * as selfCorrection from '../services/self-correction.service.js';
+import * as critiqueQueue from '../services/critique-queue.service.js';
 import { activityHelpers } from '../../activity/activity.service.js';
 import logger from '../../utils/logger.js';
 
@@ -48,6 +51,7 @@ export async function executeGraph(
   const {
     maxAttempts = DEFAULT_MAX_ATTEMPTS,
     timeoutMs = DEFAULT_TIMEOUT_MS,
+    fastPath = true, // Default to fast path for sub-5s responses
     onNodeStart,
     onNodeEnd,
     onError,
@@ -57,8 +61,39 @@ export async function executeGraph(
   const nodesExecuted: NodeName[] = [];
   const nodeMetrics: NodeMetrics[] = [];
 
-  // Initialize state
-  let state = createInitialState(input, identity, agentView);
+  // Load hints and corrections BEFORE execution (fast path feature)
+  let injectedHints: string | null = null;
+  let correctionPrompt: string | null = null;
+  let correctionIds: string[] = [];
+
+  if (fastPath) {
+    try {
+      // Load in parallel for speed
+      const [hints, corrections] = await Promise.all([
+        hintInjection.getActiveHints(input.session_id, userId),
+        selfCorrection.getFormattedCorrectionPrompt(input.session_id),
+      ]);
+
+      injectedHints = hintInjection.formatHintsForPrompt(hints);
+      correctionPrompt = corrections.prompt;
+      correctionIds = corrections.correctionIds;
+
+      // Mark corrections as processed upfront (they'll be used in this response)
+      if (correctionIds.length > 0) {
+        await selfCorrection.markCorrectionsProcessed(correctionIds);
+      }
+    } catch (err) {
+      logger.warn('Failed to load hints/corrections, continuing without', {
+        error: (err as Error).message,
+      });
+    }
+  }
+
+  // Initialize state with hints
+  let state = createInitialState(input, identity, agentView, {
+    injectedHints,
+    correctionPrompt,
+  });
 
   // Create token tracker for this turn
   const tracker = tokenTracker.createTurnTracker(
@@ -150,6 +185,36 @@ export async function executeGraph(
               result.tokenUsage.outputTokens
             )
           ).catch(() => {}); // Non-blocking
+        }
+
+        // FAST PATH: After draft, skip critique and queue for background
+        if (fastPath && nextNode === 'draft' && state.draft) {
+          // Queue for background critique (non-blocking)
+          critiqueQueue.queueForCritique({
+            turnId: state.turn_id,
+            sessionId: state.session_id,
+            userId,
+            userInput: state.user_input,
+            draft: state.draft,
+            plan: state.plan,
+            mode: state.mode,
+            identityId: identity.id,
+            identityVersion: identity.version,
+          }).catch((err) => {
+            logger.warn('Failed to queue background critique', {
+              error: (err as Error).message,
+              turnId: state.turn_id,
+            });
+          });
+
+          // Use draft as final output, skip critique loop
+          state.final_output = state.draft;
+          logger.info('Fast path: skipping critique, queued for background', {
+            sessionId: state.session_id,
+            turnId: state.turn_id,
+            draftLength: state.draft.length,
+          });
+          break;
         }
 
       } catch (error) {
