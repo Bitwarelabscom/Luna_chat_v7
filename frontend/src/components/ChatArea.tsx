@@ -135,6 +135,29 @@ function StandardChatArea() {
     textareaRef.current?.focus();
   }, [currentSession?.id]);
 
+  // End session on browser close/tab close to trigger memory consolidation
+  useEffect(() => {
+    const sessionId = currentSession?.id;
+    if (!sessionId) return;
+
+    const handleBeforeUnload = () => {
+      // Use fetch with keepalive for reliable delivery during page unload
+      // This triggers MemoryCore consolidation (Working Memory → Episodic)
+      fetch(`/api/chat/sessions/${sessionId}/end`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        keepalive: true, // Ensures request survives page navigation
+        body: JSON.stringify({}),
+      }).catch(() => {}); // Ignore errors on unload
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [currentSession?.id]);
+
   // Startup message trigger DISABLED - wait for user input instead
   // const startupTriggeredRef = useRef<string | null>(null);
   // useEffect(() => {

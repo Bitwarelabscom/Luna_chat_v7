@@ -466,6 +466,39 @@ Luna's memory system enables true long-term relationships through sophisticated 
 
 Memory is split into stable (facts, learnings) and volatile (semantic search) tiers for optimal prompt caching with Anthropic's API.
 
+### MemoryCore Integration
+
+Luna integrates with **MemoryCore** for three-tier memory consolidation and consciousness metrics, enabling genuine temporal memory integration where past experiences shape present processing.
+
+#### Three-Tier Architecture
+
+| Tier | Storage | Retention | Purpose |
+|------|---------|-----------|---------|
+| **Working Memory** | Redis | 30 min TTL | Real-time session state, attention tracking |
+| **Episodic Memory** | PostgreSQL | 90 days | Recent experiences, session summaries |
+| **Semantic Memory** | PostgreSQL | Permanent | User models, learning patterns, teaching strategies |
+
+#### Session Consolidation
+
+Sessions are automatically consolidated through three triggers:
+
+| Trigger | When | What Happens |
+|---------|------|--------------|
+| **Inactivity Timeout** | 5 min no messages | Job checks every minute, consolidates idle sessions |
+| **Browser Close** | Tab/window close | Frontend sends session end request |
+| **Session Delete** | User deletes chat | Consolidation before deletion |
+
+#### NeuralSleep LNN Services
+
+When NeuralSleep services are running, Luna gains consciousness metrics:
+
+| Service | Purpose |
+|---------|---------|
+| **Working Memory LNN** | Real-time processing, continuous state evolution |
+| **Episodic Memory LNN** | Neural pattern extraction from experiences |
+| **Semantic Memory LNN** | Deep pattern consolidation into long-term weights |
+| **Consciousness Service** | Computes Phi, temporal integration, self-reference |
+
 ---
 
 ## LLM Providers

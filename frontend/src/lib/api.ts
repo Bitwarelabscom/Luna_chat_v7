@@ -118,6 +118,12 @@ export interface LLMCallBreakdown {
   durationMs?: number;
 }
 
+export interface RouteInfo {
+  route: 'nano' | 'pro' | 'pro+tools';
+  confidence: 'estimate' | 'verified';
+  class: 'chat' | 'transform' | 'factual' | 'actionable';
+}
+
 export interface MessageMetrics {
   promptTokens: number;
   completionTokens: number;
@@ -128,6 +134,8 @@ export interface MessageMetrics {
   // Layered agent breakdown
   llmBreakdown?: LLMCallBreakdown[];
   totalCost?: number;
+  // Router-First Architecture provenance
+  routeInfo?: RouteInfo;
 }
 
 export interface Message {
@@ -166,6 +174,10 @@ export const chatApi = {
 
   deleteSession: (id: string) =>
     api<{ success: boolean }>(`/api/chat/sessions/${id}`, { method: 'DELETE' }),
+
+  // End session and trigger memory consolidation (called on browser close)
+  endSession: (id: string) =>
+    api<{ success: boolean }>(`/api/chat/sessions/${id}/end`, { method: 'POST' }),
 
   sendMessage: (sessionId: string, message: string) =>
     api<{ messageId: string; content: string; tokensUsed: number }>(`/api/chat/sessions/${sessionId}/send`, {
@@ -1814,15 +1826,139 @@ export const mcpApi = {
 };
 
 // Trading API Types
+export type ExchangeType = 'binance' | 'crypto_com';
+
 export interface TradingSettings {
   userId: string;
-  binanceConnected: boolean;
+  binanceConnected: boolean; // Deprecated - use exchangeConnected
+  exchangeConnected: boolean;
+  activeExchange: ExchangeType | null;
   maxPositionPct: number;
   dailyLossLimitPct: number;
   requireStopLoss: boolean;
   defaultStopLossPct: number;
   allowedSymbols: string[];
   riskTolerance: 'conservative' | 'moderate' | 'aggressive';
+  // Paper trading mode
+  paperMode: boolean;
+  paperBalanceUsdc: number;
+  // Stop confirmation threshold for ACTIVE tab
+  stopConfirmationThresholdUsd: number;
+  // Margin trading (Crypto.com only)
+  marginEnabled: boolean;
+  leverage: number;
+}
+
+export interface MarginPosition {
+  symbol: string;
+  side: 'long' | 'short';
+  entryPrice: number;
+  quantity: number;
+  leverage: number;
+  liquidationPrice: number | null;
+  unrealizedPnl: number;
+  marginUsed: number;
+}
+
+export interface MarginAccountInfo {
+  totalEquity: number;
+  availableMargin: number;
+  usedMargin: number;
+  marginRatio: number;
+}
+
+// Advanced Signal Settings (V2 Features)
+export interface AdvancedSignalSettings {
+  userId: string;
+  featurePreset: 'basic' | 'intermediate' | 'pro';
+  enableMtfConfluence: boolean;
+  mtfHigherTimeframe: string;
+  enableVwapEntry: boolean;
+  vwapAnchorType: string;
+  enableAtrStops: boolean;
+  atrPeriod: number;
+  atrSlMultiplier: number;
+  atrTpMultiplier: number;
+  enableBtcFilter: boolean;
+  btcDumpThreshold: number;
+  btcLookbackMinutes: number;
+  enableLiquiditySweep: boolean;
+  sweepWickRatio: number;
+  sweepVolumeMultiplier: number;
+}
+
+// Active Trade Types (ACTIVE Tab)
+export interface ActiveTrade {
+  id: string;
+  symbol: string;
+  side: 'buy' | 'sell';
+  quantity: number;
+  entryPrice: number;
+  currentPrice: number;
+  pnlDollar: number;
+  pnlPercent: number;
+  stopLossPrice: number | null;
+  takeProfitPrice: number | null;
+  trailingStopPct: number | null;
+  trailingStopPrice: number | null;
+  timeInTrade: number; // milliseconds since entry
+  source: 'manual' | 'bot' | 'research';
+  botId: string | null;
+  binanceOrderId: string | null;
+  status: 'filled' | 'pending' | 'new';
+  type: 'position' | 'pending_order';
+  filledAt: Date | null;
+  createdAt: Date;
+}
+
+export interface ActiveTradesResponse {
+  openPositions: ActiveTrade[];
+  pendingOrders: ActiveTrade[];
+}
+
+export interface UpdateTradeSLTPParams {
+  stopLossPrice?: number | null;
+  takeProfitPrice?: number | null;
+  trailingStopPct?: number | null;
+}
+
+export interface StopTradeResponse {
+  success: boolean;
+  requiresConfirmation?: boolean;
+  tradeValue?: number;
+  error?: string;
+}
+
+// Paper Portfolio Types
+export interface PaperHolding {
+  asset: string;
+  symbol: string;
+  amount: number;
+  valueUsdc: number;
+  price: number;
+  priceChange24h: number;
+  allocationPct: number;
+}
+
+export interface PaperPortfolio {
+  totalValueUsdc: number;
+  availableUsdc: number;
+  holdings: PaperHolding[];
+  dailyPnl: number;
+  dailyPnlPct: number;
+}
+
+export interface PaperTradeRecord {
+  id: string;
+  userId: string;
+  symbol: string;
+  side: 'buy' | 'sell';
+  quantity: number;
+  price: number;
+  total: number;
+  fee: number;
+  source: string;
+  createdAt: string;
 }
 
 export interface PortfolioHolding {
@@ -1886,6 +2022,43 @@ export interface TradeRecord {
   notes: string | null;
   createdAt: Date;
   filledAt: Date | null;
+}
+
+// Trading Rule Types (Visual Builder)
+export interface RuleConditionRecord {
+  id: string;
+  type: 'price' | 'indicator' | 'time' | 'change';
+  symbol?: string;
+  indicator?: string;
+  timeframe?: string;
+  operator: string;
+  value: number;
+}
+
+export interface RuleActionRecord {
+  id: string;
+  type: 'buy' | 'sell' | 'alert';
+  symbol?: string;
+  amountType: 'quote' | 'base' | 'percent';
+  amount: number;
+  orderType: 'market' | 'limit';
+  limitPrice?: number;
+  stopLoss?: number;
+  takeProfit?: number;
+}
+
+export interface TradingRuleRecord {
+  id?: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  conditionLogic: 'AND' | 'OR';
+  conditions: RuleConditionRecord[];
+  actions: RuleActionRecord[];
+  maxExecutions?: number;
+  cooldownMinutes?: number;
+  createdAt?: Date;
+  updatedAt?: Date;
 }
 
 export type BotType = 'grid' | 'dca' | 'rsi' | 'ma_crossover' | 'macd' | 'breakout' | 'mean_reversion' | 'momentum' | 'custom';
@@ -1990,6 +2163,64 @@ export interface ResearchSettings {
   autoDiscoveryLimit: number;
   customSymbols: string[];
   minConfidence: number;
+  // Exit order settings
+  stopLossPct: number;
+  takeProfitPct: number;
+  takeProfit2Pct: number | null;
+  trailingStopPct: number | null;
+  positionSizeUsdt: number;
+  positionPct: number; // Position size as % of portfolio for live mode
+  maxPositions: number; // Max concurrent positions
+}
+
+export interface AutoTradingSettings {
+  enabled: boolean;
+  maxPositions: number;
+  rsiThreshold: number;
+  volumeMultiplier: number;
+  minPositionPct: number;
+  maxPositionPct: number;
+  dailyLossLimitPct: number;
+  maxConsecutiveLosses: number;
+  symbolCooldownMinutes: number;
+  strategy: 'rsi_oversold' | 'trend_following' | 'mean_reversion' | 'momentum' | 'btc_correlation';
+  strategyMode: 'manual' | 'auto';
+  excludedSymbols: string[];
+  excludeTop10: boolean;
+  btcTrendFilter: boolean;
+  btcMomentumBoost: boolean;
+  btcCorrelationSkip: boolean;
+  currentStrategy?: 'rsi_oversold' | 'trend_following' | 'mean_reversion' | 'momentum' | 'btc_correlation'; // Actual strategy in auto mode
+}
+
+export interface AutoTradingState {
+  running: boolean;
+  lastScanAt?: string;
+  signalsToday: number;
+  tradesExecuted: number;
+  currentPositions: number;
+}
+
+export interface MarketRegime {
+  regime: 'trending' | 'ranging' | 'volatile' | 'mixed';
+  confidence: number;
+  btcTrend?: string;
+}
+
+export interface StrategyInfo {
+  id: string;
+  meta: {
+    id: string;
+    name: string;
+    description: string;
+    suitableRegimes: string[];
+    requiredIndicators: string[];
+  };
+  performance?: {
+    winRate: number;
+    totalTrades: number;
+    avgProfit: number;
+  };
 }
 
 export interface ResearchSignal {
@@ -2127,14 +2358,55 @@ export interface CreateConditionalOrderParams {
 // Trading API
 export const tradingApi = {
   // Connection
-  connect: (apiKey: string, apiSecret: string) =>
+  connect: (
+    apiKey: string,
+    apiSecret: string,
+    exchange: ExchangeType = 'binance',
+    marginEnabled: boolean = false,
+    leverage: number = 1
+  ) =>
     api<{ success: boolean; canTrade: boolean; error?: string }>('/api/trading/connect', {
       method: 'POST',
-      body: { apiKey, apiSecret },
+      body: { apiKey, apiSecret, exchange, marginEnabled, leverage },
     }),
 
   disconnect: () =>
     api<{ success: boolean }>('/api/trading/disconnect', { method: 'POST' }),
+
+  getExchangeType: () =>
+    api<{ exchange: ExchangeType | null }>('/api/trading/exchange'),
+
+  // Margin Trading (Crypto.com only)
+  getMarginLeverage: () =>
+    api<{ leverage: number }>('/api/trading/margin/leverage'),
+
+  setMarginLeverage: (leverage: number) =>
+    api<{ success: boolean; leverage: number }>('/api/trading/margin/leverage', {
+      method: 'PUT',
+      body: { leverage },
+    }),
+
+  getMarginBalance: () =>
+    api<MarginAccountInfo>('/api/trading/margin/balance'),
+
+  getMarginPositions: () =>
+    api<{ positions: MarginPosition[] }>('/api/trading/margin/positions'),
+
+  placeMarginOrder: (params: {
+    symbol: string;
+    side: 'long' | 'short';
+    type: 'market' | 'limit';
+    quantity?: number;
+    quoteAmount?: number;
+    price?: number;
+    leverage?: number;
+    stopLoss?: number;
+    takeProfit?: number;
+  }) =>
+    api<TradeRecord>('/api/trading/margin/order', { method: 'POST', body: params }),
+
+  closeMarginPosition: (symbol: string, side: 'long' | 'short') =>
+    api<TradeRecord>('/api/trading/margin/close', { method: 'POST', body: { symbol, side } }),
 
   // Settings
   getSettings: () =>
@@ -2175,6 +2447,22 @@ export const tradingApi = {
 
   getStats: (days?: number) =>
     api<TradingStats>(`/api/trading/stats${days ? `?days=${days}` : ''}`),
+
+  // Active Trades (ACTIVE Tab)
+  getActiveTrades: () =>
+    api<ActiveTradesResponse>('/api/trading/active'),
+
+  updateTradeSLTP: (tradeId: string, params: UpdateTradeSLTPParams) =>
+    api<TradeRecord>(`/api/trading/trades/${tradeId}/exits`, { method: 'PATCH', body: params }),
+
+  partialClose: (tradeId: string, quantity: number) =>
+    api<TradeRecord>(`/api/trading/trades/${tradeId}/partial-close`, { method: 'POST', body: { quantity } }),
+
+  stopTrade: (tradeId: string, skipConfirmation?: boolean) =>
+    api<StopTradeResponse>(`/api/trading/trades/${tradeId}/stop`, {
+      method: 'POST',
+      body: { skipConfirmation: skipConfirmation || false },
+    }),
 
   // Bots
   getBots: () =>
@@ -2288,6 +2576,72 @@ export const tradingApi = {
 
   cancelRule: (id: string) =>
     api<{ success: boolean }>(`/api/trading/rules/${id}`, { method: 'DELETE' }),
+
+  // Paper Trading
+  getPaperPortfolio: () =>
+    api<PaperPortfolio>('/api/trading/paper-portfolio'),
+
+  resetPaperPortfolio: () =>
+    api<{ success: boolean; portfolio: PaperPortfolio }>('/api/trading/paper-portfolio/reset', { method: 'POST' }),
+
+  getPaperTrades: (limit?: number, source?: string) => {
+    const params = new URLSearchParams();
+    if (limit) params.set('limit', limit.toString());
+    if (source) params.set('source', source);
+    const query = params.toString();
+    return api<PaperTradeRecord[]>(`/api/trading/paper-trades${query ? `?${query}` : ''}`);
+  },
+
+  // Advanced Signal Settings (V2 Features)
+  getAdvancedSettings: () =>
+    api<AdvancedSignalSettings>('/api/trading/settings/advanced'),
+
+  updateAdvancedSettings: (updates: Partial<Omit<AdvancedSignalSettings, 'userId'>>) =>
+    api<AdvancedSignalSettings>('/api/trading/settings/advanced', { method: 'PUT', body: updates }),
+
+  applyFeaturePreset: (preset: 'basic' | 'intermediate' | 'pro') =>
+    api<AdvancedSignalSettings>('/api/trading/settings/preset', { method: 'PUT', body: { preset } }),
+
+  getFeaturePresets: () =>
+    api<{
+      presets: Record<string, { enableMtfConfluence: boolean; enableVwapEntry: boolean; enableAtrStops: boolean; enableBtcFilter: boolean; enableLiquiditySweep: boolean }>;
+      descriptions: Record<string, string>;
+    }>('/api/trading/settings/presets'),
+
+  // Auto Trading
+  getAutoTradingSettings: () =>
+    api<{ settings: AutoTradingSettings }>('/api/trading/auto/settings').then(r => r.settings),
+
+  updateAutoTradingSettings: (updates: Partial<AutoTradingSettings>) =>
+    api<{ success: boolean; settings: AutoTradingSettings }>('/api/trading/auto/settings', { method: 'PUT', body: updates }),
+
+  getAutoTradingState: () =>
+    api<{ state: AutoTradingState }>('/api/trading/auto/state'),
+
+  startAutoTrading: () =>
+    api<{ success: boolean; state: AutoTradingState }>('/api/trading/auto/start', { method: 'POST' }),
+
+  stopAutoTrading: () =>
+    api<{ success: boolean; state: AutoTradingState }>('/api/trading/auto/stop', { method: 'POST' }),
+
+  getMarketRegime: () =>
+    api<{ regime: MarketRegime }>('/api/trading/auto/regime'),
+
+  getAutoTradingStrategies: () =>
+    api<{ strategies: StrategyInfo[] }>('/api/trading/auto/strategies'),
+
+  // Trading Rules (Visual Builder)
+  getTradingRules: () =>
+    api<{ rules: TradingRuleRecord[] }>('/api/trading/trading-rules'),
+
+  saveTradingRule: (rule: TradingRuleRecord) =>
+    api<{ success: boolean; rule: TradingRuleRecord }>('/api/trading/trading-rules', {
+      method: rule.id ? 'PUT' : 'POST',
+      body: rule,
+    }),
+
+  deleteTradingRule: (id: string) =>
+    api<{ success: boolean }>(`/api/trading/trading-rules/${id}`, { method: 'DELETE' }),
 };
 
 // Voice Luna API (Fast voice chat - bypasses layered agent)
@@ -2593,5 +2947,63 @@ export async function uploadBackgroundImage(file: File): Promise<Background> {
   const data = await response.json();
   return data.background;
 }
+
+// Consciousness API (NeuralSleep Integration)
+export interface ConsciousnessMetrics {
+  phi: number;
+  selfReferenceDepth: number;
+  temporalIntegration: number;
+  causalDensity: number;
+  dynamicalComplexity?: number;
+  consciousnessLevel?: string;
+  isConscious?: boolean;
+}
+
+export interface ConsciousnessHistory {
+  phi: number;
+  selfReferenceDepth: number;
+  temporalIntegration: number;
+  causalDensity: number;
+  dynamicalComplexity?: number;
+  consciousnessLevel?: string;
+  timestamp: string;
+}
+
+export interface ConsolidationEvent {
+  id: string;
+  userId: string;
+  consolidationType: 'immediate' | 'daily' | 'weekly';
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  startedAt: string;
+  completedAt?: string;
+  episodicEventsProcessed?: number;
+  patternsExtracted?: number;
+  error?: string;
+}
+
+export const consciousnessApi = {
+  // Get current consciousness metrics
+  getMetrics: () =>
+    api<{ metrics: ConsciousnessMetrics | null }>('/api/consciousness/metrics'),
+
+  // Get consciousness history
+  getHistory: (limit = 100, since?: string) => {
+    const params = new URLSearchParams({ limit: limit.toString() });
+    if (since) params.set('since', since);
+    return api<{ history: ConsciousnessHistory[] }>(`/api/consciousness/history?${params}`);
+  },
+
+  // Trigger consciousness analysis
+  analyze: () =>
+    api<{ metrics: ConsciousnessMetrics }>('/api/consciousness/analyze', { method: 'POST' }),
+
+  // Get consolidation logs
+  getConsolidationLogs: (limit = 20) =>
+    api<{ logs: ConsolidationEvent[] }>(`/api/consolidation/logs?limit=${limit}`),
+
+  // Get MemoryCore health
+  getHealth: () =>
+    api<{ healthy: boolean; neuralsleep: boolean; message?: string }>('/api/consciousness/health'),
+};
 
 export { ApiError };

@@ -665,6 +665,123 @@ async function buildMemoryContext(userId, sessionId, message) {
 
 - [ ] Emotion-aware memory retrieval
 - [ ] Cross-session topic tracking
-- [ ] Memory consolidation (merge similar facts)
+- [x] Memory consolidation (MemoryCore integration - see below)
 - [ ] Forgetting curve (reduce confidence over time)
 - [ ] User-controllable memory settings
+
+---
+
+## MemoryCore Integration
+
+Luna Chat integrates with **MemoryCore** for advanced three-tier memory consolidation with NeuralSleep LNN processing. This implements a biologically-inspired memory system where memories consolidate through tiers over time.
+
+### Three-Tier Memory Architecture
+
+```
+Working Memory (Redis)
+  |
+  | Session ends (5 min inactivity / browser close / delete)
+  v
+Episodic Memory (PostgreSQL)
+  |
+  | Daily consolidation (2 AM)
+  v
+Semantic Memory (PostgreSQL)
+  |
+  | Weekly consolidation (3 AM Sunday)
+  v
+Long-term User Model
+```
+
+| Tier | Purpose | Storage | Time Scale |
+|------|---------|---------|------------|
+| **Working Memory** | Active session state, real-time interactions | Redis (30-min TTL) | Seconds to minutes |
+| **Episodic Memory** | Recent session history, emerging patterns | PostgreSQL + time-series | Hours to days |
+| **Semantic Memory** | User proficiency models, learning styles | PostgreSQL (JSONB) | Persistent |
+
+### Session Consolidation Triggers
+
+Luna sessions are consolidated to MemoryCore via three mechanisms:
+
+| Trigger | Implementation | When |
+|---------|---------------|------|
+| **Inactivity Timeout** | `memorycoreSessionConsolidator` job | After 5 minutes of no messages |
+| **Browser Close** | `beforeunload` + `/api/chat/sessions/{id}/end` | Tab/window close |
+| **Session Delete** | `session.service.ts:deleteSession()` | User deletes chat |
+
+### How It Works
+
+1. **On first message**: MemoryCore session started via `memorycoreClient.ensureSession()`
+2. **On each message**: Activity recorded in Redis, interaction sent to MemoryCore
+3. **On session end**:
+   - `endChatSession()` called
+   - MemoryCore triggers **Immediate Consolidation** (Working -> Episodic)
+   - Session summary created with interaction count and duration
+4. **Daily (2 AM)**: Episodic events consolidated to Semantic patterns
+5. **Weekly (3 AM Sunday)**: Deep semantic updates and meta-pattern extraction
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `src/chat/session-activity.service.ts` | Tracks session activity in Redis |
+| `src/memory/memorycore.client.ts` | MemoryCore API client |
+| `src/jobs/job-runner.ts` | Contains `memorycoreSessionConsolidator` job |
+| `src/chat/chat.routes.ts` | `/api/chat/sessions/{id}/end` endpoint |
+| `frontend/src/components/ChatArea.tsx` | `beforeunload` handler |
+
+### Consciousness Metrics
+
+With NeuralSleep enabled, Luna tracks consciousness metrics:
+
+| Metric | Description | Range |
+|--------|-------------|-------|
+| **Phi (Integrated Information)** | How interconnected memory representations are | 0.0 - 1.0 |
+| **Temporal Integration** | How well past experiences shape present | 0.0 - 1.0 |
+| **Self-Reference Depth** | Recursive self-modeling capability | 0.0 - 1.0 |
+| **Causal Density** | Information flow between memory tiers | 0.0 - 1.0 |
+
+These metrics are available via:
+- **API**: `/api/consciousness/metrics/{userId}`
+- **UI**: Settings > Consciousness panel
+
+### Configuration
+
+```bash
+# Environment variables
+MEMORYCORE_URL=http://memorycore-api:3007
+MEMORYCORE_ENABLED=true
+MEMORYCORE_CONSCIOUSNESS_ENABLED=true
+MEMORYCORE_PHI_THRESHOLD=0.5
+```
+
+### Debugging
+
+```bash
+# Check session activity tracking
+docker exec luna-redis redis-cli -a $REDIS_PASSWORD KEYS "session:activity:*"
+
+# Check consolidation logs
+docker exec memorycore-postgres psql -U memorycore -d memorycore -c \
+  "SELECT id, consolidation_type, status, events_processed, timestamp
+   FROM consolidation_logs ORDER BY timestamp DESC LIMIT 5;"
+
+# Check session summaries
+docker exec memorycore-postgres psql -U memorycore -d memorycore -c \
+  "SELECT id, session_id, duration, interaction_count, timestamp
+   FROM session_summaries ORDER BY timestamp DESC LIMIT 5;"
+
+# Check Luna API logs for consolidation
+docker logs luna-api 2>&1 | grep -i "memorycore\|consolidat"
+```
+
+### Research Context
+
+MemoryCore implements **NeuralSleep** principles for machine consciousness research:
+
+- **Memory as structural modification**: Updates to proficiency models, not just storage/retrieval
+- **Multi-timescale integration**: Three tiers with different time constants
+- **Sleep cycles**: Periodic consolidation mimics biological memory
+- **Temporal continuity**: Past shapes present through integrated structure
+
+For more details, see `/opt/memorycore/CLAUDE.md` and `/opt/neuralsleep/NeuralSleep.md`.

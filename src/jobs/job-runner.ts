@@ -10,10 +10,14 @@ import * as sessionLogService from '../chat/session-log.service.js';
 import * as orderMonitorService from '../trading/order-monitor.service.js';
 import * as botExecutorService from '../trading/bot-executor.service.js';
 import * as scalpingService from '../trading/scalping.service.js';
+import * as researchService from '../trading/research.service.js';
+import * as indicatorCalculatorService from '../trading/indicator-calculator.service.js';
+import * as autoTradingService from '../trading/auto-trading.service.js';
 import * as calendarReminderService from '../abilities/calendar-reminder.service.js';
 import * as reminderService from '../abilities/reminder.service.js';
 import * as hintInjection from '../layered-agent/services/hint-injection.service.js';
 import * as selfCorrection from '../layered-agent/services/self-correction.service.js';
+import * as sessionActivityService from '../chat/session-activity.service.js';
 import { activityHelpers } from '../activity/activity.service.js';
 import logger from '../utils/logger.js';
 
@@ -134,6 +138,14 @@ const jobs: Job[] = [
     running: false,
     handler: finalizeIdleSessions,
   },
+  // MemoryCore session consolidation job
+  {
+    name: 'memorycoreSessionConsolidator',
+    intervalMs: 60 * 1000, // Every minute - check for 5-min inactive sessions
+    enabled: true,
+    running: false,
+    handler: consolidateInactiveSessions,
+  },
   // Trading jobs
   {
     name: 'tradingOrderMonitor',
@@ -155,6 +167,34 @@ const jobs: Job[] = [
     enabled: true,
     running: false,
     handler: runScalpingBot,
+  },
+  {
+    name: 'researchSignalScanner',
+    intervalMs: 30 * 1000, // Every 30 seconds - scan for research signals
+    enabled: true,
+    running: false,
+    handler: runResearchSignalScanner,
+  },
+  {
+    name: 'indicatorCalculator',
+    intervalMs: 60 * 1000, // Every minute - pre-calculate indicators for all symbols
+    enabled: true,
+    running: false,
+    handler: calculateIndicators,
+  },
+  {
+    name: 'autoTrading',
+    intervalMs: 30 * 1000, // Every 30 seconds - scan for auto trading signals
+    enabled: true,
+    running: false,
+    handler: runAutoTrading,
+  },
+  {
+    name: 'backtestSignals',
+    intervalMs: 60 * 1000, // Every minute - backtest pending signals
+    enabled: true,
+    running: false,
+    handler: backtestSignals,
   },
   // Layered agent hint/correction jobs
   {
@@ -595,6 +635,30 @@ async function processQuickReminders(): Promise<void> {
 }
 
 // ============================================
+// MemoryCore Session Consolidation Handler
+// ============================================
+
+/**
+ * Consolidate inactive chat sessions to MemoryCore
+ * Sessions inactive for 5+ minutes are consolidated (Working Memory → Episodic)
+ */
+async function consolidateInactiveSessions(): Promise<void> {
+  try {
+    const consolidated = await sessionActivityService.processInactiveSessions();
+
+    if (consolidated > 0) {
+      logger.info('MemoryCore session consolidation completed', { consolidated });
+    } else {
+      logger.debug('MemoryCore session consolidation - no inactive sessions');
+    }
+  } catch (error) {
+    logger.error('MemoryCore session consolidation job failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+// ============================================
 // Session Log Job Handlers
 // ============================================
 
@@ -736,6 +800,96 @@ async function runScalpingBot(): Promise<void> {
 }
 
 // ============================================
+// Research Signal Scanner Job Handler
+// ============================================
+
+/**
+ * Run research signal scanner - scans for trading opportunities using multi-indicator analysis
+ * Runs every 30 seconds
+ */
+async function runResearchSignalScanner(): Promise<void> {
+  try {
+    const results = await researchService.runResearchJob();
+
+    // Only log if there was activity
+    const totalActivity =
+      results.signalsCreated +
+      results.autoExecuted +
+      results.expired;
+
+    if (totalActivity > 0) {
+      logger.info('Research signal scanner completed', { results });
+    } else {
+      logger.debug('Research signal scanner completed - no signals');
+    }
+  } catch (error) {
+    logger.error('Research signal scanner job failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+// ============================================
+// Indicator Calculator Job Handler
+// ============================================
+
+/**
+ * Pre-calculate technical indicators for all symbols and timeframes
+ * Stores results in Redis for fast access by trading terminal
+ */
+async function calculateIndicators(): Promise<void> {
+  try {
+    const results = await indicatorCalculatorService.runIndicatorCalculations();
+
+    if (results.calculated > 0) {
+      logger.info('Indicator calculator completed', {
+        calculated: results.calculated,
+        failed: results.failed,
+        durationMs: results.duration,
+      });
+    } else {
+      logger.debug('Indicator calculator completed - no data to calculate');
+    }
+  } catch (error) {
+    logger.error('Indicator calculator job failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+// ============================================
+// Auto Trading Job Handler
+// ============================================
+
+/**
+ * Run auto trading - scans for RSI + Volume signals and executes trades
+ * Runs every 30 seconds for users with auto trading enabled
+ */
+async function runAutoTrading(): Promise<void> {
+  try {
+    await autoTradingService.runAutoTradingJob();
+  } catch (error) {
+    logger.error('Auto trading job failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+/**
+ * Backtest pending auto trading signals
+ * Checks if historical prices hit SL or TP
+ */
+async function backtestSignals(): Promise<void> {
+  try {
+    await autoTradingService.backtestPendingSignals();
+  } catch (error) {
+    logger.error('Backtest signals job failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+// ============================================
 // Layered Agent Hint/Correction Job Handlers
 // ============================================
 
@@ -821,6 +975,12 @@ async function runJob(job: Job): Promise<void> {
  */
 export function startJobs(): void {
   logger.info('Starting background jobs');
+
+  // Initialize event-driven indicator calculations (on candle close)
+  indicatorCalculatorService.initEventDrivenCalculations();
+
+  // Initialize event-driven scalping detection (on significant price drops)
+  scalpingService.initEventDrivenScalping();
 
   for (const job of jobs) {
     if (!job.enabled) {

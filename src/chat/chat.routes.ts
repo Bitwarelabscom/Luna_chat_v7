@@ -4,6 +4,7 @@ import { authenticate } from '../auth/auth.middleware.js';
 import * as sessionService from './session.service.js';
 import * as chatService from './chat.service.js';
 import * as startupService from './startup.service.js';
+import * as sessionActivityService from './session-activity.service.js';
 import * as ttsService from '../llm/tts.service.js';
 import { incrementRateLimit, incrementRateLimitCustom } from '../db/redis.js';
 import { config } from '../config/index.js';
@@ -146,6 +147,35 @@ router.delete('/sessions/:id', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Delete session failed', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to delete session' });
+  }
+});
+
+// POST /api/chat/sessions/:id/end - End session and trigger memory consolidation
+// Called when browser closes (beforeunload) or user explicitly ends session
+router.post('/sessions/:id/end', async (req: Request, res: Response) => {
+  try {
+    const sessionId = req.params.id;
+    const userId = req.user!.userId;
+
+    // Verify session belongs to user
+    const session = await sessionService.getSession(sessionId, userId);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    // End session explicitly (triggers MemoryCore consolidation)
+    const success = await sessionActivityService.endSessionExplicitly(sessionId, userId);
+
+    if (success) {
+      logger.info('Session ended via API', { sessionId, userId });
+      res.json({ success: true, message: 'Session consolidated successfully' });
+    } else {
+      res.status(500).json({ error: 'Failed to consolidate session' });
+    }
+  } catch (error) {
+    logger.error('End session failed', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to end session' });
   }
 });
 

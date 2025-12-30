@@ -92,6 +92,7 @@ import * as sessionService from './session.service.js';
 import * as contextCompression from './context-compression.service.js';
 import * as backgroundSummarization from './background-summarization.service.js';
 import * as sessionLogService from './session-log.service.js';
+import * as sessionActivityService from './session-activity.service.js';
 import * as authService from '../auth/auth.service.js';
 import logger from '../utils/logger.js';
 import { sysmonTools, executeSysmonTool } from '../abilities/sysmon.service.js';
@@ -124,6 +125,9 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
 
   // Record user message to MemoryCore (async, non-blocking)
   memorycoreClient.recordChatInteraction(sessionId, 'message', message, { mode, source }).catch(() => {});
+
+  // Track session activity for automatic consolidation after inactivity
+  sessionActivityService.recordActivity(sessionId, userId).catch(() => {});
 
   // Router-First Architecture: Route decision before any processing
   let routerDecision: RouterDecision | null = null;
@@ -1971,6 +1975,9 @@ export async function* streamMessage(
 
   // Record user message to MemoryCore (async, non-blocking)
   memorycoreClient.recordChatInteraction(sessionId, 'message', message, { mode, source }).catch(() => {});
+
+  // Track session activity for automatic consolidation after inactivity
+  sessionActivityService.recordActivity(sessionId, userId).catch(() => {});
 
   // Router-First Architecture: Route decision before any processing
   let routerDecision: RouterDecision | null = null;
