@@ -3,6 +3,7 @@ import type { Session, SessionCreate, Message, MessageCreate } from '../types/in
 import { createCompletion } from '../llm/router.js';
 import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
+import * as memorycoreClient from '../memory/memorycore.client.js';
 
 interface DbSession {
   id: string;
@@ -76,7 +77,7 @@ export async function createSession(data: SessionCreate): Promise<Session> {
     `INSERT INTO sessions (user_id, title, mode)
      VALUES ($1, $2, $3)
      RETURNING *`,
-    [data.userId, data.title || 'New Chat', data.mode || 'assistant']
+    [data.userId, data.title || 'New Chat', data.mode || 'companion']
   );
 
   if (!session) {
@@ -151,6 +152,12 @@ export async function updateSession(
 }
 
 export async function deleteSession(sessionId: string, userId: string): Promise<boolean> {
+  // End MemoryCore session to trigger consolidation before deletion
+  // This ensures interactions are preserved in episodic/semantic memory
+  await memorycoreClient.endChatSession(sessionId).catch((err) => {
+    logger.warn('Failed to end MemoryCore session on delete', { sessionId, error: (err as Error).message });
+  });
+
   const result = await query(
     'DELETE FROM sessions WHERE id = $1 AND user_id = $2 RETURNING id',
     [sessionId, userId]
@@ -181,8 +188,8 @@ export async function getSessionMessages(
 
 export async function addMessage(data: MessageCreate): Promise<Message> {
   const message = await queryOne<DbMessage>(
-    `INSERT INTO messages (session_id, role, content, tokens_used, input_tokens, output_tokens, cache_tokens, model, provider, search_results, memory_context, source)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+    `INSERT INTO messages (session_id, role, content, tokens_used, input_tokens, output_tokens, cache_tokens, model, provider, search_results, memory_context, source, route_decision)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
      RETURNING *`,
     [
       data.sessionId,
@@ -197,6 +204,7 @@ export async function addMessage(data: MessageCreate): Promise<Message> {
       data.searchResults ? JSON.stringify(data.searchResults) : null,
       data.memoryContext ? JSON.stringify(data.memoryContext) : null,
       data.source || 'web',
+      data.routeDecision ? JSON.stringify(data.routeDecision) : null,
     ]
   );
 

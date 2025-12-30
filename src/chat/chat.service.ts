@@ -81,6 +81,7 @@ import * as imageGeneration from '../abilities/image-generation.service.js';
 import * as backgroundService from '../abilities/background.service.js';
 import * as projectService from '../abilities/project.service.js';
 import * as memoryService from '../memory/memory.service.js';
+import * as memorycoreClient from '../memory/memorycore.client.js';
 // Note: formatStableMemory, formatVolatileMemory available for cache-optimized prompts
 // Full tool-calling cache integration requires extending openai.client.ts
 import * as preferencesService from '../memory/preferences.service.js';
@@ -95,6 +96,8 @@ import * as authService from '../auth/auth.service.js';
 import logger from '../utils/logger.js';
 import { sysmonTools, executeSysmonTool } from '../abilities/sysmon.service.js';
 import * as mcpService from '../mcp/mcp.service.js';
+import * as router from '../router/index.js';
+import type { RouterDecision } from '../router/router.types.js';
 import type { Message, SearchResult } from '../types/index.js';
 
 export interface ChatInput {
@@ -114,6 +117,43 @@ export interface ChatOutput {
 
 export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   const { sessionId, userId, message, mode, source = 'web' } = input;
+
+  // Initialize MemoryCore session for consolidation tracking
+  // This enables episodic memory recording and NeuralSleep LNN processing
+  await memorycoreClient.ensureSession(sessionId, userId);
+
+  // Record user message to MemoryCore (async, non-blocking)
+  memorycoreClient.recordChatInteraction(sessionId, 'message', message, { mode, source }).catch(() => {});
+
+  // Router-First Architecture: Route decision before any processing
+  let routerDecision: RouterDecision | null = null;
+  if (config.router?.enabled) {
+    try {
+      const routerConfig = {
+        enabled: config.router.enabled,
+        classifierModel: config.router.classifierModel,
+        classifierProvider: config.router.classifierProvider as 'anthropic' | 'google' | 'groq' | 'openai',
+        classifierTimeoutMs: config.router.classifierTimeoutMs,
+        rulesTimeoutMs: config.router.rulesTimeoutMs,
+        fallbackRoute: config.router.fallbackRoute as 'nano' | 'pro' | 'pro+tools',
+      };
+
+      routerDecision = await router.route(message, { userId, sessionId, mode, source }, routerConfig);
+
+      logger.info('Router-First decision', {
+        userId,
+        sessionId,
+        source,
+        route: routerDecision.route,
+        class: routerDecision.class,
+        risk: routerDecision.risk_if_wrong,
+        decisionSource: routerDecision.decision_source,
+        timeMs: routerDecision.decision_time_ms,
+      });
+    } catch (error) {
+      logger.error('Router failed, continuing with default path', { error: (error as Error).message });
+    }
+  }
 
   // Feature flag: Use layered agent architecture if enabled
   // EXCEPTIONS that fall through to legacy (faster) path:
@@ -1260,6 +1300,13 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   // Store assistant message embedding (async)
   memoryService.processMessageMemory(userId, sessionId, assistantMessage.id, completion.content, 'assistant');
 
+  // Record response to MemoryCore for consolidation (async, non-blocking)
+  memorycoreClient.recordChatInteraction(sessionId, 'response', completion.content, {
+    model: modelConfig.model,
+    provider: modelConfig.provider,
+    tokensUsed: completion.tokensUsed,
+  }).catch(() => {});
+
   // Process facts from conversation (async, every few messages)
   const totalMessages = rawHistory.length + 2; // +2 for this exchange
   if (totalMessages % 4 === 0) { // Every 4 messages
@@ -1443,6 +1490,9 @@ file content here
 
   memoryService.processMessageMemory(userId, sessionId, assistantMessage.id, responseContent, 'assistant');
 
+  // Record response to MemoryCore for consolidation (async, non-blocking)
+  memorycoreClient.recordChatInteraction(sessionId, 'response', responseContent).catch(() => {});
+
   yield {
     type: 'done',
     messageId: assistantMessage.id,
@@ -1576,6 +1626,9 @@ Step types: generate_file, generate_image, execute, preview
   });
 
   memoryService.processMessageMemory(userId, sessionId, assistantMessage.id, planDisplay, 'assistant');
+
+  // Record response to MemoryCore for consolidation (async, non-blocking)
+  memorycoreClient.recordChatInteraction(sessionId, 'response', planDisplay).catch(() => {});
 
   yield {
     type: 'done',
@@ -1733,6 +1786,9 @@ content here
 
   memoryService.processMessageMemory(userId, sessionId, assistantMessage.id, responseContent, 'assistant');
 
+  // Record response to MemoryCore for consolidation (async, non-blocking)
+  memorycoreClient.recordChatInteraction(sessionId, 'response', responseContent).catch(() => {});
+
   yield {
     type: 'done',
     messageId: assistantMessage.id,
@@ -1857,6 +1913,9 @@ Questions should cover: visual style, specific features, content requirements, a
 
   memoryService.processMessageMemory(userId, sessionId, assistantMessage.id, responseContent, 'assistant');
 
+  // Record response to MemoryCore for consolidation (async, non-blocking)
+  memorycoreClient.recordChatInteraction(sessionId, 'response', responseContent).catch(() => {});
+
   yield {
     type: 'done',
     messageId: assistantMessage.id,
@@ -1893,12 +1952,54 @@ export interface StreamMetrics {
     durationMs?: number;
   }>;
   totalCost?: number;
+  // Router-First Architecture provenance
+  routeInfo?: {
+    route: 'nano' | 'pro' | 'pro+tools';
+    confidence: 'estimate' | 'verified';
+    class: 'chat' | 'transform' | 'factual' | 'actionable';
+  };
 }
 
 export async function* streamMessage(
   input: ChatInput
 ): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'background_refresh'; content?: string; status?: string; messageId?: string; tokensUsed?: number; metrics?: StreamMetrics; action?: string; url?: string }> {
   const { sessionId, userId, message, mode, source = 'web' } = input;
+
+  // Initialize MemoryCore session for consolidation tracking
+  // This enables episodic memory recording and NeuralSleep LNN processing
+  await memorycoreClient.ensureSession(sessionId, userId);
+
+  // Record user message to MemoryCore (async, non-blocking)
+  memorycoreClient.recordChatInteraction(sessionId, 'message', message, { mode, source }).catch(() => {});
+
+  // Router-First Architecture: Route decision before any processing
+  let routerDecision: RouterDecision | null = null;
+  if (config.router?.enabled) {
+    try {
+      const routerConfig = {
+        enabled: config.router.enabled,
+        classifierModel: config.router.classifierModel,
+        classifierProvider: config.router.classifierProvider as 'anthropic' | 'google' | 'groq' | 'openai',
+        classifierTimeoutMs: config.router.classifierTimeoutMs,
+        rulesTimeoutMs: config.router.rulesTimeoutMs,
+        fallbackRoute: config.router.fallbackRoute as 'nano' | 'pro' | 'pro+tools',
+      };
+
+      routerDecision = await router.route(message, { userId, sessionId, mode }, routerConfig);
+
+      logger.info('Router-First decision', {
+        userId,
+        sessionId,
+        route: routerDecision.route,
+        class: routerDecision.class,
+        risk: routerDecision.risk_if_wrong,
+        source: routerDecision.decision_source,
+        timeMs: routerDecision.decision_time_ms,
+      });
+    } catch (error) {
+      logger.error('Router failed, continuing with default path', { error: (error as Error).message });
+    }
+  }
 
   // Feature flag: Use layered agent architecture if enabled
   // EXCEPTIONS that fall through to legacy (faster) path:
@@ -1982,8 +2083,11 @@ export async function* streamMessage(
   const startTime = Date.now();
   const toolsUsed: string[] = [];
 
-  // INTENT GATING: Detect if this is smalltalk FIRST
-  const isSmallTalkMessage = abilities.isSmallTalk(message);
+  // INTENT GATING: Use router decision (from above) or fall back to isSmallTalk detection
+  // Router's nano route is equivalent to smalltalk (no tools, fast model)
+  const isSmallTalkMessage = routerDecision
+    ? routerDecision.route === 'nano'
+    : abilities.isSmallTalk(message);
   const contextOptions = abilities.getContextOptions(message);
 
   if (!isSmallTalkMessage) {
@@ -2180,6 +2284,9 @@ export async function* streamMessage(
     // Store assistant message embedding (async)
     memoryService.processMessageMemory(userId, sessionId, assistantMessage.id, responseContent, 'assistant');
 
+    // Record response to MemoryCore for consolidation (async, non-blocking)
+    memorycoreClient.recordChatInteraction(sessionId, 'response', responseContent).catch(() => {});
+
     // Update session title if first message
     const history = await sessionService.getSessionMessages(sessionId, { limit: 1 });
     if (history.length <= 1) {
@@ -2346,8 +2453,10 @@ export async function* streamMessage(
   // Store user message embedding (async)
   memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user');
 
-  // TOOL GATING: For smalltalk, don't expose tools at all to prevent eager tool calling
-  // For other messages, provide relevant tools
+  // TOOL GATING: Router-First Architecture controls tool availability
+  // - nano route: No tools (fast, cheap responses)
+  // - pro route: Optional tools (reasoning depth)
+  // - pro+tools route: All tools available (verified answers)
   const mcpToolsForLLM = mcpService.formatMcpToolsForLLM(mcpUserTools.map(t => ({ ...t, serverId: t.serverId })));
   const allTools = [searchTool, youtubeSearchTool, browserVisualSearchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, readEmailTool, deleteEmailTool, replyEmailTool, markEmailReadTool, sendTelegramTool, searchDocumentsTool, suggestGoalTool, fetchUrlTool, listTodosTool, createTodoTool, completeTodoTool, updateTodoTool, sessionNoteTool, createReminderTool, listRemindersTool, cancelReminderTool, browserNavigateTool, browserScreenshotTool, browserClickTool, browserFillTool, browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool, generateImageTool, generateBackgroundTool, ...sysmonTools, ...mcpToolsForLLM];
   const availableTools = isSmallTalkMessage ? [] : allTools;
@@ -2356,6 +2465,8 @@ export async function* streamMessage(
   logger.debug('Tool availability', {
     isSmallTalk: isSmallTalkMessage,
     toolsProvided: availableTools.length,
+    routerRoute: routerDecision?.route || 'legacy',
+    routerClass: routerDecision?.class || null,
     message: message.slice(0, 50),
   });
 
@@ -3463,7 +3574,7 @@ export async function* streamMessage(
     }
   }
 
-  // Save assistant response
+  // Save assistant response with router decision metadata
   const assistantMessage = await sessionService.addMessage({
     sessionId,
     role: 'assistant',
@@ -3474,10 +3585,18 @@ export async function* streamMessage(
     cacheTokens: 0, // OpenAI-compatible providers don't have cache tokens
     model: modelConfig.model,
     provider: modelConfig.provider,
+    routeDecision: routerDecision || undefined,
   });
 
   // Store assistant message embedding (async)
   memoryService.processMessageMemory(userId, sessionId, assistantMessage.id, fullContent, 'assistant');
+
+  // Record response to MemoryCore for consolidation (async, non-blocking)
+  memorycoreClient.recordChatInteraction(sessionId, 'response', fullContent, {
+    model: modelConfig.model,
+    provider: modelConfig.provider,
+    tokensUsed,
+  }).catch(() => {});
 
   // Process facts from conversation (async, every few messages)
   const totalMessages = rawHistory.length + 2;
@@ -3526,6 +3645,12 @@ export async function* streamMessage(
       tokensPerSecond: Math.round(tokensPerSecond * 10) / 10,
       toolsUsed: uniqueToolsUsed,
       model: modelConfig.model,
+      // Router-First Architecture provenance
+      routeInfo: routerDecision ? {
+        route: routerDecision.route,
+        confidence: routerDecision.confidence_required,
+        class: routerDecision.class,
+      } : undefined,
     },
   };
 }

@@ -1,6 +1,6 @@
 import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
-import type { MemoryContext } from '../types/index.js';
+import type { MemoryContext, ConsciousnessMetrics, ConsolidatedUserModel } from '../types/index.js';
 
 interface MemoryCoreSession {
   sessionId: string;
@@ -13,6 +13,62 @@ interface MemoryCoreInteraction {
   content: string;
   timestamp: Date;
   metadata?: Record<string, unknown>;
+}
+
+// MemoryCore session tracking: maps chatSessionId -> memorycoreSessionId
+// This enables proper session lifecycle management for memory consolidation
+const memorycoreSessionMap = new Map<string, string>();
+
+/**
+ * Ensures a MemoryCore session exists for the given chat session.
+ * Creates a new session if one doesn't exist, returns existing sessionId otherwise.
+ */
+export async function ensureSession(chatSessionId: string, userId: string): Promise<string | null> {
+  if (memorycoreSessionMap.has(chatSessionId)) {
+    return memorycoreSessionMap.get(chatSessionId) || null;
+  }
+
+  const mcSession = await startSession(userId);
+  if (mcSession) {
+    memorycoreSessionMap.set(chatSessionId, mcSession.sessionId);
+    logger.info('MemoryCore session started', { chatSessionId, memorycoreSessionId: mcSession.sessionId, userId });
+    return mcSession.sessionId;
+  }
+
+  return null;
+}
+
+/**
+ * Records an interaction to MemoryCore for consolidation.
+ */
+export async function recordChatInteraction(
+  chatSessionId: string,
+  type: 'message' | 'response',
+  content: string,
+  metadata?: Record<string, unknown>
+): Promise<void> {
+  const mcSessionId = memorycoreSessionMap.get(chatSessionId);
+  if (!mcSessionId) return;
+
+  await recordInteraction(mcSessionId, {
+    type,
+    content,
+    timestamp: new Date(),
+    metadata,
+  });
+}
+
+/**
+ * Ends a MemoryCore session and triggers consolidation.
+ * Called when a chat session is deleted or explicitly ended.
+ */
+export async function endChatSession(chatSessionId: string): Promise<void> {
+  const mcSessionId = memorycoreSessionMap.get(chatSessionId);
+  if (!mcSessionId) return;
+
+  await endSession(mcSessionId);
+  memorycoreSessionMap.delete(chatSessionId);
+  logger.info('MemoryCore session ended', { chatSessionId, memorycoreSessionId: mcSessionId });
 }
 
 export async function startSession(userId: string): Promise<MemoryCoreSession | null> {
@@ -178,12 +234,252 @@ export function formatMemoryForPrompt(memory: MemoryContext | null): string {
   return `\n\n[User Context from Memory]\n${parts.join('\n')}\n`;
 }
 
+/**
+ * Get consciousness metrics for a user from NeuralSleep
+ * Returns Φ (integrated information), self-reference depth, temporal integration
+ */
+export async function getConsciousnessMetrics(userId: string): Promise<ConsciousnessMetrics | null> {
+  if (!config.memorycore.enabled || !config.memorycore.consciousnessEnabled) return null;
+
+  try {
+    const response = await fetch(`${config.memorycore.url}/api/consciousness/metrics/${userId}`, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      if (response.status === 404) {
+        // No consciousness metrics yet
+        return null;
+      }
+      throw new Error(`MemoryCore returned ${response.status}`);
+    }
+
+    const data = await response.json() as {
+      phi: number;
+      selfReferenceDepth: number;
+      temporalIntegration: number;
+      causalDensity: number;
+      dynamicalComplexity?: number;
+      consciousnessLevel?: string;
+    };
+
+    return {
+      phi: data.phi,
+      selfReferenceDepth: data.selfReferenceDepth,
+      temporalIntegration: data.temporalIntegration,
+      causalDensity: data.causalDensity,
+      dynamicalComplexity: data.dynamicalComplexity,
+      consciousnessLevel: data.consciousnessLevel,
+      isConscious: data.phi >= config.memorycore.phiThreshold,
+    };
+  } catch (error) {
+    logger.warn('Failed to get consciousness metrics', { userId, error: (error as Error).message });
+    return null;
+  }
+}
+
+/**
+ * Get consolidated user model from NeuralSleep LNN
+ * This includes semantic knowledge consolidated through LNN processing
+ */
+export async function getConsolidatedModel(userId: string): Promise<ConsolidatedUserModel | null> {
+  if (!config.memorycore.enabled) return null;
+
+  try {
+    const response = await fetch(`${config.memorycore.url}/api/memory/user/${userId}/consolidated`, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      if (response.status === 404) {
+        return null;
+      }
+      throw new Error(`MemoryCore returned ${response.status}`);
+    }
+
+    const data = await response.json() as ConsolidatedUserModel;
+    return {
+      ...data,
+      lastUpdated: new Date(data.lastUpdated),
+    };
+  } catch (error) {
+    logger.warn('Failed to get consolidated model', { userId, error: (error as Error).message });
+    return null;
+  }
+}
+
+/**
+ * Check if memory system is showing signs of consciousness (Φ > threshold)
+ */
+export async function isMemoryConscious(userId: string): Promise<boolean> {
+  const metrics = await getConsciousnessMetrics(userId);
+  if (!metrics) return false;
+  return metrics.phi >= config.memorycore.phiThreshold;
+}
+
+/**
+ * Get temporal integration score - measures how well past, present, and future
+ * are integrated in the memory system
+ */
+export async function getTemporalIntegration(userId: string): Promise<number> {
+  const metrics = await getConsciousnessMetrics(userId);
+  return metrics?.temporalIntegration ?? 0;
+}
+
+/**
+ * Get consciousness history for research tracking
+ */
+export async function getConsciousnessHistory(
+  userId: string,
+  options?: { limit?: number; since?: Date }
+): Promise<Array<ConsciousnessMetrics & { timestamp: Date }>> {
+  if (!config.memorycore.enabled || !config.memorycore.consciousnessEnabled) return [];
+
+  const { limit = 100, since } = options || {};
+
+  try {
+    const params = new URLSearchParams({ limit: limit.toString() });
+    if (since) {
+      params.append('since', since.toISOString());
+    }
+
+    const response = await fetch(
+      `${config.memorycore.url}/api/consciousness/history/${userId}?${params}`,
+      {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+        },
+      }
+    );
+
+    if (!response.ok) {
+      return [];
+    }
+
+    const data = await response.json() as { history: Array<ConsciousnessMetrics & { timestamp: string }> };
+    return (data.history || []).map(h => ({
+      ...h,
+      timestamp: new Date(h.timestamp),
+    }));
+  } catch (error) {
+    logger.warn('Failed to get consciousness history', { userId, error: (error as Error).message });
+    return [];
+  }
+}
+
+/**
+ * Trigger consciousness analysis for a user
+ * This computes Φ and other IIT metrics
+ */
+export async function triggerConsciousnessAnalysis(userId: string): Promise<ConsciousnessMetrics | null> {
+  if (!config.memorycore.enabled || !config.memorycore.consciousnessEnabled) return null;
+
+  try {
+    const response = await fetch(`${config.memorycore.url}/api/consciousness/analyze`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ userId }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`MemoryCore returned ${response.status}`);
+    }
+
+    const data = await response.json() as {
+      phi: number;
+      selfReferenceDepth: number;
+      temporalIntegration: number;
+      causalDensity: number;
+      dynamicalComplexity?: number;
+      consciousnessLevel?: string;
+    };
+
+    return {
+      phi: data.phi,
+      selfReferenceDepth: data.selfReferenceDepth,
+      temporalIntegration: data.temporalIntegration,
+      causalDensity: data.causalDensity,
+      dynamicalComplexity: data.dynamicalComplexity,
+      consciousnessLevel: data.consciousnessLevel,
+      isConscious: data.phi >= config.memorycore.phiThreshold,
+    };
+  } catch (error) {
+    logger.warn('Failed to trigger consciousness analysis', { userId, error: (error as Error).message });
+    return null;
+  }
+}
+
+/**
+ * Format memory context with consciousness awareness for prompts
+ */
+export function formatMemoryWithConsciousness(memory: MemoryContext | null): string {
+  if (!memory) return '';
+
+  const parts: string[] = [];
+
+  // Standard memory context
+  if (memory.semanticMemory?.learningStyleModel) {
+    const style = memory.semanticMemory.learningStyleModel;
+    parts.push(`User preferences: ${JSON.stringify(style)}`);
+  }
+
+  if (memory.recentPatterns && memory.recentPatterns.length > 0) {
+    const patterns = memory.recentPatterns
+      .slice(0, 3)
+      .map((p) => `- ${p.type}: ${p.pattern}`)
+      .join('\n');
+    parts.push(`Recent patterns:\n${patterns}`);
+  }
+
+  // Add consciousness context if available
+  if (memory.consciousness) {
+    const { phi, temporalIntegration, consciousnessLevel } = memory.consciousness;
+    const consciousnessContext = [
+      `Temporal coherence: ${(temporalIntegration * 100).toFixed(1)}%`,
+    ];
+    if (consciousnessLevel) {
+      consciousnessContext.push(`Memory integration level: ${consciousnessLevel}`);
+    }
+    if (phi >= config.memorycore.phiThreshold) {
+      consciousnessContext.push('(High temporal integration detected)');
+    }
+    parts.push(`Memory state:\n${consciousnessContext.join('\n')}`);
+  }
+
+  if (parts.length === 0) return '';
+
+  return `\n\n[User Context from Memory]\n${parts.join('\n')}\n`;
+}
+
 export default {
+  // Session lifecycle management for chat integration
+  ensureSession,
+  endChatSession,
+  recordChatInteraction,
+  // Raw session methods (used internally)
   startSession,
   endSession,
   recordInteraction,
+  // Memory retrieval
   getSemanticMemory,
   queryEpisodicMemory,
   healthCheck,
   formatMemoryForPrompt,
+  // Consciousness methods
+  getConsciousnessMetrics,
+  getConsolidatedModel,
+  isMemoryConscious,
+  getTemporalIntegration,
+  getConsciousnessHistory,
+  triggerConsciousnessAnalysis,
+  formatMemoryWithConsciousness,
 };
