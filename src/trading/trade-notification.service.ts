@@ -307,3 +307,219 @@ export function buildModifySLButtons(tradeId: string): Array<{ text: string; cal
     { text: 'Cancel', callback: `trade:slcancel:${tradeId}` },
   ];
 }
+
+// ============================================
+// Enhanced Notifications
+// ============================================
+
+// Rate limiting for technical signals (max 1 per indicator per symbol per 15 minutes)
+const signalNotifications = new Map<string, number>();
+const SIGNAL_COOLDOWN = 15 * 60 * 1000; // 15 minutes
+
+/**
+ * Notify when a technical indicator generates a signal
+ */
+export async function notifyTechnicalSignal(
+  userId: string,
+  signal: {
+    symbol: string;
+    indicator: string;  // RSI, MACD, MA Cross, etc.
+    signal: 'bullish' | 'bearish';
+    value: number;
+    message: string;
+  }
+): Promise<void> {
+  try {
+    // Rate limit per indicator per symbol
+    const key = `${userId}:${signal.symbol}:${signal.indicator}`;
+    const lastNotified = signalNotifications.get(key);
+    if (lastNotified && Date.now() - lastNotified < SIGNAL_COOLDOWN) {
+      return;
+    }
+    signalNotifications.set(key, Date.now());
+
+    const emoji = signal.signal === 'bullish' ? '📈' : '📉';
+    let message = `${emoji} ${signal.indicator} Signal\n\n`;
+    message += `Symbol: ${signal.symbol}\n`;
+    message += `Signal: ${signal.signal.toUpperCase()}\n`;
+    message += `Value: ${signal.value.toFixed(2)}\n`;
+    message += `\n${signal.message}`;
+
+    await sendTradeNotification(userId, message);
+
+    logger.info('Sent technical signal notification', {
+      userId,
+      symbol: signal.symbol,
+      indicator: signal.indicator,
+      signal: signal.signal,
+    });
+  } catch (error) {
+    logger.error('Failed to send technical signal notification', { userId, signal, error: (error as Error).message });
+  }
+}
+
+/**
+ * Notify when a trading bot's status changes
+ */
+export async function notifyBotStatusChange(
+  userId: string,
+  bot: {
+    id: string;
+    name: string;
+    type: string;
+    symbol: string;
+    status: string;
+    reason?: string;
+  }
+): Promise<void> {
+  try {
+    let emoji = '🤖';
+    if (bot.status === 'running') {
+      emoji = '▶️';
+    } else if (bot.status === 'stopped') {
+      emoji = '⏸️';
+    } else if (bot.status === 'error') {
+      emoji = '⚠️';
+    }
+
+    let message = `${emoji} Bot Status Changed\n\n`;
+    message += `Bot: ${bot.name}\n`;
+    message += `Type: ${bot.type}\n`;
+    message += `Symbol: ${bot.symbol}\n`;
+    message += `Status: ${bot.status.toUpperCase()}`;
+
+    if (bot.reason) {
+      message += `\nReason: ${bot.reason}`;
+    }
+
+    await sendTradeNotification(userId, message);
+
+    logger.info('Sent bot status notification', {
+      userId,
+      botId: bot.id,
+      status: bot.status,
+    });
+  } catch (error) {
+    logger.error('Failed to send bot status notification', { userId, bot, error: (error as Error).message });
+  }
+}
+
+/**
+ * Notify when a price alert is triggered
+ */
+export async function notifyPriceAlert(
+  userId: string,
+  alert: {
+    id?: string;
+    symbol: string;
+    condition: string;  // 'above', 'below', 'crosses_up', 'crosses_down'
+    targetPrice: number;
+    currentPrice: number;
+  }
+): Promise<void> {
+  try {
+    const emoji = '🔔';
+    let conditionText = '';
+    switch (alert.condition) {
+      case 'above':
+        conditionText = 'Price above';
+        break;
+      case 'below':
+        conditionText = 'Price below';
+        break;
+      case 'crosses_up':
+        conditionText = 'Crossed above';
+        break;
+      case 'crosses_down':
+        conditionText = 'Crossed below';
+        break;
+      default:
+        conditionText = alert.condition;
+    }
+
+    let message = `${emoji} Price Alert Triggered\n\n`;
+    message += `Symbol: ${alert.symbol}\n`;
+    message += `Condition: ${conditionText}\n`;
+    message += `Target: $${formatPrice(alert.targetPrice)}\n`;
+    message += `Current: $${formatPrice(alert.currentPrice)}`;
+
+    await sendTradeNotification(userId, message);
+
+    logger.info('Sent price alert notification', {
+      userId,
+      symbol: alert.symbol,
+      condition: alert.condition,
+    });
+  } catch (error) {
+    logger.error('Failed to send price alert notification', { userId, alert, error: (error as Error).message });
+  }
+}
+
+/**
+ * Notify when there's a significant portfolio change
+ */
+export async function notifyPortfolioChange(
+  userId: string,
+  change: {
+    type: 'daily_summary' | 'large_gain' | 'large_loss' | 'position_change';
+    description: string;
+    pnl?: number;
+    pnlPct?: number;
+  }
+): Promise<void> {
+  try {
+    let emoji = '📊';
+    if (change.pnl !== undefined) {
+      emoji = change.pnl >= 0 ? '💰' : '📉';
+    }
+
+    let message = `${emoji} Portfolio Update\n\n`;
+    message += `${change.type.replace(/_/g, ' ').toUpperCase()}\n`;
+    message += `${change.description}`;
+
+    if (change.pnl !== undefined && change.pnlPct !== undefined) {
+      const sign = change.pnl >= 0 ? '+' : '';
+      message += `\n\nP&L: ${sign}$${formatPrice(Math.abs(change.pnl))} (${sign}${change.pnlPct.toFixed(2)}%)`;
+    }
+
+    await sendTradeNotification(userId, message);
+
+    logger.info('Sent portfolio change notification', {
+      userId,
+      type: change.type,
+    });
+  } catch (error) {
+    logger.error('Failed to send portfolio change notification', { userId, change, error: (error as Error).message });
+  }
+}
+
+/**
+ * Notify when a conditional order fails to execute
+ */
+export async function notifyConditionalOrderFailed(
+  userId: string,
+  symbol: string,
+  condition: string,
+  triggerPrice: number,
+  side: string,
+  errorMessage: string
+): Promise<void> {
+  try {
+    let message = `⚠️ Conditional Order Failed\n\n`;
+    message += `${symbol} ${side.toUpperCase()}\n`;
+    message += `Condition: ${condition} $${formatPrice(triggerPrice)}\n`;
+    message += `\nReason: ${errorMessage}\n`;
+    message += `\nThe order has been cancelled to prevent repeated failures.`;
+
+    await sendTradeNotification(userId, message);
+
+    logger.info('Sent conditional order failed notification', {
+      userId,
+      symbol,
+      condition,
+      side,
+    });
+  } catch (error) {
+    logger.error('Failed to send conditional order failed notification', { userId, symbol, error: (error as Error).message });
+  }
+}

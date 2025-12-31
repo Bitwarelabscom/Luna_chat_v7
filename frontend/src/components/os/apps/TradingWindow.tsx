@@ -1,11 +1,11 @@
 'use client';
 
-import TradingDashboard from '@/components/trading/TradingDashboard';
+import TradingTerminal from '@/components/trading/terminal/TradingTerminal';
 
 export function TradingWindow() {
   return (
-    <div className="h-full w-full overflow-hidden" style={{ background: 'var(--theme-bg-primary)' }}>
-      <TradingDashboard />
+    <div className="h-full w-full overflow-hidden trading-terminal-embedded" style={{ background: 'var(--terminal-bg)' }}>
+      <TradingTerminal onClose={() => {}} />
     </div>
   );
 }

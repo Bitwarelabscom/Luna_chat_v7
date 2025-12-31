@@ -45,7 +45,7 @@ export function EditorWindow({
   const provider = useMemo(() => {
     const protocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = typeof window !== 'undefined' ? window.location.host : 'localhost:3005';
-    const wsUrl = `${protocol}//${host}/luna-chat/ws/editor`;
+    const wsUrl = `${protocol}//${host}/ws/editor`;
 
     return new HocuspocusProvider({
       url: wsUrl,

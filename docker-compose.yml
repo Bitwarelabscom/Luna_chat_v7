@@ -35,10 +35,13 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=http://10.0.0.2:3005
     container_name: luna-frontend
     restart: unless-stopped
     ports:
       - "127.0.0.1:3004:3000"
+      - "10.0.0.2:3004:3000"
     environment:
       - NEXT_PUBLIC_API_URL=
     depends_on:
@@ -59,6 +62,35 @@ services:
       timeout: 10s
       retries: 3
 
+  # Luna Mobile - Local network only (10.0.0.x) on port 5555
+  luna-mobile:
+    build:
+      context: ./frontend-mobile
+      dockerfile: Dockerfile
+    container_name: luna-mobile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5556:5555"  # Internal only - nginx handles external access with IP restriction
+    environment:
+      - NEXT_PUBLIC_API_URL=
+    depends_on:
+      - luna-api
+    networks:
+      - luna-network
+    # SECURITY: Container hardening
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:5555/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
   luna-api:
     build:
       context: .
@@ -66,10 +98,13 @@ services:
     container_name: luna-api
     restart: unless-stopped
     ports:
-      - "127.0.0.1:3005:3003"
+      - "10.0.0.2:3005:3003"
     environment:
       - NODE_ENV=production
       - AGENT_ENGINE=${AGENT_ENGINE:-legacy}
+      - ROUTER_ENABLED=${ROUTER_ENABLED:-false}
+      - ROUTER_CLASSIFIER_MODEL=${ROUTER_CLASSIFIER_MODEL:-llama-3.1-8b-instant}
+      - ROUTER_CLASSIFIER_PROVIDER=${ROUTER_CLASSIFIER_PROVIDER:-groq}
       - PORT=3003
       - POSTGRES_HOST=luna-postgres
       - POSTGRES_PORT=5432
@@ -90,7 +125,7 @@ services:
       - SEARXNG_ENABLED=${SEARXNG_ENABLED:-true}
       - RATE_LIMIT_WINDOW_MS=${RATE_LIMIT_WINDOW_MS:-60000}
       - RATE_LIMIT_MAX_REQUESTS=${RATE_LIMIT_MAX_REQUESTS:-40}
-      - CORS_ORIGIN=${CORS_ORIGIN:-https://bitwarelabs.com}
+      - CORS_ORIGIN=${CORS_ORIGIN:-http://10.0.0.2:3005}
       - SANDBOX_CONTAINER=luna-sandbox
       - DOCKER_HOST=${DOCKER_HOST:-tcp://docker-proxy:2375}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
@@ -117,8 +152,11 @@ services:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TRADING_TELEGRAM_BOT_TOKEN=${TRADING_TELEGRAM_BOT_TOKEN}
       # OAuth callback URLs
-      - OAUTH_CALLBACK_BASE_URL=https://luna.bitwarelabs.com
-      - FRONTEND_URL=https://luna.bitwarelabs.com
+      - OAUTH_CALLBACK_BASE_URL=http://10.0.0.2:3005
+      - FRONTEND_URL=http://10.0.0.2:3005
+      # TradeCore integration
+      - TRADECORE_URL=http://tradecore:9090
+      - TRADECORE_ENABLED=${TRADECORE_ENABLED:-false}
     secrets:
       - postgres_password
       - jwt_secret
@@ -155,6 +193,8 @@ services:
       luna-ollama:
         condition: service_healthy
       luna-radicale:
+        condition: service_healthy
+      tradecore:
         condition: service_healthy
     networks:
       - luna-network
@@ -210,6 +250,7 @@ services:
     image: redis:7-alpine
     container_name: luna-redis
     restart: unless-stopped
+    user: "999:999"  # SECURITY: Run as redis user, not root
     command: >
       sh -c 'redis-server --appendonly yes --requirepass "$$(cat /run/secrets/redis_password)"'
     secrets:
@@ -231,6 +272,7 @@ services:
     container_name: luna-sandbox
     restart: unless-stopped
     command: sleep infinity
+    init: true  # Proper init system to reap zombie processes
     networks:
       - luna-network
     mem_limit: 8g
@@ -313,6 +355,49 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+
+  # TradeCore - High-performance trading engine (Go)
+  # Handles bot execution, market streaming, and trade execution
+  tradecore:
+    build:
+      context: ../tradecore
+      dockerfile: Dockerfile
+    container_name: tradecore
+    restart: unless-stopped
+    # SECURITY: Internal only - not exposed to host
+    expose:
+      - "9090"
+    environment:
+      - PORT=9090
+      - MOCK_MODE=${TRADECORE_MOCK_MODE:-true}
+      - LOG_LEVEL=${TRADECORE_LOG_LEVEL:-info}
+      - POSTGRES_HOST=luna-postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-luna}
+      - POSTGRES_DB=${POSTGRES_DB:-luna_chat}
+    secrets:
+      - postgres_password
+      - encryption_key
+    volumes:
+      # Mount encryption key as readable file (Docker secrets don't support mode in non-Swarm)
+      - ./secrets/encryption_key.txt:/run/secrets/encryption_key:ro
+    depends_on:
+      luna-postgres:
+        condition: service_healthy
+    networks:
+      - luna-network
+    # SECURITY: Container hardening
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:9090/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 volumes:
   luna-postgres-data:

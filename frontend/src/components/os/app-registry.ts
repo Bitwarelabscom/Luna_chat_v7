@@ -16,6 +16,7 @@ import {
   Activity,
   FileText,
   FolderCode,
+  Brain,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -34,7 +35,8 @@ export type AppId =
   | 'music'
   | 'trading'
   | 'settings'
-  | 'activity';
+  | 'activity'
+  | 'consciousness';
 
 export interface AppConfig {
   id: AppId;
@@ -169,6 +171,14 @@ export const appConfig: Record<AppId, AppConfig> = {
     defaultSize: { width: 400, height: 500 },
     showInDock: true,
   },
+  consciousness: {
+    id: 'consciousness',
+    title: 'Consciousness',
+    icon: Brain,
+    color: 'from-cyan-400 to-purple-500',
+    defaultSize: { width: 900, height: 700 },
+    showInDock: true,
+  },
 };
 
 // Apps to show in the dock (in order)
@@ -187,6 +197,7 @@ export const dockApps: AppId[] = [
   'music',
   'trading',
   'activity',
+  'consciousness',
 ];
 
 export default appConfig;

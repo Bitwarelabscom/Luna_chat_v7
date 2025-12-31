@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 
 export interface PriceUpdate {
   symbol: string;
@@ -23,21 +23,40 @@ interface UseTradingWebSocketOptions {
   enabled?: boolean;
 }
 
+// Stable empty array reference to prevent unnecessary re-renders
+const EMPTY_SYMBOLS: string[] = [];
+
 export function useTradingWebSocket(options: UseTradingWebSocketOptions = {}) {
-  const { symbols = [], onPriceUpdate, enabled = true } = options;
+  const { symbols: propSymbols, onPriceUpdate, enabled = true } = options;
+  // Deep compare symbols to prevent reconnection when array values are the same
+  const symbolsKey = (propSymbols || EMPTY_SYMBOLS).sort().join(',');
+  const symbols = useMemo(() => propSymbols || EMPTY_SYMBOLS, [symbolsKey]); // eslint-disable-line
   const [prices, setPrices] = useState<Map<string, PriceUpdate>>(new Map());
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  // Store callback in ref to avoid triggering reconnection when callback changes
+  const onPriceUpdateRef = useRef(onPriceUpdate);
+  onPriceUpdateRef.current = onPriceUpdate;
+
+  // Store symbols in ref to use in onopen without causing reconnection
+  const symbolsRef = useRef(symbols);
+  symbolsRef.current = symbols;
 
   const connect = useCallback(() => {
     if (!enabled) return;
 
+    // Don't create new connection if one exists
+    if (wsRef.current?.readyState === WebSocket.OPEN ||
+        wsRef.current?.readyState === WebSocket.CONNECTING) {
+      return;
+    }
+
     // Determine WebSocket URL based on current location
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    // In production (no API URL set), connect through nginx proxy at /luna-chat
+    // In production (no API URL set), connect through nginx proxy
     // In development (API URL set), connect directly to the API server
     const apiUrl = process.env.NEXT_PUBLIC_API_URL;
     let wsUrl: string;
@@ -47,7 +66,7 @@ export function useTradingWebSocket(options: UseTradingWebSocketOptions = {}) {
       wsUrl = `${apiWsUrl}/ws/trading`;
     } else {
       // Production: go through nginx proxy
-      wsUrl = `${protocol}//${window.location.host}/luna-chat/ws/trading`;
+      wsUrl = `${protocol}//${window.location.host}/ws/trading`;
     }
 
     try {
@@ -58,11 +77,12 @@ export function useTradingWebSocket(options: UseTradingWebSocketOptions = {}) {
         setConnected(true);
         setError(null);
 
-        // Subscribe to specific symbols if provided
-        if (symbols.length > 0) {
+        // Subscribe to specific symbols if provided (use ref for latest value)
+        const currentSymbols = symbolsRef.current;
+        if (currentSymbols.length > 0) {
           ws.send(JSON.stringify({
             type: 'subscribe',
-            symbols,
+            symbols: currentSymbols,
           }));
         }
 
@@ -88,8 +108,8 @@ export function useTradingWebSocket(options: UseTradingWebSocketOptions = {}) {
                 return newPrices;
               });
 
-              if (onPriceUpdate) {
-                onPriceUpdate(message.data);
+              if (onPriceUpdateRef.current) {
+                onPriceUpdateRef.current(message.data);
               }
             }
           }
@@ -123,7 +143,7 @@ export function useTradingWebSocket(options: UseTradingWebSocketOptions = {}) {
     } catch (err) {
       setError((err as Error).message);
     }
-  }, [enabled, symbols, onPriceUpdate]);
+  }, [enabled]); // Only depend on enabled, not symbols
 
   // Connect on mount
   useEffect(() => {

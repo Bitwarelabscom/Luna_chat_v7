@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { authenticate } from '../auth/auth.middleware.js';
 import * as tradingService from './trading.service.js';
 import * as botExecutorService from './bot-executor.service.js';
+import * as paperPortfolioService from './paper-portfolio.service.js';
+import * as autoTradingService from './auto-trading.service.js';
 import { getAllBotTemplates, getBotTemplate, getRecommendedSettings, type BotType } from './bot-templates.js';
 import logger from '../utils/logger.js';
 
@@ -20,35 +22,56 @@ router.use(authenticate as RequestHandler);
 // CONNECTION & SETTINGS
 // ============================================
 
-// Connect Binance account
+// Connect Crypto.com exchange account
 const connectSchema = z.object({
   apiKey: z.string().min(1, 'API key is required'),
   apiSecret: z.string().min(1, 'API secret is required'),
+  exchange: z.literal('crypto_com').default('crypto_com'),
+  marginEnabled: z.boolean().default(false),
+  leverage: z.number().min(1).max(10).default(1),
 });
 
 router.post('/connect', async (req: Request, res: Response) => {
   try {
     const body = connectSchema.parse(req.body);
-    const result = await tradingService.connectBinance(getUserId(req), body.apiKey, body.apiSecret);
+    const result = await tradingService.connectExchange(
+      getUserId(req),
+      body.apiKey,
+      body.apiSecret,
+      body.exchange,
+      body.marginEnabled,
+      body.leverage
+    );
     res.json(result);
   } catch (error) {
     if (error instanceof z.ZodError) {
       res.status(400).json({ error: error.errors[0].message });
       return;
     }
-    logger.error('Failed to connect Binance', { error: (error as Error).message });
-    res.status(500).json({ error: 'Failed to connect Binance account' });
+    logger.error('Failed to connect exchange', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to connect exchange account' });
   }
 });
 
-// Disconnect Binance account
+// Disconnect exchange account
 router.post('/disconnect', async (req: Request, res: Response) => {
   try {
-    await tradingService.disconnectBinance(getUserId(req));
+    await tradingService.disconnectExchange(getUserId(req));
     res.json({ success: true });
   } catch (error) {
-    logger.error('Failed to disconnect Binance', { error: (error as Error).message });
-    res.status(500).json({ error: 'Failed to disconnect Binance account' });
+    logger.error('Failed to disconnect exchange', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to disconnect exchange account' });
+  }
+});
+
+// Get current exchange type
+router.get('/exchange', async (req: Request, res: Response) => {
+  try {
+    const exchange = await tradingService.getUserExchangeType(getUserId(req));
+    res.json({ exchange });
+  } catch (error) {
+    logger.error('Failed to get exchange type', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get exchange type' });
   }
 });
 
@@ -71,6 +94,11 @@ const updateSettingsSchema = z.object({
   defaultStopLossPct: z.number().min(0.1).max(50).optional(),
   allowedSymbols: z.array(z.string()).optional(),
   riskTolerance: z.enum(['conservative', 'moderate', 'aggressive']).optional(),
+  // Paper trading mode
+  paperMode: z.boolean().optional(),
+  paperBalanceUsdc: z.number().min(100).max(1000000).optional(),
+  // Stop confirmation threshold for ACTIVE tab
+  stopConfirmationThresholdUsd: z.number().min(0).optional(),
 });
 
 router.put('/settings', async (req: Request, res: Response) => {
@@ -135,6 +163,49 @@ router.get('/klines/:symbol', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to get klines', { symbol, error: (error as Error).message });
     res.status(500).json({ error: 'Failed to get klines' });
+  }
+});
+
+// ============================================
+// PAPER TRADING
+// ============================================
+
+// Get paper portfolio
+router.get('/paper-portfolio', async (req: Request, res: Response) => {
+  try {
+    const portfolio = await paperPortfolioService.getPaperPortfolio(getUserId(req));
+    res.json(portfolio);
+  } catch (error) {
+    logger.error('Failed to get paper portfolio', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get paper portfolio' });
+  }
+});
+
+// Reset paper portfolio
+router.post('/paper-portfolio/reset', async (req: Request, res: Response) => {
+  try {
+    await paperPortfolioService.resetPaperPortfolio(getUserId(req));
+    const portfolio = await paperPortfolioService.getPaperPortfolio(getUserId(req));
+    res.json({ success: true, portfolio });
+  } catch (error) {
+    logger.error('Failed to reset paper portfolio', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to reset paper portfolio' });
+  }
+});
+
+// Get paper trade history
+router.get('/paper-trades', async (req: Request, res: Response) => {
+  try {
+    const { limit, source } = req.query;
+    const trades = await paperPortfolioService.getPaperTrades(
+      getUserId(req),
+      limit ? parseInt(limit as string, 10) : 50,
+      source as string | undefined
+    );
+    res.json(trades);
+  } catch (error) {
+    logger.error('Failed to get paper trades', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get paper trades' });
   }
 });
 
@@ -216,6 +287,99 @@ router.get('/stats', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to get trading stats', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to get trading stats' });
+  }
+});
+
+// ============================================
+// ACTIVE TRADES (ACTIVE Tab)
+// ============================================
+
+// Get active trades - open positions with SL/TP and pending orders
+router.get('/active', async (req: Request, res: Response) => {
+  try {
+    const activeTrades = await tradingService.getActiveTrades(getUserId(req));
+    res.json(activeTrades);
+  } catch (error) {
+    logger.error('Failed to get active trades', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get active trades' });
+  }
+});
+
+// Update trade SL/TP/trailing stop
+const updateSLTPSchema = z.object({
+  stopLossPrice: z.number().positive().nullable().optional(),
+  takeProfitPrice: z.number().positive().nullable().optional(),
+  trailingStopPct: z.number().min(0.1).max(50).nullable().optional(),
+});
+
+router.patch('/trades/:tradeId/exits', async (req: Request, res: Response) => {
+  try {
+    const body = updateSLTPSchema.parse(req.body);
+    const trade = await tradingService.updateTradeSLTP(getUserId(req), req.params.tradeId, body);
+    res.json(trade);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: error.errors[0].message });
+      return;
+    }
+    const errorMessage = error instanceof Error ? error.message : 'Failed to update trade';
+    logger.error('Failed to update trade SL/TP', { error: errorMessage });
+    res.status(400).json({ error: errorMessage });
+  }
+});
+
+// Partial close a position
+const partialCloseSchema = z.object({
+  quantity: z.number().positive('Quantity must be positive'),
+});
+
+router.post('/trades/:tradeId/partial-close', async (req: Request, res: Response) => {
+  try {
+    const body = partialCloseSchema.parse(req.body);
+    const trade = await tradingService.partialClosePosition(getUserId(req), req.params.tradeId, body.quantity);
+    res.json(trade);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: error.errors[0].message });
+      return;
+    }
+    const errorMessage = error instanceof Error ? error.message : 'Failed to partial close';
+    logger.error('Failed to partial close position', { error: errorMessage });
+    res.status(400).json({ error: errorMessage });
+  }
+});
+
+// Stop a trade - close position at market or cancel pending order
+const stopTradeSchema = z.object({
+  skipConfirmation: z.boolean().optional().default(false),
+});
+
+router.post('/trades/:tradeId/stop', async (req: Request, res: Response) => {
+  try {
+    const body = stopTradeSchema.parse(req.body);
+    const result = await tradingService.stopTrade(getUserId(req), req.params.tradeId, body.skipConfirmation);
+    if (result.requiresConfirmation) {
+      res.status(200).json({
+        success: false,
+        requiresConfirmation: true,
+        tradeValue: result.tradeValue,
+        message: 'Trade value exceeds confirmation threshold',
+      });
+      return;
+    }
+    if (!result.success) {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+    res.json({ success: true, tradeValue: result.tradeValue });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: error.errors[0].message });
+      return;
+    }
+    const errorMessage = error instanceof Error ? error.message : 'Failed to stop trade';
+    logger.error('Failed to stop trade', { error: errorMessage });
+    res.status(400).json({ error: errorMessage });
   }
 });
 
@@ -754,6 +918,91 @@ router.post('/research/indicators/preset', async (req: Request, res: Response) =
 });
 
 // ============================================
+// ADVANCED SIGNAL SETTINGS (V2 Features)
+// ============================================
+
+// Get advanced signal settings
+router.get('/settings/advanced', async (req: Request, res: Response) => {
+  try {
+    const settings = await indicatorsService.getAdvancedSignalSettings(getUserId(req));
+    res.json(settings);
+  } catch (error) {
+    logger.error('Failed to get advanced signal settings', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get advanced signal settings' });
+  }
+});
+
+// Update advanced signal settings
+const advancedSettingsSchema = z.object({
+  enableMtfConfluence: z.boolean().optional(),
+  mtfHigherTimeframe: z.string().optional(),
+  enableVwapEntry: z.boolean().optional(),
+  vwapAnchorType: z.string().optional(),
+  enableAtrStops: z.boolean().optional(),
+  atrPeriod: z.number().min(5).max(50).optional(),
+  atrSlMultiplier: z.number().min(0.5).max(10).optional(),
+  atrTpMultiplier: z.number().min(0.5).max(20).optional(),
+  enableBtcFilter: z.boolean().optional(),
+  btcDumpThreshold: z.number().min(0.5).max(10).optional(),
+  btcLookbackMinutes: z.number().min(5).max(120).optional(),
+  enableLiquiditySweep: z.boolean().optional(),
+  sweepWickRatio: z.number().min(1).max(5).optional(),
+  sweepVolumeMultiplier: z.number().min(1).max(10).optional(),
+});
+
+router.put('/settings/advanced', async (req: Request, res: Response) => {
+  try {
+    const body = advancedSettingsSchema.parse(req.body);
+    const settings = await indicatorsService.updateAdvancedSignalSettings(getUserId(req), body);
+    res.json(settings);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: error.errors[0].message });
+      return;
+    }
+    logger.error('Failed to update advanced signal settings', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to update advanced signal settings' });
+  }
+});
+
+// Apply feature preset (basic, intermediate, pro)
+const featurePresetSchema = z.object({
+  preset: z.enum(['basic', 'intermediate', 'pro']),
+});
+
+router.put('/settings/preset', async (req: Request, res: Response) => {
+  try {
+    const body = featurePresetSchema.parse(req.body);
+    const settings = await indicatorsService.applyFeaturePreset(getUserId(req), body.preset);
+    res.json(settings);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: error.errors[0].message });
+      return;
+    }
+    logger.error('Failed to apply feature preset', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to apply feature preset' });
+  }
+});
+
+// Get available feature presets
+router.get('/settings/presets', async (_req: Request, res: Response) => {
+  try {
+    res.json({
+      presets: indicatorsService.FEATURE_PRESETS,
+      descriptions: {
+        basic: 'Original signal logic - RSI, MACD, EMA without advanced filters',
+        intermediate: 'MTF Confluence + VWAP Entry + ATR-Based Stops for higher quality signals',
+        pro: 'All features - includes BTC correlation filter and liquidity sweep detection',
+      },
+    });
+  } catch (error) {
+    logger.error('Failed to get feature presets', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get feature presets' });
+  }
+});
+
+// ============================================
 // CONDITIONAL ORDERS (Trade Rules)
 // ============================================
 
@@ -820,6 +1069,129 @@ router.delete('/rules/:id', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to cancel conditional order', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to cancel conditional order' });
+  }
+});
+
+// ============================================
+// MARGIN TRADING (Crypto.com only)
+// ============================================
+
+// Get margin leverage
+router.get('/margin/leverage', async (req: Request, res: Response) => {
+  try {
+    const leverage = await tradingService.getMarginLeverage(getUserId(req));
+    res.json({ leverage });
+  } catch (error) {
+    logger.error('Failed to get margin leverage', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get margin leverage' });
+  }
+});
+
+// Set margin leverage (1-10x)
+const leverageSchema = z.object({
+  leverage: z.number().min(1).max(10),
+});
+
+router.put('/margin/leverage', async (req: Request, res: Response) => {
+  try {
+    const body = leverageSchema.parse(req.body);
+    await tradingService.setMarginLeverage(getUserId(req), body.leverage);
+    res.json({ success: true, leverage: body.leverage });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: error.errors[0].message });
+      return;
+    }
+    logger.error('Failed to set margin leverage', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to set margin leverage' });
+  }
+});
+
+// Get margin account info
+router.get('/margin/balance', async (req: Request, res: Response) => {
+  try {
+    const info = await tradingService.getMarginAccountInfo(getUserId(req));
+    if (!info) {
+      res.status(400).json({ error: 'Margin trading not available - connect Crypto.com first' });
+      return;
+    }
+    res.json(info);
+  } catch (error) {
+    logger.error('Failed to get margin balance', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get margin balance' });
+  }
+});
+
+// Get open margin positions
+router.get('/margin/positions', async (req: Request, res: Response) => {
+  try {
+    const positions = await tradingService.getMarginPositions(getUserId(req));
+    res.json({ positions });
+  } catch (error) {
+    logger.error('Failed to get margin positions', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get margin positions' });
+  }
+});
+
+// Place margin order (long or short)
+const marginOrderSchema = z.object({
+  symbol: z.string().min(1),
+  side: z.enum(['long', 'short']),
+  type: z.enum(['market', 'limit']),
+  quantity: z.number().positive().optional(),
+  quoteAmount: z.number().positive().optional(),
+  price: z.number().positive().optional(),
+  leverage: z.number().min(1).max(10).optional(),
+  stopLoss: z.number().positive().optional(),
+  takeProfit: z.number().positive().optional(),
+});
+
+router.post('/margin/order', async (req: Request, res: Response) => {
+  try {
+    const body = marginOrderSchema.parse(req.body);
+
+    // Validate that quantity or quoteAmount is provided
+    if (!body.quantity && !body.quoteAmount) {
+      res.status(400).json({ error: 'Either quantity or quoteAmount is required' });
+      return;
+    }
+
+    // Validate price for limit orders
+    if (body.type === 'limit' && !body.price) {
+      res.status(400).json({ error: 'Price is required for limit orders' });
+      return;
+    }
+
+    const trade = await tradingService.placeMarginOrder(getUserId(req), body);
+    res.json(trade);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: error.errors[0].message });
+      return;
+    }
+    logger.error('Failed to place margin order', { error: (error as Error).message });
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to place margin order' });
+  }
+});
+
+// Close margin position
+const closePositionSchema = z.object({
+  symbol: z.string().min(1),
+  side: z.enum(['long', 'short']),
+});
+
+router.post('/margin/close', async (req: Request, res: Response) => {
+  try {
+    const body = closePositionSchema.parse(req.body);
+    const trade = await tradingService.closeMarginPosition(getUserId(req), body.symbol, body.side);
+    res.json(trade);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: error.errors[0].message });
+      return;
+    }
+    logger.error('Failed to close margin position', { error: (error as Error).message });
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to close margin position' });
   }
 });
 
@@ -969,6 +1341,313 @@ router.get('/portfolio/combined', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to get combined portfolio', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to get combined portfolio' });
+  }
+});
+
+// ============================================
+// TRADING RULES (Visual Builder)
+// ============================================
+
+// Validation schemas for trading rules
+const ruleConditionSchema = z.object({
+  id: z.string(),
+  type: z.enum(['price', 'indicator', 'time', 'change']),
+  symbol: z.string().optional(),
+  indicator: z.string().optional(),
+  timeframe: z.string().optional(),
+  operator: z.string(),
+  value: z.number(),
+});
+
+const ruleActionSchema = z.object({
+  id: z.string(),
+  type: z.enum(['buy', 'sell', 'alert']),
+  symbol: z.string().optional(),
+  amountType: z.enum(['quote', 'base', 'percent']),
+  amount: z.number(),
+  orderType: z.enum(['market', 'limit']),
+  limitPrice: z.number().optional(),
+  stopLoss: z.number().optional(),
+  takeProfit: z.number().optional(),
+});
+
+const tradingRuleSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1),
+  description: z.string(),
+  enabled: z.boolean(),
+  conditionLogic: z.enum(['AND', 'OR']),
+  conditions: z.array(ruleConditionSchema).min(1),
+  actions: z.array(ruleActionSchema).min(1),
+  maxExecutions: z.number().optional(),
+  cooldownMinutes: z.number().optional(),
+});
+
+// Get all trading rules for user
+router.get('/trading-rules', async (req: Request, res: Response) => {
+  try {
+    const userId = getUserId(req);
+
+    // Get rules with conditions and actions
+    const rulesResult = await tradingService.getTradingRules(userId);
+    res.json({ rules: rulesResult });
+  } catch (error) {
+    logger.error('Failed to get trading rules', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get trading rules' });
+  }
+});
+
+// Create new trading rule
+router.post('/trading-rules', async (req: Request, res: Response) => {
+  try {
+    const body = tradingRuleSchema.parse(req.body);
+    const userId = getUserId(req);
+
+    const rule = await tradingService.createTradingRule(userId, body);
+    res.json({ success: true, rule });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: error.errors[0].message });
+      return;
+    }
+    logger.error('Failed to create trading rule', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to create trading rule' });
+  }
+});
+
+// Update trading rule
+router.put('/trading-rules', async (req: Request, res: Response) => {
+  try {
+    const body = tradingRuleSchema.parse(req.body);
+    const userId = getUserId(req);
+
+    if (!body.id) {
+      res.status(400).json({ error: 'Rule ID required for update' });
+      return;
+    }
+
+    const rule = await tradingService.updateTradingRule(userId, body.id, body);
+    res.json({ success: true, rule });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: error.errors[0].message });
+      return;
+    }
+    logger.error('Failed to update trading rule', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to update trading rule' });
+  }
+});
+
+// Delete trading rule
+router.delete('/trading-rules/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const userId = getUserId(req);
+
+    await tradingService.deleteTradingRule(userId, id);
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Failed to delete trading rule', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to delete trading rule' });
+  }
+});
+
+// ============================================
+// AUTO TRADING
+// ============================================
+
+const autoSettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  maxPositions: z.number().min(1).max(10).optional(),
+  rsiThreshold: z.number().min(10).max(50).optional(),
+  volumeMultiplier: z.number().min(1).max(5).optional(),
+  minPositionPct: z.number().min(0.5).max(10).optional(),
+  maxPositionPct: z.number().min(1).max(20).optional(),
+  dailyLossLimitPct: z.number().min(1).max(20).optional(),
+  maxConsecutiveLosses: z.number().min(1).max(10).optional(),
+  symbolCooldownMinutes: z.number().min(1).max(120).optional(),
+  // Multi-strategy settings
+  strategy: z.enum(['rsi_oversold', 'trend_following', 'mean_reversion', 'momentum', 'btc_correlation']).optional(),
+  strategyMode: z.enum(['manual', 'auto']).optional(),
+  excludedSymbols: z.array(z.string()).optional(),
+  excludeTop10: z.boolean().optional(),
+  btcTrendFilter: z.boolean().optional(),
+  btcMomentumBoost: z.boolean().optional(),
+  btcCorrelationSkip: z.boolean().optional(),
+});
+
+// Get auto trading settings
+router.get('/auto/settings', async (req: Request, res: Response) => {
+  try {
+    const userId = getUserId(req);
+    const settings = await autoTradingService.getSettings(userId);
+
+    // If in auto mode, include the current auto-selected strategy
+    let currentStrategy = settings.strategy;
+    if (settings.strategyMode === 'auto') {
+      const regime = await autoTradingService.getMarketRegime();
+      const selection = await import('./auto-mode-selector.service.js').then(m =>
+        m.selectBestStrategy(userId, regime)
+      );
+      currentStrategy = selection.selectedStrategy;
+      logger.info('Auto settings API response', {
+        storedStrategy: settings.strategy,
+        currentStrategy,
+        regime: regime.regime,
+      });
+    }
+
+    res.json({
+      settings: {
+        ...settings,
+        currentStrategy, // The actual strategy being used (may differ in auto mode)
+      },
+    });
+  } catch (error) {
+    logger.error('Failed to get auto trading settings', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get auto trading settings' });
+  }
+});
+
+// Update auto trading settings
+router.put('/auto/settings', async (req: Request, res: Response) => {
+  try {
+    const body = autoSettingsSchema.parse(req.body);
+    const userId = getUserId(req);
+    const settings = await autoTradingService.updateSettings(userId, body);
+    res.json({ success: true, settings });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: error.errors[0].message });
+      return;
+    }
+    logger.error('Failed to update auto trading settings', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to update auto trading settings' });
+  }
+});
+
+// Start auto trading
+router.post('/auto/start', async (req: Request, res: Response) => {
+  try {
+    const userId = getUserId(req);
+    await autoTradingService.startAutoTrading(userId);
+    const state = await autoTradingService.getState(userId);
+    res.json({ success: true, state });
+  } catch (error) {
+    logger.error('Failed to start auto trading', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to start auto trading' });
+  }
+});
+
+// Stop auto trading
+router.post('/auto/stop', async (req: Request, res: Response) => {
+  try {
+    const userId = getUserId(req);
+    await autoTradingService.stopAutoTrading(userId);
+    const state = await autoTradingService.getState(userId);
+    res.json({ success: true, state });
+  } catch (error) {
+    logger.error('Failed to stop auto trading', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to stop auto trading' });
+  }
+});
+
+// Get auto trading state
+router.get('/auto/state', async (req: Request, res: Response) => {
+  try {
+    const userId = getUserId(req);
+    const state = await autoTradingService.getState(userId);
+    res.json({ state });
+  } catch (error) {
+    logger.error('Failed to get auto trading state', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get auto trading state' });
+  }
+});
+
+// Get today's auto trade history
+router.get('/auto/history', async (req: Request, res: Response) => {
+  try {
+    const userId = getUserId(req);
+    const history = await autoTradingService.getHistory(userId);
+    res.json({ trades: history });
+  } catch (error) {
+    logger.error('Failed to get auto trading history', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get auto trading history' });
+  }
+});
+
+// Get signal history with backtest results
+router.get('/auto/signals', async (req: Request, res: Response) => {
+  try {
+    const userId = getUserId(req);
+    const limit = parseInt(req.query.limit as string) || 100;
+    const signals = await autoTradingService.getSignalHistory(userId, limit);
+    res.json({ signals });
+  } catch (error) {
+    logger.error('Failed to get signal history', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get signal history' });
+  }
+});
+
+// Get top signal candidates (closest to triggering)
+router.get('/auto/candidates', async (_req: Request, res: Response) => {
+  try {
+    const candidates = await autoTradingService.getTopCandidates();
+    res.json({ candidates });
+  } catch (error) {
+    logger.error('Failed to get candidates', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get candidates' });
+  }
+});
+
+// Get available trading strategies with performance data
+router.get('/auto/strategies', async (req: Request, res: Response) => {
+  try {
+    const strategyMetas = autoTradingService.getAvailableStrategies();
+    const userId = getUserId(req);
+    const performanceMap = await autoTradingService.getStrategyPerformance(userId);
+
+    // Combine meta and performance into expected format
+    const strategies = strategyMetas.map(meta => ({
+      id: meta.id,
+      meta,
+      performance: performanceMap[meta.id] || {
+        strategy: meta.id,
+        wins: 0,
+        losses: 0,
+        breakeven: 0,
+        totalTrades: 0,
+        winRate: 0,
+        avgPnlPct: 0,
+      },
+    }));
+
+    res.json({ strategies });
+  } catch (error) {
+    logger.error('Failed to get strategies', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get strategies' });
+  }
+});
+
+// Get current market regime
+router.get('/auto/regime', async (_req: Request, res: Response) => {
+  try {
+    const regime = await autoTradingService.getMarketRegime();
+    res.json({ regime });
+  } catch (error) {
+    logger.error('Failed to get market regime', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get market regime' });
+  }
+});
+
+// Get strategy performance for user
+router.get('/auto/strategy-performance', async (req: Request, res: Response) => {
+  try {
+    const performance = await autoTradingService.getStrategyPerformance(getUserId(req));
+    res.json({ performance });
+  } catch (error) {
+    logger.error('Failed to get strategy performance', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get strategy performance' });
   }
 });
 

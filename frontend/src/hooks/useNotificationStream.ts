@@ -4,6 +4,9 @@ import { useEffect, useRef, useCallback } from 'react';
 import { useNotificationStore, type NotificationCategory, getPriorityLevel } from '@/lib/notification-store';
 import { type AppId } from '@/components/os/app-registry';
 
+// API URL for SSE connections
+const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
+
 // SSE event types from the backend
 interface TriggerEvent {
   type: 'connected' | 'ping' | 'new_message' | 'trigger_delivered' | 'notification';
@@ -91,8 +94,8 @@ export function useNotificationStream() {
 
     isConnectingRef.current = true;
 
-    // Use the existing SSE endpoint
-    const eventSource = new EventSource('/luna-chat/api/triggers/live', {
+    // Use the existing SSE endpoint with full API URL
+    const eventSource = new EventSource(`${API_URL}/api/triggers/live`, {
       withCredentials: true,
     });
 

@@ -3,6 +3,7 @@ package com.bitwarelabs.luna.presentation.screens.chat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bitwarelabs.luna.data.network.StreamEvent
+import com.bitwarelabs.luna.domain.model.ChatMode
 import com.bitwarelabs.luna.domain.model.Message
 import com.bitwarelabs.luna.domain.model.MessageRole
 import com.bitwarelabs.luna.domain.model.Session
@@ -31,8 +32,12 @@ data class ChatUiState(
     val inputText: String = "",
     val error: String? = null,
     val editingSessionId: String? = null,
-    val editingTitle: String = ""
-)
+    val editingTitle: String = "",
+    val expandedMessageIds: Set<String> = emptySet()
+) {
+    val currentMode: ChatMode?
+        get() = sessions.find { it.id == currentSessionId }?.mode
+}
 
 @HiltViewModel
 class ChatViewModel @Inject constructor(
@@ -267,8 +272,9 @@ class ChatViewModel @Inject constructor(
                                     role = MessageRole.ASSISTANT,
                                     content = _uiState.value.streamingContent,
                                     tokensUsed = event.tokensUsed,
-                                    model = null,
-                                    createdAt = System.currentTimeMillis().toString()
+                                    model = event.metrics?.model,
+                                    createdAt = System.currentTimeMillis().toString(),
+                                    metrics = event.metrics
                                 )
                                 _uiState.update {
                                     it.copy(
@@ -303,6 +309,17 @@ class ChatViewModel @Inject constructor(
 
     fun clearError() {
         _uiState.update { it.copy(error = null) }
+    }
+
+    fun toggleMessageExpand(messageId: String) {
+        _uiState.update {
+            val newExpanded = if (messageId in it.expandedMessageIds) {
+                it.expandedMessageIds - messageId
+            } else {
+                it.expandedMessageIds + messageId
+            }
+            it.copy(expandedMessageIds = newExpanded)
+        }
     }
 
     override fun onCleared() {

@@ -32,6 +32,8 @@ fun ChatArea(
     isLoading: Boolean,
     isSending: Boolean,
     hasSession: Boolean,
+    expandedMessageIds: Set<String> = emptySet(),
+    onMessageClick: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
@@ -94,7 +96,11 @@ fun ChatArea(
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     items(messages, key = { it.id }) { message ->
-                        MessageBubble(message = message)
+                        MessageBubble(
+                            message = message,
+                            isExpanded = message.id in expandedMessageIds,
+                            onClick = { onMessageClick(message.id) }
+                        )
                     }
 
                     // Streaming content or status

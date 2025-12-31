@@ -2,7 +2,26 @@ import { Request, Response, NextFunction } from 'express';
 import { verifyToken } from './jwt.js';
 import logger from '../utils/logger.js';
 
+// Auto-auth user for WireGuard network (10.0.0.x)
+const WIREGUARD_USER = {
+  userId: '727e0045-3858-4e42-b81e-4d48d980a59d',
+  email: 'henke@bitwarelabs.com',
+  type: 'access' as const
+};
+
+function isWireGuardRequest(req: Request): boolean {
+  const ip = req.ip || req.socket.remoteAddress || '';
+  return ip.startsWith('10.0.0.') || ip === '::ffff:10.0.0.2' || ip.includes('10.0.0.');
+}
+
 export function authenticate(req: Request, res: Response, next: NextFunction): void {
+  // Auto-authenticate WireGuard requests
+  if (isWireGuardRequest(req)) {
+    req.user = WIREGUARD_USER;
+    next();
+    return;
+  }
+
   const authHeader = req.headers.authorization;
 
   // Prefer Authorization header, but fall back to httpOnly cookie
@@ -44,6 +63,13 @@ export function authenticate(req: Request, res: Response, next: NextFunction): v
 }
 
 export function optionalAuth(req: Request, _res: Response, next: NextFunction): void {
+  // Auto-authenticate WireGuard requests
+  if (isWireGuardRequest(req)) {
+    req.user = WIREGUARD_USER;
+    next();
+    return;
+  }
+
   const authHeader = req.headers.authorization;
 
   const headerToken = (() => {

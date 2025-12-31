@@ -7,7 +7,8 @@ data class Message(
     val content: String,
     val tokensUsed: Int?,
     val model: String?,
-    val createdAt: String
+    val createdAt: String,
+    val metrics: StreamMetrics? = null
 )
 
 enum class MessageRole {

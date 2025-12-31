@@ -116,6 +116,46 @@ export interface SymbolInfo {
   filters: SymbolFilter[];
 }
 
+// Funding wallet balance
+export interface FundingAsset {
+  asset: string;
+  free: string;
+  locked: string;
+  freeze: string;
+  withdrawing: string;
+  btcValuation: string;
+}
+
+// Simple Earn flexible position
+export interface FlexiblePosition {
+  asset: string;
+  totalAmount: string;
+  latestAnnualPercentageRate: string;
+  canRedeem: boolean;
+}
+
+// Simple Earn locked position
+export interface LockedPosition {
+  positionId: string;
+  asset: string;
+  amount: string;
+  purchaseTime: number;
+  duration: number;
+  accrualDays: number;
+  rewardAsset: string;
+  apy: string;
+  isAutoSubscribe: boolean;
+  redeemingAmt?: string;
+}
+
+// All wallet balances combined
+export interface AllWalletBalances {
+  spot: AccountBalance[];
+  funding: FundingAsset[];
+  flexibleEarn: FlexiblePosition[];
+  lockedEarn: LockedPosition[];
+}
+
 // Cache for symbol info to avoid repeated API calls
 const symbolInfoCache = new Map<string, { info: SymbolInfo; timestamp: number }>();
 const CACHE_TTL = 3600000; // 1 hour
@@ -132,6 +172,9 @@ export interface OrderParams {
 }
 
 export class BinanceClient {
+  readonly exchangeType: string = 'binance'; // Legacy - not used for trading
+  readonly supportsMargin: boolean = false;
+
   private apiKey: string;
   private apiSecret: string;
 
@@ -382,6 +425,67 @@ export class BinanceClient {
 
     const notional = info.filters.find((f) => f.filterType === 'NOTIONAL' || f.filterType === 'MIN_NOTIONAL');
     return notional?.minNotional || null;
+  }
+
+  // Get Funding wallet balances
+  async getFundingAsset(asset?: string): Promise<FundingAsset[]> {
+    try {
+      const params: Record<string, string> = {};
+      if (asset) params.asset = asset;
+      return await this.request<FundingAsset[]>('/sapi/v1/asset/get-funding-asset', 'POST', params, true);
+    } catch (error) {
+      logger.debug('Failed to get funding assets', { error });
+      return [];
+    }
+  }
+
+  // Get Simple Earn flexible positions
+  async getFlexiblePositions(): Promise<FlexiblePosition[]> {
+    try {
+      const response = await this.request<{ rows: FlexiblePosition[]; total: number }>(
+        '/sapi/v1/simple-earn/flexible/position',
+        'GET',
+        { size: 100 },
+        true
+      );
+      return response.rows || [];
+    } catch (error) {
+      logger.debug('Failed to get flexible earn positions', { error });
+      return [];
+    }
+  }
+
+  // Get Simple Earn locked positions
+  async getLockedPositions(): Promise<LockedPosition[]> {
+    try {
+      const response = await this.request<{ rows: LockedPosition[]; total: number }>(
+        '/sapi/v1/simple-earn/locked/position',
+        'GET',
+        { size: 100 },
+        true
+      );
+      return response.rows || [];
+    } catch (error) {
+      logger.debug('Failed to get locked earn positions', { error });
+      return [];
+    }
+  }
+
+  // Get all wallet balances (Spot + Funding + Earn)
+  async getAllWalletBalances(): Promise<AllWalletBalances> {
+    const [accountInfo, funding, flexibleEarn, lockedEarn] = await Promise.all([
+      this.getAccountInfo(),
+      this.getFundingAsset(),
+      this.getFlexiblePositions(),
+      this.getLockedPositions(),
+    ]);
+
+    return {
+      spot: accountInfo.balances,
+      funding,
+      flexibleEarn,
+      lockedEarn,
+    };
   }
 
   // Test connectivity with API keys

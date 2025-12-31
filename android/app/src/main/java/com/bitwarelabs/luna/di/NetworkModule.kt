@@ -4,7 +4,10 @@ import com.bitwarelabs.luna.BuildConfig
 import com.bitwarelabs.luna.data.api.AbilitiesApi
 import com.bitwarelabs.luna.data.api.AuthApi
 import com.bitwarelabs.luna.data.api.ChatApi
+import com.bitwarelabs.luna.data.api.ActivityApi
 import com.bitwarelabs.luna.data.api.SettingsApi
+import com.bitwarelabs.luna.data.api.TradingApi
+import com.bitwarelabs.luna.data.api.TriggersApi
 import com.bitwarelabs.luna.data.local.TokenStorage
 import com.bitwarelabs.luna.data.network.AuthInterceptor
 import com.bitwarelabs.luna.data.network.SSEClient
@@ -109,6 +112,24 @@ object NetworkModule {
     @Singleton
     fun provideAbilitiesApi(retrofit: Retrofit): AbilitiesApi {
         return retrofit.create(AbilitiesApi::class.java)
+    }
+
+    @Provides
+    @Singleton
+    fun provideTradingApi(retrofit: Retrofit): TradingApi {
+        return retrofit.create(TradingApi::class.java)
+    }
+
+    @Provides
+    @Singleton
+    fun provideTriggersApi(retrofit: Retrofit): TriggersApi {
+        return retrofit.create(TriggersApi::class.java)
+    }
+
+    @Provides
+    @Singleton
+    fun provideActivityApi(retrofit: Retrofit): ActivityApi {
+        return retrofit.create(ActivityApi::class.java)
     }
 
     @Provides

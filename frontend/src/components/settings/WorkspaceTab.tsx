@@ -8,7 +8,7 @@ import {
 import { workspaceApi, documentsApi, uploadWorkspaceFile, WorkspaceFile, Document } from '../../lib/api';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
-const API_PREFIX = API_URL ? '' : '/luna-chat';
+const API_PREFIX = '';
 
 export default function WorkspaceTab() {
   const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceFile[]>([]);

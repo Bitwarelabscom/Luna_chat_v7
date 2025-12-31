@@ -13,7 +13,7 @@ export default function ImageEmbed({ url, caption }: ImageEmbedProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
 
-  // Add base path prefix for API URLs (e.g., /api/images -> /luna-chat/api/images)
+  // Add base path prefix for API URLs (e.g., /api/images -> /api/images)
   const imageUrl = getMediaUrl(url);
 
   return (

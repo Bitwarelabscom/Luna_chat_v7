@@ -107,6 +107,20 @@ export function isConfigured(): boolean {
   return !!getBotToken();
 }
 
+// Allowlist of authorized Telegram user IDs (empty = allow all linked users)
+const ALLOWED_TELEGRAM_IDS: Set<number> = new Set(
+  (process.env.TRADING_TELEGRAM_ALLOWED_IDS || '')
+    .split(',')
+    .map(id => parseInt(id.trim(), 10))
+    .filter(id => !isNaN(id))
+);
+
+function isUserAllowed(telegramUserId: number): boolean {
+  // If no allowlist configured, allow all linked users
+  if (ALLOWED_TELEGRAM_IDS.size === 0) return true;
+  return ALLOWED_TELEGRAM_IDS.has(telegramUserId);
+}
+
 // ============================================
 // Telegram API
 // ============================================
@@ -629,8 +643,19 @@ async function cancelOrder(orderId: string, userId: string): Promise<{ success: 
  */
 async function handleChatMessage(
   connection: TradingTelegramConnection,
-  text: string
+  text: string,
+  telegramUserId: number
 ): Promise<void> {
+  // Security check - only allow users on the allowlist
+  if (!isUserAllowed(telegramUserId)) {
+    logger.warn('Unauthorized Trading Telegram access attempt', {
+      telegramUserId,
+      chatId: connection.chatId,
+    });
+    await sendMessage(connection.chatId, 'You are not authorized to use this bot.');
+    return;
+  }
+
   try {
     // Send typing indicator
     await telegramRequest('sendChatAction', {
@@ -744,7 +769,7 @@ export async function processUpdate(update: TelegramUpdate): Promise<void> {
   // For other messages, process as trading chat if user is linked
   const connection = await getConnectionByChatId(chatId);
   if (connection) {
-    await handleChatMessage(connection, text);
+    await handleChatMessage(connection, text, message.from.id);
   } else {
     await sendMessage(
       chatId,
@@ -977,9 +1002,9 @@ async function handleTradeCallback(
 
       const trade = result.rows[0];
 
-      // Get current price from Binance
-      const { BinanceClient } = await import('../trading/binance.client.js');
-      const client = new BinanceClient({ apiKey: '', apiSecret: '' });
+      // Get current price from Crypto.com
+      const { CryptoComClient } = await import('../trading/crypto-com.client.js');
+      const client = new CryptoComClient({ apiKey: '', apiSecret: '' });
       const ticker = await client.getTickerPrice(trade.symbol) as { symbol: string; price: string };
       const currentPrice = parseFloat(ticker.price);
 

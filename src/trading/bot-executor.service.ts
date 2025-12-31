@@ -11,10 +11,27 @@
 
 import { pool } from '../db/index.js';
 import redis from '../db/redis.js';
-import { BinanceClient, type Ticker24hr } from './binance.client.js';
-import { decryptToken } from '../utils/encryption.js';
+import { CryptoComClient } from './crypto-com.client.js';
+import { getExchangeClient } from './exchange.factory.js';
+import { toCryptoComSymbol } from './symbol-utils.js';
 import * as tradingService from './trading.service.js';
+import * as tradeNotification from './trade-notification.service.js';
+import * as redisTradingService from './redis-trading.service.js';
 import logger from '../utils/logger.js';
+
+// ============================================
+// Utilities
+// ============================================
+
+/**
+ * Format price for display - handles both large and tiny prices (meme coins)
+ */
+function formatPrice(price: number): string {
+  if (price === 0) return '0';
+  if (price >= 1) return price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (price >= 0.01) return price.toFixed(4);
+  return price.toPrecision(4);
+}
 
 // ============================================
 // Types
@@ -43,12 +60,17 @@ export interface ConditionalOrder {
 }
 
 export interface GridBotConfig {
-  symbol: string;
+  // Note: symbol is stored in the database row (bot.symbol), not in config JSON
   upperPrice: number;
   lowerPrice: number;
   gridCount: number;
   totalInvestment: number;
   mode: 'arithmetic' | 'geometric';
+  stopLoss?: number;
+  takeProfit?: number;
+  // Trailing grid options
+  trailing?: boolean; // If true, grid follows price upward
+  gridSpacingPct?: number; // Grid spacing as percentage (e.g., 1 = 1%)
 }
 
 export interface DCABotConfig {
@@ -134,43 +156,40 @@ export interface MomentumBotConfig {
 }
 
 // ============================================
-// Binance Client Management
+// Exchange Client Management - Crypto.com only
 // ============================================
 
-const clientCache = new Map<string, { client: BinanceClient; expiresAt: number }>();
+import type { IExchangeClient } from './exchange.interface.js';
+
+interface CachedClient {
+  client: IExchangeClient;
+  expiresAt: number;
+}
+
+const clientCache = new Map<string, CachedClient>();
 const CLIENT_CACHE_TTL = 5 * 60 * 1000;
 
-async function getBinanceClient(userId: string): Promise<BinanceClient | null> {
+/**
+ * Get Crypto.com exchange client for user (cached)
+ */
+async function getClient(userId: string): Promise<IExchangeClient | null> {
   const cached = clientCache.get(userId);
   if (cached && cached.expiresAt > Date.now()) {
     return cached.client;
   }
 
-  const result = await pool.query(
-    `SELECT api_key_encrypted, api_secret_encrypted
-     FROM user_trading_keys
-     WHERE user_id = $1`,
-    [userId]
-  );
-
-  if (result.rows.length === 0) {
+  // Use exchange factory to get the Crypto.com client
+  const client = await getExchangeClient(userId);
+  if (!client) {
     return null;
   }
 
-  try {
-    const apiKey = decryptToken(result.rows[0].api_key_encrypted);
-    const apiSecret = decryptToken(result.rows[0].api_secret_encrypted);
-    const client = new BinanceClient({ apiKey, apiSecret });
+  clientCache.set(userId, {
+    client,
+    expiresAt: Date.now() + CLIENT_CACHE_TTL,
+  });
 
-    clientCache.set(userId, {
-      client,
-      expiresAt: Date.now() + CLIENT_CACHE_TTL,
-    });
-
-    return client;
-  } catch {
-    return null;
-  }
+  return client;
 }
 
 // ============================================
@@ -268,9 +287,11 @@ export async function getConditionalOrders(
 
 /**
  * Cancel a conditional order
+ * Supports both full UUID and prefix matching (e.g., first 8 chars)
  */
 export async function cancelConditionalOrder(userId: string, orderId: string): Promise<boolean> {
-  const result = await pool.query(
+  // First try exact match (full UUID)
+  let result = await pool.query(
     `UPDATE conditional_orders
      SET status = 'cancelled'
      WHERE id = $1 AND user_id = $2 AND status = 'active'
@@ -278,8 +299,19 @@ export async function cancelConditionalOrder(userId: string, orderId: string): P
     [orderId, userId]
   );
 
+  // If no exact match and orderId looks like a prefix (not a full UUID), try prefix match
+  if (result.rows.length === 0 && orderId.length < 36) {
+    result = await pool.query(
+      `UPDATE conditional_orders
+       SET status = 'cancelled'
+       WHERE id::text LIKE $1 AND user_id = $2 AND status = 'active'
+       RETURNING id`,
+      [orderId + '%', userId]
+    );
+  }
+
   if (result.rows.length > 0) {
-    logger.info('Conditional order cancelled', { userId, orderId });
+    logger.info('Conditional order cancelled', { userId, orderId, matchedId: result.rows[0].id });
     return true;
   }
 
@@ -312,21 +344,33 @@ export async function checkConditionalOrders(): Promise<{ executed: number; erro
 
     if (result.rows.length === 0) return { executed, errors };
 
-    // Get unique symbols
-    const symbols = [...new Set(result.rows.map(r => r.symbol))];
+    // Get unique symbols and normalize to Crypto.com format
+    const symbols = [...new Set(result.rows.map(r => toCryptoComSymbol(r.symbol)))];
 
-    // Fetch current prices
-    const publicClient = new BinanceClient({ apiKey: '', apiSecret: '' });
-    const tickers = (await publicClient.getTicker24hr()) as Ticker24hr[];
-    const priceMap = new Map<string, number>();
-    for (const t of tickers) {
-      if (symbols.includes(t.symbol)) {
-        priceMap.set(t.symbol, parseFloat(t.lastPrice));
+    // Fetch current prices from Redis cache (single batch operation)
+    let priceMap = await redisTradingService.getPricesBatch(symbols);
+
+    // Fallback to API if Redis cache is empty
+    if (priceMap.size === 0) {
+      logger.warn('Redis price cache empty for conditional orders, falling back to API');
+      try {
+        const cryptoClient = new CryptoComClient({ apiKey: '', apiSecret: '' });
+        const cryptoTickers = await cryptoClient.getTicker24hr();
+        const tickerArray = Array.isArray(cryptoTickers) ? cryptoTickers : [cryptoTickers];
+        for (const t of tickerArray) {
+          const cryptoSymbol = toCryptoComSymbol(t.symbol);
+          if (symbols.includes(cryptoSymbol)) {
+            priceMap.set(cryptoSymbol, parseFloat(t.lastPrice));
+          }
+        }
+      } catch (err) {
+        logger.warn('Failed to fetch Crypto.com prices for conditional orders', { error: (err as Error).message });
       }
     }
 
     for (const order of result.rows) {
-      const currentPrice = priceMap.get(order.symbol);
+      const normalizedSymbol = toCryptoComSymbol(order.symbol);
+      const currentPrice = priceMap.get(normalizedSymbol);
       if (!currentPrice) continue;
 
       const triggerPrice = parseFloat(order.trigger_price);
@@ -362,10 +406,25 @@ export async function checkConditionalOrders(): Promise<{ executed: number; erro
           executed++;
         } catch (err) {
           errors++;
+          const errorMessage = (err as Error).message;
           logger.error('Failed to execute conditional order', {
             orderId: order.id,
-            error: (err as Error).message,
+            error: errorMessage,
           });
+          // Mark order as failed so it doesn't keep retrying
+          await pool.query(
+            `UPDATE conditional_orders SET status = 'failed', notes = $2, triggered_at = NOW() WHERE id = $1`,
+            [order.id, `Failed: ${errorMessage}`]
+          );
+          // Notify user about the failure
+          tradeNotification.notifyConditionalOrderFailed(
+            order.user_id,
+            order.symbol,
+            order.condition,
+            parseFloat(order.trigger_price),
+            order.action.side,
+            errorMessage
+          );
         }
       }
     }
@@ -392,9 +451,15 @@ async function executeConditionalOrder(
   action: ConditionalOrder['action'],
   currentPrice: number
 ): Promise<void> {
-  const client = await getBinanceClient(userId);
-  if (!client) {
-    throw new Error('Binance client not available');
+  // Check if user is in paper mode - if so, no exchange client needed
+  const settings = await tradingService.getSettings(userId);
+  const isPaperMode = settings.paperMode;
+
+  if (!isPaperMode) {
+    const client = await getClient(userId);
+    if (!client) {
+      throw new Error('Crypto.com client not available');
+    }
   }
 
   // Calculate quantity based on amount type
@@ -433,7 +498,8 @@ async function executeConditionalOrder(
     trailingStopPct = (action.trailingStopDollar / currentPrice) * 100;
   }
 
-  // Place the order
+  // Place the order (tradingService.placeOrder handles paper vs live mode)
+  const modeLabel = isPaperMode ? '[PAPER] ' : '';
   await tradingService.placeOrder(userId, {
     symbol,
     side: action.side,
@@ -444,7 +510,7 @@ async function executeConditionalOrder(
     stopLoss: action.stopLoss,
     takeProfit: action.takeProfit,
     trailingStopPct,
-    notes: `Conditional order ${orderId} triggered at $${currentPrice}`,
+    notes: `${modeLabel}Conditional order ${orderId} triggered at $${currentPrice}`,
   });
 
   // Mark order as triggered
@@ -482,12 +548,90 @@ export async function executeGridBot(botId: string): Promise<{ trades: number }>
   const config = bot.config as GridBotConfig;
   const userId = bot.user_id;
 
-  const client = await getBinanceClient(userId);
+  // Get Crypto.com exchange client
+  const client = await getClient(userId);
   if (!client) return { trades };
 
-  // Get current price
-  const ticker = await client.getTickerPrice(config.symbol) as { price: string };
+  // Get symbol from bot row (not config - symbol is stored as a column)
+  const botSymbol = bot.symbol as string;
+
+  // Get current price using Crypto.com symbol format
+  const symbol = toCryptoComSymbol(botSymbol);
+
+  const ticker = await client.getTickerPrice(symbol) as { price: string };
   const currentPrice = parseFloat(ticker.price);
+
+  logger.info('Grid bot price check', { botId, symbol, currentPrice, botSymbol });
+
+  // Trailing grid: if price moves above upper bound, shift grid up
+  if (config.trailing && config.gridSpacingPct && currentPrice > config.upperPrice) {
+    const spacingMultiplier = config.gridSpacingPct / 100;
+    const newUpperPrice = currentPrice;
+    const newLowerPrice = currentPrice * (1 - spacingMultiplier * config.gridCount);
+
+    // Update stop loss to trail (keep same distance below grid)
+    const oldStopLossDistance = config.lowerPrice - (config.stopLoss || 0);
+    const newStopLoss = config.stopLoss ? newLowerPrice - oldStopLossDistance : undefined;
+
+    logger.info('Trailing grid shifted up', {
+      botId,
+      oldUpper: config.upperPrice,
+      oldLower: config.lowerPrice,
+      newUpper: newUpperPrice,
+      newLower: newLowerPrice,
+      newStopLoss,
+    });
+
+    // Update config in database
+    const newConfig = {
+      ...config,
+      upperPrice: newUpperPrice,
+      lowerPrice: newLowerPrice,
+      stopLoss: newStopLoss,
+    };
+    await pool.query(
+      `UPDATE trading_bots SET config = $1 WHERE id = $2`,
+      [JSON.stringify(newConfig), botId]
+    );
+
+    // Update local config for this execution
+    config.upperPrice = newUpperPrice;
+    config.lowerPrice = newLowerPrice;
+    if (newStopLoss) config.stopLoss = newStopLoss;
+
+    // Clear positions when grid shifts (they're no longer at valid levels)
+    const stateKey = `grid:${botId}:state`;
+    await redis.set(stateKey, JSON.stringify({ lastLevel: -1, positions: [] }));
+  }
+
+  // Check stop loss / take profit
+  if (config.stopLoss && currentPrice <= config.stopLoss) {
+    logger.warn('Grid bot hit stop loss', { botId, currentPrice, stopLoss: config.stopLoss });
+    await tradingService.updateBotStatus(userId, botId, 'stopped', 'Stop loss triggered');
+    await tradeNotification.notifyBotStatusChange(userId, {
+      id: botId,
+      name: bot.name,
+      type: 'grid',
+      symbol: botSymbol,
+      status: 'stopped',
+      reason: `Stop loss triggered at $${formatPrice(currentPrice)} (SL: $${formatPrice(config.stopLoss)})`,
+    });
+    return { trades };
+  }
+
+  if (config.takeProfit && currentPrice >= config.takeProfit) {
+    logger.info('Grid bot hit take profit', { botId, currentPrice, takeProfit: config.takeProfit });
+    await tradingService.updateBotStatus(userId, botId, 'stopped', 'Take profit triggered');
+    await tradeNotification.notifyBotStatusChange(userId, {
+      id: botId,
+      name: bot.name,
+      type: 'grid',
+      symbol: botSymbol,
+      status: 'stopped',
+      reason: `Take profit triggered at $${formatPrice(currentPrice)} (TP: $${formatPrice(config.takeProfit)})`,
+    });
+    return { trades };
+  }
 
   // Calculate grid levels
   const gridStep = config.mode === 'arithmetic'
@@ -517,56 +661,196 @@ export async function executeGridBot(botId: string): Promise<{ trades: number }>
     }
   }
 
+  logger.info('Grid bot level check', {
+    botId,
+    currentLevel,
+    lastLevel: state.lastLevel,
+    currentPrice,
+    levelChanged: currentLevel !== state.lastLevel,
+  });
+
   // Execute grid logic
   const amountPerGrid = config.totalInvestment / config.gridCount;
+
+  // Initialize grid: on first run, buy at all levels below current price
+  if (state.lastLevel === -1 && currentLevel >= 0 && currentLevel < config.gridCount) {
+    logger.info('Grid bot initializing - buying at levels below current price', {
+      botId,
+      currentLevel,
+      levelsToBuy: currentLevel,
+    });
+
+    const symbolInfo = await tradingService.getSymbolInfo(botSymbol);
+    const stepSize = symbolInfo?.stepSize ? parseFloat(symbolInfo.stepSize) : 1;
+    const stopLossPrice = config.stopLoss || config.lowerPrice * 0.95;
+
+    // Buy at each level below current price
+    for (let level = currentLevel - 1; level >= 0; level--) {
+      const levelPrice = levels[level];
+      const rawBuyQty = amountPerGrid / levelPrice;
+      const buyQty = stepSize >= 1
+        ? Math.floor(rawBuyQty / stepSize) * stepSize
+        : Math.floor(rawBuyQty * (1 / stepSize)) / (1 / stepSize);
+
+      if (buyQty <= 0) continue;
+
+      try {
+        await tradingService.placeOrder(userId, {
+          symbol: botSymbol,
+          side: 'buy',
+          type: 'market',
+          quantity: buyQty,
+          stopLoss: stopLossPrice,
+          notes: `Grid bot ${botId} init buy at level ${level}`,
+        });
+        trades++;
+
+        // Record position for this level
+        if (!state.positions) state.positions = [];
+        state.positions.push({
+          level,
+          quantity: buyQty,
+          price: levelPrice,
+        });
+
+        logger.info('Grid bot init buy executed', { botId, level, price: levelPrice, quantity: buyQty });
+
+        // Small delay between orders to avoid rate limits
+        await new Promise(resolve => setTimeout(resolve, 500));
+      } catch (err) {
+        logger.error('Grid bot init buy failed', { botId, level, error: (err as Error).message });
+      }
+    }
+
+    await pool.query(
+      `UPDATE trading_bots SET total_trades = total_trades + $1 WHERE id = $2`,
+      [trades, botId]
+    );
+
+    // Save state and return - initialization complete
+    state.lastLevel = currentLevel;
+    await redis.set(stateKey, JSON.stringify(state));
+    return { trades };
+  }
 
   if (currentLevel !== state.lastLevel && currentLevel >= 0) {
     if (currentLevel < state.lastLevel) {
       // Price dropped - buy at this level
       try {
-        await tradingService.placeOrder(userId, {
-          symbol: config.symbol,
-          side: 'buy',
-          type: 'market',
-          quoteAmount: amountPerGrid,
-          notes: `Grid bot ${botId} buy at level ${currentLevel}`,
+        // Use grid stop loss or default to lower grid bound
+        const stopLossPrice = config.stopLoss || config.lowerPrice * 0.95;
+
+        // Calculate buy quantity from USD amount and current price
+        // For tokens like BONK with large step sizes (10000), use quantity instead of notional
+        const rawBuyQty = amountPerGrid / currentPrice;
+
+        // Get step size to round quantity (default to 1 if not available)
+        const symbolInfo = await tradingService.getSymbolInfo(botSymbol);
+        const stepSize = symbolInfo?.stepSize ? parseFloat(symbolInfo.stepSize) : 1;
+
+        // Round down to nearest step size
+        const buyQty = stepSize >= 1
+          ? Math.floor(rawBuyQty / stepSize) * stepSize
+          : Math.floor(rawBuyQty * (1 / stepSize)) / (1 / stepSize);
+
+        logger.info('Grid bot buy calculation', {
+          botId,
+          amountPerGrid,
+          currentPrice,
+          rawBuyQty,
+          stepSize,
+          buyQty,
         });
-        trades++;
 
-        await pool.query(
-          `UPDATE trading_bots SET total_trades = total_trades + 1 WHERE id = $1`,
-          [botId]
-        );
+        if (buyQty <= 0) {
+          logger.warn('Grid bot buy quantity too small', { botId, buyQty, stepSize });
+        } else {
+          await tradingService.placeOrder(userId, {
+            symbol: botSymbol,
+            side: 'buy',
+            type: 'market',
+            quantity: buyQty,
+            stopLoss: stopLossPrice,
+            takeProfit: config.takeProfit,
+            notes: `Grid bot ${botId} buy at level ${currentLevel}`,
+          });
+          trades++;
 
-        logger.info('Grid bot buy executed', { botId, level: currentLevel, price: currentPrice });
+          await pool.query(
+            `UPDATE trading_bots SET total_trades = total_trades + 1 WHERE id = $1`,
+            [botId]
+          );
+
+          // Record position for profitable sell tracking
+          if (!state.positions) state.positions = [];
+          state.positions.push({
+            level: currentLevel,
+            quantity: buyQty,
+            price: currentPrice,
+          });
+
+          logger.info('Grid bot buy executed', { botId, level: currentLevel, price: currentPrice, positionsCount: state.positions.length });
+        }
       } catch (err) {
         logger.error('Grid bot buy failed', { botId, error: (err as Error).message });
       }
     } else if (currentLevel > state.lastLevel && state.lastLevel >= 0) {
-      // Price rose - sell at this level
+      // Price rose - sell positions that were bought at LOWER levels (profitable sells only)
       try {
-        // Get holdings to sell
-        const portfolio = await tradingService.getPortfolio(userId);
-        if (portfolio) {
-          const asset = config.symbol.replace(/USD[TC]$/, '');
-          const holding = portfolio.holdings.find(h => h.asset === asset);
-          if (holding && holding.amount > 0) {
-            const sellQty = Math.min(holding.amount, amountPerGrid / currentPrice);
+        // Find positions bought at lower levels than current
+        const profitablePositions = (state.positions || []).filter(
+          (pos: { level: number; quantity: number; price: number }) => pos.level < currentLevel
+        );
+
+        if (profitablePositions.length === 0) {
+          logger.info('Grid bot sell skipped - no profitable positions', {
+            botId,
+            currentLevel,
+            positions: state.positions?.length || 0,
+          });
+        } else {
+          // Sell the oldest profitable position (FIFO)
+          const positionToSell = profitablePositions[0];
+
+          // Get step size to format quantity
+          const symbolInfo = await tradingService.getSymbolInfo(botSymbol);
+          const stepSize = symbolInfo?.stepSize ? parseFloat(symbolInfo.stepSize) : 1;
+
+          // Round quantity to step size
+          const sellQty = stepSize >= 1
+            ? Math.floor(positionToSell.quantity / stepSize) * stepSize
+            : Math.floor(positionToSell.quantity * (1 / stepSize)) / (1 / stepSize);
+
+          if (sellQty <= 0) {
+            logger.warn('Grid bot sell quantity too small', { botId, sellQty, stepSize });
+          } else {
             await tradingService.placeOrder(userId, {
-              symbol: config.symbol,
+              symbol: botSymbol,
               side: 'sell',
               type: 'market',
               quantity: sellQty,
-              notes: `Grid bot ${botId} sell at level ${currentLevel}`,
+              notes: `Grid bot ${botId} sell at level ${currentLevel} (bought at level ${positionToSell.level})`,
             });
             trades++;
+
+            // Remove the sold position from state
+            state.positions = state.positions.filter(
+              (pos: { level: number }) => pos !== positionToSell
+            );
 
             await pool.query(
               `UPDATE trading_bots SET total_trades = total_trades + 1 WHERE id = $1`,
               [botId]
             );
 
-            logger.info('Grid bot sell executed', { botId, level: currentLevel, price: currentPrice });
+            logger.info('Grid bot sell executed', {
+              botId,
+              sellLevel: currentLevel,
+              buyLevel: positionToSell.level,
+              buyPrice: positionToSell.price,
+              sellPrice: currentPrice,
+              profit: ((currentPrice - positionToSell.price) / positionToSell.price * 100).toFixed(2) + '%',
+            });
           }
         }
       } catch (err) {
@@ -703,6 +987,16 @@ export async function executeRSIBot(botId: string): Promise<{ traded: boolean; s
   if (rsi <= config.oversoldThreshold) {
     // Oversold - BUY signal
     signal = 'buy';
+
+    // Send technical signal notification
+    tradeNotification.notifyTechnicalSignal(userId, {
+      symbol: config.symbol,
+      indicator: 'RSI',
+      signal: 'bullish',
+      value: rsi,
+      message: `Oversold condition detected (RSI ${rsi.toFixed(1)} < ${config.oversoldThreshold})`,
+    }).catch(err => logger.error('Failed to send RSI signal notification', { error: (err as Error).message }));
+
     try {
       await tradingService.placeOrder(userId, {
         symbol: config.symbol,
@@ -726,6 +1020,15 @@ export async function executeRSIBot(botId: string): Promise<{ traded: boolean; s
   } else if (rsi >= config.overboughtThreshold) {
     // Overbought - SELL signal
     signal = 'sell';
+
+    // Send technical signal notification
+    tradeNotification.notifyTechnicalSignal(userId, {
+      symbol: config.symbol,
+      indicator: 'RSI',
+      signal: 'bearish',
+      value: rsi,
+      message: `Overbought condition detected (RSI ${rsi.toFixed(1)} > ${config.overboughtThreshold})`,
+    }).catch(err => logger.error('Failed to send RSI signal notification', { error: (err as Error).message }));
 
     // Get holdings to sell
     const portfolio = await tradingService.getPortfolio(userId);
@@ -870,6 +1173,15 @@ export async function executeMACrossBot(botId: string): Promise<{ traded: boolea
   }
 
   if (signal === 'buy') {
+    // Send technical signal notification
+    tradeNotification.notifyTechnicalSignal(userId, {
+      symbol: config.symbol,
+      indicator: 'MA Cross',
+      signal: 'bullish',
+      value: currentFast,
+      message: `Golden Cross: ${config.fastPeriod} ${config.maType.toUpperCase()} (${currentFast.toFixed(2)}) crossed above ${config.slowPeriod} ${config.maType.toUpperCase()} (${currentSlow.toFixed(2)})`,
+    }).catch(err => logger.error('Failed to send MA Cross signal notification', { error: (err as Error).message }));
+
     try {
       await tradingService.placeOrder(userId, {
         symbol: config.symbol,
@@ -892,6 +1204,15 @@ export async function executeMACrossBot(botId: string): Promise<{ traded: boolea
       logger.error('MA Cross bot buy failed', { botId, error: (err as Error).message });
     }
   } else if (signal === 'sell') {
+    // Send technical signal notification
+    tradeNotification.notifyTechnicalSignal(userId, {
+      symbol: config.symbol,
+      indicator: 'MA Cross',
+      signal: 'bearish',
+      value: currentFast,
+      message: `Death Cross: ${config.fastPeriod} ${config.maType.toUpperCase()} (${currentFast.toFixed(2)}) crossed below ${config.slowPeriod} ${config.maType.toUpperCase()} (${currentSlow.toFixed(2)})`,
+    }).catch(err => logger.error('Failed to send MA Cross signal notification', { error: (err as Error).message }));
+
     const portfolio = await tradingService.getPortfolio(userId);
     if (portfolio) {
       const asset = config.symbol.replace(/USD[TC]$/, '');
@@ -1012,6 +1333,15 @@ export async function executeMACDBot(botId: string): Promise<{ traded: boolean; 
   }
 
   if (signal === 'buy') {
+    // Send technical signal notification
+    tradeNotification.notifyTechnicalSignal(userId, {
+      symbol: config.symbol,
+      indicator: 'MACD',
+      signal: 'bullish',
+      value: currentMACD,
+      message: `Bullish Crossover: MACD (${currentMACD.toFixed(4)}) crossed above Signal (${currentSignal.toFixed(4)})`,
+    }).catch(err => logger.error('Failed to send MACD signal notification', { error: (err as Error).message }));
+
     try {
       await tradingService.placeOrder(userId, {
         symbol: config.symbol,
@@ -1034,6 +1364,15 @@ export async function executeMACDBot(botId: string): Promise<{ traded: boolean; 
       logger.error('MACD bot buy failed', { botId, error: (err as Error).message });
     }
   } else if (signal === 'sell') {
+    // Send technical signal notification
+    tradeNotification.notifyTechnicalSignal(userId, {
+      symbol: config.symbol,
+      indicator: 'MACD',
+      signal: 'bearish',
+      value: currentMACD,
+      message: `Bearish Crossover: MACD (${currentMACD.toFixed(4)}) crossed below Signal (${currentSignal.toFixed(4)})`,
+    }).catch(err => logger.error('Failed to send MACD signal notification', { error: (err as Error).message }));
+
     const portfolio = await tradingService.getPortfolio(userId);
     if (portfolio) {
       const asset = config.symbol.replace(/USD[TC]$/, '');

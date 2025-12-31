@@ -24,8 +24,11 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Logout
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -44,6 +47,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.bitwarelabs.luna.domain.model.ChatMode
 import com.bitwarelabs.luna.domain.model.Session
 import com.bitwarelabs.luna.presentation.theme.LunaTheme
 
@@ -63,6 +67,9 @@ fun Sidebar(
     onCancelEditSession: () -> Unit,
     onSettingsClick: () -> Unit,
     onAbilitiesClick: () -> Unit,
+    onTradingClick: () -> Unit,
+    onNotificationsClick: () -> Unit,
+    onActivityClick: () -> Unit,
     onLogoutClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -168,6 +175,27 @@ fun Sidebar(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .clickable(onClick = onTradingClick)
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ShowChart,
+                    contentDescription = null,
+                    tint = LunaTheme.colors.success,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = "Trading",
+                    color = LunaTheme.colors.textPrimary,
+                    style = MaterialTheme.typography.bodyLarge
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
                     .clickable(onClick = onAbilitiesClick)
                     .padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -181,6 +209,48 @@ fun Sidebar(
                 Spacer(modifier = Modifier.width(12.dp))
                 Text(
                     text = "Abilities",
+                    color = LunaTheme.colors.textPrimary,
+                    style = MaterialTheme.typography.bodyLarge
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onNotificationsClick)
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Notifications,
+                    contentDescription = null,
+                    tint = LunaTheme.colors.warning,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = "Notifications",
+                    color = LunaTheme.colors.textPrimary,
+                    style = MaterialTheme.typography.bodyLarge
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onActivityClick)
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = null,
+                    tint = LunaTheme.colors.accentPrimary,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = "Activity",
                     color = LunaTheme.colors.textPrimary,
                     style = MaterialTheme.typography.bodyLarge
                 )
@@ -294,6 +364,8 @@ private fun SessionItem(
                 )
             }
         } else {
+            ModeIcon(mode = session.mode, size = 16.dp)
+            Spacer(modifier = Modifier.width(8.dp))
             Text(
                 text = session.title,
                 color = LunaTheme.colors.textPrimary,

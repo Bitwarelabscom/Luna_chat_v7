@@ -44,16 +44,33 @@ const refreshSchema = z.object({
 });
 
 const isProd = config.nodeEnv === 'production';
-const accessCookieOptions = {
-  httpOnly: true,
-  sameSite: 'lax' as const,
-  secure: isProd,
-  path: '/',
-};
-const refreshCookieOptions = {
-  ...accessCookieOptions,
-  // Align cookie lifetime with refresh token lifetime (default 30d)
-  maxAge: (() => {
+
+// Check if request is from local/WireGuard network (HTTP access)
+function isLocalRequest(req: Request): boolean {
+  const origin = req.headers.origin || '';
+  const host = req.headers.host || '';
+  return origin.includes('://luna:') ||
+         origin.includes('10.0.0.') ||
+         origin.includes('localhost') ||
+         origin.includes('127.0.0.1') ||
+         host.includes('10.0.0.') ||
+         host.includes('localhost');
+}
+
+function getAccessCookieOptions(req: Request) {
+  return {
+    httpOnly: true,
+    sameSite: 'lax' as const,
+    secure: isProd && !isLocalRequest(req),
+    path: '/',
+  };
+}
+
+function getRefreshCookieOptions(req: Request) {
+  return {
+    ...getAccessCookieOptions(req),
+    // Align cookie lifetime with refresh token lifetime (default 30d)
+    maxAge: (() => {
     const match = (config.jwt.refreshExpiresIn as string).match(/^(\d+)([smhd])$/);
     if (!match) return 30 * 24 * 60 * 60 * 1000;
     const value = parseInt(match[1], 10);
@@ -66,19 +83,24 @@ const refreshCookieOptions = {
       default: return 30 * 24 * 60 * 60 * 1000;
     }
   })(),
-};
-
-function setAuthCookies(res: Response, tokens: AuthTokens) {
-  res.cookie('accessToken', tokens.accessToken, {
-    ...accessCookieOptions,
-    maxAge: tokens.expiresIn * 1000,
-  });
-  res.cookie('refreshToken', tokens.refreshToken, refreshCookieOptions);
+  };
 }
 
-function clearAuthCookies(res: Response) {
-  res.clearCookie('accessToken', accessCookieOptions);
-  res.clearCookie('refreshToken', refreshCookieOptions);
+function setAuthCookies(req: Request, res: Response, tokens: AuthTokens) {
+  const accessOpts = getAccessCookieOptions(req);
+  const refreshOpts = getRefreshCookieOptions(req);
+  res.cookie('accessToken', tokens.accessToken, {
+    ...accessOpts,
+    maxAge: tokens.expiresIn * 1000,
+  });
+  res.cookie('refreshToken', tokens.refreshToken, refreshOpts);
+}
+
+function clearAuthCookies(req: Request, res: Response) {
+  const accessOpts = getAccessCookieOptions(req);
+  const refreshOpts = getRefreshCookieOptions(req);
+  res.clearCookie('accessToken', accessOpts);
+  res.clearCookie('refreshToken', refreshOpts);
 }
 
 function getCookie(req: Request, name: string): string | undefined {
@@ -117,7 +139,7 @@ router.post('/login', loginLimiter, async (req: Request, res: Response) => {
     // SECURITY: Clear fail2ban attempts on successful login
     await fail2banService.clearAttempts(clientIP);
 
-    setAuthCookies(res, result.tokens);
+    setAuthCookies(req, res, result.tokens);
 
     res.json({
       user: {
@@ -176,7 +198,7 @@ router.post('/refresh', refreshLimiter, async (req: Request, res: Response) => {
 
     const tokens = await authService.refreshTokens(refreshToken);
 
-    setAuthCookies(res, tokens);
+    setAuthCookies(req, res, tokens);
 
     res.json(tokens);
   } catch (error) {
@@ -194,11 +216,52 @@ router.post('/refresh', refreshLimiter, async (req: Request, res: Response) => {
 router.post('/logout', authenticate, async (req: Request, res: Response) => {
   try {
     await authService.logout(req.user!.userId);
-    clearAuthCookies(res);
+    clearAuthCookies(req, res);
     res.json({ success: true });
   } catch (error) {
     logger.error('Logout failed', { error: (error as Error).message });
     res.status(500).json({ error: 'Logout failed' });
+  }
+});
+
+// POST /api/auth/auto-login - Passwordless login for trusted local network devices
+// SECURITY: Only works from 10.0.0.x network (enforced by nginx, verified here)
+router.post('/auto-login', async (req: Request, res: Response) => {
+  try {
+    const clientIP = getClientIP(req);
+
+    // SECURITY: Only allow from local network
+    if (!clientIP.startsWith('10.0.0.') && clientIP !== '127.0.0.1') {
+      logger.warn('Auto-login attempt from unauthorized IP', { ip: clientIP });
+      res.status(403).json({ error: 'Access denied' });
+      return;
+    }
+
+    // Get the first (and likely only) user for auto-login
+    const user = await authService.getFirstUser();
+    if (!user) {
+      res.status(404).json({ error: 'No user found' });
+      return;
+    }
+
+    const tokens = await authService.generateTokensForUser(user.id);
+
+    logger.info('Auto-login successful', { userId: user.id, ip: clientIP });
+
+    res.json({
+      user: {
+        id: user.id,
+        email: user.email,
+        displayName: user.displayName,
+        avatarUrl: user.avatarUrl,
+        settings: user.settings,
+        createdAt: user.createdAt,
+      },
+      ...tokens,
+    });
+  } catch (error) {
+    logger.error('Auto-login failed', { error: (error as Error).message });
+    res.status(500).json({ error: 'Auto-login failed' });
   }
 });
 

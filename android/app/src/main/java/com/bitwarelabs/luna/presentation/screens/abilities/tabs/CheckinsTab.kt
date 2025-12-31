@@ -16,7 +16,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.bitwarelabs.luna.domain.model.BuiltInCheckin
 import com.bitwarelabs.luna.domain.model.CheckinHistory
-import com.bitwarelabs.luna.domain.model.CheckinSchedule
+import com.bitwarelabs.luna.domain.model.LegacyCheckinSchedule
 import com.bitwarelabs.luna.presentation.screens.abilities.AbilitiesViewModel
 import com.bitwarelabs.luna.presentation.theme.LunaTheme
 
@@ -188,7 +188,7 @@ private fun BuiltInCheckinItem(checkin: BuiltInCheckin) {
 
 @Composable
 private fun CheckinScheduleItem(
-    schedule: CheckinSchedule,
+    schedule: LegacyCheckinSchedule,
     onDelete: () -> Unit
 ) {
     Row(

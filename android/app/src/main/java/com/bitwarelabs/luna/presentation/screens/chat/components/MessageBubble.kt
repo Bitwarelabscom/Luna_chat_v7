@@ -1,8 +1,10 @@
 package com.bitwarelabs.luna.presentation.screens.chat.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -22,9 +24,12 @@ import com.bitwarelabs.luna.presentation.theme.LunaTheme
 @Composable
 fun MessageBubble(
     message: Message,
+    isExpanded: Boolean = false,
+    onClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val isUser = message.role == MessageRole.USER
+    val isAssistant = message.role == MessageRole.ASSISTANT
     val configuration = LocalConfiguration.current
     val maxWidth = (configuration.screenWidthDp * 0.85f).dp
 
@@ -56,14 +61,31 @@ fun MessageBubble(
                     )
                 )
                 .background(backgroundColor)
+                .then(
+                    if (isAssistant && onClick != null) {
+                        Modifier.clickable(onClick = onClick)
+                    } else {
+                        Modifier
+                    }
+                )
                 .padding(12.dp)
         ) {
-            // Simple text rendering - in production, use Markwon for markdown
-            Text(
-                text = message.content,
-                style = MaterialTheme.typography.bodyLarge,
-                color = textColor
-            )
+            Column {
+                // Simple text rendering - in production, use Markwon for markdown
+                Text(
+                    text = message.content,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = textColor
+                )
+
+                // Expandable metadata for assistant messages
+                if (isAssistant) {
+                    ExpandableMetadata(
+                        isExpanded = isExpanded,
+                        metrics = message.metrics
+                    )
+                }
+            }
         }
     }
 }

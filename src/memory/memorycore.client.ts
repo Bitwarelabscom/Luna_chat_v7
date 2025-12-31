@@ -2,6 +2,56 @@ import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
 import type { MemoryContext, ConsciousnessMetrics, ConsolidatedUserModel } from '../types/index.js';
 
+// ============================================
+// Graph Memory Types
+// ============================================
+
+export interface GraphNarrativeContext {
+  coreMemories: string[];
+  activeTopics: string[];
+  relationships: string[];
+  preferences: string[];
+  emotionalContext: string[];
+  stats: {
+    nodesIncluded: number;
+    edgesIncluded: number;
+    queryTimeMs: number;
+  };
+}
+
+export interface GraphMemoryContext {
+  formattedContext: string;
+  narrative: GraphNarrativeContext;
+  stats: {
+    nodesIncluded: number;
+    edgesIncluded: number;
+    queryTimeMs: number;
+  };
+}
+
+export interface GraphStats {
+  totalNodes: number;
+  totalEdges: number;
+  nodesByType: Record<string, number>;
+  avgConnectivity: number;
+  highTrustNodes: number;
+}
+
+export interface GraphExtractionResult {
+  entitiesExtracted: number;
+  cooccurrences: number;
+  processingTimeMs: number;
+  nodesCreated: number;
+  nodesUpdated: number;
+  mentionsLogged: number;
+  entities: Array<{
+    label: string;
+    type: string;
+    origin: string;
+    confidence: number;
+  }>;
+}
+
 interface MemoryCoreSession {
   sessionId: string;
   userId: string;
@@ -460,6 +510,173 @@ export function formatMemoryWithConsciousness(memory: MemoryContext | null): str
   return `\n\n[User Context from Memory]\n${parts.join('\n')}\n`;
 }
 
+// ============================================
+// Graph Memory Methods
+// ============================================
+
+/**
+ * Get graph memory context for a user
+ * Returns narrative context formatted for prompt injection
+ */
+export async function getGraphContext(userId: string): Promise<GraphMemoryContext | null> {
+  if (!config.memorycore.enabled) return null;
+
+  try {
+    const response = await fetch(`${config.memorycore.url}/api/graph/context/${userId}`, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      if (response.status === 404) {
+        return null;
+      }
+      throw new Error(`MemoryCore returned ${response.status}`);
+    }
+
+    const data = await response.json() as { success: boolean; data: GraphMemoryContext };
+    return data.data;
+  } catch (error) {
+    logger.warn('Failed to get graph context', { userId, error: (error as Error).message });
+    return null;
+  }
+}
+
+/**
+ * Get graph memory statistics for a user
+ */
+export async function getGraphStats(userId: string): Promise<GraphStats | null> {
+  if (!config.memorycore.enabled) return null;
+
+  try {
+    const response = await fetch(`${config.memorycore.url}/api/graph/stats/${userId}`, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json() as { success: boolean; data: GraphStats };
+    return data.data;
+  } catch (error) {
+    logger.warn('Failed to get graph stats', { userId, error: (error as Error).message });
+    return null;
+  }
+}
+
+/**
+ * Extract entities from a message and update graph memory
+ * Call this after processing user/assistant messages
+ */
+export async function extractGraphEntities(
+  userId: string,
+  sessionId: string,
+  content: string,
+  origin: 'user' | 'model' = 'user'
+): Promise<GraphExtractionResult | null> {
+  if (!config.memorycore.enabled) return null;
+
+  try {
+    const response = await fetch(`${config.memorycore.url}/api/graph/extract`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ userId, sessionId, content, origin }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`MemoryCore returned ${response.status}`);
+    }
+
+    const data = await response.json() as { success: boolean; data: GraphExtractionResult };
+    logger.debug('Graph entities extracted', {
+      userId,
+      sessionId,
+      entitiesExtracted: data.data.entitiesExtracted,
+    });
+    return data.data;
+  } catch (error) {
+    logger.warn('Failed to extract graph entities', { userId, error: (error as Error).message });
+    return null;
+  }
+}
+
+/**
+ * Format graph context for inclusion in prompts
+ * Returns the pre-formatted context string from MemoryCore
+ */
+export function formatGraphContext(graphContext: GraphMemoryContext | null): string {
+  if (!graphContext || !graphContext.formattedContext) return '';
+  return graphContext.formattedContext;
+}
+
+/**
+ * Build combined memory context including graph memory
+ * This is the main method for getting full memory context
+ */
+export async function getFullMemoryContext(userId: string): Promise<{
+  semantic: MemoryContext | null;
+  graph: GraphMemoryContext | null;
+  consciousness: ConsciousnessMetrics | null;
+  consolidated: ConsolidatedUserModel | null;
+}> {
+  if (!config.memorycore.enabled) {
+    return { semantic: null, graph: null, consciousness: null, consolidated: null };
+  }
+
+  // Fetch all memory sources in parallel
+  const [semantic, graph, consciousness, consolidated] = await Promise.all([
+    getSemanticMemory(userId),
+    getGraphContext(userId),
+    config.memorycore.consciousnessEnabled ? getConsciousnessMetrics(userId) : Promise.resolve(null),
+    getConsolidatedModel(userId),
+  ]);
+
+  return { semantic, graph, consciousness, consolidated };
+}
+
+/**
+ * Format full memory context for prompts
+ * Combines semantic, graph, and consciousness context
+ */
+export function formatFullMemoryContext(context: {
+  semantic: MemoryContext | null;
+  graph: GraphMemoryContext | null;
+  consciousness: ConsciousnessMetrics | null;
+}): string {
+  const parts: string[] = [];
+
+  // Graph memory (narrative format - primary)
+  if (context.graph?.formattedContext) {
+    parts.push(context.graph.formattedContext);
+  }
+
+  // Semantic memory patterns
+  if (context.semantic?.recentPatterns && context.semantic.recentPatterns.length > 0) {
+    const patterns = context.semantic.recentPatterns
+      .slice(0, 3)
+      .map((p) => `- ${p.type}: ${p.pattern}`)
+      .join('\n');
+    parts.push(`<recent_patterns>\n${patterns}\n</recent_patterns>`);
+  }
+
+  // Consciousness state (if high integration)
+  if (context.consciousness && context.consciousness.phi >= config.memorycore.phiThreshold) {
+    parts.push(`<memory_coherence>High temporal integration (${(context.consciousness.temporalIntegration * 100).toFixed(0)}%)</memory_coherence>`);
+  }
+
+  if (parts.length === 0) return '';
+
+  return parts.join('\n\n');
+}
+
 export default {
   // Session lifecycle management for chat integration
   ensureSession,
@@ -482,4 +699,11 @@ export default {
   getConsciousnessHistory,
   triggerConsciousnessAnalysis,
   formatMemoryWithConsciousness,
+  // Graph memory methods
+  getGraphContext,
+  getGraphStats,
+  extractGraphEntities,
+  formatGraphContext,
+  getFullMemoryContext,
+  formatFullMemoryContext,
 };

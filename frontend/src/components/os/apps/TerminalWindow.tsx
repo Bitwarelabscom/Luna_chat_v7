@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Terminal, Play, RefreshCw, Trash2, Copy, Check, ChevronDown } from 'lucide-react';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
-const API_PREFIX = API_URL ? '' : '/luna-chat';
+const API_PREFIX = '';
 
 type Language = 'python' | 'javascript' | 'shell';
 

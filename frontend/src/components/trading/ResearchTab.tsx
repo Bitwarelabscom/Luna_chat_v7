@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Activity, Zap, TrendingDown, CheckCircle, XCircle, AlertTriangle, RefreshCw, Settings, ChevronDown, ChevronUp } from 'lucide-react';
-import { tradingApi, IndicatorSettings } from '@/lib/api';
+import { Activity, Zap, TrendingDown, CheckCircle, XCircle, AlertTriangle, RefreshCw, Settings, ChevronDown, ChevronUp, Bot, Play, Square } from 'lucide-react';
+import { tradingApi, IndicatorSettings, ResearchSettings, AutoTradingSettings, MarketRegime } from '@/lib/api';
 
 interface ResearchSignal {
   id: string;
@@ -37,15 +37,6 @@ interface ResearchSignal {
   };
 }
 
-interface ResearchSettings {
-  executionMode: 'auto' | 'confirm' | 'manual';
-  paperLiveMode: 'paper' | 'live';
-  enableAutoDiscovery: boolean;
-  autoDiscoveryLimit: number;
-  customSymbols: string[];
-  minConfidence: number;
-}
-
 interface ResearchMetrics {
   research: {
     totalSignals: number;
@@ -76,6 +67,13 @@ export default function ResearchTab({ onViewChart }: ResearchTabProps) {
   const [indicatorSettings, setIndicatorSettings] = useState<IndicatorSettings | null>(null);
   const [showIndicatorSettings, setShowIndicatorSettings] = useState(false);
   const [savingIndicators, setSavingIndicators] = useState(false);
+  const [showExitSettings, setShowExitSettings] = useState(false);
+  const [savingExitSettings, setSavingExitSettings] = useState(false);
+  // Auto Trading state
+  const [autoSettings, setAutoSettings] = useState<AutoTradingSettings | null>(null);
+  const [marketRegime, setMarketRegime] = useState<MarketRegime | null>(null);
+  const [showAutoSettings, setShowAutoSettings] = useState(false);
+  const [savingAutoSettings, setSavingAutoSettings] = useState(false);
 
   // Load initial data
   useEffect(() => {
@@ -87,18 +85,22 @@ export default function ResearchTab({ onViewChart }: ResearchTabProps) {
 
   const loadData = async () => {
     try {
-      const [settingsData, metricsData, pairsData, signalsData, indicatorData] = await Promise.all([
+      const [settingsData, metricsData, pairsData, signalsData, indicatorData, autoData, regimeData] = await Promise.all([
         tradingApi.getResearchSettings(),
         tradingApi.getResearchMetrics(),
         tradingApi.getTopPairs(20),
         tradingApi.getResearchSignals(),
-        tradingApi.getIndicatorSettings().catch(() => null)
+        tradingApi.getIndicatorSettings().catch(() => null),
+        tradingApi.getAutoTradingSettings().catch(() => null),
+        tradingApi.getMarketRegime().catch(() => null),
       ]);
       setSettings(settingsData);
       setMetrics(metricsData);
       setTopPairs(pairsData.pairs);
       setSignals(signalsData);
       if (indicatorData) setIndicatorSettings(indicatorData);
+      if (autoData) setAutoSettings(autoData);
+      if (regimeData) setMarketRegime(regimeData.regime);
     } catch (error) {
       console.error('Failed to load research data', error);
     } finally {
@@ -198,6 +200,50 @@ export default function ResearchTab({ onViewChart }: ResearchTabProps) {
     }
   };
 
+  const handleExitSettingsChange = async (updates: Partial<ResearchSettings>) => {
+    if (!settings) return;
+    setSavingExitSettings(true);
+    try {
+      const updated = await tradingApi.updateResearchSettings(updates);
+      setSettings(updated);
+    } catch (error) {
+      console.error('Failed to update exit settings', error);
+    } finally {
+      setSavingExitSettings(false);
+    }
+  };
+
+  const handleAutoSettingsChange = async (updates: Partial<AutoTradingSettings>) => {
+    if (!autoSettings) return;
+    setSavingAutoSettings(true);
+    try {
+      const result = await tradingApi.updateAutoTradingSettings(updates);
+      setAutoSettings(result.settings);
+    } catch (error) {
+      console.error('Failed to update auto settings', error);
+    } finally {
+      setSavingAutoSettings(false);
+    }
+  };
+
+  const handleAutoTradingToggle = async () => {
+    if (!autoSettings) return;
+    setSavingAutoSettings(true);
+    try {
+      if (autoSettings.enabled) {
+        await tradingApi.stopAutoTrading();
+      } else {
+        await tradingApi.startAutoTrading();
+      }
+      const result = await tradingApi.getAutoTradingSettings();
+      setAutoSettings(result);
+    } catch (error) {
+      console.error('Failed to toggle auto trading', error);
+    } finally {
+      setSavingAutoSettings(false);
+    }
+  };
+
   if (loading) {
     return (
       <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -279,6 +325,49 @@ export default function ResearchTab({ onViewChart }: ResearchTabProps) {
           <Settings style={{ width: 14, height: 14 }} />
           Indicators
           {showIndicatorSettings ? <ChevronUp style={{ width: 12, height: 12 }} /> : <ChevronDown style={{ width: 12, height: 12 }} />}
+        </button>
+
+        {/* Exit Orders Settings Toggle */}
+        <button
+          onClick={() => setShowExitSettings(!showExitSettings)}
+          style={{
+            padding: '6px 12px',
+            borderRadius: '4px',
+            border: '1px solid #2a3545',
+            background: showExitSettings ? '#f59e0b20' : '#2a3545',
+            color: showExitSettings ? '#f59e0b' : '#fff',
+            cursor: 'pointer',
+            fontSize: '12px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+          }}
+        >
+          <Settings style={{ width: 14, height: 14 }} />
+          Exit Orders
+          {showExitSettings ? <ChevronUp style={{ width: 12, height: 12 }} /> : <ChevronDown style={{ width: 12, height: 12 }} />}
+        </button>
+
+        {/* Auto Trading Toggle */}
+        <button
+          onClick={() => setShowAutoSettings(!showAutoSettings)}
+          style={{
+            padding: '6px 12px',
+            borderRadius: '4px',
+            border: '1px solid #2a3545',
+            background: showAutoSettings ? '#8b5cf620' : autoSettings?.enabled ? '#10b98120' : '#2a3545',
+            color: showAutoSettings ? '#8b5cf6' : autoSettings?.enabled ? '#10b981' : '#fff',
+            cursor: 'pointer',
+            fontSize: '12px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+          }}
+        >
+          <Bot style={{ width: 14, height: 14 }} />
+          Auto Trading
+          {autoSettings?.enabled && <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#10b981' }} />}
+          {showAutoSettings ? <ChevronUp style={{ width: 12, height: 12 }} /> : <ChevronDown style={{ width: 12, height: 12 }} />}
         </button>
 
         {/* Refresh Button */}
@@ -403,6 +492,321 @@ export default function ResearchTab({ onViewChart }: ResearchTabProps) {
         </div>
       )}
 
+      {/* Exit Orders Settings Panel */}
+      {showExitSettings && settings && (
+        <div style={{ background: '#111827', borderRadius: '8px', padding: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+            <h4 style={{ margin: 0, fontSize: '13px', color: '#fff', fontWeight: 500 }}>
+              Exit Order Settings
+            </h4>
+            {savingExitSettings && (
+              <span style={{ fontSize: '11px', color: '#8892a0' }}>Saving...</span>
+            )}
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '16px' }}>
+            {/* Position Size */}
+            <div>
+              <div style={{ fontSize: '11px', color: '#8892a0', marginBottom: '8px', textTransform: 'uppercase' }}>
+                Position Size (USDC): ${settings.positionSizeUsdt || 100}
+              </div>
+              <input
+                type="range"
+                min="25"
+                max="500"
+                step="25"
+                value={settings.positionSizeUsdt || 100}
+                onChange={(e) => handleExitSettingsChange({ positionSizeUsdt: parseFloat(e.target.value) })}
+                disabled={savingExitSettings}
+                style={{ width: '100%', accentColor: '#00ff9f' }}
+              />
+            </div>
+
+            {/* Stop Loss */}
+            <div>
+              <div style={{ fontSize: '11px', color: '#8892a0', marginBottom: '8px', textTransform: 'uppercase' }}>
+                Stop Loss: {settings.stopLossPct || 2}%
+              </div>
+              <input
+                type="range"
+                min="0.5"
+                max="10"
+                step="0.5"
+                value={settings.stopLossPct || 2}
+                onChange={(e) => handleExitSettingsChange({ stopLossPct: parseFloat(e.target.value) })}
+                disabled={savingExitSettings}
+                style={{ width: '100%', accentColor: '#ef4444' }}
+              />
+            </div>
+
+            {/* Take Profit 1 */}
+            <div>
+              <div style={{ fontSize: '11px', color: '#8892a0', marginBottom: '8px', textTransform: 'uppercase' }}>
+                Take Profit: {settings.takeProfitPct || 3}%
+              </div>
+              <input
+                type="range"
+                min="1"
+                max="20"
+                step="0.5"
+                value={settings.takeProfitPct || 3}
+                onChange={(e) => handleExitSettingsChange({ takeProfitPct: parseFloat(e.target.value) })}
+                disabled={savingExitSettings}
+                style={{ width: '100%', accentColor: '#10b981' }}
+              />
+            </div>
+
+            {/* Trailing Stop */}
+            <div>
+              <div style={{ fontSize: '11px', color: '#8892a0', marginBottom: '8px', textTransform: 'uppercase' }}>
+                Trailing Stop: {settings.trailingStopPct ? `${settings.trailingStopPct}%` : 'Off'}
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="5"
+                step="0.5"
+                value={settings.trailingStopPct || 0}
+                onChange={(e) => {
+                  const val = parseFloat(e.target.value);
+                  handleExitSettingsChange({ trailingStopPct: val > 0 ? val : null });
+                }}
+                disabled={savingExitSettings}
+                style={{ width: '100%', accentColor: '#f59e0b' }}
+              />
+              <div style={{ fontSize: '10px', color: '#6b7280', marginTop: '4px' }}>
+                0 = Fixed SL, {'>'}0 = Trailing
+              </div>
+            </div>
+
+            {/* Position Size % (for live mode) */}
+            <div>
+              <div style={{ fontSize: '11px', color: '#8892a0', marginBottom: '8px', textTransform: 'uppercase' }}>
+                Position Size: {settings.positionPct || 10}% of Portfolio
+              </div>
+              <input
+                type="range"
+                min="5"
+                max="50"
+                step="5"
+                value={settings.positionPct || 10}
+                onChange={(e) => handleExitSettingsChange({ positionPct: parseFloat(e.target.value) })}
+                disabled={savingExitSettings}
+                style={{ width: '100%', accentColor: '#3b82f6' }}
+              />
+              <div style={{ fontSize: '10px', color: '#6b7280', marginTop: '4px' }}>
+                Used in live mode
+              </div>
+            </div>
+
+            {/* Max Positions */}
+            <div>
+              <div style={{ fontSize: '11px', color: '#8892a0', marginBottom: '8px', textTransform: 'uppercase' }}>
+                Max Concurrent Trades: {settings.maxPositions || 3}
+              </div>
+              <input
+                type="range"
+                min="1"
+                max="10"
+                step="1"
+                value={settings.maxPositions || 3}
+                onChange={(e) => handleExitSettingsChange({ maxPositions: parseInt(e.target.value) })}
+                disabled={savingExitSettings}
+                style={{ width: '100%', accentColor: '#8b5cf6' }}
+              />
+            </div>
+          </div>
+
+          {/* Preview */}
+          <div style={{
+            marginTop: '16px',
+            padding: '12px',
+            background: '#1a2535',
+            borderRadius: '6px',
+            fontSize: '11px',
+            color: '#8892a0'
+          }}>
+            <strong style={{ color: '#fff' }}>Example:</strong> Buy at $100 → SL: ${(100 * (1 - (settings.stopLossPct || 2) / 100)).toFixed(2)} | TP: ${(100 * (1 + (settings.takeProfitPct || 3) / 100)).toFixed(2)}
+          </div>
+        </div>
+      )}
+
+      {/* Auto Trading Settings Panel */}
+      {showAutoSettings && autoSettings && (
+        <div style={{ background: '#111827', borderRadius: '8px', padding: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <h4 style={{ margin: 0, fontSize: '13px', color: '#fff', fontWeight: 500 }}>
+                Auto Trading Settings
+                <span style={{ fontSize: '10px', color: '#6b7280', marginLeft: '8px' }}>v2024.12.28.1</span>
+              </h4>
+              {marketRegime && (
+                <span style={{
+                  fontSize: '10px',
+                  padding: '2px 8px',
+                  borderRadius: '4px',
+                  background: marketRegime.regime === 'trending' ? '#3b82f620' :
+                             marketRegime.regime === 'ranging' ? '#f59e0b20' : '#8b5cf620',
+                  color: marketRegime.regime === 'trending' ? '#3b82f6' :
+                         marketRegime.regime === 'ranging' ? '#f59e0b' : '#8b5cf6',
+                  textTransform: 'uppercase',
+                }}>
+                  {marketRegime.regime}
+                </span>
+              )}
+            </div>
+            <button
+              onClick={handleAutoTradingToggle}
+              disabled={savingAutoSettings}
+              style={{
+                padding: '6px 16px',
+                borderRadius: '4px',
+                border: 'none',
+                background: autoSettings.enabled ? '#ef4444' : '#10b981',
+                color: '#fff',
+                cursor: savingAutoSettings ? 'not-allowed' : 'pointer',
+                fontSize: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                opacity: savingAutoSettings ? 0.5 : 1,
+              }}
+            >
+              {autoSettings.enabled ? <Square style={{ width: 12, height: 12 }} /> : <Play style={{ width: 12, height: 12 }} />}
+              {autoSettings.enabled ? 'Stop' : 'Start'}
+            </button>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '16px' }}>
+            {/* Strategy Mode */}
+            <div>
+              <div style={{ fontSize: '11px', color: '#8892a0', marginBottom: '8px', textTransform: 'uppercase' }}>
+                Strategy Mode
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  onClick={() => handleAutoSettingsChange({ strategyMode: 'auto' })}
+                  disabled={savingAutoSettings}
+                  style={{
+                    flex: 1,
+                    padding: '8px',
+                    borderRadius: '4px',
+                    border: autoSettings.strategyMode === 'auto' ? '1px solid #8b5cf6' : '1px solid #2a3545',
+                    background: autoSettings.strategyMode === 'auto' ? '#8b5cf620' : 'transparent',
+                    color: autoSettings.strategyMode === 'auto' ? '#8b5cf6' : '#8892a0',
+                    cursor: 'pointer',
+                    fontSize: '11px',
+                  }}
+                >
+                  Auto (Regime-based)
+                </button>
+                <button
+                  onClick={() => handleAutoSettingsChange({ strategyMode: 'manual' })}
+                  disabled={savingAutoSettings}
+                  style={{
+                    flex: 1,
+                    padding: '8px',
+                    borderRadius: '4px',
+                    border: autoSettings.strategyMode === 'manual' ? '1px solid #3b82f6' : '1px solid #2a3545',
+                    background: autoSettings.strategyMode === 'manual' ? '#3b82f620' : 'transparent',
+                    color: autoSettings.strategyMode === 'manual' ? '#3b82f6' : '#8892a0',
+                    cursor: 'pointer',
+                    fontSize: '11px',
+                  }}
+                >
+                  Manual
+                </button>
+              </div>
+            </div>
+
+            {/* Strategy Selection (only in manual mode) */}
+            <div>
+              <div style={{ fontSize: '11px', color: '#8892a0', marginBottom: '8px', textTransform: 'uppercase' }}>
+                Strategy {autoSettings.strategyMode === 'auto' ? `(Auto: ${autoSettings.currentStrategy || 'loading...'})` : ''}
+              </div>
+              <select
+                value={autoSettings.strategyMode === 'auto' ? (autoSettings.currentStrategy || autoSettings.strategy) : autoSettings.strategy}
+                onChange={(e) => handleAutoSettingsChange({ strategy: e.target.value as AutoTradingSettings['strategy'] })}
+                disabled={savingAutoSettings || autoSettings.strategyMode === 'auto'}
+                style={{
+                  width: '100%',
+                  padding: '8px',
+                  borderRadius: '4px',
+                  border: '1px solid #2a3545',
+                  background: autoSettings.strategyMode === 'auto' ? '#1a2535' : '#111827',
+                  color: autoSettings.strategyMode === 'auto' ? '#6b7280' : '#fff',
+                  fontSize: '11px',
+                  cursor: autoSettings.strategyMode === 'auto' ? 'not-allowed' : 'pointer',
+                }}
+              >
+                <option value="rsi_oversold">RSI Oversold</option>
+                <option value="trend_following">Trend Following</option>
+                <option value="mean_reversion">Mean Reversion</option>
+                <option value="momentum">Momentum</option>
+                <option value="btc_correlation">BTC Correlation</option>
+              </select>
+            </div>
+
+            {/* Position Size % */}
+            <div>
+              <div style={{ fontSize: '11px', color: '#8892a0', marginBottom: '8px', textTransform: 'uppercase' }}>
+                Position Size: {autoSettings.maxPositionPct}% of Portfolio
+              </div>
+              <input
+                type="range"
+                min="5"
+                max="50"
+                step="5"
+                value={autoSettings.maxPositionPct}
+                onChange={(e) => handleAutoSettingsChange({ maxPositionPct: parseFloat(e.target.value), minPositionPct: parseFloat(e.target.value) })}
+                disabled={savingAutoSettings}
+                style={{ width: '100%', accentColor: '#3b82f6' }}
+              />
+            </div>
+
+            {/* Max Positions */}
+            <div>
+              <div style={{ fontSize: '11px', color: '#8892a0', marginBottom: '8px', textTransform: 'uppercase' }}>
+                Max Concurrent Trades: {autoSettings.maxPositions}
+              </div>
+              <input
+                type="range"
+                min="1"
+                max="10"
+                step="1"
+                value={autoSettings.maxPositions}
+                onChange={(e) => handleAutoSettingsChange({ maxPositions: parseInt(e.target.value) })}
+                disabled={savingAutoSettings}
+                style={{ width: '100%', accentColor: '#8b5cf6' }}
+              />
+            </div>
+          </div>
+
+          {/* Status */}
+          <div style={{
+            marginTop: '16px',
+            padding: '12px',
+            background: '#1a2535',
+            borderRadius: '6px',
+            fontSize: '11px',
+            color: '#8892a0',
+            display: 'flex',
+            justifyContent: 'space-between',
+          }}>
+            <span>
+              <strong style={{ color: '#fff' }}>Status:</strong>{' '}
+              <span style={{ color: autoSettings.enabled ? '#10b981' : '#ef4444' }}>
+                {autoSettings.enabled ? 'Running' : 'Stopped'}
+              </span>
+            </span>
+            <span>
+              <strong style={{ color: '#fff' }}>Strategy:</strong>{' '}
+              {autoSettings.strategyMode === 'auto' ? `Auto (${autoSettings.strategy})` : autoSettings.strategy}
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Metrics Panel */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
         <MetricCard
@@ -442,7 +846,7 @@ export default function ResearchTab({ onViewChart }: ResearchTabProps) {
               No signals detected yet. The bot scans for opportunities every 30 seconds.
             </div>
           ) : (
-            signals.map(signal => (
+            signals.slice(0, 10).map(signal => (
               <SignalCard
                 key={signal.id}
                 signal={signal}

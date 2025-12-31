@@ -265,7 +265,7 @@ data class MoodTrends(
 
 data class CheckinsData(
     val builtIn: List<BuiltInCheckin>,
-    val schedules: List<CheckinSchedule>
+    val schedules: List<LegacyCheckinSchedule>
 )
 
 data class BuiltInCheckin(
@@ -275,7 +275,7 @@ data class BuiltInCheckin(
     val defaultTime: String
 )
 
-data class CheckinSchedule(
+data class LegacyCheckinSchedule(
     val id: String,
     val type: String,
     val name: String,

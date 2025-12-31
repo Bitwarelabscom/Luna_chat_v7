@@ -175,3 +175,35 @@ export async function updateUserSettings(
     [JSON.stringify(settings), userId]
   );
 }
+
+// Get the first active user (for auto-login on trusted local network)
+export async function getFirstUser(): Promise<(Omit<User, 'settings'> & { settings: Record<string, unknown> }) | null> {
+  const user = await queryOne<DbUser>(
+    'SELECT * FROM users WHERE is_active = true ORDER BY created_at ASC LIMIT 1',
+    []
+  );
+  return user ? mapDbUser(user) : null;
+}
+
+// Generate tokens for a user by ID (for auto-login)
+export async function generateTokensForUser(userId: string): Promise<AuthTokens> {
+  const user = await queryOne<DbUser>(
+    'SELECT * FROM users WHERE id = $1 AND is_active = true',
+    [userId]
+  );
+
+  if (!user) {
+    throw new Error('User not found');
+  }
+
+  // Update last login
+  await query('UPDATE users SET last_login = NOW() WHERE id = $1', [userId]);
+
+  // Generate tokens
+  const tokens = generateTokens(user.id, user.email);
+
+  // Store refresh token
+  await storeRefreshToken(user.id, tokens.refreshToken);
+
+  return tokens;
+}

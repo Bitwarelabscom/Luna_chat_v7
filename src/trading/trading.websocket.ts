@@ -1,29 +1,18 @@
 /**
  * Trading WebSocket Service
  *
- * Connects to Binance WebSocket streams for real-time price data
+ * Connects to Crypto.com WebSocket streams for real-time price data
  * and broadcasts updates to connected frontend clients.
  */
 
 import WebSocket from 'ws';
 import logger from '../utils/logger.js';
-
-// Binance WebSocket base URL
-const BINANCE_WS_BASE = 'wss://stream.binance.com:9443/ws';
+import * as cryptoComWs from './crypto-com.websocket.js';
+import * as binanceWs from './binance.websocket.js';
+import { toCryptoComSymbol } from './symbol-utils.js';
+import * as redisTradingService from './redis-trading.service.js';
 
 // Types
-interface MiniTicker {
-  e: string;      // Event type
-  E: number;      // Event time
-  s: string;      // Symbol
-  c: string;      // Close price
-  o: string;      // Open price
-  h: string;      // High price
-  l: string;      // Low price
-  v: string;      // Total traded base asset volume
-  q: string;      // Total traded quote asset volume
-}
-
 interface PriceUpdate {
   symbol: string;
   price: number;
@@ -31,104 +20,22 @@ interface PriceUpdate {
   high24h: number;
   low24h: number;
   volume: number;
+  exchange: 'crypto_com';
 }
 
 // Client management
 const clients = new Set<WebSocket>();
 const clientSubscriptions = new Map<WebSocket, Set<string>>();
 
-// Binance connection
-let binanceWs: WebSocket | null = null;
-let reconnectTimeout: NodeJS.Timeout | null = null;
-let isConnecting = false;
-
 // Price cache for instant responses
 const priceCache = new Map<string, PriceUpdate>();
 
-// Default symbols to track
+// Default symbols to track (Crypto.com USD pairs)
 const DEFAULT_SYMBOLS = [
-  'BTCUSDC', 'ETHUSDC', 'BNBUSDC', 'SOLUSDC', 'XRPUSDC',
-  'ADAUSDC', 'DOGEUSDC', 'AVAXUSDC', 'DOTUSDC', 'LINKUSDC'
+  'BTC_USD', 'ETH_USD', 'SOL_USD', 'XRP_USD',
+  'ADA_USD', 'DOGE_USD', 'AVAX_USD', 'DOT_USD', 'LINK_USD',
+  'BONK_USD', 'SHIB_USD', 'PEPE_USD'
 ];
-
-/**
- * Connect to Binance WebSocket
- */
-function connectToBinance(): void {
-  if (isConnecting || (binanceWs && binanceWs.readyState === WebSocket.OPEN)) {
-    return;
-  }
-
-  isConnecting = true;
-
-  // Create stream URL for all mini tickers
-  const streamUrl = `${BINANCE_WS_BASE}/!miniTicker@arr`;
-
-  logger.info('Connecting to Binance WebSocket', { url: streamUrl });
-
-  binanceWs = new WebSocket(streamUrl);
-
-  binanceWs.on('open', () => {
-    isConnecting = false;
-    logger.info('Connected to Binance WebSocket');
-  });
-
-  binanceWs.on('message', (data: WebSocket.Data) => {
-    try {
-      const tickers = JSON.parse(data.toString()) as MiniTicker[];
-
-      // Filter to only symbols we care about
-      const trackedSymbols = new Set<string>();
-      for (const subs of clientSubscriptions.values()) {
-        for (const s of subs) trackedSymbols.add(s);
-      }
-      // Always track defaults
-      DEFAULT_SYMBOLS.forEach(s => trackedSymbols.add(s));
-
-      const updates: PriceUpdate[] = [];
-
-      for (const ticker of tickers) {
-        if (!trackedSymbols.has(ticker.s)) continue;
-
-        const openPrice = parseFloat(ticker.o);
-        const closePrice = parseFloat(ticker.c);
-        const change24h = openPrice > 0 ? ((closePrice - openPrice) / openPrice) * 100 : 0;
-
-        const update: PriceUpdate = {
-          symbol: ticker.s,
-          price: closePrice,
-          change24h,
-          high24h: parseFloat(ticker.h),
-          low24h: parseFloat(ticker.l),
-          volume: parseFloat(ticker.v),
-        };
-
-        priceCache.set(ticker.s, update);
-        updates.push(update);
-      }
-
-      if (updates.length > 0) {
-        broadcastPriceUpdates(updates);
-      }
-    } catch (error) {
-      logger.error('Failed to parse Binance message', { error: (error as Error).message });
-    }
-  });
-
-  binanceWs.on('error', (error) => {
-    logger.error('Binance WebSocket error', { error: error.message });
-  });
-
-  binanceWs.on('close', () => {
-    isConnecting = false;
-    logger.warn('Binance WebSocket closed, reconnecting in 5s');
-
-    if (reconnectTimeout) clearTimeout(reconnectTimeout);
-    reconnectTimeout = setTimeout(() => {
-      connectToBinance();
-    }, 5000);
-  });
-}
 
 /**
  * Broadcast price updates to subscribed clients
@@ -141,7 +48,11 @@ function broadcastPriceUpdates(updates: PriceUpdate[]): void {
     if (!subscriptions) continue;
 
     // Filter updates to only symbols this client subscribed to
-    const clientUpdates = updates.filter(u => subscriptions.has(u.symbol) || subscriptions.has('*'));
+    const clientUpdates = updates.filter(u =>
+      subscriptions.has(u.symbol) ||
+      subscriptions.has(toCryptoComSymbol(u.symbol)) ||
+      subscriptions.has('*')
+    );
 
     if (clientUpdates.length > 0) {
       client.send(JSON.stringify({
@@ -215,9 +126,6 @@ export function handleClientConnection(ws: WebSocket): void {
   ws.on('error', (error) => {
     logger.error('Client WebSocket error', { error: error.message });
   });
-
-  // Ensure Binance connection is active
-  connectToBinance();
 }
 
 /**
@@ -228,13 +136,17 @@ function handleClientMessage(ws: WebSocket, message: { type: string; symbols?: s
     case 'subscribe':
       if (message.symbols && Array.isArray(message.symbols)) {
         const subs = clientSubscriptions.get(ws) || new Set();
-        message.symbols.forEach(s => subs.add(s.toUpperCase()));
+        message.symbols.forEach(s => {
+          // Normalize to Crypto.com format
+          subs.add(toCryptoComSymbol(s));
+        });
         clientSubscriptions.set(ws, subs);
 
         // Send cached prices for new subscriptions
         const prices: PriceUpdate[] = [];
         for (const symbol of message.symbols) {
-          const cached = priceCache.get(symbol.toUpperCase());
+          const normalizedSymbol = toCryptoComSymbol(symbol);
+          const cached = priceCache.get(normalizedSymbol);
           if (cached) prices.push(cached);
         }
         if (prices.length > 0) {
@@ -251,7 +163,7 @@ function handleClientMessage(ws: WebSocket, message: { type: string; symbols?: s
       if (message.symbols && Array.isArray(message.symbols)) {
         const subs = clientSubscriptions.get(ws);
         if (subs) {
-          message.symbols.forEach(s => subs.delete(s.toUpperCase()));
+          message.symbols.forEach(s => subs.delete(toCryptoComSymbol(s)));
         }
       }
       break;
@@ -280,7 +192,9 @@ function handleClientMessage(ws: WebSocket, message: { type: string; symbols?: s
  * Get cached price for a symbol
  */
 export function getCachedPrice(symbol: string): PriceUpdate | undefined {
-  return priceCache.get(symbol.toUpperCase());
+  // Try both formats
+  const cryptoComSymbol = toCryptoComSymbol(symbol);
+  return priceCache.get(cryptoComSymbol) || priceCache.get(symbol);
 }
 
 /**
@@ -291,25 +205,67 @@ export function getAllCachedPrices(): PriceUpdate[] {
 }
 
 /**
- * Initialize WebSocket service
+ * Initialize WebSocket service - Crypto.com for execution + Binance for indicators
  */
 export function initializeTradingWebSocket(): void {
-  connectToBinance();
-  logger.info('Trading WebSocket service initialized');
+  // Connect to Binance for accurate price data and historical candles (for indicators)
+  binanceWs.initializeBinanceWebSocket({
+    fetchHistory: true, // Fetch historical candles to populate Redis
+    klineTimeframes: ['1m', '5m', '15m', '1h'], // Timeframes for indicator calculation
+  }).catch(err => {
+    logger.error('Failed to initialize Binance WebSocket', { error: err.message });
+  });
+
+  // Connect to Crypto.com and forward price updates (for execution)
+  cryptoComWs.initializeCryptoComWebSocket();
+  cryptoComWs.onPriceUpdate((updates) => {
+    // Convert to our format and broadcast
+    const priceUpdates: PriceUpdate[] = updates.map(u => ({
+      symbol: u.symbol,
+      price: u.price,
+      change24h: u.change24h,
+      high24h: u.high24h,
+      low24h: u.low24h,
+      volume: u.volume,
+      exchange: 'crypto_com' as const,
+    }));
+
+    // Update cache with Crypto.com prices
+    for (const update of priceUpdates) {
+      priceCache.set(update.symbol, update);
+    }
+
+    // Write prices to Redis for centralized data access
+    const redisPrices: redisTradingService.PriceData[] = priceUpdates.map(u => ({
+      symbol: u.symbol,
+      price: u.price,
+      change24h: u.change24h,
+      volume24h: u.volume,
+      high24h: u.high24h,
+      low24h: u.low24h,
+      timestamp: Date.now(),
+      source: 'crypto_com' as const,
+    }));
+    redisTradingService.setPrices(redisPrices).catch(err => {
+      logger.error('Failed to write prices to Redis', { error: err.message });
+    });
+
+    // Broadcast to clients
+    broadcastPriceUpdates(priceUpdates);
+  });
+
+  logger.info('Trading WebSocket service initialized (Binance + Crypto.com)');
 }
 
 /**
  * Cleanup on shutdown
  */
 export function shutdownTradingWebSocket(): void {
-  if (reconnectTimeout) {
-    clearTimeout(reconnectTimeout);
-  }
+  // Shutdown Binance WebSocket
+  binanceWs.shutdownBinanceWebSocket();
 
-  if (binanceWs) {
-    binanceWs.close();
-    binanceWs = null;
-  }
+  // Shutdown Crypto.com WebSocket
+  cryptoComWs.shutdownCryptoComWebSocket();
 
   for (const client of clients) {
     client.close();

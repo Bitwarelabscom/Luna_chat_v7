@@ -32,7 +32,8 @@ interface UseActivityStreamOptions {
   historyLimit?: number;
 }
 
-const API_BASE = '/luna-chat/api';
+const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
+const API_BASE = `${API_URL}/api`;
 
 export function useActivityStream(options: UseActivityStreamOptions = {}) {
   const {

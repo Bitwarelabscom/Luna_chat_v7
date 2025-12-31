@@ -8,10 +8,19 @@
  */
 
 import { pool } from '../db/index.js';
-import { BinanceClient, type Ticker24hr } from './binance.client.js';
+import { CryptoComClient } from './crypto-com.client.js';
+import type { Ticker24hr } from './exchange.interface.js';
 import * as tradingService from './trading.service.js';
 import { getCachedPrice } from './trading.websocket.js';
+import * as binanceWebSocket from './binance.websocket.js';
+import * as redisTradingService from './redis-trading.service.js';
 import logger from '../utils/logger.js';
+
+// Price tracking for event-driven detection
+const priceTracker = new Map<string, { price: number; timestamp: number }>();
+const SIGNIFICANT_DROP_PCT = 1.5; // 1.5% drop triggers check
+const PRICE_TRACK_WINDOW_MS = 5 * 60 * 1000; // 5 minute window
+let eventDrivenEnabled = false;
 
 // ============================================
 // Types
@@ -281,7 +290,7 @@ async function detectOpportunities(
   settings: ScalpingSettings
 ): Promise<ScalpingOpportunity[]> {
   const opportunities: ScalpingOpportunity[] = [];
-  const publicClient = new BinanceClient({ apiKey: '', apiSecret: '' });
+  const publicClient = new CryptoComClient({ apiKey: '', apiSecret: '' });
 
   for (const symbol of settings.symbols) {
     try {
@@ -1049,6 +1058,258 @@ export async function runScalpingJob(): Promise<{
   return results;
 }
 
+// ============================================
+// Event-Driven Scalping Detection
+// ============================================
+
+/**
+ * Check for significant price drop that warrants immediate opportunity check
+ */
+function checkForSignificantDrop(
+  symbol: string,
+  currentPrice: number
+): { isDrop: boolean; dropPct: number } {
+  const now = Date.now();
+  const tracked = priceTracker.get(symbol);
+
+  // Update tracker with current price if it's higher than what we have
+  // (we track highs to detect drops from)
+  if (!tracked || currentPrice > tracked.price || now - tracked.timestamp > PRICE_TRACK_WINDOW_MS) {
+    priceTracker.set(symbol, { price: currentPrice, timestamp: now });
+    return { isDrop: false, dropPct: 0 };
+  }
+
+  // Check if we've dropped significantly from the tracked high
+  const dropPct = ((tracked.price - currentPrice) / tracked.price) * 100;
+
+  if (dropPct >= SIGNIFICANT_DROP_PCT) {
+    // Reset tracker after detecting a drop
+    priceTracker.set(symbol, { price: currentPrice, timestamp: now });
+    return { isDrop: true, dropPct };
+  }
+
+  return { isDrop: false, dropPct };
+}
+
+/**
+ * Handle price update - check for significant drops that might be scalping opportunities
+ */
+async function handlePriceUpdate(
+  updates: redisTradingService.PriceData[]
+): Promise<void> {
+  for (const update of updates) {
+    const { isDrop, dropPct } = checkForSignificantDrop(update.symbol, update.price);
+
+    if (isDrop) {
+      logger.info('Significant price drop detected', {
+        symbol: update.symbol,
+        dropPct: dropPct.toFixed(2),
+        price: update.price,
+      });
+
+      // Find users with scalping enabled for this symbol and trigger check
+      try {
+        const result = await pool.query<{ user_id: string }>(
+          `SELECT user_id FROM scalping_settings
+           WHERE enabled = true
+           AND $1 = ANY(symbols)`,
+          [update.symbol]
+        );
+
+        for (const row of result.rows) {
+          // Queue a quick scalping check for this user/symbol
+          // Run async to not block price processing
+          triggerQuickCheck(row.user_id, update.symbol).catch(err => {
+            logger.error('Failed to trigger quick scalping check', {
+              userId: row.user_id,
+              symbol: update.symbol,
+              error: (err as Error).message,
+            });
+          });
+        }
+      } catch (err) {
+        logger.error('Failed to find users for scalping trigger', {
+          symbol: update.symbol,
+          error: (err as Error).message,
+        });
+      }
+    }
+  }
+}
+
+// Track in-progress quick checks to avoid duplicates
+const pendingQuickChecks = new Set<string>();
+
+/**
+ * Trigger a quick scalping check for a specific user and symbol
+ */
+async function triggerQuickCheck(userId: string, symbol: string): Promise<void> {
+  const key = `${userId}:${symbol}`;
+  if (pendingQuickChecks.has(key)) return;
+
+  pendingQuickChecks.add(key);
+
+  try {
+    const settings = await getSettings(userId);
+    if (!settings?.enabled) return;
+
+    // Get open positions to check if we already have one
+    // getOpenPositions works for both paper and live modes
+    const openPositions = await getOpenPositions(userId);
+
+    if (openPositions.some(p => p.symbol === symbol)) {
+      return; // Already have a position
+    }
+
+    // Quick opportunity detection for single symbol
+    const opportunity = await detectSingleOpportunity(settings, symbol);
+
+    if (opportunity && opportunity.confidenceScore >= settings.minConfidence) {
+      logger.info('Quick scalping opportunity detected', {
+        userId,
+        symbol,
+        confidence: opportunity.confidenceScore.toFixed(2),
+      });
+
+      if (settings.mode === 'paper') {
+        await executePaperTrade(opportunity, settings);
+      } else {
+        await executeLiveTrade(opportunity, settings);
+      }
+    }
+  } finally {
+    pendingQuickChecks.delete(key);
+  }
+}
+
+/**
+ * Detect opportunity for a single symbol (for quick checks)
+ */
+async function detectSingleOpportunity(
+  settings: ScalpingSettings,
+  symbol: string
+): Promise<ScalpingOpportunity | null> {
+  const publicClient = new CryptoComClient({ apiKey: '', apiSecret: '' });
+
+  try {
+    // Get current price from cache or API
+    let currentPrice: number;
+    let low24h: number;
+    let volume: number;
+
+    const cached = getCachedPrice(symbol);
+    if (cached) {
+      currentPrice = cached.price;
+      low24h = cached.low24h;
+      volume = cached.volume;
+    } else {
+      const ticker = await publicClient.getTicker24hr(symbol) as Ticker24hr;
+      currentPrice = parseFloat(ticker.lastPrice);
+      low24h = parseFloat(ticker.lowPrice);
+      volume = parseFloat(ticker.volume);
+    }
+
+    // Get klines for RSI calculation
+    const klines = await tradingService.getKlines(symbol, '5m', 20);
+    const closes = klines.map(k => parseFloat(k.close));
+    const rsi = calculateRSI(closes);
+
+    // Get recent prices for drop detection
+    const recentPrices = await getRecentPrices(symbol, 60);
+    let recentHigh = currentPrice;
+    let priceDropPct = 0;
+
+    if (recentPrices.length > 0) {
+      recentHigh = Math.max(...recentPrices.map(p => p.price));
+      priceDropPct = ((recentHigh - currentPrice) / recentHigh) * 100;
+    }
+
+    // Calculate volume ratio
+    let volumeRatio = 1;
+    if (recentPrices.length >= 12) {
+      const avgVolume = recentPrices.reduce((sum, p) => sum + (p.volume1m || 0), 0) / recentPrices.length;
+      volumeRatio = avgVolume > 0 ? volume / avgVolume : 1;
+    }
+
+    // Evaluate opportunity
+    const signalReasons: string[] = [];
+    let confidenceScore = 0;
+
+    // Price drop
+    if (priceDropPct >= settings.minDropPct && priceDropPct <= settings.maxDropPct) {
+      signalReasons.push(`Price dropped ${priceDropPct.toFixed(2)}% from recent high`);
+      confidenceScore += 0.25;
+      if (priceDropPct >= 2 && priceDropPct <= 5) confidenceScore += 0.1;
+    }
+
+    // RSI oversold
+    if (rsi <= settings.rsiOversoldThreshold) {
+      signalReasons.push(`RSI oversold at ${rsi.toFixed(1)}`);
+      confidenceScore += 0.25;
+      if (rsi <= 25) confidenceScore += 0.1;
+    }
+
+    // Volume spike
+    if (volumeRatio >= settings.volumeSpikeMultiplier) {
+      signalReasons.push(`Volume spike ${volumeRatio.toFixed(1)}x average`);
+      confidenceScore += 0.2;
+    }
+
+    // Near support
+    const distanceToSupport = ((currentPrice - low24h) / low24h) * 100;
+    if (distanceToSupport <= 2) {
+      signalReasons.push(`Near 24h support ($${low24h.toFixed(2)})`);
+      confidenceScore += 0.15;
+    }
+
+    // Pattern modifier
+    const patternModifier = await getPatternConfidenceModifier(settings.userId, symbol, {
+      priceDropPct,
+      rsi,
+      volumeRatio,
+    });
+    confidenceScore += patternModifier;
+    confidenceScore = Math.min(1, Math.max(0, confidenceScore));
+
+    if (signalReasons.length >= 2) {
+      return {
+        userId: settings.userId,
+        symbol,
+        currentPrice,
+        priceDropPct,
+        rsiValue: rsi,
+        volumeRatio,
+        distanceToSupportPct: distanceToSupport,
+        confidenceScore,
+        signalReasons,
+      };
+    }
+
+    return null;
+  } catch (error) {
+    logger.error('Failed to detect single opportunity', {
+      symbol,
+      error: (error as Error).message,
+    });
+    return null;
+  }
+}
+
+/**
+ * Initialize event-driven scalping detection
+ * Registers a callback to detect opportunities when prices drop significantly
+ */
+export function initEventDrivenScalping(): void {
+  if (eventDrivenEnabled) {
+    logger.warn('Event-driven scalping already initialized');
+    return;
+  }
+
+  binanceWebSocket.onPriceUpdate(handlePriceUpdate);
+  eventDrivenEnabled = true;
+  logger.info('Event-driven scalping detection enabled');
+}
+
 export default {
   getSettings,
   updateSettings,
@@ -1057,4 +1318,5 @@ export default {
   getStats,
   getOpenPositions,
   runScalpingJob,
+  initEventDrivenScalping,
 };

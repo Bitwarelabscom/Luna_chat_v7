@@ -25,6 +25,7 @@ import voiceRoutes from './voice/voice.routes.js';
 import projectRoutes from './abilities/project.routes.js';
 import activityRoutes from './activity/activity.routes.js';
 import backgroundRoutes from './abilities/background.routes.js';
+import consciousnessRoutes from './consciousness/consciousness.routes.js';
 import { startJobs, stopJobs } from './jobs/job-runner.js';
 import { setBroadcastFunction } from './activity/activity.service.js';
 import { initializeCritiqueQueue, shutdownCritiqueQueue } from './layered-agent/services/critique-queue.service.js';
@@ -51,9 +52,14 @@ app.use(ipWhitelistMiddleware);
 // SECURITY: Fail2ban - block IPs with too many failed login attempts
 app.use(fail2banMiddleware);
 
-// SECURITY: HTTPS enforcement in production (skip for health checks, webhooks, and static files)
+// SECURITY: HTTPS enforcement in production (skip for WireGuard, health checks, webhooks, and static files)
 if (config.nodeEnv === 'production') {
   app.use((req, res, next) => {
+    const clientIp = req.ip || req.socket.remoteAddress || '';
+    // Skip HTTPS redirect for WireGuard network (10.0.0.x)
+    if (clientIp.includes('10.0.0.')) {
+      return next();
+    }
     // Skip HTTPS redirect for health check, Telegram webhook, and static images
     // Static files like /api/images/* need to load without redirect for img tags
     if (req.path === '/api/health' ||
@@ -68,7 +74,7 @@ if (config.nodeEnv === 'production') {
   });
 }
 
-// SECURITY: Helmet with strict CSP and HSTS
+// SECURITY: Helmet with strict CSP (disabled HTTPS upgrade for WireGuard)
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -81,13 +87,10 @@ app.use(helmet({
       objectSrc: ["'none'"],
       mediaSrc: ["'self'"],
       frameSrc: ["'none'"],
+      upgradeInsecureRequests: null,  // Disable for WireGuard HTTP access
     },
   },
-  hsts: {
-    maxAge: 31536000,  // 1 year
-    includeSubDomains: true,
-    preload: true,
-  },
+  hsts: false,  // Disable HSTS for WireGuard HTTP access
   referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
   noSniff: true,
   xssFilter: true,
@@ -95,7 +98,15 @@ app.use(helmet({
 }));
 
 app.use(cors({
-  origin: config.cors.origin,
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, curl, etc)
+    // WireGuard network requests, and local hostname access
+    if (!origin || origin.includes('10.0.0.') || origin.includes('://luna:') || origin === config.cors.origin) {
+      callback(null, true);
+    } else {
+      callback(null, false);
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
@@ -167,6 +178,8 @@ app.use('/api/voice', voiceRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/activity', activityRoutes);
 app.use('/api/backgrounds', backgroundRoutes);
+app.use('/api/consciousness', consciousnessRoutes);
+app.use('/api/consolidation', consciousnessRoutes);  // Consolidation logs share routes
 
 // Connect activity service to delivery service's SSE broadcast
 setBroadcastFunction((userId: string, activity) => {

@@ -1,8 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { Clock, Zap, Wrench, Hash, ChevronDown, ChevronUp, DollarSign, Brain, CheckCircle } from 'lucide-react';
-import type { MessageMetrics as MetricsType } from '@/lib/api';
+import { Clock, Zap, Wrench, Hash, ChevronDown, ChevronUp, DollarSign, Brain, CheckCircle, AlertCircle, Sparkles, Cpu, Shield } from 'lucide-react';
+import type { MessageMetrics as MetricsType, RouteInfo } from '@/lib/api';
 
 interface MessageMetricsProps {
   metrics?: MetricsType;
@@ -16,6 +16,33 @@ const nodeNames: Record<string, string> = {
   critique: 'Review',
   repair: 'Repair',
 };
+
+// Route badge configuration
+const routeConfig: Record<string, { icon: React.ReactNode; color: string; label: string }> = {
+  'nano': { icon: <Sparkles className="w-3 h-3" />, color: 'text-gray-400', label: 'fast' },
+  'pro': { icon: <Cpu className="w-3 h-3" />, color: 'text-blue-400', label: 'pro' },
+  'pro+tools': { icon: <Shield className="w-3 h-3" />, color: 'text-green-400', label: 'verified' },
+};
+
+function RouteBadge({ routeInfo }: { routeInfo: RouteInfo }) {
+  const config = routeConfig[routeInfo.route] || routeConfig['pro'];
+  const isVerified = routeInfo.confidence === 'verified';
+
+  return (
+    <div
+      className={`flex items-center gap-1 ${config.color}`}
+      title={`Route: ${routeInfo.route} | Class: ${routeInfo.class} | Confidence: ${routeInfo.confidence}`}
+    >
+      {config.icon}
+      <span className="text-[10px] uppercase tracking-wide">{config.label}</span>
+      {isVerified ? (
+        <CheckCircle className="w-2.5 h-2.5" />
+      ) : (
+        <AlertCircle className="w-2.5 h-2.5 opacity-60" />
+      )}
+    </div>
+  );
+}
 
 export default function MessageMetrics({ metrics, role }: MessageMetricsProps) {
   const [expanded, setExpanded] = useState(false);
@@ -50,6 +77,11 @@ export default function MessageMetrics({ metrics, role }: MessageMetricsProps) {
     <div className="mt-1.5 text-xs text-theme-text-muted">
       {/* Main metrics row */}
       <div className="flex flex-wrap items-center gap-3">
+        {/* Route provenance badge - Router-First Architecture */}
+        {metrics.routeInfo && (
+          <RouteBadge routeInfo={metrics.routeInfo} />
+        )}
+
         {/* Processing time */}
         {metrics.processingTimeMs > 0 && (
           <div className="flex items-center gap-1" title="Processing time">

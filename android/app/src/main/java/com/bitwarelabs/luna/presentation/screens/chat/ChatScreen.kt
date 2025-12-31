@@ -4,10 +4,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.DrawerValue
@@ -33,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.bitwarelabs.luna.presentation.screens.chat.components.ChatArea
 import com.bitwarelabs.luna.presentation.screens.chat.components.ChatInput
+import com.bitwarelabs.luna.presentation.screens.chat.components.ModeIcon
 import com.bitwarelabs.luna.presentation.screens.chat.components.Sidebar
 import com.bitwarelabs.luna.presentation.theme.LunaTheme
 import kotlinx.coroutines.launch
@@ -43,6 +47,9 @@ fun ChatScreen(
     initialSessionId: String? = null,
     onNavigateToSettings: () -> Unit,
     onNavigateToAbilities: () -> Unit = {},
+    onNavigateToTrading: () -> Unit = {},
+    onNavigateToNotifications: () -> Unit = {},
+    onNavigateToActivity: () -> Unit = {},
     onLogout: () -> Unit,
     viewModel: ChatViewModel = hiltViewModel()
 ) {
@@ -94,6 +101,18 @@ fun ChatScreen(
                     scope.launch { drawerState.close() }
                     onNavigateToAbilities()
                 },
+                onTradingClick = {
+                    scope.launch { drawerState.close() }
+                    onNavigateToTrading()
+                },
+                onNotificationsClick = {
+                    scope.launch { drawerState.close() }
+                    onNavigateToNotifications()
+                },
+                onActivityClick = {
+                    scope.launch { drawerState.close() }
+                    onNavigateToActivity()
+                },
                 onLogoutClick = {
                     viewModel.logout()
                     onLogout()
@@ -105,15 +124,22 @@ fun ChatScreen(
         Scaffold(
             modifier = Modifier
                 .fillMaxSize()
-                .background(LunaTheme.colors.bgPrimary),
+                .background(LunaTheme.colors.bgPrimary)
+                .imePadding(),
             containerColor = LunaTheme.colors.bgPrimary,
             topBar = {
                 TopAppBar(
                     title = {
-                        Text(
-                            text = "Luna",
-                            color = LunaTheme.colors.textPrimary
-                        )
+                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                            Text(
+                                text = "Luna",
+                                color = LunaTheme.colors.textPrimary
+                            )
+                            uiState.currentMode?.let { mode ->
+                                Spacer(modifier = Modifier.width(8.dp))
+                                ModeIcon(mode = mode, size = 18.dp)
+                            }
+                        }
                     },
                     navigationIcon = {
                         IconButton(onClick = { scope.launch { drawerState.open() } }) {
@@ -144,6 +170,8 @@ fun ChatScreen(
                     isLoading = uiState.isLoadingMessages,
                     isSending = uiState.isSending,
                     hasSession = uiState.currentSessionId != null,
+                    expandedMessageIds = uiState.expandedMessageIds,
+                    onMessageClick = viewModel::toggleMessageExpand,
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()

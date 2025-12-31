@@ -76,7 +76,7 @@ export default function IntegrationsTab() {
     const left = window.screenX + (window.innerWidth - width) / 2;
     const top = window.screenY + (window.innerHeight - height) / 2;
     const popup = window.open(
-      `/luna-chat/api/integrations/oauth/${provider}/auth`,
+      `/api/integrations/oauth/${provider}/auth`,
       `${provider}_oauth`,
       `width=${width},height=${height},left=${left},top=${top}`
     );

@@ -36,8 +36,8 @@ export function BrowserWindow({ initialUrl = 'https://www.google.com' }: Browser
     // Use cookie-based auth - WebSocket inherits cookies from the browser
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
-    // Use /luna-chat prefix for nginx routing
-    const wsUrl = `${protocol}//${host}/luna-chat/ws/browser`;
+    // Use nginx proxy
+    const wsUrl = `${protocol}//${host}/ws/browser`;
 
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;

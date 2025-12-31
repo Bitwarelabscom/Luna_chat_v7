@@ -33,6 +33,16 @@ const configSchema = z.object({
   // Layered Agent Architecture feature flag
   agentEngine: z.enum(['legacy', 'layered_v1']).default('legacy'),
 
+  // Router-First Architecture feature flag
+  router: z.object({
+    enabled: z.coerce.boolean().default(false),
+    classifierModel: z.string().default('llama-3.1-8b-instant'),
+    classifierProvider: z.enum(['anthropic', 'google', 'groq', 'openai']).default('groq'),
+    classifierTimeoutMs: z.coerce.number().default(200),
+    rulesTimeoutMs: z.coerce.number().default(50),
+    fallbackRoute: z.enum(['nano', 'pro', 'pro+tools']).default('pro+tools'),
+  }).optional(),
+
   postgres: z.object({
     host: z.string().default('localhost'),
     port: z.coerce.number().default(5432),
@@ -97,6 +107,8 @@ const configSchema = z.object({
   memorycore: z.object({
     url: z.string().url(),
     enabled: z.coerce.boolean().default(true),
+    consciousnessEnabled: z.coerce.boolean().default(true),
+    phiThreshold: z.coerce.number().default(0.5),
   }),
 
   searxng: z.object({
@@ -180,6 +192,15 @@ const rawConfig = {
   nodeEnv: process.env.NODE_ENV,
   agentEngine: process.env.AGENT_ENGINE,
 
+  router: process.env.ROUTER_ENABLED ? {
+    enabled: process.env.ROUTER_ENABLED,
+    classifierModel: process.env.ROUTER_CLASSIFIER_MODEL,
+    classifierProvider: process.env.ROUTER_CLASSIFIER_PROVIDER,
+    classifierTimeoutMs: process.env.ROUTER_CLASSIFIER_TIMEOUT_MS,
+    rulesTimeoutMs: process.env.ROUTER_RULES_TIMEOUT_MS,
+    fallbackRoute: process.env.ROUTER_FALLBACK_ROUTE,
+  } : undefined,
+
   postgres: {
     host: process.env.POSTGRES_HOST,
     port: process.env.POSTGRES_PORT,
@@ -244,6 +265,8 @@ const rawConfig = {
   memorycore: {
     url: process.env.MEMORYCORE_URL,
     enabled: process.env.MEMORYCORE_ENABLED,
+    consciousnessEnabled: process.env.MEMORYCORE_CONSCIOUSNESS_ENABLED,
+    phiThreshold: process.env.MEMORYCORE_PHI_THRESHOLD,
   },
 
   searxng: {

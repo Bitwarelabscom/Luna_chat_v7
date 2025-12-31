@@ -1099,9 +1099,9 @@ async function handleTradeCallback(
 
       const trade = result.rows[0];
 
-      // Get current price from Binance
-      const { BinanceClient } = await import('../trading/binance.client.js');
-      const client = new BinanceClient({ apiKey: '', apiSecret: '' });
+      // Get current price from Crypto.com
+      const { CryptoComClient } = await import('../trading/crypto-com.client.js');
+      const client = new CryptoComClient({ apiKey: '', apiSecret: '' });
       const ticker = await client.getTickerPrice(trade.symbol) as { symbol: string; price: string };
       const currentPrice = parseFloat(ticker.price);
 

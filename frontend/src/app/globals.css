@@ -566,3 +566,450 @@ body {
 .notification-urgent {
   animation: notification-pulse 1s ease-in-out infinite;
 }
+
+/* === TRADING TERMINAL STYLES === */
+
+/* Import IBM Plex Mono for professional terminal look */
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+
+/* Terminal container - fullscreen */
+.trading-terminal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: var(--terminal-bg, #0a0f14);
+  font-family: 'IBM Plex Sans', var(--font-mono);
+  display: flex;
+  flex-direction: column;
+}
+
+/* When embedded in LunaOS window, use relative positioning */
+.trading-terminal-embedded .trading-terminal {
+  position: relative;
+  inset: unset;
+  z-index: unset;
+  height: 100%;
+  width: 100%;
+}
+
+/* Terminal theme variables */
+:root {
+  --terminal-bg: #0a0f14;
+  --terminal-surface: #111820;
+  --terminal-surface-hover: #1a232e;
+  --terminal-border: #1e2a38;
+  --terminal-text: #e6e8eb;
+  --terminal-text-muted: #8b9db0;
+  --terminal-text-dim: #5a6b7d;
+  --terminal-accent: #00d4aa;
+  --terminal-accent-hover: #00e6b8;
+  --terminal-positive: #00d68f;
+  --terminal-negative: #ff6b6b;
+  --terminal-warning: #ffc94d;
+  --terminal-info: #4dabf7;
+  --terminal-header-bg: #0d1318;
+  --terminal-ticker-bg: #080c10;
+}
+
+/* Terminal header */
+.terminal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1.25rem;
+  background: var(--terminal-header-bg);
+  border-bottom: 1px solid var(--terminal-border);
+  height: 56px;
+}
+
+.terminal-logo {
+  font-family: 'IBM Plex Mono', monospace;
+  font-weight: 600;
+  font-size: 1rem;
+  letter-spacing: 0.05em;
+  color: var(--terminal-accent);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.terminal-stats {
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+}
+
+.terminal-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.terminal-stat-label {
+  font-size: 0.65rem;
+  color: var(--terminal-text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.terminal-stat-value {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+.terminal-stat-positive {
+  color: var(--terminal-positive);
+}
+
+.terminal-stat-negative {
+  color: var(--terminal-negative);
+}
+
+/* Terminal navigation tabs */
+.terminal-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0 1rem;
+  background: var(--terminal-surface);
+  border-bottom: 1px solid var(--terminal-border);
+  height: 44px;
+}
+
+.terminal-tab {
+  padding: 0.625rem 1rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--terminal-text-muted);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.terminal-tab:hover {
+  color: var(--terminal-text);
+  background: var(--terminal-surface-hover);
+}
+
+.terminal-tab.active {
+  color: var(--terminal-accent);
+  border-bottom-color: var(--terminal-accent);
+}
+
+/* Terminal main content area */
+.terminal-content {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.terminal-main {
+  flex: 1;
+  overflow: auto;
+  padding: 1rem;
+}
+
+/* Terminal chat sidebar */
+.terminal-chat {
+  width: 320px;
+  background: var(--terminal-surface);
+  border-left: 1px solid var(--terminal-border);
+  display: flex;
+  flex-direction: column;
+}
+
+.terminal-chat-collapsed {
+  width: 48px;
+}
+
+/* Terminal bottom ticker */
+.terminal-ticker {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  background: var(--terminal-ticker-bg);
+  border-top: 1px solid var(--terminal-border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.terminal-ticker::-webkit-scrollbar {
+  display: none;
+}
+
+.terminal-ticker-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 1rem;
+  white-space: nowrap;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.75rem;
+  border-right: 1px solid var(--terminal-border);
+}
+
+.terminal-ticker-symbol {
+  color: var(--terminal-text);
+  font-weight: 500;
+}
+
+.terminal-ticker-price {
+  color: var(--terminal-text-muted);
+}
+
+.terminal-ticker-change {
+  font-weight: 500;
+}
+
+/* Terminal cards and panels */
+.terminal-card {
+  background: var(--terminal-surface);
+  border: 1px solid var(--terminal-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.terminal-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  background: var(--terminal-header-bg);
+  border-bottom: 1px solid var(--terminal-border);
+}
+
+.terminal-card-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--terminal-text);
+}
+
+.terminal-card-body {
+  padding: 1rem;
+}
+
+/* Terminal grid layout */
+.terminal-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.terminal-grid-2x2 {
+  grid-template-columns: repeat(2, 1fr);
+  grid-template-rows: repeat(2, 1fr);
+}
+
+.terminal-grid-3col {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+/* Terminal data table */
+.terminal-table {
+  width: 100%;
+  font-size: 0.8rem;
+  border-collapse: collapse;
+}
+
+.terminal-table th {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--terminal-text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--terminal-border);
+}
+
+.terminal-table td {
+  padding: 0.625rem 0.75rem;
+  color: var(--terminal-text);
+  border-bottom: 1px solid var(--terminal-border);
+}
+
+.terminal-table tr:last-child td {
+  border-bottom: none;
+}
+
+.terminal-table tr:hover td {
+  background: var(--terminal-surface-hover);
+}
+
+/* Terminal buttons */
+.terminal-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  padding: 0.5rem 1rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.terminal-btn-primary {
+  background: var(--terminal-accent);
+  color: #000;
+}
+
+.terminal-btn-primary:hover {
+  background: var(--terminal-accent-hover);
+}
+
+.terminal-btn-secondary {
+  background: var(--terminal-surface-hover);
+  color: var(--terminal-text);
+  border: 1px solid var(--terminal-border);
+}
+
+.terminal-btn-secondary:hover {
+  background: var(--terminal-border);
+}
+
+.terminal-btn-buy {
+  background: var(--terminal-positive);
+  color: #000;
+}
+
+.terminal-btn-sell {
+  background: var(--terminal-negative);
+  color: #fff;
+}
+
+/* Terminal input */
+.terminal-input {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+  background: var(--terminal-bg);
+  border: 1px solid var(--terminal-border);
+  border-radius: 4px;
+  color: var(--terminal-text);
+  font-family: 'IBM Plex Mono', monospace;
+}
+
+.terminal-input:focus {
+  outline: none;
+  border-color: var(--terminal-accent);
+  box-shadow: 0 0 0 2px rgba(0, 212, 170, 0.1);
+}
+
+.terminal-input::placeholder {
+  color: var(--terminal-text-dim);
+}
+
+/* Terminal status indicators */
+.terminal-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.terminal-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.terminal-status-live .terminal-status-dot {
+  background: var(--terminal-positive);
+  box-shadow: 0 0 8px var(--terminal-positive);
+  animation: pulse-glow 2s infinite;
+}
+
+.terminal-status-offline .terminal-status-dot {
+  background: var(--terminal-negative);
+}
+
+.terminal-status-paper .terminal-status-dot {
+  background: var(--terminal-warning);
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* Terminal signal badges */
+.terminal-signal {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.65rem;
+  font-weight: 600;
+  border-radius: 3px;
+  text-transform: uppercase;
+}
+
+.terminal-signal-buy {
+  background: rgba(0, 214, 143, 0.15);
+  color: var(--terminal-positive);
+  border: 1px solid rgba(0, 214, 143, 0.3);
+}
+
+.terminal-signal-sell {
+  background: rgba(255, 107, 107, 0.15);
+  color: var(--terminal-negative);
+  border: 1px solid rgba(255, 107, 107, 0.3);
+}
+
+.terminal-signal-neutral {
+  background: rgba(139, 157, 176, 0.15);
+  color: var(--terminal-text-muted);
+  border: 1px solid rgba(139, 157, 176, 0.3);
+}
+
+/* Responsive adjustments for terminal */
+@media (max-width: 1024px) {
+  .terminal-chat {
+    display: none;
+  }
+
+  .terminal-grid-2x2 {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+  }
+
+  .terminal-grid-3col {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .terminal-header {
+    flex-wrap: wrap;
+    height: auto;
+    padding: 0.5rem 1rem;
+  }
+
+  .terminal-stats {
+    width: 100%;
+    justify-content: space-between;
+    margin-top: 0.5rem;
+  }
+
+  .terminal-nav {
+    overflow-x: auto;
+  }
+
+  .terminal-tab {
+    padding: 0.5rem 0.75rem;
+    font-size: 0.7rem;
+  }
+}

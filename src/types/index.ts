@@ -89,6 +89,7 @@ export interface MessageCreate {
   searchResults?: unknown;
   memoryContext?: unknown;
   source?: MessageSource;
+  routeDecision?: unknown;  // Router-First Architecture decision metadata
 }
 
 // Auth types
@@ -138,6 +139,36 @@ export interface MemoryContext {
     pattern: string;
     confidence: number;
   }>;
+  consciousness?: ConsciousnessMetrics;
+}
+
+// Consciousness metrics from NeuralSleep
+export interface ConsciousnessMetrics {
+  phi: number;                    // Integrated Information (Φ)
+  selfReferenceDepth: number;     // Self-model recursion depth
+  temporalIntegration: number;    // Past-present-future coherence
+  causalDensity: number;          // Causal connections density
+  dynamicalComplexity?: number;   // System complexity measure
+  consciousnessLevel?: string;    // Human-readable level
+  isConscious?: boolean;          // Φ > threshold
+}
+
+// Consolidated user model from NeuralSleep LNN
+export interface ConsolidatedUserModel {
+  userId: string;
+  lastUpdated: Date;
+  semanticKnowledge: {
+    proficiencyModel?: Record<string, unknown>;
+    learningStyleModel?: Record<string, unknown>;
+    persistentPatterns?: Record<string, unknown>;
+  };
+  episodicPatterns: Array<{
+    type: string;
+    pattern: string;
+    confidence: number;
+    occurrences: number;
+  }>;
+  consciousness: ConsciousnessMetrics;
 }
 
 // Express extension

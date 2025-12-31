@@ -27,6 +27,7 @@ import MusicWindow from './apps/MusicWindow';
 import TradingWindow from './apps/TradingWindow';
 import SettingsWindow from './apps/SettingsWindow';
 import ActivityWindow from './apps/ActivityWindow';
+import ConsciousnessWindow from './apps/ConsciousnessWindow';
 import PlaceholderWindow from './apps/PlaceholderWindow';
 
 // Map appId to component
@@ -62,6 +63,8 @@ function getAppComponent(appId: AppId): React.ReactNode {
       return <SettingsWindow />;
     case 'activity':
       return <ActivityWindow />;
+    case 'consciousness':
+      return <ConsciousnessWindow />;
     default:
       return <PlaceholderWindow title="Unknown" message="Unknown app" />;
   }

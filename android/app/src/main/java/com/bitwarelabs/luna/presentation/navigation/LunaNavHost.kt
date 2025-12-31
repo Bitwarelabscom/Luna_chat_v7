@@ -16,6 +16,9 @@ import com.bitwarelabs.luna.presentation.screens.chat.ChatScreen
 import com.bitwarelabs.luna.presentation.screens.login.LoginScreen
 import com.bitwarelabs.luna.presentation.screens.login.LoginViewModel
 import com.bitwarelabs.luna.presentation.screens.settings.SettingsScreen
+import com.bitwarelabs.luna.presentation.screens.trading.TradingScreen
+import com.bitwarelabs.luna.presentation.screens.notifications.NotificationsScreen
+import com.bitwarelabs.luna.presentation.screens.activity.ActivityScreen
 
 @Composable
 fun LunaNavHost(
@@ -47,6 +50,15 @@ fun LunaNavHost(
                 onNavigateToAbilities = {
                     navController.navigate(NavRoutes.Abilities.route)
                 },
+                onNavigateToTrading = {
+                    navController.navigate(NavRoutes.Trading.route)
+                },
+                onNavigateToNotifications = {
+                    navController.navigate(NavRoutes.Notifications.route)
+                },
+                onNavigateToActivity = {
+                    navController.navigate(NavRoutes.Activity.route)
+                },
                 onLogout = {
                     navController.navigate(NavRoutes.Login.route) {
                         popUpTo(0) { inclusive = true }
@@ -70,6 +82,15 @@ fun LunaNavHost(
                 onNavigateToAbilities = {
                     navController.navigate(NavRoutes.Abilities.route)
                 },
+                onNavigateToTrading = {
+                    navController.navigate(NavRoutes.Trading.route)
+                },
+                onNavigateToNotifications = {
+                    navController.navigate(NavRoutes.Notifications.route)
+                },
+                onNavigateToActivity = {
+                    navController.navigate(NavRoutes.Activity.route)
+                },
                 onLogout = {
                     navController.navigate(NavRoutes.Login.route) {
                         popUpTo(0) { inclusive = true }
@@ -88,6 +109,30 @@ fun LunaNavHost(
 
         composable(NavRoutes.Abilities.route) {
             AbilitiesScreen(
+                onNavigateBack = {
+                    navController.popBackStack()
+                }
+            )
+        }
+
+        composable(NavRoutes.Trading.route) {
+            TradingScreen(
+                onNavigateBack = {
+                    navController.popBackStack()
+                }
+            )
+        }
+
+        composable(NavRoutes.Notifications.route) {
+            NotificationsScreen(
+                onNavigateBack = {
+                    navController.popBackStack()
+                }
+            )
+        }
+
+        composable(NavRoutes.Activity.route) {
+            ActivityScreen(
                 onNavigateBack = {
                     navController.popBackStack()
                 }

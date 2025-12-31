@@ -472,6 +472,47 @@ export async function executeTool(
 // LLM Tool Formatting
 // ============================================================================
 
+/**
+ * Normalize JSON Schema for OpenAI compatibility.
+ * OpenAI requires object schemas to have a 'properties' field.
+ */
+function normalizeSchemaForOpenAI(schema: Record<string, unknown>): Record<string, unknown> {
+  if (!schema || typeof schema !== 'object') {
+    return { type: 'object', properties: {} };
+  }
+
+  const normalized = { ...schema };
+
+  // If type is object, ensure properties exists
+  if (normalized.type === 'object' && !normalized.properties) {
+    normalized.properties = {};
+  }
+
+  // If no type specified but has properties-like structure, assume object
+  if (!normalized.type && !normalized.properties) {
+    normalized.type = 'object';
+    normalized.properties = {};
+  }
+
+  // Recursively normalize nested properties
+  if (normalized.properties && typeof normalized.properties === 'object') {
+    const props = normalized.properties as Record<string, Record<string, unknown>>;
+    normalized.properties = Object.fromEntries(
+      Object.entries(props).map(([key, value]) => [
+        key,
+        typeof value === 'object' && value !== null ? normalizeSchemaForOpenAI(value) : value
+      ])
+    );
+  }
+
+  // Handle items in arrays
+  if (normalized.type === 'array' && normalized.items && typeof normalized.items === 'object') {
+    normalized.items = normalizeSchemaForOpenAI(normalized.items as Record<string, unknown>);
+  }
+
+  return normalized;
+}
+
 export function formatMcpToolsForLLM(
   tools: Array<McpTool & { serverName: string; serverId?: string }>
 ): OpenAI.Chat.Completions.ChatCompletionTool[] {
@@ -483,12 +524,15 @@ export function formatMcpToolsForLLM(
     // Enhance description with server context
     const description = `[MCP: ${tool.serverName}] ${tool.description}`;
 
+    // Normalize schema to ensure OpenAI compatibility
+    const parameters = normalizeSchemaForOpenAI(tool.inputSchema as Record<string, unknown>);
+
     return {
       type: 'function' as const,
       function: {
         name: prefixedName,
         description,
-        parameters: tool.inputSchema as Record<string, unknown>,
+        parameters,
       },
     };
   });

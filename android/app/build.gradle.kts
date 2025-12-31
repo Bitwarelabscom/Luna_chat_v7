@@ -65,11 +65,11 @@ android {
             dimension = "environment"
             applicationIdSuffix = ".dev"
             versionNameSuffix = "-dev"
-            buildConfigField("String", "API_BASE_URL", "\"http://10.0.2.2:3003\"")
+            buildConfigField("String", "API_BASE_URL", "\"http://10.0.0.2:3005\"")
         }
         create("production") {
             dimension = "environment"
-            buildConfigField("String", "API_BASE_URL", "\"https://luna.bitwarelabs.com\"")
+            buildConfigField("String", "API_BASE_URL", "\"http://10.0.0.2:3005\"")
         }
     }
 

@@ -1,0 +1,210 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --nav-height: 64px;
+
+  /* Terminal theme */
+  --terminal-bg: #0a0f14;
+  --terminal-surface: #111820;
+  --terminal-surface-hover: #1a232e;
+  --terminal-border: #1e2a38;
+  --terminal-text: #e6e8eb;
+  --terminal-text-muted: #8b9db0;
+  --terminal-text-dim: #5a6b7d;
+  --terminal-accent: #00d4aa;
+  --terminal-accent-hover: #00e6b8;
+  --terminal-positive: #00d68f;
+  --terminal-negative: #ff6b6b;
+  --terminal-warning: #ffc94d;
+}
+
+[data-theme="dark"] {
+  --theme-bg-primary: #030712;
+  --theme-bg-secondary: #111827;
+  --theme-bg-tertiary: #1f2937;
+  --theme-text-primary: #f9fafb;
+  --theme-text-secondary: #e5e7eb;
+  --theme-text-muted: #9ca3af;
+  --theme-border: #374151;
+  --theme-accent-primary: #4f46e5;
+}
+
+body {
+  background: var(--terminal-bg);
+  color: var(--terminal-text);
+  font-family: var(--font-mono);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Prevent overscroll bounce on iOS */
+html, body {
+  overscroll-behavior: none;
+  height: 100%;
+}
+
+/* Mobile viewport height fix */
+@supports (height: 100dvh) {
+  .h-dvh {
+    height: 100dvh;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--terminal-border);
+  border-radius: 2px;
+}
+
+/* Touch optimization */
+button, a, [role="button"] {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  cursor: pointer;
+}
+
+/* Ensure buttons are interactive */
+button:not(:disabled) {
+  pointer-events: auto;
+}
+
+/* Hide scrollbar but keep functionality */
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Status indicators */
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.status-live {
+  background: var(--terminal-positive);
+  box-shadow: 0 0 8px var(--terminal-positive);
+  animation: pulse-glow 2s infinite;
+}
+
+.status-paper {
+  background: var(--terminal-warning);
+}
+
+.status-offline {
+  background: var(--terminal-negative);
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* Card styles */
+.card {
+  background: var(--terminal-surface);
+  border: 1px solid var(--terminal-border);
+  border-radius: 8px;
+}
+
+.card-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--terminal-border);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--terminal-text-muted);
+}
+
+/* PnL colors */
+.pnl-positive {
+  color: var(--terminal-positive);
+}
+
+.pnl-negative {
+  color: var(--terminal-negative);
+}
+
+/* Message styling */
+.message-user {
+  background: var(--terminal-accent);
+  color: #000;
+}
+
+.message-assistant {
+  background: var(--terminal-surface);
+  border: 1px solid var(--terminal-border);
+}
+
+/* Input styles */
+input, textarea {
+  background: var(--terminal-bg);
+  border: 1px solid var(--terminal-border);
+  border-radius: 6px;
+  color: var(--terminal-text);
+  font-family: var(--font-mono);
+}
+
+input:focus, textarea:focus {
+  outline: none;
+  border-color: var(--terminal-accent);
+  box-shadow: 0 0 0 2px rgba(0, 212, 170, 0.1);
+}
+
+input::placeholder, textarea::placeholder {
+  color: var(--terminal-text-dim);
+}
+
+/* Button styles */
+.btn-primary {
+  background: var(--terminal-accent);
+  color: #000;
+  font-weight: 500;
+  padding: 10px 16px;
+  border-radius: 6px;
+  transition: background 0.15s;
+}
+
+.btn-primary:active {
+  background: var(--terminal-accent-hover);
+}
+
+.btn-secondary {
+  background: var(--terminal-surface-hover);
+  color: var(--terminal-text);
+  border: 1px solid var(--terminal-border);
+  padding: 10px 16px;
+  border-radius: 6px;
+}
+
+/* Safe area padding for bottom nav */
+.safe-bottom {
+  padding-bottom: calc(var(--nav-height) + var(--safe-area-bottom));
+}
+
+/* Slide animations */
+@keyframes slideUp {
+  from { transform: translateY(100%); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.slide-up {
+  animation: slideUp 0.2s ease-out;
+}

@@ -11,12 +11,14 @@ import RecentTrades from './RecentTrades';
 import TradingSettingsModal from './TradingSettingsModal';
 import ResearchTab from './ResearchTab';
 import RulesTab from './RulesTab';
+import ActiveTab from './ActiveTab';
 import BotManager from './BotManager';
 import BotInfoDrawer from './BotInfoDrawer';
 import BotCreationModal from './BotCreationModal';
+import { TradingTerminal } from './terminal';
 import { useTradingWebSocket, type PriceUpdate } from '@/hooks/useTradingWebSocket';
 
-type TabType = 'chart' | 'portfolio' | 'trades' | 'bots' | 'rules' | 'research' | 'settings';
+type TabType = 'active' | 'chart' | 'portfolio' | 'trades' | 'bots' | 'rules' | 'research' | 'settings';
 
 export default function TradingDashboard() {
   const [settings, setSettings] = useState<TradingSettings | null>(null);
@@ -30,12 +32,15 @@ export default function TradingDashboard() {
   const [selectedSymbol, setSelectedSymbol] = useState('BTCUSDC');
   const [chatOpen, setChatOpen] = useState(false);
   const [displayContent, setDisplayContent] = useState<DisplayContent>({ type: 'chart', symbol: 'BTCUSDC' });
-  const [activeTab, setActiveTab] = useState<TabType>('chart');
+  const [activeTab, setActiveTab] = useState<TabType>('active');
 
   // Bot modal states
   const [showBotHelp, setShowBotHelp] = useState(false);
   const [selectedBotHelpType, setSelectedBotHelpType] = useState<BotType | undefined>(undefined);
   const [showBotCreation, setShowBotCreation] = useState(false);
+
+  // Terminal fullscreen mode
+  const [showTerminal, setShowTerminal] = useState(false);
 
   // WebSocket for real-time price updates
   const { connected: wsConnected } = useTradingWebSocket({
@@ -68,7 +73,7 @@ export default function TradingDashboard() {
       const pricesData = await tradingApi.getPrices();
       setPrices(pricesData);
 
-      if (settingsData.binanceConnected) {
+      if (settingsData.exchangeConnected || settingsData.binanceConnected) {
         const [portfolioData, tradesData, botsData] = await Promise.all([
           tradingApi.getPortfolio(),
           tradingApi.getTrades(50),
@@ -179,17 +184,19 @@ export default function TradingDashboard() {
   const runningBots = bots.filter(b => b.status === 'running').length;
 
   const tabs: { id: TabType; label: string; icon: React.ReactNode }[] = [
+    { id: 'active', label: 'Active', icon: <Activity style={{ width: 16, height: 16 }} /> },
     { id: 'chart', label: 'Chart', icon: <BarChart3 style={{ width: 16, height: 16 }} /> },
     { id: 'portfolio', label: 'Portfolio', icon: <Wallet style={{ width: 16, height: 16 }} /> },
     { id: 'trades', label: 'Trades', icon: <History style={{ width: 16, height: 16 }} /> },
     { id: 'bots', label: 'Bots', icon: <Bot style={{ width: 16, height: 16 }} /> },
     { id: 'rules', label: 'Rules', icon: <ListChecks style={{ width: 16, height: 16 }} /> },
-    { id: 'research', label: 'Research', icon: <Activity style={{ width: 16, height: 16 }} /> },
+    { id: 'research', label: 'Research', icon: <TrendingUp style={{ width: 16, height: 16 }} /> },
     { id: 'settings', label: 'Settings', icon: <Settings style={{ width: 16, height: 16 }} /> },
   ];
 
-  // Connect prompt if not connected
-  if (!loading && settings && !settings.binanceConnected) {
+  // Connect prompt if not connected (check both new and legacy fields)
+  const isConnected = settings?.exchangeConnected || settings?.binanceConnected;
+  if (!loading && settings && !isConnected) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#0a0f18' }}>
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -202,9 +209,9 @@ export default function TradingDashboard() {
             maxWidth: '500px',
           }}>
             <TrendingUp style={{ width: 64, height: 64, color: '#00ff9f', marginBottom: 20 }} />
-            <h2 style={{ color: '#fff', fontSize: '24px', marginBottom: '12px' }}>Connect Your Binance Account</h2>
+            <h2 style={{ color: '#fff', fontSize: '24px', marginBottom: '12px' }}>Connect Your Exchange</h2>
             <p style={{ color: '#8892a0', fontSize: '14px', marginBottom: '24px', lineHeight: 1.6 }}>
-              Connect your Binance account to start trading with Trader Luna.
+              Connect your Binance or Crypto.com account to start trading with Trader Luna.
             </p>
             <button
               onClick={() => setShowSettings(true)}
@@ -219,7 +226,7 @@ export default function TradingDashboard() {
                 cursor: 'pointer',
               }}
             >
-              Connect Binance
+              Connect Exchange
             </button>
           </div>
         </div>
@@ -274,21 +281,82 @@ export default function TradingDashboard() {
           )}
         </div>
 
-        {/* Connection Status */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          {wsConnected ? (
-            <Wifi style={{ width: 14, height: 14, color: '#10b981' }} />
-          ) : (
-            <WifiOff style={{ width: 14, height: 14, color: '#ef4444' }} />
+        {/* Paper Mode Indicator + Connection Status */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          {/* Paper Mode Badge */}
+          {settings?.paperMode && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '4px 10px',
+              background: 'rgba(16, 185, 129, 0.15)',
+              border: '1px solid #10b981',
+              borderRadius: '4px',
+            }}>
+              <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#10b981' }} />
+              <span style={{
+                fontSize: '11px',
+                fontWeight: 600,
+                color: '#10b981',
+                textTransform: 'uppercase',
+                letterSpacing: '0.5px',
+              }}>
+                Paper Mode
+              </span>
+            </div>
           )}
+
+          {/* Connection Status */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            {wsConnected ? (
+              <Wifi style={{ width: 14, height: 14, color: '#10b981' }} />
+            ) : (
+              <WifiOff style={{ width: 14, height: 14, color: '#ef4444' }} />
+            )}
+            <span style={{
+              fontSize: '10px',
+              fontWeight: 500,
+              color: wsConnected ? '#10b981' : '#ef4444',
+              textTransform: 'uppercase',
+            }}>
+              {wsConnected ? 'Live' : 'Polling'}
+            </span>
+          </div>
+
+          {/* Version Badge */}
           <span style={{
-            fontSize: '10px',
-            fontWeight: 500,
-            color: wsConnected ? '#10b981' : '#ef4444',
-            textTransform: 'uppercase',
+            fontSize: '9px',
+            color: '#6b7280',
+            padding: '2px 6px',
+            background: '#1f2937',
+            borderRadius: '3px',
           }}>
-            {wsConnected ? 'Live' : 'Polling'}
+            BUILD_28DEC_V2
           </span>
+
+          {/* Terminal Toggle */}
+          <button
+            onClick={() => setShowTerminal(true)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 12px',
+              background: 'linear-gradient(135deg, #00d4aa 0%, #00b894 100%)',
+              border: 'none',
+              borderRadius: '6px',
+              color: '#000',
+              fontSize: '11px',
+              fontWeight: 600,
+              cursor: 'pointer',
+              textTransform: 'uppercase',
+              letterSpacing: '0.5px',
+            }}
+          >
+            <ExternalLink style={{ width: 12, height: 12 }} />
+            Terminal
+          </button>
         </div>
       </div>
 
@@ -327,6 +395,13 @@ export default function TradingDashboard() {
 
       {/* Tab Content */}
       <div style={{ flex: 1, overflow: 'hidden', padding: '16px' }}>
+        {/* Active Tab */}
+        {activeTab === 'active' && (
+          <div style={{ height: '100%', background: '#111827', borderRadius: '8px', overflow: 'hidden' }}>
+            <ActiveTab />
+          </div>
+        )}
+
         {/* Chart Tab */}
         {activeTab === 'chart' && (
           <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -487,16 +562,18 @@ export default function TradingDashboard() {
             <div style={{ padding: '20px' }}>
               {/* Connection Status */}
               <div style={{ marginBottom: '24px' }}>
-                <div style={{ fontSize: '12px', color: '#8892a0', marginBottom: '8px', textTransform: 'uppercase' }}>Binance Connection</div>
+                <div style={{ fontSize: '12px', color: '#8892a0', marginBottom: '8px', textTransform: 'uppercase' }}>Exchange Connection</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                   <div style={{
                     width: 10,
                     height: 10,
                     borderRadius: '50%',
-                    background: settings?.binanceConnected ? '#10b981' : '#ef4444',
+                    background: isConnected ? '#10b981' : '#ef4444',
                   }} />
                   <span style={{ color: '#fff', fontSize: '14px' }}>
-                    {settings?.binanceConnected ? 'Connected' : 'Not Connected'}
+                    {isConnected
+                      ? `Connected to ${settings?.activeExchange === 'crypto_com' ? 'Crypto.com' : 'Binance'}`
+                      : 'Not Connected'}
                   </span>
                   <button
                     onClick={() => setShowSettings(true)}
@@ -510,7 +587,7 @@ export default function TradingDashboard() {
                       cursor: 'pointer',
                     }}
                   >
-                    {settings?.binanceConnected ? 'Manage' : 'Connect'}
+                    {isConnected ? 'Manage' : 'Connect'}
                   </button>
                 </div>
               </div>
@@ -689,6 +766,13 @@ export default function TradingDashboard() {
         onCreated={handleBotCreated}
         preselectedSymbol={selectedSymbol}
       />
+
+      {/* Trading Terminal Fullscreen Mode */}
+      {showTerminal && (
+        <TradingTerminal
+          onClose={() => setShowTerminal(false)}
+        />
+      )}
 
       <style>{`
         @keyframes spin {

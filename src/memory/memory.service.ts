@@ -1,6 +1,7 @@
 import * as embeddingService from './embedding.service.js';
 import * as factsService from './facts.service.js';
 import * as insightsService from '../autonomous/insights.service.js';
+import * as memorycoreClient from './memorycore.client.js';
 import logger from '../utils/logger.js';
 
 /**
@@ -12,6 +13,13 @@ export interface MemoryContext {
   stable: {
     facts: string;      // User facts - sorted alphabetically for determinism
     learnings: string;  // Luna's learnings - sorted for determinism
+    graphMemory?: string;  // Graph memory narrative (connections, relationships)
+    consciousness?: {   // Consciousness metrics from NeuralSleep
+      phi: number;
+      temporalIntegration: number;
+      consciousnessLevel?: string;
+    };
+    consolidatedPatterns?: string;  // NeuralSleep consolidated patterns
   };
   // Volatile (not cached) - changes per query, goes in Tier 4
   volatile: {
@@ -26,11 +34,36 @@ export interface MemoryContext {
  */
 export function formatStableMemory(context: MemoryContext): string {
   const parts: string[] = [];
+
+  // Graph memory (narrative format - primary knowledge source)
+  // This goes first as it provides structured relationship context
+  if (context.stable.graphMemory) {
+    parts.push(context.stable.graphMemory);
+  }
+
   if (context.stable.facts) {
     parts.push(context.stable.facts);
   }
   if (context.stable.learnings) {
     parts.push(context.stable.learnings);
+  }
+  // Add consolidated patterns from NeuralSleep if available
+  if (context.stable.consolidatedPatterns) {
+    parts.push(context.stable.consolidatedPatterns);
+  }
+  // Add consciousness context if available (high temporal integration indicates strong memory coherence)
+  if (context.stable.consciousness) {
+    const { temporalIntegration, consciousnessLevel } = context.stable.consciousness;
+    const consciousnessInfo: string[] = [];
+    if (temporalIntegration >= 0.5) {
+      consciousnessInfo.push(`Memory coherence: ${(temporalIntegration * 100).toFixed(0)}%`);
+    }
+    if (consciousnessLevel) {
+      consciousnessInfo.push(`Integration level: ${consciousnessLevel}`);
+    }
+    if (consciousnessInfo.length > 0) {
+      parts.push(`[Memory State]\n${consciousnessInfo.join('\n')}`);
+    }
   }
   return parts.join('\n\n');
 }
@@ -62,7 +95,7 @@ export async function buildMemoryContext(
 ): Promise<MemoryContext> {
   try {
     // Run all queries in parallel for better performance
-    const [facts, similarMessages, similarConversations, learningsContext] = await Promise.all([
+    const [facts, similarMessages, similarConversations, learningsContext, consciousnessMetrics, consolidatedModel, graphContext] = await Promise.all([
       // Get user facts
       factsService.getUserFacts(userId, { limit: 30 }),
       // Search for relevant past messages (excluding current session)
@@ -83,6 +116,12 @@ export async function buildMemoryContext(
       ),
       // Get active learnings from autonomous sessions
       insightsService.getActiveLearningsForContext(userId, 10),
+      // Get consciousness metrics from MemoryCore/NeuralSleep
+      memorycoreClient.getConsciousnessMetrics(userId),
+      // Get consolidated model from NeuralSleep (bi-directional flow)
+      memorycoreClient.getConsolidatedModel(userId),
+      // Get graph memory context (narrative format)
+      memorycoreClient.getGraphContext(userId),
     ]);
 
     // Format facts with alphabetical sorting for cache determinism
@@ -113,10 +152,35 @@ export async function buildMemoryContext(
       conversationContext = `[Related Past Topics]\n${contextItems.join('\n')}`;
     }
 
+    // Build consciousness context if metrics available
+    const consciousness = consciousnessMetrics ? {
+      phi: consciousnessMetrics.phi,
+      temporalIntegration: consciousnessMetrics.temporalIntegration,
+      consciousnessLevel: consciousnessMetrics.consciousnessLevel,
+    } : undefined;
+
+    // Format consolidated patterns from NeuralSleep (bi-directional flow)
+    let consolidatedPatterns = '';
+    if (consolidatedModel && consolidatedModel.episodicPatterns && consolidatedModel.episodicPatterns.length > 0) {
+      const patterns = consolidatedModel.episodicPatterns
+        .filter(p => p.confidence > 0.6)
+        .slice(0, 5)
+        .map(p => `- ${p.pattern} (${p.type})`);
+      if (patterns.length > 0) {
+        consolidatedPatterns = `[Consolidated Memory Patterns]\n${patterns.join('\n')}`;
+      }
+    }
+
+    // Get formatted graph memory (narrative format from MemoryCore)
+    const graphMemory = memorycoreClient.formatGraphContext(graphContext);
+
     return {
       stable: {
         facts: factsPrompt,
         learnings,
+        graphMemory,
+        consciousness,
+        consolidatedPatterns,
       },
       volatile: {
         relevantHistory,
@@ -142,9 +206,12 @@ export async function buildMemoryContext(
  */
 export async function buildStableMemoryOnly(userId: string): Promise<MemoryContext> {
   try {
-    const [facts, learningsContext] = await Promise.all([
+    const [facts, learningsContext, consciousnessMetrics, consolidatedModel, graphContext] = await Promise.all([
       factsService.getUserFacts(userId, { limit: 30 }),
       insightsService.getActiveLearningsForContext(userId, 10),
+      memorycoreClient.getConsciousnessMetrics(userId),
+      memorycoreClient.getConsolidatedModel(userId),
+      memorycoreClient.getGraphContext(userId),
     ]);
 
     const factsPrompt = factsService.formatFactsForPrompt(facts);
@@ -154,10 +221,35 @@ export async function buildStableMemoryOnly(userId: string): Promise<MemoryConte
       learnings = `[Luna's Learnings - Apply these insights to personalize responses]\n${learningsContext}`;
     }
 
+    // Build consciousness context if metrics available
+    const consciousness = consciousnessMetrics ? {
+      phi: consciousnessMetrics.phi,
+      temporalIntegration: consciousnessMetrics.temporalIntegration,
+      consciousnessLevel: consciousnessMetrics.consciousnessLevel,
+    } : undefined;
+
+    // Format consolidated patterns from NeuralSleep (bi-directional flow)
+    let consolidatedPatterns = '';
+    if (consolidatedModel && consolidatedModel.episodicPatterns && consolidatedModel.episodicPatterns.length > 0) {
+      const patterns = consolidatedModel.episodicPatterns
+        .filter(p => p.confidence > 0.6)
+        .slice(0, 5)
+        .map(p => `- ${p.pattern} (${p.type})`);
+      if (patterns.length > 0) {
+        consolidatedPatterns = `[Consolidated Memory Patterns]\n${patterns.join('\n')}`;
+      }
+    }
+
+    // Get formatted graph memory (narrative format from MemoryCore)
+    const graphMemory = memorycoreClient.formatGraphContext(graphContext);
+
     return {
       stable: {
         facts: factsPrompt,
         learnings,
+        graphMemory,
+        consciousness,
+        consolidatedPatterns,
       },
       volatile: {
         relevantHistory: '',
@@ -183,12 +275,35 @@ export async function buildStableMemoryOnly(userId: string): Promise<MemoryConte
 export function formatMemoryForPrompt(context: MemoryContext): string {
   const parts: string[] = [];
 
+  // Graph memory (narrative format - primary knowledge source)
+  if (context.stable.graphMemory) {
+    parts.push(context.stable.graphMemory);
+  }
+
   // Stable parts
   if (context.stable.facts) {
     parts.push(context.stable.facts);
   }
   if (context.stable.learnings) {
     parts.push(context.stable.learnings);
+  }
+  // Add consolidated patterns from NeuralSleep if available
+  if (context.stable.consolidatedPatterns) {
+    parts.push(context.stable.consolidatedPatterns);
+  }
+  // Add consciousness context if available
+  if (context.stable.consciousness) {
+    const { temporalIntegration, consciousnessLevel } = context.stable.consciousness;
+    const consciousnessInfo: string[] = [];
+    if (temporalIntegration >= 0.5) {
+      consciousnessInfo.push(`Memory coherence: ${(temporalIntegration * 100).toFixed(0)}%`);
+    }
+    if (consciousnessLevel) {
+      consciousnessInfo.push(`Integration level: ${consciousnessLevel}`);
+    }
+    if (consciousnessInfo.length > 0) {
+      parts.push(`[Memory State]\n${consciousnessInfo.join('\n')}`);
+    }
   }
 
   // Volatile parts
@@ -223,6 +338,16 @@ export async function processMessageMemory(
     role
   ).catch(err => {
     logger.error('Failed to store message embedding', { error: err.message });
+  });
+
+  // Extract graph entities asynchronously (builds connection-based memory)
+  memorycoreClient.extractGraphEntities(
+    userId,
+    sessionId,
+    content,
+    role === 'user' ? 'user' : 'model'
+  ).catch(err => {
+    logger.error('Failed to extract graph entities', { error: err.message });
   });
 }
 

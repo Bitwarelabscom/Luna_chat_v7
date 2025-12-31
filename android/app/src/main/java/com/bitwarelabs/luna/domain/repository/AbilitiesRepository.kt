@@ -60,9 +60,9 @@ interface AbilitiesRepository {
 
     // Check-ins
     suspend fun getCheckins(): Result<CheckinsData>
-    suspend fun createCheckin(type: String, name: String, cronExpression: String, timezone: String = "UTC", enabled: Boolean = true): Result<CheckinSchedule>
+    suspend fun createCheckin(type: String, name: String, cronExpression: String, timezone: String = "UTC", enabled: Boolean = true): Result<LegacyCheckinSchedule>
     suspend fun getCheckinHistory(limit: Int? = null): Result<List<CheckinHistory>>
-    suspend fun updateCheckin(id: String, name: String? = null, cronExpression: String? = null, timezone: String? = null, enabled: Boolean? = null): Result<CheckinSchedule>
+    suspend fun updateCheckin(id: String, name: String? = null, cronExpression: String? = null, timezone: String? = null, enabled: Boolean? = null): Result<LegacyCheckinSchedule>
     suspend fun deleteCheckin(id: String): Result<Boolean>
 
     // Calendar

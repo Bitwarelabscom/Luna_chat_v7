@@ -84,7 +84,7 @@ export default function TheaterMode({ sessionId, onClose }: TheaterModeProps) {
 
     // Connect to live stream - cookies sent automatically for same-origin
     const eventSource = new EventSource(
-      `/luna-chat/api/autonomous/deliberations/live`,
+      `/api/autonomous/deliberations/live`,
       { withCredentials: true }
     );
 
