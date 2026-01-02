@@ -157,6 +157,10 @@ services:
       # TradeCore integration
       - TRADECORE_URL=http://tradecore:9090
       - TRADECORE_ENABLED=${TRADECORE_ENABLED:-false}
+      # Sanhedrin A2A integration
+      - SANHEDRIN_ENABLED=${SANHEDRIN_ENABLED:-false}
+      - SANHEDRIN_BASE_URL=${SANHEDRIN_BASE_URL:-http://luna-sanhedrin:8000}
+      - SANHEDRIN_TIMEOUT=${SANHEDRIN_TIMEOUT:-120000}
     secrets:
       - postgres_password
       - jwt_secret
@@ -396,6 +400,37 @@ services:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:9090/health"]
       interval: 30s
       timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Sanhedrin - A2A Protocol multi-agent coordination
+  # Exposes Claude Code CLI via A2A JSON-RPC
+  luna-sanhedrin:
+    build:
+      context: /opt/sand/sanhedrin_LunaOS
+      dockerfile: Dockerfile
+    container_name: luna-sanhedrin
+    restart: unless-stopped
+    expose:
+      - "8000"
+    environment:
+      - SANHEDRIN_ADAPTER=claude-code
+      - SANHEDRIN_HOST=0.0.0.0
+      - SANHEDRIN_PORT=8000
+      - SANHEDRIN_LOG_LEVEL=INFO
+    volumes:
+      # Claude CLI credentials
+      - /home/luna/.claude/.credentials.json:/home/sanhedrin/.claude/.credentials.json:ro
+    networks:
+      - luna-network
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://127.0.0.1:8000/health').raise_for_status()"]
+      interval: 30s
+      timeout: 10s
       retries: 3
       start_period: 10s
 
