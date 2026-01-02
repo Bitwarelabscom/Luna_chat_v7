@@ -21,15 +21,16 @@ interface JSONRPCResponse {
   jsonrpc: '2.0';
   id: string;
   result?: {
-    task: {
-      id: string;
-      status: {
-        state: string;
-      };
-      artifacts?: Array<{
-        parts: Array<{ text?: string }>;
-      }>;
+    // Sanhedrin returns task data directly in result, not nested under 'task'
+    taskId: string;
+    status: {
+      state: string;
     };
+    artifacts?: Array<{
+      artifactId?: string;
+      name?: string;
+      parts: Array<{ type?: string; text?: string }>;
+    }>;
   };
   error?: {
     code: number;
@@ -47,21 +48,24 @@ function getTimeout(): number {
 
 /**
  * Convert Luna Chat messages to Sanhedrin prompt format.
- * Combines system and user messages into a single prompt.
+ * Combines system and user messages into a single natural prompt.
+ * No special formatting - just concatenate with separators.
  */
 function formatMessagesForSanhedrin(messages: ChatMessage[]): string {
   const parts: string[] = [];
 
-  // Extract system message
+  // Extract system message (now contains the task framing)
   const systemMsg = messages.find(m => m.role === 'system');
   if (systemMsg) {
-    parts.push(`[System Instructions]\n${systemMsg.content}`);
+    parts.push(systemMsg.content);
   }
 
-  // Add conversation messages
+  // Add user message (the context)
   for (const msg of messages.filter(m => m.role !== 'system')) {
-    const role = msg.role === 'user' ? 'User' : 'Assistant';
-    parts.push(`\n[${role}]\n${msg.content}`);
+    if (msg.role === 'user') {
+      parts.push('\n---\n');
+      parts.push(msg.content);
+    }
   }
 
   return parts.join('\n');
@@ -75,7 +79,8 @@ function extractContentFromResponse(response: JSONRPCResponse): string {
     throw new Error(`Sanhedrin error: ${response.error.message}`);
   }
 
-  const artifacts = response.result?.task?.artifacts || [];
+  // Sanhedrin returns artifacts directly in result, not nested under 'task'
+  const artifacts = response.result?.artifacts || [];
   const textParts: string[] = [];
 
   for (const artifact of artifacts) {
@@ -134,7 +139,29 @@ export async function createCompletion(
     }
 
     const jsonResponse = await response.json() as JSONRPCResponse;
+
+    // Debug: Log the full response structure
+    logger.debug('Sanhedrin raw response', {
+      model,
+      hasResult: !!jsonResponse.result,
+      taskId: jsonResponse.result?.taskId,
+      taskStatus: jsonResponse.result?.status?.state,
+      artifactCount: jsonResponse.result?.artifacts?.length || 0,
+      error: jsonResponse.error,
+    });
+
     const content = extractContentFromResponse(jsonResponse);
+
+    // Warn if content is empty - this is likely a bug
+    if (!content) {
+      logger.warn('Sanhedrin returned empty content', {
+        model,
+        taskId: jsonResponse.result?.taskId,
+        taskStatus: jsonResponse.result?.status?.state,
+        artifactCount: jsonResponse.result?.artifacts?.length || 0,
+        firstArtifact: JSON.stringify(jsonResponse.result?.artifacts?.[0])?.substring(0, 200),
+      });
+    }
 
     logger.debug('Sanhedrin response received', { model, contentLength: content.length });
 

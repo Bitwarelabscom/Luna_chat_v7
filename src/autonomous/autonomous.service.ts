@@ -34,7 +34,7 @@ export interface AutonomousConfig {
 export interface AutonomousSession {
   id: string;
   userId: string;
-  status: 'active' | 'completed' | 'paused' | 'failed';
+  status: 'active' | 'completed' | 'paused' | 'stopped' | 'error';
   currentPhase: SessionPhase | null;
   startedAt: Date;
   endedAt: Date | null;
@@ -61,6 +61,47 @@ type SessionPhase = 'planning' | 'polaris' | 'aurora' | 'vega' | 'sol' | 'act';
 // Constants
 const MAX_TOOL_USES = 100;
 const MAX_LOOPS = 50; // Increased to support larger tasks
+const MAX_REPEATED_ACTIONS = 3; // Circuit breaker: force sleep after N identical action types
+
+// Track recent action types for spinning detection
+const sessionActionHistory = new Map<string, string[]>();
+
+function getActionType(decision: string): string {
+  const lower = decision.toLowerCase();
+  if (lower.includes('ask') && lower.includes('user')) return 'ask_user';
+  if (lower.includes('search')) return 'search';
+  if (lower.includes('create') && lower.includes('task')) return 'create_task';
+  if (lower.includes('fetch')) return 'fetch';
+  if (lower.includes('note') || lower.includes('record')) return 'note';
+  if (lower.includes('sleep') || lower.includes('pause')) return 'sleep';
+  return 'other';
+}
+
+function isSpinning(sessionId: string, decision: string): boolean {
+  const history = sessionActionHistory.get(sessionId) || [];
+  const currentType = getActionType(decision);
+
+  // Add current to history
+  history.push(currentType);
+
+  // Keep only last MAX_REPEATED_ACTIONS + 1
+  if (history.length > MAX_REPEATED_ACTIONS + 1) {
+    history.shift();
+  }
+  sessionActionHistory.set(sessionId, history);
+
+  // Check if last N actions are all the same type (and not sleep/other)
+  if (history.length >= MAX_REPEATED_ACTIONS && currentType !== 'sleep' && currentType !== 'other') {
+    const lastN = history.slice(-MAX_REPEATED_ACTIONS);
+    return lastN.every(t => t === currentType);
+  }
+
+  return false;
+}
+
+function clearActionHistory(sessionId: string): void {
+  sessionActionHistory.delete(sessionId);
+}
 
 // Active session tracking (in-memory for SSE)
 const activeSessions = new Map<string, {
@@ -68,6 +109,29 @@ const activeSessions = new Map<string, {
   subscribers: Set<(data: unknown) => void>;
   toolUseCount: number;
 }>();
+
+// Cleanup orphaned sessions on startup (sessions marked active in DB but not in memory)
+async function cleanupOrphanedSessions(): Promise<void> {
+  try {
+    const result = await pool.query(
+      `UPDATE autonomous_sessions
+       SET status = 'stopped'
+       WHERE status = 'active'
+       RETURNING id`
+    );
+    if (result.rowCount && result.rowCount > 0) {
+      logger.info('Cleaned up orphaned autonomous sessions on startup', {
+        count: result.rowCount,
+        sessionIds: result.rows.map(r => r.id),
+      });
+    }
+  } catch (error) {
+    logger.error('Failed to cleanup orphaned sessions', { error });
+  }
+}
+
+// Run cleanup on module load
+cleanupOrphanedSessions();
 
 // Tool use tracking helper
 function incrementToolUse(sessionId: string): number {
@@ -434,6 +498,10 @@ export function subscribeToSession(sessionId: string, callback: (data: unknown) 
   };
 }
 
+export function isSessionRunning(sessionId: string): boolean {
+  return activeSessions.has(sessionId);
+}
+
 function broadcastToSession(sessionId: string, data: unknown): void {
   const tracked = activeSessions.get(sessionId);
   if (tracked) {
@@ -529,7 +597,7 @@ async function runCouncilLoop(
     }
 
     // Check if session was stopped (completed/failed) - exit immediately
-    if (session.status === 'completed' || session.status === 'failed') {
+    if (session.status === 'completed' || session.status === 'stopped' || session.status === 'error') {
       logger.info('Session was stopped, exiting loop', { sessionId, status: session.status });
       break;
     }
@@ -698,8 +766,8 @@ async function runCouncilLoop(
         }
       }
 
-      // Execute the action
-      await runPhase(sessionId, userId, 'act', loopCount);
+      // Execute the action (pass userAvailable so ask-user works correctly)
+      await runPhase(sessionId, userId, 'act', loopCount, userAvailable);
 
       // Check if we asked a question - if so, pause and wait for answer
       const pendingQuestions = await questionsService.getPendingQuestions(userId);
@@ -731,6 +799,34 @@ async function runCouncilLoop(
       const deliberation = await councilService.getLatestDeliberation(sessionId);
       const decisionLower = deliberation?.decision?.toLowerCase().trim() || '';
 
+      // CIRCUIT BREAKER: Detect spinning (same action type repeated N times)
+      if (deliberation?.decision && isSpinning(sessionId, deliberation.decision)) {
+        logger.warn('Spinning detected - forcing session pause', {
+          sessionId,
+          loopCount,
+          lastDecision: deliberation.decision,
+        });
+
+        await sessionWorkspaceService.addNote(sessionId, userId, {
+          noteType: 'observation',
+          content: `Circuit breaker triggered: Same action type repeated ${MAX_REPEATED_ACTIONS} times. Session pausing to break the cycle.`,
+          phase: 'act',
+        });
+
+        broadcastToSession(sessionId, {
+          type: 'circuit_breaker',
+          message: 'Spinning detected - session pausing',
+          loopCount,
+        });
+
+        await sessionWorkspaceService.addSessionSummary(
+          sessionId,
+          userId,
+          `Session paused after ${loopCount} loops due to spinning detection. Last decision: ${deliberation?.decision}`
+        );
+        break;
+      }
+
       // Only end if the decision is specifically to sleep/complete, not just contains it
       const shouldSleep = decisionLower === 'sleep' ||
                           decisionLower === 'pause' ||
@@ -746,6 +842,7 @@ async function runCouncilLoop(
           userId,
           `Session completed after ${loopCount} loops, ${getToolUseCount(sessionId)} tool uses. Final decision: ${deliberation?.decision}`
         );
+        clearActionHistory(sessionId);
         break;
       }
 
@@ -915,7 +1012,9 @@ async function executeAction(sessionId: string, userId: string, userAvailable?: 
   incrementToolUse(sessionId);
 
   // If user is not available and action is to ask user, convert to search instead
-  if (!userAvailable && actionLower.includes('ask') && actionLower.includes('user')) {
+  // Use startsWith to avoid false matches (e.g., "note: ...asking questions...")
+  const isAskUserAction = actionLower.startsWith('ask user:') || actionLower.startsWith('ask:') || actionLower.startsWith('question:');
+  if (!userAvailable && isAskUserAction) {
     logger.info('User not available, converting ask-user action to search', { sessionId, originalAction: action });
 
     // Extract what they wanted to ask about and search for it instead
@@ -945,29 +1044,30 @@ async function executeAction(sessionId: string, userId: string, userAvailable?: 
     return;
   }
 
-  // Execute based on action type
-  if (actionLower.includes('search') && (actionLower.includes('web') || actionLower.includes('internet') || actionLower.includes('find'))) {
+  // Execute based on action type - use startsWith for reliable routing
+  // Order matters: check most specific patterns first
+  if (actionLower.startsWith('note:') || actionLower.startsWith('record:') || actionLower.startsWith('remember:')) {
+    // Note to self - add to session workspace (check FIRST to avoid false matches)
+    actionTaken = await executeNoteAction(sessionId, userId, action);
+  } else if (actionLower.startsWith('ask user:') || actionLower.startsWith('ask:') || actionLower.startsWith('question:')) {
+    // Ask user a question - must START with "ask user:" to avoid false matches
+    actionTaken = await executeAskUserAction(sessionId, userId, action, deliberation);
+  } else if (actionLower.startsWith('search:') || actionLower.startsWith('find:') || (actionLower.includes('search') && actionLower.includes('web'))) {
     // Web search
     actionTaken = await executeSearchAction(sessionId, userId, action);
-  } else if (actionLower.includes('ask') && actionLower.includes('user')) {
-    // Ask user a question
-    actionTaken = await executeAskUserAction(sessionId, userId, action, deliberation);
-  } else if (actionLower.includes('task') && (actionLower.includes('create') || actionLower.includes('add') || actionLower.includes('new'))) {
+  } else if (actionLower.startsWith('create task:') || actionLower.startsWith('add task:') || actionLower.startsWith('new task:')) {
     // Create a new task
     actionTaken = await executeCreateTaskAction(sessionId, userId, action);
-  } else if (actionLower.includes('task') && (actionLower.includes('complete') || actionLower.includes('done') || actionLower.includes('finish'))) {
+  } else if (actionLower.startsWith('complete task:') || actionLower.startsWith('done:') || actionLower.startsWith('finish task:')) {
     // Complete a task
     actionTaken = await executeCompleteTaskAction(sessionId, userId, action);
-  } else if (actionLower.includes('file') && (actionLower.includes('write') || actionLower.includes('save') || actionLower.includes('create'))) {
+  } else if (actionLower.startsWith('write file:') || actionLower.startsWith('save file:') || actionLower.startsWith('create file:')) {
     // Write a file to workspace
     actionTaken = await executeWriteFileAction(sessionId, userId, action);
-  } else if (actionLower.includes('file') && actionLower.includes('read')) {
+  } else if (actionLower.startsWith('read file:') || actionLower.startsWith('read:')) {
     // Read a file from workspace
     actionTaken = await executeReadFileAction(sessionId, userId, action);
-  } else if (actionLower.includes('note') || actionLower.includes('record') || actionLower.includes('remember')) {
-    // Note to self - add to session workspace
-    actionTaken = await executeNoteAction(sessionId, userId, action);
-  } else if (actionLower.includes('fetch') && (actionLower.includes('web') || actionLower.includes('page') || actionLower.includes('url'))) {
+  } else if (actionLower.startsWith('fetch:') || (actionLower.includes('fetch') && actionLower.includes('url'))) {
     // Fetch web page content and store as document
     actionTaken = await executeWebFetchAndStoreAction(sessionId, userId, action);
   } else if (actionLower.includes('collect') || (actionLower.includes('research') && actionLower.includes('add'))) {
@@ -1052,8 +1152,9 @@ async function executeAskUserAction(
   deliberation: councilService.CouncilDeliberation
 ): Promise<string> {
   // Extract the question from the action
-  const questionMatch = action.match(/ask.*?[":]\s*(.+?)(?:["]|$)/i)
-    || action.match(/question.*?[":]\s*(.+?)(?:["]|$)/i);
+  // Pattern: "ask user: <question>" - capture everything after the colon
+  const questionMatch = action.match(/ask\s+user\s*:\s*(.+)$/i)
+    || action.match(/question\s*:\s*(.+)$/i);
 
   const question = questionMatch?.[1]?.trim() || action;
 
@@ -1391,7 +1492,19 @@ async function executeSearchAction(
     || action.match(/find[^:]*:\s*["']?([^"'\n]+)["']?/i)
     || action.match(/search\s+(?:for\s+)?["']?([^"'\n]+)["']?/i);
 
-  const query = queryMatch?.[1]?.trim() || action.replace(/search|find|web|internet|for/gi, '').trim();
+  let query = queryMatch?.[1]?.trim() || action.replace(/search|find|web|internet|for/gi, '').trim();
+
+  // Clean up malformed queries (numbered lists, bullet points, etc.)
+  // If query starts with "1)" or "1." or "-", extract just the first meaningful phrase
+  if (/^[\d\-\*\)\.]+\s/.test(query)) {
+    // Remove the numbering/bullet and take first sentence or phrase
+    query = query.replace(/^[\d\-\*\)\.]+\s*/, '').split(/[,;]|\s{2,}/)[0].trim();
+  }
+
+  // If query is too long (probably a full paragraph), take first phrase
+  if (query.length > 100) {
+    query = query.substring(0, 100).split(/[,;.]/).slice(0, 2).join(' ').trim();
+  }
 
   if (!query || query.length < 3) {
     await sessionWorkspaceService.addObservation(sessionId, userId, `Could not extract search query from: ${action}`, 'act');

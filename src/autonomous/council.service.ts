@@ -368,6 +368,20 @@ async function buildPolarisContext(userId: string, _sessionId: string): Promise<
     }
   }
 
+  // CRITICAL: Include recently answered questions so Polaris knows what user said
+  const recentlyAnswered = await questionsService.getRecentlyAnsweredQuestions(
+    _sessionId,
+    new Date(Date.now() - 60 * 60 * 1000) // Last hour
+  );
+  if (recentlyAnswered.length > 0) {
+    parts.push('\nQuestions Answered by User:');
+    for (const q of recentlyAnswered) {
+      parts.push(`Q: ${q.question}`);
+      parts.push(`A: "${q.userResponse}"`);
+      parts.push('');
+    }
+  }
+
   parts.push('\nYour task: Summarize where we are. What is the current context? What goals are active? What tasks need attention? What is the priority stack?');
 
   return parts.join('\n');

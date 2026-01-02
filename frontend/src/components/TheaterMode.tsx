@@ -5,6 +5,9 @@ import { X, Minimize2, Maximize2, MessageCircle, FileText, Send, ChevronRight } 
 import { autonomousApi } from '../lib/api';
 import type { AutonomousQuestion, SessionNote } from '../lib/api';
 
+// API URL for SSE connections - must match where cookies are set
+const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
+
 interface TheaterModeProps {
   sessionId: string;
   onClose: () => void;
@@ -18,7 +21,7 @@ interface CouncilMessage {
 }
 
 interface StreamEvent {
-  type: 'connected' | 'phase_start' | 'phase_end' | 'council_message' | 'action' | 'session_end' | 'error' | 'tool_count_update' | 'tool_limit_reached' | 'search_start' | 'search_complete' | 'web_fetch_start' | 'web_fetched' | 'document_created';
+  type: 'connected' | 'phase_start' | 'phase_end' | 'council_message' | 'action' | 'session_end' | 'error' | 'tool_count_update' | 'tool_limit_reached' | 'search_start' | 'search_complete' | 'web_fetch_start' | 'web_fetched' | 'document_created' | 'history_load' | 'session_paused' | 'ping';
   phase?: string;
   speaker?: string;
   message?: string;
@@ -31,6 +34,9 @@ interface StreamEvent {
   resultCount?: number;
   url?: string;
   title?: string;
+  deliberations?: Array<{ conversationData?: CouncilMessage[]; loopNumber?: number }>;
+  currentLoop?: number;
+  timestamp?: string;
 }
 
 const councilConfig: Record<string, { name: string; emoji: string; color: string; role: string }> = {
@@ -69,48 +75,79 @@ export default function TheaterMode({ sessionId, onClose }: TheaterModeProps) {
   const [sessionNotes, setSessionNotes] = useState<SessionNote[]>([]);
   const [showSidebar, setShowSidebar] = useState(false);
   const [questionResponse, setQuestionResponse] = useState('');
+  const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const MAX_RECONNECT_ATTEMPTS = 5;
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Connect to SSE stream
+  // Connect to SSE stream with reconnection logic
   useEffect(() => {
     // Load existing deliberations first
     loadExistingMessages();
 
-    // Connect to live stream - cookies sent automatically for same-origin
-    const eventSource = new EventSource(
-      `/api/autonomous/deliberations/live`,
-      { withCredentials: true }
-    );
-
-    eventSource.onopen = () => {
-      setIsConnected(true);
-      setError(null);
-    };
-
-    eventSource.onmessage = (event) => {
-      try {
-        const data: StreamEvent = JSON.parse(event.data);
-        handleStreamEvent(data);
-      } catch (e) {
-        console.error('Failed to parse SSE event:', e);
+    const connect = () => {
+      // Close existing connection if any
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
       }
+
+      // Connect to live stream with credentials for auth
+      const eventSource = new EventSource(`${API_URL}/api/autonomous/deliberations/live`, {
+        withCredentials: true,
+      });
+
+      eventSource.onopen = () => {
+        setIsConnected(true);
+        setError(null);
+        setReconnectAttempt(0); // Reset on successful connection
+      };
+
+      eventSource.onmessage = (event) => {
+        try {
+          const data: StreamEvent = JSON.parse(event.data);
+          handleStreamEvent(data);
+        } catch (e) {
+          console.error('Failed to parse SSE event:', e);
+        }
+      };
+
+      eventSource.onerror = () => {
+        setIsConnected(false);
+        eventSource.close();
+
+        // Attempt reconnection with exponential backoff
+        if (reconnectAttempt < MAX_RECONNECT_ATTEMPTS) {
+          const delay = Math.min(1000 * Math.pow(2, reconnectAttempt), 30000);
+          setError(`Reconnecting in ${Math.round(delay / 1000)}s...`);
+
+          reconnectTimeoutRef.current = setTimeout(() => {
+            setReconnectAttempt(prev => prev + 1);
+            connect();
+          }, delay);
+        } else {
+          setError('Connection lost. Please refresh to reconnect.');
+        }
+      };
+
+      eventSourceRef.current = eventSource;
     };
 
-    eventSource.onerror = () => {
-      setIsConnected(false);
-      setError('Connection lost. The session may have ended.');
-    };
-
-    eventSourceRef.current = eventSource;
+    connect();
 
     return () => {
-      eventSource.close();
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+      }
     };
   }, [sessionId]);
 
@@ -269,6 +306,27 @@ export default function TheaterMode({ sessionId, onClose }: TheaterModeProps) {
       case 'session_end':
         setCurrentPhase(null);
         setIsConnected(false);
+        break;
+
+      case 'history_load':
+        // Session was interrupted - load existing deliberations
+        if (event.deliberations && event.deliberations.length > 0) {
+          const latest = event.deliberations[event.deliberations.length - 1];
+          if (latest.conversationData) {
+            setMessages(latest.conversationData);
+          }
+        }
+        if (event.currentLoop) setLoopCount(event.currentLoop);
+        setIsConnected(true);
+        break;
+
+      case 'session_paused':
+        setError(event.message || 'Session was interrupted');
+        // Keep isConnected true - connection is still open for heartbeat
+        break;
+
+      case 'ping':
+        // Keep-alive heartbeat - no action needed, just confirms connection is alive
         break;
 
       case 'error':
