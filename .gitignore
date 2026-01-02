@@ -51,6 +51,10 @@ images/moods/
 
 # Internal documentation
 prompting.md
+CLAUDE.md
+
+# Claude Code settings (local development)
+.claude/
 
 # Trading engine files (proprietary)
 src/trading/conditional-order.service.ts

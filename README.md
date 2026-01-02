@@ -409,7 +409,9 @@ Friends discuss observations about your communication patterns, interests, and n
 
 ## Autonomous Mode
 
-Luna can operate independently with self-directed capabilities:
+Luna can operate independently with self-directed capabilities.
+
+> **Deep Dive**: See [docs/AUTONOMOUS.md](docs/AUTONOMOUS.md) for comprehensive documentation on the Council system, Theater Mode, and autonomous architecture.
 
 ### Autonomous Features
 | Feature | Description |
@@ -421,6 +423,41 @@ Luna can operate independently with self-directed capabilities:
 | **Friend Conversations** | Background discussions with AI friends |
 | **Insight Generation** | Generate insights from accumulated knowledge |
 | **Questions** | Ask clarifying questions when needed |
+| **Theater Mode** | Watch council deliberations in real-time |
+
+### Theater Mode
+
+Theater Mode provides a live view into Luna's autonomous thinking process:
+
+- **Real-time Deliberations**: Watch the Council debate in real-time via SSE streaming
+- **Phase Visibility**: See sense, plan, and act phases unfold
+- **Council Insights**: View each persona's perspective (Polaris, Aurora, Vega, Sol)
+- **Action Tracking**: Monitor what Luna decides to do and why
+- **Question Queue**: See pending questions Luna wants to ask you
+
+Access Theater Mode from the Autonomous settings when a session is active.
+
+### Circuit Breaker
+
+The autonomous system includes spin detection to prevent infinite loops:
+- Detects 3+ identical action types in a row
+- Forces pause and escalation when spinning
+- Tracks action history per session
+
+### Sanhedrin Integration
+
+Luna can delegate tasks to external agents via the A2A (Agent-to-Agent) Protocol:
+
+| Feature | Description |
+|---------|-------------|
+| **Claude Code** | Delegate complex coding tasks to Claude CLI |
+| **JSON-RPC 2.0** | Standard protocol for agent communication |
+| **Task Artifacts** | Structured response handling |
+
+Configure in Settings > Autonomous or via environment variables:
+- `SANHEDRIN_ENABLED`: Enable/disable integration
+- `SANHEDRIN_BASE_URL`: Sanhedrin server URL
+- `SANHEDRIN_TIMEOUT`: Request timeout (default 120s)
 
 ### Configuration
 - **Auto-start**: Enable automatic session startup
@@ -503,7 +540,7 @@ When NeuralSleep services are running, Luna gains consciousness metrics:
 
 ## LLM Providers
 
-Luna supports 7 providers with 100+ models:
+Luna supports 8 providers with 100+ models:
 
 | Provider | Notable Models | Best For |
 |----------|---------------|----------|
@@ -514,6 +551,7 @@ Luna supports 7 providers with 100+ models:
 | **xAI** | Grok 4.1, Grok 4 Fast | Reasoning, coding |
 | **OpenRouter** | Various (aggregation) | Flexibility, fallback |
 | **Ollama** | Qwen 2.5, Llama 3.2, BGE-M3 | Local/private |
+| **Sanhedrin** | Claude Code CLI | Agent delegation via A2A Protocol |
 
 ### Configurable Tasks
 Assign different models to different purposes:
@@ -583,6 +621,7 @@ luna-chat/
 |   |   |-- router.ts               # Model routing
 |   |   |-- tts.service.ts          # Text-to-speech
 |   |   |-- providers/              # Provider implementations
+|   |   |   |-- sanhedrin.provider.ts  # A2A Protocol for agent delegation
 |   |-- memory/             # Memory system
 |   |   |-- embedding.service.ts    # Vector embeddings
 |   |   |-- facts.service.ts        # Fact extraction
@@ -639,13 +678,16 @@ luna-chat/
 
 | Service | Port | Description |
 |---------|------|-------------|
-| luna-frontend | 3004 | Next.js web UI |
+| luna-frontend | 3004 | Next.js web UI (desktop) |
+| luna-mobile | 5555 | Next.js mobile-optimized UI |
 | luna-api | 3005 | Backend API |
 | luna-postgres | 5432 | PostgreSQL with pgvector |
 | luna-redis | 6379 | Redis cache |
 | luna-sandbox | - | Code execution sandbox |
 | luna-ollama | 11434 | Local LLM and embeddings |
 | luna-radicale | 5232 | CalDAV calendar server |
+| tradecore | 9090 | High-performance trading engine (Go) |
+| luna-sanhedrin | 8000 | A2A Protocol multi-agent coordination |
 | docker-proxy | 2375 | Docker socket proxy |
 
 ---
@@ -747,6 +789,9 @@ npm start
 | GET/POST | `/api/autonomous/goals` | Goal management |
 | GET | `/api/autonomous/council` | Council members |
 | GET/POST | `/api/autonomous/council/deliberations` | Deliberations |
+| GET | `/api/autonomous/deliberations/live` | SSE stream for Theater Mode |
+| GET/POST | `/api/autonomous/questions` | Questions queue |
+| POST | `/api/autonomous/questions/:id/answer` | Answer a question |
 | GET/POST | `/api/autonomous/rss` | RSS feeds |
 | GET | `/api/autonomous/insights` | Generated insights |
 | GET | `/api/autonomous/friends` | Friend conversations |
