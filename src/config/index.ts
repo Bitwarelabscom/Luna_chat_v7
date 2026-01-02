@@ -97,6 +97,12 @@ const configSchema = z.object({
     enabled: z.coerce.boolean().default(true),
   }).optional(),
 
+  sanhedrin: z.object({
+    baseUrl: z.string().url().default('http://localhost:8000'),
+    timeout: z.coerce.number().default(120000),
+    enabled: z.coerce.boolean().default(false),
+  }).optional(),
+
   elevenlabs: z.object({
     apiKey: z.string().optional(),
     voiceId: z.string().default('21m00Tcm4TlvDq8ikWAM'),  // Rachel - warm, calm voice
@@ -253,6 +259,12 @@ const rawConfig = {
   google: {
     apiKey: secrets.googleApiKey,
     enabled: process.env.GOOGLE_ENABLED,
+  },
+
+  sanhedrin: {
+    baseUrl: process.env.SANHEDRIN_BASE_URL,
+    timeout: process.env.SANHEDRIN_TIMEOUT,
+    enabled: process.env.SANHEDRIN_ENABLED,
   },
 
   elevenlabs: {

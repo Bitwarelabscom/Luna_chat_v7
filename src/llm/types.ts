@@ -1,6 +1,6 @@
 // LLM Provider Types
 
-export type ProviderId = 'openai' | 'groq' | 'anthropic' | 'xai' | 'openrouter' | 'ollama' | 'google';
+export type ProviderId = 'openai' | 'groq' | 'anthropic' | 'xai' | 'openrouter' | 'ollama' | 'google' | 'sanhedrin';
 
 export interface LLMProvider {
   id: ProviderId;
@@ -757,6 +757,49 @@ export const PROVIDERS: LLMProvider[] = [
       },
     ],
   },
+  {
+    id: 'sanhedrin',
+    name: 'Sanhedrin (CLI Agents)',
+    enabled: true,
+    models: [
+      {
+        id: 'claude-code',
+        name: 'Claude Code (CLI)',
+        contextWindow: 200000,
+        maxOutputTokens: 64000,
+        capabilities: ['chat', 'code', 'analysis'],
+        costPer1kInput: 0,
+        costPer1kOutput: 0,
+      },
+      {
+        id: 'gemini-cli',
+        name: 'Gemini CLI',
+        contextWindow: 1000000,
+        maxOutputTokens: 32000,
+        capabilities: ['chat', 'code', 'analysis'],
+        costPer1kInput: 0,
+        costPer1kOutput: 0,
+      },
+      {
+        id: 'codex-cli',
+        name: 'Codex CLI',
+        contextWindow: 128000,
+        maxOutputTokens: 16000,
+        capabilities: ['chat', 'code'],
+        costPer1kInput: 0,
+        costPer1kOutput: 0,
+      },
+      {
+        id: 'ollama',
+        name: 'Ollama (via Sanhedrin)',
+        contextWindow: 32768,
+        maxOutputTokens: 8192,
+        capabilities: ['chat', 'code', 'fast'],
+        costPer1kInput: 0,
+        costPer1kOutput: 0,
+      },
+    ],
+  },
 ];
 
 // Task types that can have configurable models
@@ -770,6 +813,7 @@ export type ConfigurableTask =
   | 'agent:planner'
   | 'friend'
   | 'smalltalk'
+  | 'fast_llm'
   | 'fast_plan'
   | 'fast_draft';
 
@@ -844,6 +888,13 @@ export const CONFIGURABLE_TASKS: TaskModelConfig[] = [
     description: 'Simple greetings, acknowledgments, and casual chat',
     defaultProvider: 'xai',
     defaultModel: 'grok-4-1-fast-non-reasoning-latest',
+  },
+  {
+    taskType: 'fast_llm',
+    displayName: 'Voice Chat',
+    description: 'Model for voice conversations - optimized for speed',
+    defaultProvider: 'xai',
+    defaultModel: 'grok-4-1-fast',
   },
   {
     taskType: 'fast_plan',
