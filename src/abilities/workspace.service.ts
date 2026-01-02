@@ -34,8 +34,17 @@ export interface WorkspaceStats {
 /**
  * Get user's workspace directory path
  */
-function getUserWorkspacePath(userId: string): string {
+export function getUserWorkspacePath(userId: string): string {
   return path.join(WORKSPACE_DIR, userId);
+}
+
+/**
+ * Get file:// URL for a workspace file (for browser navigation)
+ */
+export function getWorkspaceFileUrl(userId: string, filename: string): string {
+  // In sandbox, workspace is mounted at /workspace
+  const filePath = path.join('/workspace', userId, filename);
+  return `file://${filePath}`;
 }
 
 /**
@@ -310,4 +319,6 @@ export default {
   fileExists,
   getWorkspaceStats,
   getSandboxFilePath,
+  getUserWorkspacePath,
+  getWorkspaceFileUrl,
 };

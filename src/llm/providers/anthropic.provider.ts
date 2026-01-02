@@ -262,3 +262,217 @@ export async function* streamCompletion(
 export function isConfigured(): boolean {
   return !!config.anthropic?.apiKey;
 }
+
+// ============================================
+// Tool Calling Support
+// ============================================
+
+/**
+ * OpenAI-compatible tool definition
+ */
+export interface OpenAITool {
+  type: 'function';
+  function: {
+    name: string;
+    description?: string;
+    parameters?: Record<string, unknown>;
+  };
+}
+
+/**
+ * OpenAI-compatible tool call
+ */
+export interface OpenAIToolCall {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+/**
+ * Message with potential tool calls/results
+ */
+export interface ToolMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string;
+  tool_calls?: OpenAIToolCall[];
+  tool_call_id?: string;
+}
+
+/**
+ * Result from tool-enabled completion
+ */
+export interface ToolCompletionResult {
+  content: string;
+  tokensUsed: number;
+  promptTokens: number;
+  completionTokens: number;
+  toolCalls?: OpenAIToolCall[];
+  finishReason: string;
+}
+
+/**
+ * Convert OpenAI tool format to Anthropic tool format
+ */
+function convertToolsToAnthropic(tools: OpenAITool[]): Anthropic.Tool[] {
+  return tools.map(tool => ({
+    name: tool.function.name,
+    description: tool.function.description || '',
+    input_schema: (tool.function.parameters || { type: 'object', properties: {} }) as Anthropic.Tool.InputSchema,
+  }));
+}
+
+/**
+ * Convert messages with tool calls/results to Anthropic format
+ */
+function convertToolMessagesToAnthropic(
+  messages: ToolMessage[]
+): Anthropic.MessageParam[] {
+  const converted: Anthropic.MessageParam[] = [];
+
+  for (const msg of messages) {
+    // Skip system messages (handled separately)
+    if (msg.role === 'system') continue;
+
+    if (msg.role === 'tool') {
+      // Tool result - Anthropic expects this as a user message with tool_result block
+      converted.push({
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: msg.tool_call_id!,
+          content: msg.content,
+        }],
+      });
+    } else if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
+      // Assistant message with tool calls
+      const content: Anthropic.ContentBlockParam[] = [];
+
+      // Add text content if present
+      if (msg.content) {
+        content.push({ type: 'text', text: msg.content });
+      }
+
+      // Add tool use blocks
+      for (const toolCall of msg.tool_calls) {
+        content.push({
+          type: 'tool_use',
+          id: toolCall.id,
+          name: toolCall.function.name,
+          input: JSON.parse(toolCall.function.arguments || '{}'),
+        });
+      }
+
+      converted.push({ role: 'assistant', content });
+    } else {
+      // Regular message
+      converted.push({
+        role: msg.role as 'user' | 'assistant',
+        content: msg.content,
+      });
+    }
+  }
+
+  return converted;
+}
+
+/**
+ * Extract tool calls from Anthropic response
+ */
+function extractToolCalls(content: Anthropic.ContentBlock[]): OpenAIToolCall[] {
+  const toolCalls: OpenAIToolCall[] = [];
+
+  for (const block of content) {
+    if (block.type === 'tool_use') {
+      toolCalls.push({
+        id: block.id,
+        type: 'function',
+        function: {
+          name: block.name,
+          arguments: JSON.stringify(block.input),
+        },
+      });
+    }
+  }
+
+  return toolCalls;
+}
+
+/**
+ * Create completion with tool calling support
+ * Converts OpenAI tool format to Anthropic native format
+ */
+export async function createCompletionWithTools(
+  model: string,
+  messages: ToolMessage[],
+  tools: OpenAITool[],
+  options: {
+    temperature?: number;
+    maxTokens?: number;
+  } = {}
+): Promise<ToolCompletionResult> {
+  const anthropic = getClient();
+
+  // Extract system message
+  const systemMessage = messages.find(m => m.role === 'system');
+  const systemPrompt = systemMessage?.content;
+
+  // Convert messages and tools
+  const convertedMessages = convertToolMessagesToAnthropic(messages);
+  const convertedTools = convertToolsToAnthropic(tools);
+
+  try {
+    const response = await anthropic.messages.create({
+      model,
+      max_tokens: options.maxTokens || 4096,
+      system: systemPrompt,
+      messages: convertedMessages,
+      tools: convertedTools,
+      temperature: options.temperature ?? 0.7,
+    });
+
+    // Extract text content
+    const textContent = response.content
+      .filter(block => block.type === 'text')
+      .map(block => (block as Anthropic.TextBlock).text)
+      .join('');
+
+    // Extract tool calls
+    const toolCalls = extractToolCalls(response.content);
+
+    // Map Anthropic stop reasons to OpenAI format
+    let finishReason = 'stop';
+    if (response.stop_reason === 'tool_use') {
+      finishReason = 'tool_calls';
+    } else if (response.stop_reason === 'max_tokens') {
+      finishReason = 'length';
+    }
+
+    const usage = response.usage;
+
+    logger.debug('Anthropic tool completion', {
+      model,
+      toolCallCount: toolCalls.length,
+      finishReason,
+      inputTokens: usage.input_tokens,
+      outputTokens: usage.output_tokens,
+    });
+
+    return {
+      content: textContent,
+      tokensUsed: usage.input_tokens + usage.output_tokens,
+      promptTokens: usage.input_tokens,
+      completionTokens: usage.output_tokens,
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      finishReason,
+    };
+  } catch (error) {
+    logger.error('Anthropic tool completion failed', {
+      error: (error as Error).message,
+      model,
+    });
+    throw error;
+  }
+}

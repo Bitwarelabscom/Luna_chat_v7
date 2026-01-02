@@ -1,7 +1,12 @@
 import { spawn } from 'child_process';
+import * as fs from 'fs/promises';
+import * as path from 'path';
 import { validateExternalUrl } from '../utils/url-validator.js';
 import logger from '../utils/logger.js';
 import * as browserScreencast from './browser-screencast.service.js';
+
+// Workspace directory constant (must match workspace.service.ts)
+const WORKSPACE_DIR = process.env.WORKSPACE_DIR || '/app/workspace';
 
 const SANDBOX_CONTAINER = process.env.SANDBOX_CONTAINER || 'luna-sandbox';
 const DOCKER_HOST = process.env.DOCKER_HOST || 'http://docker-proxy:2375';
@@ -65,10 +70,10 @@ interface BrowserSession {
 const userSessions = new Map<string, BrowserSession>();
 
 // Blocked URL patterns for security
+// NOTE: file: is handled separately via isAllowedFileUrl() to allow workspace files
 const BLOCKED_URL_PATTERNS = [
   /^javascript:/i,
   /^data:/i,
-  /^file:/i,
   /^about:/i,
   /^chrome:/i,
   /^view-source:/i,
@@ -76,6 +81,64 @@ const BLOCKED_URL_PATTERNS = [
 
 function isBlockedUrl(url: string): boolean {
   return BLOCKED_URL_PATTERNS.some((pattern) => pattern.test(url));
+}
+
+/**
+ * Check if a file:// URL points to a valid workspace file
+ * Security: Uses realpath to prevent symlink attacks and path traversal
+ */
+async function isAllowedFileUrl(urlString: string, userId: string): Promise<{ allowed: boolean; error?: string; sandboxPath?: string }> {
+  try {
+    const url = new URL(urlString);
+    if (url.protocol !== 'file:') {
+      return { allowed: false, error: 'Not a file:// URL' };
+    }
+
+    // Get file path from URL (handles URL encoding)
+    const filePath = decodeURIComponent(url.pathname);
+
+    // The URL should use /workspace/{userId}/ format (sandbox path)
+    // Convert to host path for validation
+    const expectedPrefix = `/workspace/${userId}/`;
+    if (!filePath.startsWith(expectedPrefix)) {
+      return { allowed: false, error: 'File path must be within your workspace' };
+    }
+
+    // Extract filename from path
+    const filename = filePath.substring(expectedPrefix.length);
+
+    // Check for path traversal attempts in filename
+    if (filename.includes('..') || filename.includes('/')) {
+      return { allowed: false, error: 'Invalid filename - path traversal not allowed' };
+    }
+
+    // Build host path for validation
+    const hostPath = path.join(WORKSPACE_DIR, userId, filename);
+
+    // Check file exists on host
+    try {
+      const stat = await fs.stat(hostPath);
+      if (!stat.isFile()) {
+        return { allowed: false, error: 'Path is not a regular file' };
+      }
+    } catch {
+      return { allowed: false, error: 'File not found in workspace' };
+    }
+
+    // Use realpath to resolve any symlinks and verify it's still in workspace
+    const realPath = await fs.realpath(hostPath);
+    const workspaceRealPath = await fs.realpath(path.join(WORKSPACE_DIR, userId));
+
+    if (!realPath.startsWith(workspaceRealPath + path.sep) && realPath !== workspaceRealPath) {
+      return { allowed: false, error: 'File resolves outside workspace (symlink attack prevented)' };
+    }
+
+    // Return the sandbox path for the browser to use
+    return { allowed: true, sandboxPath: filePath };
+  } catch (error) {
+    logger.error('Error validating file URL', { urlString, userId, error: (error as Error).message });
+    return { allowed: false, error: 'Failed to validate file URL' };
+  }
 }
 
 // Update session activity
@@ -263,15 +326,31 @@ export async function navigate(
     };
   }
 
-  // SSRF Protection: validate URL before navigating
-  try {
-    await validateExternalUrl(url, { allowHttp: true });
-  } catch (error) {
-    return {
-      success: false,
-      error: `URL validation failed: ${(error as Error).message}`,
-      executionTimeMs: Date.now() - startTime,
-    };
+  // Handle file:// URLs - allow only workspace files
+  let actualUrl = url;
+  if (url.startsWith('file://')) {
+    const fileCheck = await isAllowedFileUrl(url, userId);
+    if (!fileCheck.allowed) {
+      return {
+        success: false,
+        error: fileCheck.error || 'File URL not allowed',
+        executionTimeMs: Date.now() - startTime,
+      };
+    }
+    // Use the validated sandbox path
+    actualUrl = `file://${fileCheck.sandboxPath}`;
+    logger.info('Browser navigating to workspace file', { userId, file: fileCheck.sandboxPath });
+  } else {
+    // SSRF Protection: validate external URLs before navigating
+    try {
+      await validateExternalUrl(url, { allowHttp: true });
+    } catch (error) {
+      return {
+        success: false,
+        error: `URL validation failed: ${(error as Error).message}`,
+        executionTimeMs: Date.now() - startTime,
+      };
+    }
   }
 
   // If there's an active screencast session, use it instead of creating a new one
@@ -279,16 +358,16 @@ export async function navigate(
     try {
       await browserScreencast.sendBrowserCommand(userId, {
         action: 'navigate',
-        url,
+        url: actualUrl,
       });
-      logger.info('Browser navigate via screencast', { userId, url });
+      logger.info('Browser navigate via screencast', { userId, url: actualUrl });
       return {
         success: true,
-        pageUrl: url,
+        pageUrl: actualUrl,
         executionTimeMs: Date.now() - startTime,
       };
     } catch (error) {
-      logger.error('Browser navigate via screencast failed', { userId, url, error: (error as Error).message });
+      logger.error('Browser navigate via screencast failed', { userId, url: actualUrl, error: (error as Error).message });
       return {
         success: false,
         error: (error as Error).message,
@@ -298,7 +377,7 @@ export async function navigate(
   }
 
   const script = wrapPlaywrightScript(`
-    const response = await page.goto(${JSON.stringify(url)}, {
+    const response = await page.goto(${JSON.stringify(actualUrl)}, {
       waitUntil: ${JSON.stringify(waitUntil)},
       timeout: ${timeout}
     });
@@ -309,8 +388,11 @@ export async function navigate(
     const bodyText = await page.textContent('body').catch(() => '');
     const contentLength = bodyText?.length || 0;
 
-    // Detect blocked/empty pages
-    if (status >= 400 || contentLength < 100) {
+    // For file:// URLs, skip the content length check (local files are trusted)
+    const isFileUrl = ${JSON.stringify(actualUrl)}.startsWith('file://');
+
+    // Detect blocked/empty pages (skip for file:// URLs)
+    if (!isFileUrl && (status >= 400 || contentLength < 100)) {
       console.log(JSON.stringify({
         success: false,
         error: status >= 400
@@ -336,7 +418,7 @@ export async function navigate(
     const result = await executeBrowserScript(script, timeout + 10000);
 
     if (result.error && !result.output) {
-      logger.error('Browser navigate failed', { userId, url, error: result.error });
+      logger.error('Browser navigate failed', { userId, url: actualUrl, error: result.error });
       return {
         success: false,
         error: result.error,
@@ -347,7 +429,7 @@ export async function navigate(
     const parsed = JSON.parse(result.output);
     updateSession(userId, parsed.pageUrl);
 
-    logger.info('Browser navigate success', { userId, url, title: parsed.pageTitle });
+    logger.info('Browser navigate success', { userId, url: actualUrl, title: parsed.pageTitle });
 
     return {
       success: parsed.success,
@@ -357,7 +439,7 @@ export async function navigate(
       executionTimeMs: Date.now() - startTime,
     };
   } catch (error) {
-    logger.error('Browser navigate exception', { userId, url, error: (error as Error).message });
+    logger.error('Browser navigate exception', { userId, url: actualUrl, error: (error as Error).message });
     return {
       success: false,
       error: (error as Error).message,
@@ -386,15 +468,31 @@ export async function screenshot(
     };
   }
 
-  // SSRF Protection
-  try {
-    await validateExternalUrl(url, { allowHttp: true });
-  } catch (error) {
-    return {
-      success: false,
-      error: `URL validation failed: ${(error as Error).message}`,
-      executionTimeMs: Date.now() - startTime,
-    };
+  // Handle file:// URLs - allow only workspace files
+  let actualUrl = url;
+  if (url.startsWith('file://')) {
+    const fileCheck = await isAllowedFileUrl(url, userId);
+    if (!fileCheck.allowed) {
+      return {
+        success: false,
+        error: fileCheck.error || 'File URL not allowed',
+        executionTimeMs: Date.now() - startTime,
+      };
+    }
+    // Use the validated sandbox path
+    actualUrl = `file://${fileCheck.sandboxPath}`;
+    logger.info('Browser screenshot of workspace file', { userId, file: fileCheck.sandboxPath });
+  } else {
+    // SSRF Protection: validate external URLs
+    try {
+      await validateExternalUrl(url, { allowHttp: true });
+    } catch (error) {
+      return {
+        success: false,
+        error: `URL validation failed: ${(error as Error).message}`,
+        executionTimeMs: Date.now() - startTime,
+      };
+    }
   }
 
   const screenshotCode = selector
@@ -402,7 +500,7 @@ export async function screenshot(
     : `await page.screenshot({ fullPage: ${fullPage}, type: 'jpeg', quality: ${quality} })`;
 
   const script = wrapPlaywrightScript(`
-    const response = await page.goto(${JSON.stringify(url)}, { waitUntil: 'networkidle', timeout: 30000 });
+    const response = await page.goto(${JSON.stringify(actualUrl)}, { waitUntil: 'networkidle', timeout: 30000 });
 
     const status = response?.status() || 0;
     const title = await page.title();
@@ -410,8 +508,11 @@ export async function screenshot(
     const bodyText = await page.textContent('body').catch(() => '');
     const contentLength = bodyText?.length || 0;
 
-    // Detect blocked/empty pages before taking screenshot
-    if (status >= 400 || contentLength < 100) {
+    // For file:// URLs, skip the content length check (local files are trusted)
+    const isFileUrl = ${JSON.stringify(actualUrl)}.startsWith('file://');
+
+    // Detect blocked/empty pages before taking screenshot (skip for file:// URLs)
+    if (!isFileUrl && (status >= 400 || contentLength < 100)) {
       console.log(JSON.stringify({
         success: false,
         error: status >= 400
@@ -441,7 +542,7 @@ export async function screenshot(
     const result = await executeBrowserScript(script, 60000);
 
     if (result.error && !result.output) {
-      logger.error('Browser screenshot failed', { userId, url, error: result.error });
+      logger.error('Browser screenshot failed', { userId, url: actualUrl, error: result.error });
       return {
         success: false,
         error: result.error,

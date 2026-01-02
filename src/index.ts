@@ -56,8 +56,8 @@ app.use(fail2banMiddleware);
 if (config.nodeEnv === 'production') {
   app.use((req, res, next) => {
     const clientIp = req.ip || req.socket.remoteAddress || '';
-    // Skip HTTPS redirect for WireGuard network (10.0.0.x)
-    if (clientIp.includes('10.0.0.')) {
+    // Skip HTTPS redirect for WireGuard network (10.0.0.x) and Docker internal network (172.x.x.x)
+    if (clientIp.includes('10.0.0.') || clientIp.includes('172.')) {
       return next();
     }
     // Skip HTTPS redirect for health check, Telegram webhook, and static images

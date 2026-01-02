@@ -170,24 +170,39 @@ function isIPAllowed(ip: string): boolean {
 }
 
 /**
- * Get client IP from request (handles proxies)
+ * Get client IP from request for whitelist checking
+ * Uses socket IP (the proxy's IP) NOT X-Forwarded-For/X-Real-IP
+ * This allows requests through trusted proxies (nginx) while blocking direct external access
  */
 function getClientIP(req: Request): string {
-  // X-Forwarded-For can contain multiple IPs: client, proxy1, proxy2
+  // Use socket address - this is the actual connection source (nginx proxy for external requests)
+  // NOT the X-Forwarded-For/X-Real-IP which contain the external client IP
+  const socketIP = req.socket.remoteAddress || '';
+
+  // Normalize IPv4-mapped IPv6
+  if (socketIP.startsWith('::ffff:')) {
+    return socketIP.substring(7);
+  }
+
+  return socketIP || 'unknown';
+}
+
+/**
+ * Get real client IP for logging purposes (from proxy headers)
+ */
+function getRealClientIP(req: Request): string {
   const forwarded = req.headers['x-forwarded-for'];
   if (forwarded) {
     const ips = (Array.isArray(forwarded) ? forwarded[0] : forwarded).split(',');
     return ips[0].trim();
   }
 
-  // X-Real-IP header (nginx)
   const realIP = req.headers['x-real-ip'];
   if (realIP) {
     return Array.isArray(realIP) ? realIP[0] : realIP;
   }
 
-  // Fallback to socket address
-  return req.ip || req.socket.remoteAddress || 'unknown';
+  return req.socket.remoteAddress || 'unknown';
 }
 
 /**
@@ -212,7 +227,8 @@ export function ipWhitelistMiddleware(req: Request, res: Response, next: NextFun
   }
 
   logger.warn('Blocked request from non-whitelisted IP', {
-    ip: clientIP,
+    socketIP: clientIP,
+    realIP: getRealClientIP(req),
     path: req.path,
     method: req.method
   });

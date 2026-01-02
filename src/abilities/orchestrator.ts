@@ -631,54 +631,22 @@ export async function buildAbilityContext(
 
 /**
  * Format ability context for inclusion in system prompt
- * Uses deterministic ordering and consistent headers for cache optimization
+ * Only includes sections with actual data to minimize tokens
  */
 export function formatAbilityContextForPrompt(context: AbilityContext): string {
   const sections: string[] = [];
 
-  // Always include sections in consistent order for cache determinism
-  // Use consistent headers even when content is empty
+  // Only include sections that have content
+  if (context.calendar) sections.push(context.calendar);
+  if (context.tasks) sections.push(context.tasks);
+  if (context.email) sections.push(context.email);
+  if (context.mood) sections.push(context.mood);
+  if (context.spotify) sections.push(context.spotify);
+  if (context.knowledge) sections.push(context.knowledge);
 
-  // Calendar section - always present
-  if (context.calendar) {
-    sections.push(context.calendar);
-  } else {
-    sections.push('[Calendar]\n(No upcoming events)');
-  }
-
-  // Tasks section - always present
-  if (context.tasks) {
-    sections.push(context.tasks);
-  } else {
-    sections.push('[Tasks]\n(No pending tasks)');
-  }
-
-  // Email section - always present
-  if (context.email) {
-    sections.push(context.email);
-  } else {
-    sections.push('[Email]\n(No new mail)');
-  }
-
-  // Mood section - only if available (not critical for consistency)
-  if (context.mood) {
-    sections.push(context.mood);
-  }
-
-  // Spotify section - only if available
-  if (context.spotify) {
-    sections.push(context.spotify);
-  }
-
-  // Knowledge section - only if relevant documents found
-  if (context.knowledge) {
-    sections.push(context.knowledge);
-  }
-
-  // Tools section - sort for determinism
   if (context.tools.length > 0) {
     const sortedTools = [...context.tools].sort();
-    sections.push(`[Available Tools]\n${sortedTools.join(', ')}`);
+    sections.push(`[Tools]\n${sortedTools.join(', ')}`);
   }
 
   return sections.join('\n\n');

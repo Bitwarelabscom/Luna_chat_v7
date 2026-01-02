@@ -33,11 +33,24 @@ export function BrowserWindow({ initialUrl = 'https://www.google.com' }: Browser
 
   // Connect to browser WebSocket
   useEffect(() => {
-    // Use cookie-based auth - WebSocket inherits cookies from the browser
+    // Determine WebSocket URL
+    // In production (via nginx), use same host
+    // In development or direct access, use the API server
+    const isProduction = window.location.hostname === 'luna.bitwarelabs.com';
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host;
-    // Use nginx proxy
-    const wsUrl = `${protocol}//${host}/ws/browser`;
+
+    let wsUrl: string;
+    if (isProduction) {
+      // Production: WebSocket through nginx proxy
+      wsUrl = `${protocol}//${window.location.host}/ws/browser`;
+    } else {
+      // Development/direct access: Connect to API server directly
+      // API is on port 3005 on the same network
+      const apiHost = window.location.hostname === 'localhost'
+        ? 'localhost:3005'
+        : `${window.location.hostname.replace(':3004', '')}:3005`;
+      wsUrl = `ws://${apiHost}/ws/browser`;
+    }
 
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;

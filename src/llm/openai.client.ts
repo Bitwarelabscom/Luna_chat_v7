@@ -3,6 +3,7 @@ import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
 import type { SearchResult } from '../types/index.js';
 import type { ProviderId } from './types.js';
+import * as anthropicProvider from './providers/anthropic.provider.js';
 
 // Provider clients cache
 const clients: Partial<Record<ProviderId, OpenAI>> = {};
@@ -39,8 +40,9 @@ function getClient(provider: ProviderId = 'openai'): OpenAI {
         });
         break;
       case 'anthropic':
-        // Anthropic uses different API format, not OpenAI-compatible for tool calling
-        throw new Error('Anthropic is not supported for chat with tool calling. Use OpenAI, Groq, xAI, or OpenRouter.');
+        // Anthropic tool calling is handled separately via native provider
+        // This error only triggers if someone tries to use the OpenAI client directly
+        throw new Error('Anthropic should be routed through createChatCompletion, not getClient directly.');
       case 'google':
         // Google Gemini uses different API format, not OpenAI-compatible
         throw new Error('Google Gemini is not supported for chat with tool calling. Use OpenAI, Groq, xAI, or OpenRouter.');
@@ -94,8 +96,46 @@ export async function createChatCompletion(
     reasoning,
   } = options;
 
-  const client = getClient(provider);
   const modelToUse = model || config.openai.model;
+
+  // Route Anthropic to native provider (required for tool calling, also works without tools)
+  if (provider === 'anthropic') {
+    if (tools && tools.length > 0) {
+      logger.debug('Routing to native Anthropic provider for tool calling', { model: modelToUse });
+      const result = await anthropicProvider.createCompletionWithTools(
+        modelToUse,
+        messages as anthropicProvider.ToolMessage[],
+        tools as anthropicProvider.OpenAITool[],
+        { temperature, maxTokens }
+      );
+      return {
+        content: result.content,
+        tokensUsed: result.tokensUsed,
+        promptTokens: result.promptTokens,
+        completionTokens: result.completionTokens,
+        toolCalls: result.toolCalls as OpenAI.Chat.Completions.ChatCompletionMessageToolCall[],
+        finishReason: result.finishReason,
+      };
+    } else {
+      // No tools - use regular Anthropic completion
+      logger.debug('Routing to native Anthropic provider (no tools)', { model: modelToUse });
+      const result = await anthropicProvider.createCompletion(
+        modelToUse,
+        messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
+        { temperature, maxTokens }
+      );
+      return {
+        content: result.content,
+        tokensUsed: result.tokensUsed,
+        promptTokens: result.inputTokens || 0,
+        completionTokens: result.outputTokens || 0,
+        toolCalls: undefined,
+        finishReason: 'stop',
+      };
+    }
+  }
+
+  const client = getClient(provider);
 
   try {
     // Use max_completion_tokens for OpenAI (newer models), max_tokens for others
@@ -1032,6 +1072,34 @@ export const generateBackgroundTool: OpenAI.Chat.Completions.ChatCompletionTool 
         },
       },
       required: ['prompt'],
+    },
+  },
+};
+
+// Research agent tool - uses Claude CLI for in-depth research
+export const researchTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'research',
+    description: `Conduct in-depth research using Claude Opus 4.5. Use this for complex questions that require thorough investigation, web research, code analysis, document processing, or data analysis. The research agent can search the web, analyze information, and provide detailed findings. Results can optionally be saved to the user's workspace. Use "quick" depth for simple lookups (1-2 min) or "thorough" for comprehensive analysis (5-10 min).`,
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'The research question or topic to investigate thoroughly',
+        },
+        depth: {
+          type: 'string',
+          enum: ['quick', 'thorough'],
+          description: 'Research depth - "quick" for simple lookups, "thorough" for comprehensive analysis. Default: thorough',
+        },
+        save_to_file: {
+          type: 'string',
+          description: 'Optional filename to save research results in workspace (e.g., "market-analysis.md"). File will be saved in the research/ folder.',
+        },
+      },
+      required: ['query'],
     },
   },
 };

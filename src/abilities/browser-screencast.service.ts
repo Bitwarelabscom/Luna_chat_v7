@@ -1,9 +1,12 @@
 import { WebSocket as WS } from 'ws';
 import { spawn } from 'child_process';
+import * as fs from 'fs/promises';
+import * as path from 'path';
 import logger from '../utils/logger.js';
 import { validateExternalUrl } from '../utils/url-validator.js';
 
 const SANDBOX_CONTAINER = process.env.SANDBOX_CONTAINER || 'luna-sandbox';
+const WORKSPACE_DIR = process.env.WORKSPACE_DIR || '/app/workspace';
 const DOCKER_HOST = process.env.DOCKER_HOST || 'http://docker-proxy:2375';
 const SESSION_TIMEOUT = 300000; // 5 minutes idle timeout
 const SCREENCAST_QUALITY = 80;
@@ -270,6 +273,63 @@ function handleBrowserMessage(userId: string, msg: { type: string; [key: string]
 }
 
 /**
+ * Check if a file:// URL points to a valid workspace file
+ * Security: Uses realpath to prevent symlink attacks and path traversal
+ */
+async function isAllowedFileUrl(urlString: string, userId: string): Promise<{ allowed: boolean; error?: string; sandboxPath?: string }> {
+  try {
+    const url = new URL(urlString);
+    if (url.protocol !== 'file:') {
+      return { allowed: false, error: 'Not a file:// URL' };
+    }
+
+    // Get file path from URL (handles URL encoding)
+    const filePath = decodeURIComponent(url.pathname);
+
+    // The URL should use /workspace/{userId}/ format (sandbox path)
+    const expectedPrefix = `/workspace/${userId}/`;
+    if (!filePath.startsWith(expectedPrefix)) {
+      return { allowed: false, error: 'File path must be within your workspace' };
+    }
+
+    // Extract filename from path
+    const filename = filePath.substring(expectedPrefix.length);
+
+    // Check for path traversal attempts in filename
+    if (filename.includes('..') || filename.includes('/')) {
+      return { allowed: false, error: 'Invalid filename - path traversal not allowed' };
+    }
+
+    // Build host path for validation
+    const hostPath = path.join(WORKSPACE_DIR, userId, filename);
+
+    // Check file exists on host
+    try {
+      const stat = await fs.stat(hostPath);
+      if (!stat.isFile()) {
+        return { allowed: false, error: 'Path is not a regular file' };
+      }
+    } catch {
+      return { allowed: false, error: 'File not found in workspace' };
+    }
+
+    // Use realpath to resolve any symlinks and verify it's still in workspace
+    const realPath = await fs.realpath(hostPath);
+    const workspaceRealPath = await fs.realpath(path.join(WORKSPACE_DIR, userId));
+
+    if (!realPath.startsWith(workspaceRealPath + path.sep) && realPath !== workspaceRealPath) {
+      return { allowed: false, error: 'File resolves outside workspace (symlink attack prevented)' };
+    }
+
+    // Return the sandbox path for the browser to use
+    return { allowed: true, sandboxPath: filePath };
+  } catch (error) {
+    logger.error('Error validating file URL in screencast', { urlString, userId, error: (error as Error).message });
+    return { allowed: false, error: 'Failed to validate file URL' };
+  }
+}
+
+/**
  * Send command to browser
  */
 export async function sendBrowserCommand(userId: string, command: {
@@ -293,8 +353,18 @@ export async function sendBrowserCommand(userId: string, command: {
 
   // Validate URL if navigating
   if (command.action === 'navigate' && command.url) {
-    // validateExternalUrl throws on invalid URL
-    await validateExternalUrl(command.url, { allowHttp: true });
+    if (command.url.startsWith('file://')) {
+      // Validate file:// URLs are within user's workspace
+      const fileCheck = await isAllowedFileUrl(command.url, userId);
+      if (!fileCheck.allowed) {
+        throw new Error(fileCheck.error || 'File URL not allowed');
+      }
+      // Use the validated sandbox path
+      command.url = `file://${fileCheck.sandboxPath}`;
+    } else {
+      // validateExternalUrl throws on invalid URL
+      await validateExternalUrl(command.url, { allowHttp: true });
+    }
   }
 
   if (session.process.stdin) {

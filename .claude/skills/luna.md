@@ -74,13 +74,30 @@ I notice I made a mistake. Let me add this to Luna for next time.
 - **Note:** The main `api()` helper in api.ts already includes credentials, so use it when possible
 
 
+### System Prompt Optimization (2026-01-01)
+- **Before:** ~3,800 tokens base prompt + 80-400 per mode = ~4,200 tokens total
+- **After:** ~700 tokens base prompt + 30-100 per mode = ~800-1,000 tokens total
+- **Savings:** ~75% reduction
+- **Key optimizations:**
+  - Removed 36 "CRITICAL/IMPORTANT" statements (redundant emphasis)
+  - Condensed capability docs from 10+ examples each to 1-2 lines
+  - Eliminated duplicated identity rules across mode variants
+  - Removed verbose image/media examples (kept just the rule)
+  - Made ability context sections conditional (skip empty [Calendar], [Tasks], [Email])
+- **Files changed:** `src/persona/luna.persona.ts`, `src/abilities/orchestrator.ts`
+
 ---
 
 ## Project-Specific Gotchas
 
 <!-- Document quirks, non-obvious behaviors, or things that are easy to forget -->
 
--
+- **Voice mode tools are separate from main chat**: Voice Luna uses `src/chat/voice-chat.service.ts` with its own tool definitions, not the main chat service. Tools added to voice mode must be defined and handled separately.
+- **Voice mode uses Luna's email account**: Email tools in voice mode use luna@bitwarelabs.com (via `emailService.sendLunaEmail`, `checkLunaInbox`, etc.), not user email connections.
+- **Calendar in voice mode uses Radicale only**: No Google/Outlook calendar integration in voice mode - uses internal CalDAV via `calendarService.createEvent`, `getTodayEvents`, etc.
+- **System prompt token count matters**: The base prompt directly affects cost per message. Each capability should be 1-2 lines max, examples should be minimal, and mode variants should only add what's different (not repeat base rules).
+- **Anthropic tool calling now supported**: Voice mode and other tool-enabled features work with Anthropic models (Haiku 4.5, Sonnet, Opus). The `openai.client.ts` routes Anthropic requests to native `anthropic.provider.ts` which converts OpenAI tool format to Anthropic's format.
+- **Docker internal traffic needs HTTPS bypass**: The backend's HTTPS redirect (`src/index.ts`) must allow Docker internal IPs (172.x.x.x) in addition to WireGuard (10.0.0.x). Without this, container-to-container requests (frontend -> luna-api) get 301 redirected and fail with SSL errors.
 
 ---
 

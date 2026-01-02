@@ -183,6 +183,30 @@ router.get('/sessions/:id', async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * GET /api/autonomous/sessions/:sessionId/deliberations
+ * Get deliberations for a specific session
+ */
+router.get('/sessions/:sessionId/deliberations', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const sessionId = req.params.sessionId;
+
+    // Verify user owns this session
+    const session = await autonomousService.getSession(sessionId, userId);
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    const deliberations = await councilService.getSessionDeliberations(sessionId);
+
+    return res.json({ deliberations });
+  } catch (error) {
+    logger.error('Error getting session deliberations', { error });
+    return res.status(500).json({ error: 'Failed to get session deliberations' });
+  }
+});
+
 // ============================================
 // Council
 // ============================================
@@ -233,13 +257,13 @@ router.get('/deliberations', async (req: Request, res: Response) => {
 router.get('/deliberations/live', async (req: Request, res: Response) => {
   const userId = req.user!.userId;
 
-  // Set up SSE
+  // Set up SSE headers
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
 
-  // Get current active session
+  // Get current active session from DB
   const status = await autonomousService.getStatus(userId);
   const sessionId = status.currentSession?.id;
 
@@ -249,16 +273,67 @@ router.get('/deliberations/live', async (req: Request, res: Response) => {
     return;
   }
 
-  // Subscribe to session updates
-  const unsubscribe = autonomousService.subscribeToSession(sessionId, (data) => {
-    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  // Start heartbeat immediately to keep connection alive
+  const pingInterval = setInterval(() => {
+    try {
+      res.write(`data: ${JSON.stringify({ type: 'ping', timestamp: new Date().toISOString() })}\n\n`);
+    } catch {
+      // Connection closed, interval will be cleared in close handler
+    }
+  }, 30000);
+
+  // Send connected message first
+  res.write(`data: ${JSON.stringify({ type: 'connected', sessionId })}\n\n`);
+
+  // Try to subscribe to live updates
+  let unsubscribe = autonomousService.subscribeToSession(sessionId, (data) => {
+    try {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    } catch {
+      // Connection closed
+    }
   });
 
-  // Send initial connection message
-  res.write(`data: ${JSON.stringify({ type: 'connected', sessionId })}\n\n`);
+  // Check if session is running in memory
+  let isRunning = autonomousService.isSessionRunning(sessionId);
+
+  if (!isRunning) {
+    // Session may be initializing or was orphaned - load history first
+    const deliberations = await councilService.getSessionDeliberations(sessionId);
+
+    if (deliberations.length > 0) {
+      const latest = deliberations[deliberations.length - 1];
+      res.write(`data: ${JSON.stringify({
+        type: 'history_load',
+        deliberations,
+        currentLoop: latest.loopNumber || 1
+      })}\n\n`);
+    }
+
+    // Wait briefly and retry subscription (session may be initializing)
+    await new Promise(r => setTimeout(r, 500));
+    unsubscribe = autonomousService.subscribeToSession(sessionId, (data) => {
+      try {
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+      } catch {
+        // Connection closed
+      }
+    });
+
+    // Check again
+    isRunning = autonomousService.isSessionRunning(sessionId);
+    if (!isRunning) {
+      // Session truly not running - notify user but keep connection open for heartbeat
+      res.write(`data: ${JSON.stringify({
+        type: 'session_paused',
+        message: 'Session was interrupted. Click Start to resume.'
+      })}\n\n`);
+    }
+  }
 
   // Handle client disconnect
   req.on('close', () => {
+    clearInterval(pingInterval);
     unsubscribe();
   });
 });

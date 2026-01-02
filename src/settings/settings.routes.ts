@@ -472,7 +472,7 @@ router.get('/models', async (req: Request, res: Response) => {
 // Update model configuration for a task
 const updateModelConfigSchema = z.object({
   taskType: z.string().min(1),
-  provider: z.enum(['openai', 'groq', 'anthropic', 'xai', 'openrouter', 'ollama', 'google']),
+  provider: z.enum(['openai', 'groq', 'anthropic', 'xai', 'openrouter', 'ollama', 'google', 'sanhedrin']),
   model: z.string().min(1),
 });
 
@@ -525,7 +525,7 @@ const updateCoderSettingsSchema = z.object({
   claudeCliEnabled: z.boolean().optional(),
   geminiCliEnabled: z.boolean().optional(),
   coderApiEnabled: z.boolean().optional(),
-  coderApiProvider: z.enum(['openai', 'groq', 'anthropic', 'xai', 'openrouter', 'ollama', 'google']).nullable().optional(),
+  coderApiProvider: z.enum(['openai', 'groq', 'anthropic', 'xai', 'openrouter', 'ollama', 'google', 'sanhedrin']).nullable().optional(),
   coderApiModel: z.string().nullable().optional(),
   triggerWords: z.object({
     claude: z.array(z.string()),

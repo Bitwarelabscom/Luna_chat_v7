@@ -288,6 +288,8 @@ services:
       - luna-workspace:/workspace
       - luna-packages:/packages
       - luna-sandbox-data:/data
+      # Claude CLI credentials for research agent
+      - ./secrets/claude-credentials.json:/home/sandbox/.claude/.credentials.json:ro
     environment:
       - PIP_CACHE_DIR=/packages/pip
       - NPM_CONFIG_CACHE=/packages/npm
@@ -420,7 +422,7 @@ services:
       - SANHEDRIN_LOG_LEVEL=INFO
     volumes:
       # Claude CLI credentials
-      - /home/luna/.claude/.credentials.json:/home/sanhedrin/.claude/.credentials.json:ro
+      - /home/henke/.claude/.credentials.json:/home/sanhedrin/.claude/.credentials.json:ro
     networks:
       - luna-network
     security_opt:

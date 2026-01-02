@@ -85,8 +85,18 @@ RUN npm install -g \
     axios lodash dayjs \
     cheerio
 
+# Install Claude Code CLI for research agent
+RUN npm install -g @anthropic-ai/claude-code
+
+# Create non-root user for Claude CLI (security requirement)
+RUN groupadd --gid 1000 sandbox && \
+    useradd --uid 1000 --gid sandbox --shell /bin/bash --create-home sandbox && \
+    mkdir -p /home/sandbox/.claude && \
+    chown -R sandbox:sandbox /home/sandbox
+
 # Create workspace and package cache directories
-RUN mkdir -p /workspace /packages /data /go
+RUN mkdir -p /workspace /packages /data /go && \
+    chown -R sandbox:sandbox /workspace
 
 WORKDIR /workspace
 

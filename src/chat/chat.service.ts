@@ -38,6 +38,7 @@ import {
   browserRenderHtmlTool,
   generateImageTool,
   generateBackgroundTool,
+  researchTool,
   formatSearchResultsForContext,
   formatAgentResultForContext,
   type ChatMessage,
@@ -96,6 +97,7 @@ import * as sessionActivityService from './session-activity.service.js';
 import * as authService from '../auth/auth.service.js';
 import logger from '../utils/logger.js';
 import { sysmonTools, executeSysmonTool } from '../abilities/sysmon.service.js';
+import * as researchAgent from '../abilities/research.agent.service.js';
 import * as mcpService from '../mcp/mcp.service.js';
 import * as router from '../router/index.js';
 import type { RouterDecision } from '../router/router.types.js';
@@ -351,7 +353,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
 
   // TOOL GATING: For smalltalk, don't expose tools at all to prevent eager tool calling
   const mcpToolsForLLM = mcpService.formatMcpToolsForLLM(mcpUserTools.map(t => ({ ...t, serverId: t.serverId })));
-  const allTools = [searchTool, youtubeSearchTool, browserVisualSearchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, readEmailTool, deleteEmailTool, replyEmailTool, markEmailReadTool, sendTelegramTool, searchDocumentsTool, suggestGoalTool, fetchUrlTool, listTodosTool, createTodoTool, completeTodoTool, updateTodoTool, sessionNoteTool, createReminderTool, listRemindersTool, cancelReminderTool, browserNavigateTool, browserScreenshotTool, browserClickTool, browserFillTool, browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool, generateImageTool, generateBackgroundTool, ...sysmonTools, ...mcpToolsForLLM];
+  const allTools = [searchTool, youtubeSearchTool, browserVisualSearchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, readEmailTool, deleteEmailTool, replyEmailTool, markEmailReadTool, sendTelegramTool, searchDocumentsTool, suggestGoalTool, fetchUrlTool, listTodosTool, createTodoTool, completeTodoTool, updateTodoTool, sessionNoteTool, createReminderTool, listRemindersTool, cancelReminderTool, browserNavigateTool, browserScreenshotTool, browserClickTool, browserFillTool, browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool, generateImageTool, generateBackgroundTool, researchTool, ...sysmonTools, ...mcpToolsForLLM];
   const availableTools = isSmallTalkMessage ? [] : allTools;
   let searchResults: SearchResult[] | undefined;
   let agentResults: Array<{ agent: string; result: string; success: boolean }> = [];
@@ -1213,6 +1215,40 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
             role: 'tool',
             tool_call_id: toolCall.id,
             content: `Background generation error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'research') {
+        // Research agent tool - uses Claude CLI for in-depth research
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Research tool called', { userId, query: args.query?.substring(0, 100), depth: args.depth });
+        try {
+          const result = await researchAgent.executeResearch(args.query, userId, {
+            depth: args.depth || 'thorough',
+            saveToFile: args.save_to_file,
+          });
+          if (result.success) {
+            let content = `**Research Summary:**\n${result.summary}\n\n**Details:**\n${result.details}`;
+            if (result.savedFile) {
+              content += `\n\n**Saved to:** ${result.savedFile}`;
+            }
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content,
+            } as ChatMessage);
+          } else {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Research failed: ${result.error || 'Unknown error'}`,
+            } as ChatMessage);
+          }
+        } catch (error) {
+          logger.error('Research tool failed', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Research error: ${(error as Error).message}`,
           } as ChatMessage);
         }
       } else if (toolCall.function.name.startsWith('system_') ||
@@ -2465,7 +2501,7 @@ export async function* streamMessage(
   // - pro route: Optional tools (reasoning depth)
   // - pro+tools route: All tools available (verified answers)
   const mcpToolsForLLM = mcpService.formatMcpToolsForLLM(mcpUserTools.map(t => ({ ...t, serverId: t.serverId })));
-  const allTools = [searchTool, youtubeSearchTool, browserVisualSearchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, readEmailTool, deleteEmailTool, replyEmailTool, markEmailReadTool, sendTelegramTool, searchDocumentsTool, suggestGoalTool, fetchUrlTool, listTodosTool, createTodoTool, completeTodoTool, updateTodoTool, sessionNoteTool, createReminderTool, listRemindersTool, cancelReminderTool, browserNavigateTool, browserScreenshotTool, browserClickTool, browserFillTool, browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool, generateImageTool, generateBackgroundTool, ...sysmonTools, ...mcpToolsForLLM];
+  const allTools = [searchTool, youtubeSearchTool, browserVisualSearchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, readEmailTool, deleteEmailTool, replyEmailTool, markEmailReadTool, sendTelegramTool, searchDocumentsTool, suggestGoalTool, fetchUrlTool, listTodosTool, createTodoTool, completeTodoTool, updateTodoTool, sessionNoteTool, createReminderTool, listRemindersTool, cancelReminderTool, browserNavigateTool, browserScreenshotTool, browserClickTool, browserFillTool, browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool, generateImageTool, generateBackgroundTool, researchTool, ...sysmonTools, ...mcpToolsForLLM];
   const availableTools = isSmallTalkMessage ? [] : allTools;
   let searchResults: SearchResult[] | undefined;
 
@@ -3289,6 +3325,42 @@ export async function* streamMessage(
             role: 'tool',
             tool_call_id: toolCall.id,
             content: `Background generation error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'research') {
+        // Research agent tool - uses Claude CLI for in-depth research (streaming)
+        const args = JSON.parse(toolCall.function.arguments);
+        const depthLabel = args.depth === 'quick' ? 'Quick research' : 'Deep research';
+        yield { type: 'status', status: `${depthLabel}: ${args.query?.substring(0, 50)}...` };
+        logger.info('Research tool called (stream)', { userId, query: args.query?.substring(0, 100), depth: args.depth });
+        try {
+          const result = await researchAgent.executeResearch(args.query, userId, {
+            depth: args.depth || 'thorough',
+            saveToFile: args.save_to_file,
+          });
+          if (result.success) {
+            let content = `**Research Summary:**\n${result.summary}\n\n**Details:**\n${result.details}`;
+            if (result.savedFile) {
+              content += `\n\n**Saved to:** ${result.savedFile}`;
+            }
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content,
+            } as ChatMessage);
+          } else {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Research failed: ${result.error || 'Unknown error'}`,
+            } as ChatMessage);
+          }
+        } catch (error) {
+          logger.error('Research tool failed (stream)', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Research error: ${(error as Error).message}`,
           } as ChatMessage);
         }
       } else if (toolCall.function.name.startsWith('system_') ||
