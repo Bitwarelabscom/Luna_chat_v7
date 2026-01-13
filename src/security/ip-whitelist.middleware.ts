@@ -220,6 +220,13 @@ export function ipWhitelistMiddleware(req: Request, res: Response, next: NextFun
     return next();
   }
 
+  // Allow Telegram webhooks from any IP (Telegram servers need to reach these)
+  // SECURITY: These endpoints only accept POST and have no auth - they just receive updates
+  if (req.path === '/api/triggers/telegram/webhook' ||
+      req.path === '/api/triggers/trading-telegram/webhook') {
+    return next();
+  }
+
   const clientIP = getClientIP(req);
 
   if (isIPAllowed(clientIP)) {

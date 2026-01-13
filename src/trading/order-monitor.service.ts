@@ -66,43 +66,55 @@ async function getClientForUser(userId: string): Promise<IExchangeClient | null>
 
 /**
  * Get current prices for all symbols we need to monitor
- * Uses Redis cache instead of API calls for better performance
+ * Uses Redis cache with fallback to API for missing symbols
  */
 async function getCurrentPrices(symbols: string[]): Promise<Map<string, number>> {
   if (symbols.length === 0) return new Map();
 
-  // Normalize symbols to Crypto.com format for lookup
-  const normalizedSymbols = symbols.map(s => toCryptoComSymbol(s));
+  // Get prices from Redis cache (getPricesBatch handles symbol normalization internally)
+  const redisPrices = await redisTradingService.getPricesBatch(symbols);
 
-  // Get prices from Redis cache (single batch operation)
-  const redisPrices = await redisTradingService.getPricesBatch(normalizedSymbols);
+  // Find missing symbols
+  const missingSymbols = symbols.filter(s => !redisPrices.has(s));
 
-  // If we got prices from Redis, return them
-  if (redisPrices.size > 0) {
+  // If all symbols found, return
+  if (missingSymbols.length === 0) {
     return redisPrices;
   }
 
-  // Fallback to API only if Redis cache is empty (should rarely happen)
-  logger.warn('Redis price cache empty, falling back to API', { symbols: normalizedSymbols });
-  const priceMap = new Map<string, number>();
-  const symbolSet = new Set(normalizedSymbols);
+  // Fallback to API for missing symbols
+  logger.info('Some prices missing from Redis cache, falling back to API', {
+    found: redisPrices.size,
+    missing: missingSymbols.length,
+    missingSymbols: missingSymbols.slice(0, 5),
+  });
 
   try {
     const cryptoComClient = new CryptoComClient({ apiKey: '', apiSecret: '' });
     const cryptoComResult = await cryptoComClient.getTicker24hr();
     const cryptoComTickers = Array.isArray(cryptoComResult) ? cryptoComResult : [cryptoComResult];
 
+    // Build a lookup set for missing symbols (normalized to match API format)
+    const missingSet = new Set(missingSymbols.map(s => toCryptoComSymbol(s)));
+
     for (const ticker of cryptoComTickers) {
       const normalizedSymbol = toCryptoComSymbol(ticker.symbol);
-      if (symbolSet.has(normalizedSymbol)) {
-        priceMap.set(normalizedSymbol, parseFloat(ticker.lastPrice));
+      if (missingSet.has(normalizedSymbol)) {
+        // Find the original symbol that matches this normalized form
+        const originalSymbol = missingSymbols.find(s => toCryptoComSymbol(s) === normalizedSymbol);
+        if (originalSymbol) {
+          redisPrices.set(originalSymbol, parseFloat(ticker.lastPrice));
+        }
       }
     }
   } catch (err) {
-    logger.warn('Failed to fetch Crypto.com prices', { error: (err as Error).message });
+    logger.warn('Failed to fetch API prices for missing symbols', {
+      error: (err as Error).message,
+      missingSymbols,
+    });
   }
 
-  return priceMap;
+  return redisPrices;
 }
 
 /**
@@ -132,12 +144,18 @@ async function executePartialTakeProfit(
       try {
         const lotSize = await client.getLotSizeFilter(normalizedSymbol);
         if (lotSize && lotSize.stepSize) {
-          const stepStr = lotSize.stepSize.toString();
-          const decimalPlaces = stepStr.includes('.') ? stepStr.split('.')[1].replace(/0+$/, '').length : 0;
-          if (decimalPlaces === 0) {
-            formattedQuantity = Math.floor(quantityToSell).toString();
+          const step = parseFloat(lotSize.stepSize);
+
+          if (step >= 1) {
+            // For large step sizes (e.g., 10000 for SHIB/BONK), round down to nearest multiple
+            const rounded = Math.floor(quantityToSell / step) * step;
+            formattedQuantity = rounded.toString();
           } else {
-            formattedQuantity = quantityToSell.toFixed(decimalPlaces);
+            // For small step sizes, use precision-based formatting
+            const precision = Math.max(0, Math.ceil(-Math.log10(step)));
+            const multiplier = Math.pow(10, precision);
+            const rounded = Math.floor(quantityToSell * multiplier) / multiplier;
+            formattedQuantity = rounded.toFixed(precision);
           }
         }
       } catch {
@@ -196,10 +214,11 @@ export async function checkTakeProfitStopLoss(): Promise<{ triggered: number; er
       tp1_pct: number | null;
       quantity_sold_tp1: string | null;
       tp1_hit_at: Date | null;
+      auto_trade: boolean | null;
     }>(`
       SELECT id, user_id, symbol, side, quantity, filled_price,
              stop_loss_price, take_profit_price,
-             tp1_price, tp2_price, tp1_pct, quantity_sold_tp1, tp1_hit_at
+             tp1_price, tp2_price, tp1_pct, quantity_sold_tp1, tp1_hit_at, auto_trade
       FROM trades
       WHERE status = 'filled'
         AND (stop_loss_price IS NOT NULL OR take_profit_price IS NOT NULL OR tp1_price IS NOT NULL)
@@ -214,7 +233,17 @@ export async function checkTakeProfitStopLoss(): Promise<{ triggered: number; er
 
     for (const trade of result.rows) {
       const currentPrice = prices.get(trade.symbol);
-      if (!currentPrice) continue;
+      if (!currentPrice) {
+        logger.warn('SL/TP check skipped - no price available', {
+          tradeId: trade.id,
+          symbol: trade.symbol,
+          userId: trade.user_id,
+          stopLoss: trade.stop_loss_price,
+          takeProfit: trade.take_profit_price,
+          autoTrade: trade.auto_trade,
+        });
+        continue;
+      }
 
       const stopLoss = trade.stop_loss_price ? parseFloat(trade.stop_loss_price) : null;
       const takeProfit = trade.take_profit_price ? parseFloat(trade.take_profit_price) : null;
@@ -341,6 +370,7 @@ export async function checkTakeProfitStopLoss(): Promise<{ triggered: number; er
 
 /**
  * Update trailing stop loss prices
+ * Supports dual-mode: trailing only activates after profit threshold is reached
  */
 export async function updateTrailingStops(): Promise<{ updated: number; triggered: number; errors: number }> {
   let updated = 0;
@@ -348,7 +378,7 @@ export async function updateTrailingStops(): Promise<{ updated: number; triggere
   let errors = 0;
 
   try {
-    // Get trades with trailing stop enabled
+    // Get trades with trailing stop enabled (includes tier for dual-mode)
     const result = await pool.query<{
       id: string;
       user_id: string;
@@ -359,9 +389,10 @@ export async function updateTrailingStops(): Promise<{ updated: number; triggere
       trailing_stop_pct: string;
       trailing_stop_price: string | null;
       trailing_stop_highest: string | null;
+      tier: string | null;
     }>(`
       SELECT id, user_id, symbol, side, quantity, filled_price,
-             trailing_stop_pct, trailing_stop_price, trailing_stop_highest
+             trailing_stop_pct, trailing_stop_price, trailing_stop_highest, tier
       FROM trades
       WHERE status = 'filled'
         AND trailing_stop_pct IS NOT NULL
@@ -373,17 +404,98 @@ export async function updateTrailingStops(): Promise<{ updated: number; triggere
     const symbols = [...new Set(result.rows.map(r => r.symbol))];
     const prices = await getCurrentPrices(symbols);
 
+    // Cache user settings for dual-mode
+    const userSettingsCache = new Map<string, autoTradingService.AutoTradingSettings>();
+
     for (const trade of result.rows) {
       const currentPrice = prices.get(trade.symbol);
       if (!currentPrice) continue;
 
       const trailingPct = parseFloat(trade.trailing_stop_pct);
-      let highestPrice = trade.trailing_stop_highest ? parseFloat(trade.trailing_stop_highest) : parseFloat(trade.filled_price);
-      let trailingStopPrice = trade.trailing_stop_price ? parseFloat(trade.trailing_stop_price) : null;
+      const entryPrice = parseFloat(trade.filled_price);
       const isBuy = trade.side === 'buy';
+
+      // Get user settings for dual-mode activation threshold
+      let settings = userSettingsCache.get(trade.user_id);
+      if (!settings) {
+        settings = await autoTradingService.getSettings(trade.user_id);
+        userSettingsCache.set(trade.user_id, settings);
+      }
+
+      // Check if trailing is activated (highest price is set)
+      const trailingActivated = trade.trailing_stop_highest !== null;
+      let highestPrice = trade.trailing_stop_highest ? parseFloat(trade.trailing_stop_highest) : entryPrice;
+      let trailingStopPrice = trade.trailing_stop_price ? parseFloat(trade.trailing_stop_price) : null;
+
+      // Calculate current profit percentage
+      const profitPct = isBuy
+        ? ((currentPrice - entryPrice) / entryPrice) * 100
+        : ((entryPrice - currentPrice) / entryPrice) * 100;
+
+      // For dual-mode trades, check if we need to activate trailing
+      const isDualModeTrade = trade.tier === 'conservative' || trade.tier === 'aggressive';
+      const activationThreshold = settings.dualModeEnabled ? settings.trailActivationPct : 0;
 
       if (isBuy) {
         // For long positions: track highest price, stop triggers below
+
+        // Check if trailing should activate (dual-mode: profit >= activation threshold)
+        if (!trailingActivated && isDualModeTrade && settings.dualModeEnabled) {
+          if (profitPct >= activationThreshold) {
+            // Activate trailing now
+            highestPrice = currentPrice;
+            trailingStopPrice = currentPrice * (1 - trailingPct / 100);
+
+            await pool.query(
+              `UPDATE trades SET trailing_stop_highest = $1, trailing_stop_price = $2 WHERE id = $3`,
+              [highestPrice, trailingStopPrice, trade.id]
+            );
+            updated++;
+
+            logger.info('Trailing stop activated (dual-mode)', {
+              tradeId: trade.id,
+              symbol: trade.symbol,
+              tier: trade.tier,
+              profitPct: profitPct.toFixed(2),
+              activationThreshold,
+              trailingStopPrice,
+            });
+
+            tradeNotification.notifyTrailingStopUpdate(
+              trade.user_id,
+              trade.id,
+              trade.symbol,
+              trailingStopPrice,
+              highestPrice,
+              trailingPct
+            ).catch((err) => logger.error('Failed to send trailing update notification', { error: err }));
+          } else {
+            // Not yet activated - check initial stop loss
+            const initialSlPct = settings.initialStopLossPct || 5.0;
+            if (profitPct <= -initialSlPct) {
+              // Initial stop loss triggered before trailing activated
+              try {
+                await executeClosePosition(trade.user_id, trade.id, trade.symbol, trade.side, parseFloat(trade.quantity), 'stop_loss');
+                triggered++;
+                logger.info('Initial stop loss triggered (dual-mode)', {
+                  tradeId: trade.id,
+                  symbol: trade.symbol,
+                  tier: trade.tier,
+                  profitPct: profitPct.toFixed(2),
+                  initialSlPct,
+                  currentPrice,
+                  entryPrice,
+                });
+              } catch (err) {
+                logger.error('Failed to execute initial SL close', { tradeId: trade.id, error: err });
+              }
+            }
+          }
+          // Not yet activated, skip further processing
+          continue;
+        }
+
+        // Normal trailing logic (or already activated)
         if (currentPrice > highestPrice) {
           highestPrice = currentPrice;
           trailingStopPrice = currentPrice * (1 - trailingPct / 100);
@@ -414,6 +526,7 @@ export async function updateTrailingStops(): Promise<{ updated: number; triggere
               currentPrice,
               trailingStopPrice,
               highestPrice,
+              tier: trade.tier,
             });
 
             // Send trailing stop triggered notification
@@ -436,6 +549,59 @@ export async function updateTrailingStops(): Promise<{ updated: number; triggere
         }
       } else {
         // For short positions: track lowest price, stop triggers above
+
+        // Check if trailing should activate (dual-mode)
+        if (!trailingActivated && isDualModeTrade && settings.dualModeEnabled) {
+          if (profitPct >= activationThreshold) {
+            highestPrice = currentPrice; // Actually lowest for shorts
+            trailingStopPrice = currentPrice * (1 + trailingPct / 100);
+
+            await pool.query(
+              `UPDATE trades SET trailing_stop_highest = $1, trailing_stop_price = $2 WHERE id = $3`,
+              [highestPrice, trailingStopPrice, trade.id]
+            );
+            updated++;
+
+            logger.info('Trailing stop activated (dual-mode short)', {
+              tradeId: trade.id,
+              symbol: trade.symbol,
+              tier: trade.tier,
+              profitPct: profitPct.toFixed(2),
+              activationThreshold,
+            });
+
+            tradeNotification.notifyTrailingStopUpdate(
+              trade.user_id,
+              trade.id,
+              trade.symbol,
+              trailingStopPrice,
+              highestPrice,
+              trailingPct
+            ).catch((err) => logger.error('Failed to send trailing update notification', { error: err }));
+          } else {
+            // Not yet activated - check initial stop loss for shorts
+            const initialSlPct = settings.initialStopLossPct || 5.0;
+            if (profitPct <= -initialSlPct) {
+              try {
+                await executeClosePosition(trade.user_id, trade.id, trade.symbol, trade.side, parseFloat(trade.quantity), 'stop_loss');
+                triggered++;
+                logger.info('Initial stop loss triggered (dual-mode short)', {
+                  tradeId: trade.id,
+                  symbol: trade.symbol,
+                  tier: trade.tier,
+                  profitPct: profitPct.toFixed(2),
+                  initialSlPct,
+                  currentPrice,
+                  entryPrice,
+                });
+              } catch (err) {
+                logger.error('Failed to execute initial SL close (short)', { tradeId: trade.id, error: err });
+              }
+            }
+          }
+          continue;
+        }
+
         if (currentPrice < highestPrice) {
           highestPrice = currentPrice; // Actually lowest for shorts
           trailingStopPrice = currentPrice * (1 + trailingPct / 100);
@@ -472,6 +638,12 @@ export async function updateTrailingStops(): Promise<{ updated: number; triggere
             ).catch((err) => logger.error('Failed to send trailing triggered notification', { error: err }));
           } catch (err) {
             errors++;
+            logger.error('Failed to execute trailing stop close (short)', {
+              tradeId: trade.id,
+              symbol: trade.symbol,
+              side: trade.side,
+              error: (err as Error).message,
+            });
           }
         }
       }
@@ -776,16 +948,18 @@ export async function executeClosePosition(
   try {
     const lotSize = await client.getLotSizeFilter(normalizedSymbol);
     if (lotSize && lotSize.stepSize) {
-      // Calculate decimal places from step size
-      const stepStr = lotSize.stepSize.toString();
-      const decimalPlaces = stepStr.includes('.') ? stepStr.split('.')[1].replace(/0+$/, '').length : 0;
-      // Use exact decimal places from step size (some coins like ALGO need 0 decimals)
-      // Always round DOWN to ensure we don't exceed available balance
-      if (decimalPlaces === 0) {
-        formattedQuantity = Math.floor(actualQuantity).toString();
+      const step = parseFloat(lotSize.stepSize);
+
+      if (step >= 1) {
+        // For large step sizes (e.g., 10000 for SHIB/BONK), round down to nearest multiple
+        const rounded = Math.floor(actualQuantity / step) * step;
+        formattedQuantity = rounded.toString();
       } else {
-        const factor = Math.pow(10, decimalPlaces);
-        formattedQuantity = (Math.floor(actualQuantity * factor) / factor).toFixed(decimalPlaces);
+        // For small step sizes, use precision-based formatting
+        const precision = Math.max(0, Math.ceil(-Math.log10(step)));
+        const multiplier = Math.pow(10, precision);
+        const rounded = Math.floor(actualQuantity * multiplier) / multiplier;
+        formattedQuantity = rounded.toFixed(precision);
       }
     } else {
       // Default: 2 decimal places for most coins, round down
@@ -961,7 +1135,18 @@ export async function executeClosePosition(
       : (entryPrice - filledPrice) * quantity;
     const outcome = pnlUsd >= 0 ? 'win' : 'loss';
 
-    await autoTradingService.handleTradeClose(userId, tradeId, outcome, pnlUsd, symbol);
+    try {
+      await autoTradingService.handleTradeClose(userId, tradeId, outcome, pnlUsd, symbol);
+    } catch (err) {
+      logger.error('Failed to update auto trading state', {
+        tradeId,
+        symbol,
+        outcome,
+        pnlUsd: pnlUsd.toFixed(2),
+        error: (err as Error).message,
+      });
+      // Don't rethrow - trade close succeeded, just state update failed
+    }
   }
 }
 

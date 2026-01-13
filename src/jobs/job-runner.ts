@@ -190,6 +190,13 @@ const jobs: Job[] = [
     handler: runAutoTrading,
   },
   {
+    name: 'portfolioReconciliation',
+    intervalMs: 30 * 1000, // Every 30 seconds - reconcile portfolio vs trades
+    enabled: true,
+    running: false,
+    handler: runPortfolioReconciliation,
+  },
+  {
     name: 'backtestSignals',
     intervalMs: 60 * 1000, // Every minute - backtest pending signals
     enabled: true,
@@ -870,6 +877,43 @@ async function runAutoTrading(): Promise<void> {
     await autoTradingService.runAutoTradingJob();
   } catch (error) {
     logger.error('Auto trading job failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+/**
+ * Portfolio reconciliation - detects orphan positions and manual sells
+ * Creates trailing SL for orphan positions > $20
+ */
+async function runPortfolioReconciliation(): Promise<void> {
+  try {
+    // Get all users with auto trading enabled
+    const { pool } = await import('../db/postgres.js');
+    const users = await pool.query(
+      'SELECT DISTINCT user_id FROM auto_trading_settings WHERE enabled = true'
+    );
+
+    for (const user of users.rows) {
+      try {
+        const result = await autoTradingService.reconcilePortfolio(user.user_id);
+        if (result.reconciled > 0 || result.missingFromPortfolio.length > 0) {
+          logger.info('Portfolio reconciliation completed', {
+            userId: user.user_id,
+            orphansFound: result.orphanPositions.length,
+            reconciled: result.reconciled,
+            manualSells: result.missingFromPortfolio.length,
+          });
+        }
+      } catch (err) {
+        logger.warn('Reconciliation failed for user', {
+          userId: user.user_id,
+          error: (err as Error).message,
+        });
+      }
+    }
+  } catch (error) {
+    logger.error('Portfolio reconciliation job failed', {
       error: (error as Error).message,
     });
   }

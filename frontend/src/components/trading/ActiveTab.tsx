@@ -698,7 +698,7 @@ interface TradeRowProps {
   stoppingId: string | null;
 }
 
-function TradeRow({ trade, onStop, onEdit, onPartialClose, stoppingId }: TradeRowProps) {
+const TradeRow = React.memo(function TradeRow({ trade, onStop, onEdit, onPartialClose, stoppingId }: TradeRowProps) {
   const [copiedId, setCopiedId] = useState(false);
 
   const handleCopyId = () => {
@@ -966,23 +966,46 @@ function TradeRow({ trade, onStop, onEdit, onPartialClose, stoppingId }: TradeRo
       </div>
     </div>
   );
-}
+}, (prevProps, nextProps) => {
+  // Custom comparison - only re-render if relevant data changed
+  const prevTrade = prevProps.trade;
+  const nextTrade = nextProps.trade;
+  return (
+    prevTrade.id === nextTrade.id &&
+    prevTrade.currentPrice === nextTrade.currentPrice &&
+    prevTrade.pnlDollar === nextTrade.pnlDollar &&
+    prevTrade.pnlPercent === nextTrade.pnlPercent &&
+    prevTrade.stopLossPrice === nextTrade.stopLossPrice &&
+    prevTrade.takeProfitPrice === nextTrade.takeProfitPrice &&
+    prevTrade.trailingStopPrice === nextTrade.trailingStopPrice &&
+    prevTrade.trailingStopPct === nextTrade.trailingStopPct &&
+    prevTrade.timeInTrade === nextTrade.timeInTrade &&
+    prevProps.stoppingId === nextProps.stoppingId
+  );
+});
 
 // Main Component
 export default function ActiveTab() {
   const [data, setData] = useState<ActiveTradesResponse>({ openPositions: [], pendingOrders: [] });
   const [conditionalOrders, setConditionalOrders] = useState<ConditionalOrder[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stoppingId, setStoppingId] = useState<string | null>(null);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [editingTrade, setEditingTrade] = useState<ActiveTrade | null>(null);
   const [partialCloseTrade, setPartialCloseTrade] = useState<ActiveTrade | null>(null);
   const [confirmStop, setConfirmStop] = useState<{ trade: ActiveTrade; tradeValue: number } | null>(null);
+  const hasLoadedRef = React.useRef(false);
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (isManualRefresh = false) => {
     try {
-      setIsLoading(true);
+      // Only show full loading on initial load
+      if (!hasLoadedRef.current) {
+        setIsLoading(true);
+      } else if (isManualRefresh) {
+        setIsRefreshing(true);
+      }
       setError(null);
       const [activeTrades, rules] = await Promise.all([
         tradingApi.getActiveTrades(),
@@ -990,10 +1013,12 @@ export default function ActiveTab() {
       ]);
       setData(activeTrades);
       setConditionalOrders(rules);
+      hasLoadedRef.current = true;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load active trades');
     } finally {
       setIsLoading(false);
+      setIsRefreshing(false);
     }
   }, []);
 
@@ -1011,8 +1036,8 @@ export default function ActiveTab() {
 
   useEffect(() => {
     loadData();
-    // Auto-refresh every 5 seconds for real-time updates
-    const interval = setInterval(loadData, 5000);
+    // Auto-refresh every 5 seconds for real-time updates (silent refresh)
+    const interval = setInterval(() => loadData(false), 5000);
     return () => clearInterval(interval);
   }, [loadData]);
 
@@ -1102,8 +1127,8 @@ export default function ActiveTab() {
             </span>
           )}
           <button
-            onClick={loadData}
-            disabled={isLoading}
+            onClick={() => loadData(true)}
+            disabled={isLoading || isRefreshing}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -1117,7 +1142,7 @@ export default function ActiveTab() {
             }}
             title="Refresh"
           >
-            <RefreshCw size={16} color="#8892a0" className={isLoading ? 'animate-spin' : ''} />
+            <RefreshCw size={16} color="#8892a0" className={isLoading || isRefreshing ? 'animate-spin' : ''} />
           </button>
         </div>
       </div>

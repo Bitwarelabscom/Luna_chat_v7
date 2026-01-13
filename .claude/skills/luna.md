@@ -74,6 +74,47 @@ I notice I made a mistake. Let me add this to Luna for next time.
 - **Note:** The main `api()` helper in api.ts already includes credentials, so use it when possible
 
 
+### Auto Trading Symbol Format Normalization (2026-01-06)
+- **Problem:** Multiple symbol format bugs caused:
+  - SL/TP not triggering (price lookups failed)
+  - Portfolio sync finding 0 orphans (BONK not matched)
+  - Cooldowns not working (symbol mismatch)
+  - "wrong instrument" errors when closing trades
+- **Root Cause:** Three different symbol formats in use:
+  - Internal/DB: `BONK_USD` (underscore, USD quote)
+  - Binance/Redis: `BONKUSDT` (no separator, USDT quote)
+  - Crypto.com API: `PONKE_USD` (underscore, USD quote - NOT USDT!)
+- **Fix:** Always normalize to BASE asset for comparisons:
+  ```typescript
+  import { getBaseQuote } from './symbol-utils.js';
+  const baseAsset = getBaseQuote(symbol).base.toUpperCase();
+  ```
+- **Prevention:** When comparing symbols across systems, extract and compare base assets, not full symbol strings
+
+### Crypto.com Uses USD, Not USDT (2026-01-06)
+- **Mistake:** Assumed Crypto.com uses USDT like Binance and converted `_USD` to `_USDT`
+- **Reality:** Crypto.com API uses `USD` as quote currency (e.g., `PONKE_USD`, not `PONKE_USDT`)
+- **Correct:** `toCryptoComSymbol()` should convert `_USDT` to `_USD`:
+  ```typescript
+  if (result.endsWith('_USDT')) {
+    result = result.slice(0, -5) + '_USD';
+  }
+  ```
+- **Impact:** Wrong quote currency causes API calls to fail silently (instrument not found)
+
+### Auto Trading State - trades_count Bug (2026-01-06)
+- **Problem:** Win rate showed 0.0% even with 1W/0L (100% should show)
+- **Root Cause:** `handleTradeClose()` incremented `wins_count` but NOT `trades_count`
+  - Win rate = `wins_count / trades_count` = `1 / 0` = 0.0%
+- **Fix:** In `handleTradeClose()`, increment `trades_count` on both WIN and LOSS branches:
+  ```sql
+  ON CONFLICT (user_id, date) DO UPDATE SET
+    wins_count = auto_trading_state.wins_count + 1,
+    trades_count = auto_trading_state.trades_count + 1,  -- ADD THIS
+    ...
+  ```
+- **Key Insight:** `trades_count` should be incremented on CLOSE, not on trade OPEN, for accurate win rate calculation
+
 ### System Prompt Optimization (2026-01-01)
 - **Before:** ~3,800 tokens base prompt + 80-400 per mode = ~4,200 tokens total
 - **After:** ~700 tokens base prompt + 30-100 per mode = ~800-1,000 tokens total
@@ -92,6 +133,7 @@ I notice I made a mistake. Let me add this to Luna for next time.
 
 <!-- Document quirks, non-obvious behaviors, or things that are easy to forget -->
 
+- **CRITICAL: WireGuard-only access**: Luna is ONLY accessible via WireGuard VPN (10.0.0.x). NOTHING should be exposed to the public internet except the Telegram webhook. Never add public domains to CORS, never create public nginx configs. The only external endpoint is `/api/triggers/telegram/webhook`.
 - **Voice mode tools are separate from main chat**: Voice Luna uses `src/chat/voice-chat.service.ts` with its own tool definitions, not the main chat service. Tools added to voice mode must be defined and handled separately.
 - **Voice mode uses Luna's email account**: Email tools in voice mode use luna@bitwarelabs.com (via `emailService.sendLunaEmail`, `checkLunaInbox`, etc.), not user email connections.
 - **Calendar in voice mode uses Radicale only**: No Google/Outlook calendar integration in voice mode - uses internal CalDAV via `calendarService.createEvent`, `getTodayEvents`, etc.

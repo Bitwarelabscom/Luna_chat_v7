@@ -11,7 +11,15 @@ const WIREGUARD_USER = {
 
 function isWireGuardRequest(req: Request): boolean {
   const ip = req.ip || req.socket.remoteAddress || '';
-  return ip.startsWith('10.0.0.') || ip === '::ffff:10.0.0.2' || ip.includes('10.0.0.');
+  // Also check X-Forwarded-For for requests through proxies
+  const forwardedFor = req.headers['x-forwarded-for'];
+  const originalIp = typeof forwardedFor === 'string' ? forwardedFor.split(',')[0].trim() : '';
+
+  // Trust WireGuard (10.0.0.x) and Docker internal network (172.x.x.x for frontend proxy)
+  const isTrusted = (addr: string) =>
+    addr.startsWith('10.0.0.') || addr.includes('10.0.0.') ||
+    addr.startsWith('172.') || addr.includes('172.');
+  return isTrusted(ip) || isTrusted(originalIp);
 }
 
 export function authenticate(req: Request, res: Response, next: NextFunction): void {

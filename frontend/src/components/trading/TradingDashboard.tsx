@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { TrendingUp, BarChart3, Wallet, History, Bot, Settings, AlertCircle, RefreshCw, Wifi, WifiOff, X, ExternalLink, MessageCircle, Activity, ListChecks } from 'lucide-react';
+import { TrendingUp, BarChart3, Wallet, History, Bot, Settings, AlertCircle, RefreshCw, Wifi, WifiOff, X, ExternalLink, MessageCircle, Activity, ListChecks, Zap } from 'lucide-react';
 import { tradingApi, type TradingSettings, type Portfolio, type PriceData, type TradeRecord, type BotConfig, type BotType } from '@/lib/api';
 import type { DisplayContent } from '@/types/display';
 import PriceChart from './PriceChart';
@@ -12,13 +12,14 @@ import TradingSettingsModal from './TradingSettingsModal';
 import ResearchTab from './ResearchTab';
 import RulesTab from './RulesTab';
 import ActiveTab from './ActiveTab';
+import AutoTab from './AutoTab';
 import BotManager from './BotManager';
 import BotInfoDrawer from './BotInfoDrawer';
 import BotCreationModal from './BotCreationModal';
 import { TradingTerminal } from './terminal';
 import { useTradingWebSocket, type PriceUpdate } from '@/hooks/useTradingWebSocket';
 
-type TabType = 'active' | 'chart' | 'portfolio' | 'trades' | 'bots' | 'rules' | 'research' | 'settings';
+type TabType = 'active' | 'chart' | 'portfolio' | 'trades' | 'bots' | 'rules' | 'research' | 'auto' | 'settings';
 
 export default function TradingDashboard() {
   const [settings, setSettings] = useState<TradingSettings | null>(null);
@@ -191,6 +192,7 @@ export default function TradingDashboard() {
     { id: 'bots', label: 'Bots', icon: <Bot style={{ width: 16, height: 16 }} /> },
     { id: 'rules', label: 'Rules', icon: <ListChecks style={{ width: 16, height: 16 }} /> },
     { id: 'research', label: 'Research', icon: <TrendingUp style={{ width: 16, height: 16 }} /> },
+    { id: 'auto', label: 'Auto', icon: <Zap style={{ width: 16, height: 16 }} /> },
     { id: 'settings', label: 'Settings', icon: <Settings style={{ width: 16, height: 16 }} /> },
   ];
 
@@ -332,7 +334,7 @@ export default function TradingDashboard() {
             background: '#1f2937',
             borderRadius: '3px',
           }}>
-            BUILD_28DEC_V2
+            BUILD_04JAN_V1
           </span>
 
           {/* Terminal Toggle */}
@@ -550,6 +552,13 @@ export default function TradingDashboard() {
                 setActiveTab('chart');
               }}
             />
+          </div>
+        )}
+
+        {/* Auto Tab */}
+        {activeTab === 'auto' && (
+          <div style={{ height: '100%', background: '#111827', borderRadius: '8px', overflow: 'hidden' }}>
+            <AutoTab onRefresh={loadData} />
           </div>
         )}
 

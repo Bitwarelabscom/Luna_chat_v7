@@ -27,6 +27,16 @@ import {
 import { detectMarketRegime, MarketRegimeData } from './regime-detector.service.js';
 import { calculateBtcInfluence, BtcInfluenceSettings, getBtcIndicators } from './btc-influence.service.js';
 import { selectBestStrategy, getAllStrategyPerformances } from './auto-mode-selector.service.js';
+import { getBaseQuote } from './symbol-utils.js';
+
+/**
+ * Normalize symbol to internal format (BASE_USD) for consistent cooldown tracking.
+ * Converts: BONKUSDT -> BONK_USD, BONK_USDT -> BONK_USD, BTC_USD -> BTC_USD
+ */
+function normalizeToInternalSymbol(symbol: string): string {
+  const { base } = getBaseQuote(symbol);
+  return base ? `${base}_USD` : symbol;
+}
 
 // Types
 export interface AutoTradingSettings {
@@ -39,6 +49,11 @@ export interface AutoTradingSettings {
   dailyLossLimitPct: number;
   maxConsecutiveLosses: number;
   symbolCooldownMinutes: number;
+  // Fixed USD position sizing (overrides percentage if set)
+  minPositionUsd: number;
+  maxPositionUsd: number;
+  // Minimum expected profit % to cover fees
+  minProfitPct: number;
   // Multi-strategy settings
   strategy: StrategyId;
   strategyMode: 'manual' | 'auto';
@@ -47,6 +62,32 @@ export interface AutoTradingSettings {
   btcTrendFilter: boolean;
   btcMomentumBoost: boolean;
   btcCorrelationSkip: boolean;
+
+  // Dual-mode trading settings
+  dualModeEnabled: boolean;
+  conservativeCapitalPct: number;   // Default: 70
+  aggressiveCapitalPct: number;     // Default: 30
+
+  // Trailing stop settings (no fixed TP in dual mode)
+  trailingEnabled: boolean;
+  trailActivationPct: number;       // Default: 2.0 (activate at 2% profit)
+  trailDistancePct: number;         // Default: 3.0 (trail 3% below high)
+  initialStopLossPct: number;       // Default: 5.0 (initial SL before trailing activates)
+
+  // Tier-specific settings
+  conservativeSymbols: string[];    // Major coins
+  aggressiveSymbols: string[];      // Meme coins
+  conservativeMinConfidence: number; // Default: 0.75
+  aggressiveMinConfidence: number;   // Default: 0.65
+  conservativeCooldownMinutes: number; // Default: 15
+  aggressiveCooldownMinutes: number;   // Default: 5
+
+  // Margin trading settings
+  marginEnabled: boolean;           // Enable margin mode (Crypto.com only)
+  marginLeverage: number;           // Leverage (1-10, default 1)
+  shortEnabled: boolean;            // Enable short selling
+  shortRsiThreshold: number;        // RSI threshold for shorts (default 70)
+  shortVolumeMultiplier: number;    // Volume multiplier for shorts (default 1.5)
 }
 
 // Top 10 coins by market cap (excluded by default)
@@ -85,6 +126,8 @@ export interface AutoSignal {
   regime?: MarketRegime;
   btcInfluenceApplied?: boolean;
   positionMultiplier?: number;
+  // Position direction (long for spot buys, short for margin shorts)
+  direction: 'long' | 'short';
 }
 
 export interface SignalHistoryEntry {
@@ -119,14 +162,25 @@ const SCAN_SYMBOLS = [
   'CHZ_USD', 'CRV_USD', 'DYDX_USD', 'EGLD_USD', 'EOS_USD',
   'ETC_USD', 'FIL_USD', 'FLOW_USD', 'FTM_USD', 'GALA_USD',
   'GRT_USD', 'IMX_USD', 'LDO_USD', 'MANA_USD', 'MKR_USD',
-  'RUNE_USD', 'SAND_USD', 'SEI_USD', 'SHIB_USD', 'SNX_USD',
+  'PONKE_USD', 'RUNE_USD', 'SAND_USD', 'SEI_USD', 'SHIB_USD', 'SNX_USD',
   'THETA_USD', 'TIA_USD', 'TRX_USD', 'XLM_USD', 'XTZ_USD',
+];
+
+// Default conservative symbols (major coins)
+const DEFAULT_CONSERVATIVE_SYMBOLS = [
+  'BTC_USD', 'ETH_USD', 'SOL_USD', 'XRP_USD', 'ADA_USD',
+  'AVAX_USD', 'DOT_USD', 'LINK_USD', 'ATOM_USD', 'UNI_USD',
+];
+
+// Default aggressive symbols (meme coins)
+const DEFAULT_AGGRESSIVE_SYMBOLS = [
+  'DOGE_USD', 'SHIB_USD', 'BONK_USD', 'PONKE_USD', 'PEPE_USD', 'GALA_USD', 'APE_USD',
 ];
 
 // Default settings
 const DEFAULT_SETTINGS: AutoTradingSettings = {
   enabled: false,
-  maxPositions: 3,
+  maxPositions: 5,
   rsiThreshold: 30,
   volumeMultiplier: 1.5,
   minPositionPct: 2,
@@ -134,6 +188,11 @@ const DEFAULT_SETTINGS: AutoTradingSettings = {
   dailyLossLimitPct: 5,
   maxConsecutiveLosses: 3,
   symbolCooldownMinutes: 15,
+  // Fixed USD position sizing (overrides percentage when > 0)
+  minPositionUsd: 30,
+  maxPositionUsd: 70,
+  // Minimum expected profit % to cover fees (0.4% entry + 0.4% exit = 0.8%)
+  minProfitPct: 2.0,
   // Multi-strategy defaults
   strategy: 'rsi_oversold',
   strategyMode: 'manual',
@@ -142,6 +201,28 @@ const DEFAULT_SETTINGS: AutoTradingSettings = {
   btcTrendFilter: true,
   btcMomentumBoost: true,
   btcCorrelationSkip: true,
+
+  // Dual-mode defaults
+  dualModeEnabled: false,
+  conservativeCapitalPct: 70,
+  aggressiveCapitalPct: 30,
+  trailingEnabled: true,
+  trailActivationPct: 2.0,
+  trailDistancePct: 3.0,
+  initialStopLossPct: 5.0,
+  conservativeSymbols: DEFAULT_CONSERVATIVE_SYMBOLS,
+  aggressiveSymbols: DEFAULT_AGGRESSIVE_SYMBOLS,
+  conservativeMinConfidence: 0.75,
+  aggressiveMinConfidence: 0.65,
+  conservativeCooldownMinutes: 15,
+  aggressiveCooldownMinutes: 5,
+
+  // Margin defaults
+  marginEnabled: false,
+  marginLeverage: 1,
+  shortEnabled: false,
+  shortRsiThreshold: 70,
+  shortVolumeMultiplier: 1.5,
 };
 
 /**
@@ -168,6 +249,10 @@ export async function getSettings(userId: string): Promise<AutoTradingSettings> 
     dailyLossLimitPct: parseFloat(row.daily_loss_limit_pct),
     maxConsecutiveLosses: row.max_consecutive_losses,
     symbolCooldownMinutes: row.symbol_cooldown_minutes,
+    // Fixed USD position sizing
+    minPositionUsd: row.min_position_usd ? parseFloat(row.min_position_usd) : DEFAULT_SETTINGS.minPositionUsd,
+    maxPositionUsd: row.max_position_usd ? parseFloat(row.max_position_usd) : DEFAULT_SETTINGS.maxPositionUsd,
+    minProfitPct: row.min_profit_pct ? parseFloat(row.min_profit_pct) : DEFAULT_SETTINGS.minProfitPct,
     // Multi-strategy fields
     strategy: (row.strategy || 'rsi_oversold') as StrategyId,
     strategyMode: (row.strategy_mode || 'manual') as 'manual' | 'auto',
@@ -176,6 +261,26 @@ export async function getSettings(userId: string): Promise<AutoTradingSettings> 
     btcTrendFilter: row.btc_trend_filter ?? true,
     btcMomentumBoost: row.btc_momentum_boost ?? true,
     btcCorrelationSkip: row.btc_correlation_skip ?? true,
+    // Dual-mode fields
+    dualModeEnabled: row.dual_mode_enabled ?? DEFAULT_SETTINGS.dualModeEnabled,
+    conservativeCapitalPct: row.conservative_capital_pct ? parseFloat(row.conservative_capital_pct) : DEFAULT_SETTINGS.conservativeCapitalPct,
+    aggressiveCapitalPct: row.aggressive_capital_pct ? parseFloat(row.aggressive_capital_pct) : DEFAULT_SETTINGS.aggressiveCapitalPct,
+    trailingEnabled: row.trailing_enabled ?? DEFAULT_SETTINGS.trailingEnabled,
+    trailActivationPct: row.trail_activation_pct ? parseFloat(row.trail_activation_pct) : DEFAULT_SETTINGS.trailActivationPct,
+    trailDistancePct: row.trail_distance_pct ? parseFloat(row.trail_distance_pct) : DEFAULT_SETTINGS.trailDistancePct,
+    initialStopLossPct: row.initial_stop_loss_pct ? parseFloat(row.initial_stop_loss_pct) : DEFAULT_SETTINGS.initialStopLossPct,
+    conservativeSymbols: row.conservative_symbols || DEFAULT_SETTINGS.conservativeSymbols,
+    aggressiveSymbols: row.aggressive_symbols || DEFAULT_SETTINGS.aggressiveSymbols,
+    conservativeMinConfidence: row.conservative_min_confidence ? parseFloat(row.conservative_min_confidence) : DEFAULT_SETTINGS.conservativeMinConfidence,
+    aggressiveMinConfidence: row.aggressive_min_confidence ? parseFloat(row.aggressive_min_confidence) : DEFAULT_SETTINGS.aggressiveMinConfidence,
+    conservativeCooldownMinutes: row.conservative_cooldown_minutes ?? DEFAULT_SETTINGS.conservativeCooldownMinutes,
+    aggressiveCooldownMinutes: row.aggressive_cooldown_minutes ?? DEFAULT_SETTINGS.aggressiveCooldownMinutes,
+    // Margin trading fields
+    marginEnabled: row.margin_enabled ?? DEFAULT_SETTINGS.marginEnabled,
+    marginLeverage: row.margin_leverage ?? DEFAULT_SETTINGS.marginLeverage,
+    shortEnabled: row.short_enabled ?? DEFAULT_SETTINGS.shortEnabled,
+    shortRsiThreshold: row.short_rsi_threshold ? parseFloat(row.short_rsi_threshold) : DEFAULT_SETTINGS.shortRsiThreshold,
+    shortVolumeMultiplier: row.short_volume_multiplier ? parseFloat(row.short_volume_multiplier) : DEFAULT_SETTINGS.shortVolumeMultiplier,
   };
 }
 
@@ -199,16 +304,18 @@ export async function updateSettings(
     updates.strategy = getDefaultStrategyId();
   }
 
-  // Upsert settings with multi-strategy fields
+  // Upsert settings with multi-strategy and margin fields
   await pool.query(
     `INSERT INTO auto_trading_settings (
       user_id, enabled, max_positions, rsi_threshold, volume_multiplier,
       min_position_pct, max_position_pct, daily_loss_limit_pct,
       max_consecutive_losses, symbol_cooldown_minutes,
+      min_position_usd, max_position_usd, min_profit_pct,
       strategy, strategy_mode, excluded_symbols, exclude_top_10,
       btc_trend_filter, btc_momentum_boost, btc_correlation_skip,
+      margin_enabled, margin_leverage, short_enabled, short_rsi_threshold, short_volume_multiplier,
       updated_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, NOW())
     ON CONFLICT (user_id) DO UPDATE SET
       enabled = COALESCE($2, auto_trading_settings.enabled),
       max_positions = COALESCE($3, auto_trading_settings.max_positions),
@@ -219,13 +326,21 @@ export async function updateSettings(
       daily_loss_limit_pct = COALESCE($8, auto_trading_settings.daily_loss_limit_pct),
       max_consecutive_losses = COALESCE($9, auto_trading_settings.max_consecutive_losses),
       symbol_cooldown_minutes = COALESCE($10, auto_trading_settings.symbol_cooldown_minutes),
-      strategy = COALESCE($11, auto_trading_settings.strategy),
-      strategy_mode = COALESCE($12, auto_trading_settings.strategy_mode),
-      excluded_symbols = COALESCE($13, auto_trading_settings.excluded_symbols),
-      exclude_top_10 = COALESCE($14, auto_trading_settings.exclude_top_10),
-      btc_trend_filter = COALESCE($15, auto_trading_settings.btc_trend_filter),
-      btc_momentum_boost = COALESCE($16, auto_trading_settings.btc_momentum_boost),
-      btc_correlation_skip = COALESCE($17, auto_trading_settings.btc_correlation_skip),
+      min_position_usd = COALESCE($11, auto_trading_settings.min_position_usd),
+      max_position_usd = COALESCE($12, auto_trading_settings.max_position_usd),
+      min_profit_pct = COALESCE($13, auto_trading_settings.min_profit_pct),
+      strategy = COALESCE($14, auto_trading_settings.strategy),
+      strategy_mode = COALESCE($15, auto_trading_settings.strategy_mode),
+      excluded_symbols = COALESCE($16, auto_trading_settings.excluded_symbols),
+      exclude_top_10 = COALESCE($17, auto_trading_settings.exclude_top_10),
+      btc_trend_filter = COALESCE($18, auto_trading_settings.btc_trend_filter),
+      btc_momentum_boost = COALESCE($19, auto_trading_settings.btc_momentum_boost),
+      btc_correlation_skip = COALESCE($20, auto_trading_settings.btc_correlation_skip),
+      margin_enabled = COALESCE($21, auto_trading_settings.margin_enabled),
+      margin_leverage = COALESCE($22, auto_trading_settings.margin_leverage),
+      short_enabled = COALESCE($23, auto_trading_settings.short_enabled),
+      short_rsi_threshold = COALESCE($24, auto_trading_settings.short_rsi_threshold),
+      short_volume_multiplier = COALESCE($25, auto_trading_settings.short_volume_multiplier),
       updated_at = NOW()`,
     [
       userId,
@@ -238,6 +353,9 @@ export async function updateSettings(
       updates.dailyLossLimitPct !== undefined ? updates.dailyLossLimitPct : null,
       updates.maxConsecutiveLosses !== undefined ? updates.maxConsecutiveLosses : null,
       updates.symbolCooldownMinutes !== undefined ? updates.symbolCooldownMinutes : null,
+      updates.minPositionUsd !== undefined ? updates.minPositionUsd : null,
+      updates.maxPositionUsd !== undefined ? updates.maxPositionUsd : null,
+      updates.minProfitPct !== undefined ? updates.minProfitPct : null,
       updates.strategy !== undefined ? updates.strategy : null,
       updates.strategyMode !== undefined ? updates.strategyMode : null,
       updates.excludedSymbols !== undefined ? updates.excludedSymbols : null,
@@ -245,6 +363,11 @@ export async function updateSettings(
       updates.btcTrendFilter !== undefined ? updates.btcTrendFilter : null,
       updates.btcMomentumBoost !== undefined ? updates.btcMomentumBoost : null,
       updates.btcCorrelationSkip !== undefined ? updates.btcCorrelationSkip : null,
+      updates.marginEnabled !== undefined ? updates.marginEnabled : null,
+      updates.marginLeverage !== undefined ? updates.marginLeverage : null,
+      updates.shortEnabled !== undefined ? updates.shortEnabled : null,
+      updates.shortRsiThreshold !== undefined ? updates.shortRsiThreshold : null,
+      updates.shortVolumeMultiplier !== undefined ? updates.shortVolumeMultiplier : null,
     ]
   );
 
@@ -390,10 +513,12 @@ export async function stopAutoTrading(userId: string): Promise<void> {
  * Check if symbol is in cooldown
  */
 async function isSymbolInCooldown(userId: string, symbol: string): Promise<boolean> {
+  // Normalize symbol to internal format (BASE_USD) for consistent matching
+  const normalizedSymbol = normalizeToInternalSymbol(symbol);
   const result = await pool.query(
     `SELECT cooldown_until FROM auto_trading_cooldowns
      WHERE user_id = $1 AND symbol = $2 AND cooldown_until > NOW()`,
-    [userId, symbol]
+    [userId, normalizedSymbol]
   );
   return result.rows.length > 0;
 }
@@ -406,12 +531,14 @@ async function addSymbolCooldown(
   symbol: string,
   minutes: number
 ): Promise<void> {
+  // Normalize symbol to internal format (BASE_USD) for consistent matching with SCAN_SYMBOLS
+  const normalizedSymbol = normalizeToInternalSymbol(symbol);
   await pool.query(
     `INSERT INTO auto_trading_cooldowns (user_id, symbol, cooldown_until)
      VALUES ($1, $2, NOW() + interval '1 minute' * $3)
      ON CONFLICT (user_id, symbol) DO UPDATE SET
        cooldown_until = NOW() + interval '1 minute' * $3`,
-    [userId, symbol, minutes]
+    [userId, normalizedSymbol, minutes]
   );
 }
 
@@ -422,10 +549,19 @@ function calculatePositionSize(
   confidence: number,
   portfolioValue: number,
   minPct: number,
-  maxPct: number
+  maxPct: number,
+  minUsd: number = 0,
+  maxUsd: number = 0
 ): number {
-  // Linear scale from minPct to maxPct based on confidence (0.5 to 1.0)
-  const normalizedConfidence = (confidence - 0.5) / 0.5; // 0 to 1
+  // Linear scale based on confidence (0.5 to 1.0)
+  const normalizedConfidence = Math.max(0, (confidence - 0.5) / 0.5); // 0 to 1
+
+  // If fixed USD amounts are set (> 0), use them instead of percentage
+  if (minUsd > 0 && maxUsd > 0) {
+    return minUsd + (normalizedConfidence * (maxUsd - minUsd));
+  }
+
+  // Fallback to percentage-based sizing
   const pct = minPct + (normalizedConfidence * (maxPct - minPct));
   return (portfolioValue * pct) / 100;
 }
@@ -647,6 +783,8 @@ async function scanForSignals(
       regime: regimeData.regime,
       btcInfluenceApplied: symbol !== 'BTC_USD' && symbol !== 'BTCUSDT',
       positionMultiplier,
+      // Direction from strategy
+      direction: strategyResult.direction === 'short' ? 'short' : 'long',
     });
   }
 
@@ -655,7 +793,609 @@ async function scanForSignals(
 }
 
 /**
- * Execute an auto trade
+ * Scan all symbols for SHORT signals using the overbought strategy
+ * Only called when margin mode and shorts are enabled
+ */
+async function scanForShortSignals(
+  userId: string,
+  settings: AutoTradingSettings,
+  regimeData: MarketRegimeData
+): Promise<AutoSignal[]> {
+  const signals: AutoSignal[] = [];
+  const strategy = getStrategy('rsi_overbought_short');
+
+  if (!strategy) {
+    logger.error('Short strategy not found');
+    return [];
+  }
+
+  // Get BTC indicators
+  const btcIndicators = await getBtcIndicators();
+  const btcPriceData = await redisTradingService.getPrice('BTCUSDT');
+
+  for (const symbol of SCAN_SYMBOLS) {
+    // Check exclusion
+    const exclusion = isSymbolExcluded(symbol, settings);
+    if (exclusion.excluded) {
+      continue;
+    }
+
+    // Get 5m indicators from Redis
+    const indicators = await redisTradingService.getIndicators(symbol, '5m');
+    if (!indicators) {
+      continue;
+    }
+
+    // Check if strategy has required data
+    if (!strategy.hasRequiredData(indicators)) {
+      continue;
+    }
+
+    // Get current price
+    const priceData = await redisTradingService.getPrice(symbol);
+    if (!priceData) {
+      continue;
+    }
+    const currentPrice = priceData.price;
+
+    // Build market context for strategy
+    const context: MarketContext = {
+      symbol,
+      currentPrice,
+      indicators,
+      regime: regimeData.regime,
+      btcIndicators: btcIndicators || undefined,
+      btcPrice: btcPriceData?.price,
+    };
+
+    // Evaluate short strategy
+    const strategyResult = strategy.evaluate(context);
+
+    // Get ATR for position sizing
+    let atr = indicators.atr || 0;
+    if (!atr) {
+      atr = currentPrice * 0.02;
+    }
+
+    // Determine skip reason
+    let skipReason: string | undefined;
+
+    // Check if strategy triggered
+    if (!strategyResult.shouldTrade || strategyResult.direction !== 'short') {
+      // Only log for backtest if RSI is high
+      const hasInterestingCondition = (indicators.rsi !== undefined && indicators.rsi > 65);
+      if (!hasInterestingCondition) {
+        continue;
+      }
+      skipReason = 'strategy_not_triggered';
+    }
+
+    // Check for cooldown
+    if (!skipReason) {
+      const inCooldown = await isSymbolInCooldown(userId, symbol);
+      if (inCooldown) {
+        skipReason = 'cooldown';
+      }
+    }
+
+    // Check if already have a short position on this symbol
+    if (!skipReason) {
+      const existingPosition = await pool.query(
+        `SELECT id FROM trades
+         WHERE user_id = $1 AND symbol = $2 AND position_side = 'short'
+           AND status = 'filled' AND closed_at IS NULL`,
+        [userId, symbol]
+      );
+      if (existingPosition.rows.length > 0) {
+        skipReason = 'already_short';
+      }
+    }
+
+    // For shorts: SL is above entry, TP is below entry
+    const stopLoss = strategyResult.suggestedStopLoss ||
+      currentPrice + (atr * 2);  // SL above for short
+    const takeProfit = strategyResult.suggestedTakeProfit ||
+      currentPrice - (atr * 3);  // TP below for short
+
+    signals.push({
+      symbol,
+      rsi: indicators.rsi || 50,
+      volumeRatio: indicators.volume_ratio || 1,
+      skipReason,
+      confidence: strategyResult.confidence,
+      positionSizeUsd: 0,
+      stopLoss,
+      takeProfit,
+      currentPrice,
+      atr,
+      strategy: 'rsi_overbought_short',
+      strategyReasons: strategyResult.reasons,
+      regime: regimeData.regime,
+      btcInfluenceApplied: false,
+      positionMultiplier: 1,
+      direction: 'short',
+    });
+  }
+
+  // Sort by confidence (highest first)
+  return signals.sort((a, b) => b.confidence - a.confidence);
+}
+
+// Extended signal type for dual-mode
+export interface DualModeSignal extends AutoSignal {
+  tier: 'conservative' | 'aggressive';
+}
+
+/**
+ * Scan for signals in dual-mode (conservative + aggressive tiers)
+ */
+async function scanForDualModeSignals(
+  userId: string,
+  settings: AutoTradingSettings,
+  regimeData: MarketRegimeData
+): Promise<{ conservative: DualModeSignal[]; aggressive: DualModeSignal[] }> {
+  const conservativeSignals: DualModeSignal[] = [];
+  const aggressiveSignals: DualModeSignal[] = [];
+
+  // Get BTC indicators for all strategies
+  const btcIndicators = await getBtcIndicators();
+  const btcPriceData = await redisTradingService.getPrice('BTCUSDT');
+
+  // Get strategies
+  const confluenceStrategy = getStrategy('confluence');
+  const tripleSignalStrategy = getStrategy('triple_signal');
+
+  if (!confluenceStrategy || !tripleSignalStrategy) {
+    logger.error('Dual-mode strategies not found');
+    return { conservative: [], aggressive: [] };
+  }
+
+  // BTC influence settings
+  const btcSettings: BtcInfluenceSettings = {
+    btcTrendFilter: settings.btcTrendFilter,
+    btcMomentumBoost: settings.btcMomentumBoost,
+    btcCorrelationSkip: settings.btcCorrelationSkip,
+  };
+
+  // Scan conservative tier (major coins with confluence strategy)
+  for (const symbol of settings.conservativeSymbols) {
+    const signal = await evaluateSymbolForDualMode(
+      userId,
+      symbol,
+      'conservative',
+      confluenceStrategy,
+      settings,
+      regimeData,
+      btcIndicators,
+      btcPriceData?.price,
+      btcSettings,
+      settings.conservativeCooldownMinutes,
+      settings.conservativeMinConfidence
+    );
+    if (signal) {
+      conservativeSignals.push(signal);
+    }
+  }
+
+  // Scan aggressive tier (meme coins with triple-signal strategy)
+  for (const symbol of settings.aggressiveSymbols) {
+    const signal = await evaluateSymbolForDualMode(
+      userId,
+      symbol,
+      'aggressive',
+      tripleSignalStrategy,
+      settings,
+      regimeData,
+      btcIndicators,
+      btcPriceData?.price,
+      btcSettings,
+      settings.aggressiveCooldownMinutes,
+      settings.aggressiveMinConfidence
+    );
+    if (signal) {
+      aggressiveSignals.push(signal);
+    }
+  }
+
+  // Sort by confidence
+  conservativeSignals.sort((a, b) => b.confidence - a.confidence);
+  aggressiveSignals.sort((a, b) => b.confidence - a.confidence);
+
+  logger.info('Dual-mode scan complete', {
+    conservativeSignals: conservativeSignals.length,
+    aggressiveSignals: aggressiveSignals.length,
+    conservativeReady: conservativeSignals.filter(s => !s.skipReason).length,
+    aggressiveReady: aggressiveSignals.filter(s => !s.skipReason).length,
+  });
+
+  return { conservative: conservativeSignals, aggressive: aggressiveSignals };
+}
+
+/**
+ * Evaluate a single symbol for dual-mode trading
+ */
+async function evaluateSymbolForDualMode(
+  userId: string,
+  symbol: string,
+  tier: 'conservative' | 'aggressive',
+  strategy: ReturnType<typeof getStrategy>,
+  _settings: AutoTradingSettings,
+  regimeData: MarketRegimeData,
+  btcIndicators: Awaited<ReturnType<typeof getBtcIndicators>>,
+  btcPrice: number | undefined,
+  btcSettings: BtcInfluenceSettings,
+  cooldownMinutes: number,
+  minConfidence: number
+): Promise<DualModeSignal | null> {
+  if (!strategy) return null;
+
+  // Get indicators
+  const indicators = await redisTradingService.getIndicators(symbol, '5m');
+  if (!indicators) return null;
+
+  // Check if strategy has required data
+  if (!strategy.hasRequiredData(indicators)) return null;
+
+  // Get current price
+  const priceData = await redisTradingService.getPrice(symbol);
+  if (!priceData) return null;
+  const currentPrice = priceData.price;
+
+  // Build market context
+  const context: MarketContext = {
+    symbol,
+    currentPrice,
+    indicators,
+    regime: regimeData.regime,
+    btcIndicators: btcIndicators || undefined,
+    btcPrice,
+  };
+
+  // Evaluate strategy
+  const strategyResult = strategy.evaluate(context);
+
+  // Get ATR
+  let atr = indicators.atr || 0;
+  if (!atr) {
+    try {
+      const klines = await tradingService.getKlines(symbol, '5m', 20);
+      if (klines && klines.length >= 15) {
+        const numericKlines = klines.map(k => ({
+          high: parseFloat(k.high),
+          low: parseFloat(k.low),
+          close: parseFloat(k.close),
+        }));
+        const atrResult = calculateATR(numericKlines, 14);
+        atr = atrResult.atr;
+      }
+    } catch {
+      atr = currentPrice * 0.02;
+    }
+  }
+
+  // Determine skip reason
+  let skipReason: string | undefined;
+  let positionMultiplier = 1;
+
+  // Check if strategy triggered with sufficient confidence
+  if (!strategyResult.shouldTrade) {
+    skipReason = 'strategy_not_triggered';
+  } else if (strategyResult.confidence < minConfidence) {
+    skipReason = `confidence_below_threshold_${minConfidence}`;
+  }
+
+  // Apply BTC influence
+  if (!skipReason && symbol !== 'BTC_USD' && symbol !== 'BTCUSDT') {
+    const btcInfluence = await calculateBtcInfluence(symbol, btcSettings);
+    if (!btcInfluence.shouldTrade) {
+      skipReason = btcInfluence.skipReason || 'btc_influence';
+    }
+    positionMultiplier = btcInfluence.positionMultiplier;
+  }
+
+  // Check cooldown (use tier-specific cooldown)
+  if (!skipReason) {
+    const inCooldown = await isSymbolInCooldownWithMinutes(userId, symbol, cooldownMinutes);
+    if (inCooldown) {
+      skipReason = 'cooldown';
+    }
+  }
+
+  // Check if already holding
+  if (!skipReason) {
+    const existingPosition = await pool.query(
+      `SELECT quantity, filled_price FROM trades
+       WHERE user_id = $1 AND symbol = $2
+         AND status = 'filled' AND closed_at IS NULL AND quantity > 0`,
+      [userId, symbol]
+    );
+    if (existingPosition.rows.length > 0) {
+      const totalValue = existingPosition.rows.reduce((sum, row) => {
+        const qty = parseFloat(row.quantity) || 0;
+        const price = currentPrice || parseFloat(row.filled_price) || 0;
+        return sum + (qty * price);
+      }, 0);
+      if (totalValue >= 10) {
+        skipReason = 'already_holding';
+      }
+    }
+  }
+
+  // Use strategy's suggested stops (no TP for dual-mode - trailing only)
+  const stopLoss = strategyResult.suggestedStopLoss ||
+    calculateDynamicStops(currentPrice, atr, 2, 3).stopLoss;
+
+  return {
+    symbol,
+    tier,
+    rsi: indicators.rsi || 50,
+    volumeRatio: indicators.volume_ratio || 1,
+    skipReason,
+    confidence: strategyResult.confidence,
+    positionSizeUsd: 0, // Calculated later
+    stopLoss,
+    takeProfit: 0, // No fixed TP in dual-mode
+    currentPrice,
+    atr,
+    strategy: tier === 'conservative' ? 'confluence' : 'triple_signal',
+    strategyReasons: strategyResult.reasons,
+    regime: regimeData.regime,
+    btcInfluenceApplied: symbol !== 'BTC_USD' && symbol !== 'BTCUSDT',
+    positionMultiplier,
+    direction: 'long', // Dual-mode is always long (spot buys)
+  };
+}
+
+/**
+ * Check if symbol is in cooldown with custom minutes
+ * First checks the cooldowns table, then falls back to trades table
+ */
+async function isSymbolInCooldownWithMinutes(userId: string, symbol: string, cooldownMinutes: number): Promise<boolean> {
+  // First check the cooldowns table (normalized format)
+  const normalizedSymbol = normalizeToInternalSymbol(symbol);
+  const cooldownResult = await pool.query(
+    `SELECT cooldown_until FROM auto_trading_cooldowns
+     WHERE user_id = $1 AND symbol = $2 AND cooldown_until > NOW()`,
+    [userId, normalizedSymbol]
+  );
+  if (cooldownResult.rows.length > 0) return true;
+
+  // Fall back to trades table - check multiple symbol formats
+  const { base } = getBaseQuote(symbol);
+  const symbolVariants = base ? [
+    `${base}_USD`,      // BTC_USD
+    `${base}_USDT`,     // BTC_USDT
+    `${base}USDT`,      // BTCUSDT
+    `${base}USD`,       // BTCUSD
+  ] : [symbol];
+
+  const result = await pool.query(
+    `SELECT MAX(closed_at) as last_closed
+     FROM trades
+     WHERE user_id = $1 AND symbol = ANY($2) AND closed_at IS NOT NULL`,
+    [userId, symbolVariants]
+  );
+
+  if (!result.rows[0]?.last_closed) return false;
+
+  const lastClosed = new Date(result.rows[0].last_closed);
+  const cooldownEnd = new Date(lastClosed.getTime() + cooldownMinutes * 60 * 1000);
+
+  return new Date() < cooldownEnd;
+}
+
+/**
+ * Calculate position size for dual-mode (respects tier capital allocation)
+ */
+function calculateDualModePositionSize(
+  confidence: number,
+  portfolioValue: number,
+  tier: 'conservative' | 'aggressive',
+  settings: AutoTradingSettings
+): number {
+  // Get capital allocation for this tier
+  const tierCapitalPct = tier === 'conservative'
+    ? settings.conservativeCapitalPct
+    : settings.aggressiveCapitalPct;
+  const tierCapital = portfolioValue * (tierCapitalPct / 100);
+
+  // Use fixed USD sizing within tier's allocation
+  const minUsd = settings.minPositionUsd;
+  // Max is either the configured max or 25% of tier capital, whichever is smaller
+  const maxUsd = Math.min(settings.maxPositionUsd, tierCapital * 0.25);
+
+  // Scale by confidence (0.5 to 1.0 range)
+  const normalizedConfidence = Math.max(0, Math.min(1, (confidence - 0.5) / 0.5));
+  const size = minUsd + (normalizedConfidence * (maxUsd - minUsd));
+
+  return Math.max(size, 5); // Minimum $5
+}
+
+/**
+ * Execute a dual-mode trade with trailing stop settings
+ */
+async function executeDualModeTrade(
+  userId: string,
+  signal: DualModeSignal,
+  settings: AutoTradingSettings
+): Promise<{ id: string } | null> {
+  logger.info('Executing dual-mode trade', {
+    userId,
+    symbol: signal.symbol,
+    tier: signal.tier,
+    confidence: signal.confidence.toFixed(2),
+    strategy: signal.strategy,
+  });
+
+  try {
+    // Place the order (no take profit for dual-mode - trailing only)
+    const trade = await tradingService.placeOrder(userId, {
+      symbol: signal.symbol,
+      side: 'buy',
+      type: 'market',
+      quoteAmount: signal.positionSizeUsd,
+      stopLoss: signal.stopLoss,
+      // No fixed TP - trailing stop will handle exit
+      trailingStopPct: settings.trailDistancePct,
+      notes: `Dual-mode ${signal.tier}: ${signal.strategy}, Conf ${(signal.confidence * 100).toFixed(0)}%`,
+    });
+
+    // Mark as auto trade and set tier
+    await pool.query(
+      `UPDATE trades SET auto_trade = true, tier = $2 WHERE id = $1`,
+      [trade.id, signal.tier]
+    );
+
+    // Record cooldown using tier-specific duration
+    const cooldownMinutes = signal.tier === 'aggressive'
+      ? settings.aggressiveCooldownMinutes
+      : settings.conservativeCooldownMinutes;
+    await addSymbolCooldown(userId, signal.symbol, cooldownMinutes);
+
+    // Send notification
+    deliveryService.sendTradingNotification(
+      userId,
+      `Dual-Mode ${signal.tier.toUpperCase()}`,
+      `Bought $${signal.positionSizeUsd.toFixed(0)} ${signal.symbol.replace('_USD', '')} at $${signal.currentPrice.toFixed(signal.currentPrice < 1 ? 6 : 2)}\nConf: ${(signal.confidence * 100).toFixed(0)}% | Trail: ${settings.trailDistancePct}%\nSL: $${signal.stopLoss.toFixed(signal.stopLoss < 1 ? 6 : 2)}`,
+      'trading.auto_trade_opened',
+      5,
+      { tradeId: trade.id, symbol: signal.symbol, tier: signal.tier }
+    ).catch((err) => logger.error('Failed to send dual-mode trade notification', { error: err }));
+
+    return trade;
+  } catch (error) {
+    logger.error('Failed to execute dual-mode trade', {
+      userId,
+      symbol: signal.symbol,
+      tier: signal.tier,
+      error: (error as Error).message,
+    });
+    return null;
+  }
+}
+
+/**
+ * Process dual-mode trading for a user
+ * Handles both conservative and aggressive tiers independently
+ */
+async function processDualModeTrading(
+  userId: string,
+  settings: AutoTradingSettings,
+  _state: AutoTradingState,
+  portfolio: Awaited<ReturnType<typeof tradingService.getPortfolio>>,
+  regimeData: MarketRegimeData,
+  availableUsd: number,
+  isPaused: boolean
+): Promise<void> {
+  logger.info('Processing dual-mode trading', {
+    userId,
+    conservativeSymbols: settings.conservativeSymbols.length,
+    aggressiveSymbols: settings.aggressiveSymbols.length,
+    trailActivation: settings.trailActivationPct,
+    trailDistance: settings.trailDistancePct,
+  });
+
+  // Scan both tiers
+  const { conservative, aggressive } = await scanForDualModeSignals(userId, settings, regimeData);
+
+  // Get portfolio value for position sizing
+  const portfolioValue = portfolio?.totalValueUsdt || 0;
+
+  // Count current positions per tier
+  const positionsResult = await pool.query(
+    `SELECT tier, COUNT(*) as count FROM trades
+     WHERE user_id = $1 AND status = 'filled' AND closed_at IS NULL AND tier IS NOT NULL
+     GROUP BY tier`,
+    [userId]
+  );
+  const conservativePositions = positionsResult.rows.find(r => r.tier === 'conservative')?.count || 0;
+  const aggressivePositions = positionsResult.rows.find(r => r.tier === 'aggressive')?.count || 0;
+
+  // Max 2 positions per tier
+  const maxPerTier = 2;
+  const conservativeSlots = Math.max(0, maxPerTier - conservativePositions);
+  const aggressiveSlots = Math.max(0, maxPerTier - aggressivePositions);
+
+  let remainingCash = availableUsd;
+  let executedCount = 0;
+
+  // Process conservative tier first
+  for (const signal of conservative) {
+    if (executedCount >= conservativeSlots) break;
+    if (signal.skipReason) continue;
+    if (isPaused) {
+      signal.skipReason = 'paused';
+      continue;
+    }
+
+    // Calculate position size
+    signal.positionSizeUsd = calculateDualModePositionSize(
+      signal.confidence,
+      portfolioValue,
+      'conservative',
+      settings
+    ) * (signal.positionMultiplier || 1);
+
+    // Check if we can afford
+    if (remainingCash < signal.positionSizeUsd * 0.9) {
+      signal.skipReason = 'insufficient_balance';
+      continue;
+    }
+
+    // Execute
+    const trade = await executeDualModeTrade(userId, signal, settings);
+    if (trade) {
+      await logSignal(userId, signal, true, trade.id);
+      executedCount++;
+      remainingCash -= signal.positionSizeUsd;
+    }
+  }
+
+  // Process aggressive tier
+  executedCount = 0;
+  for (const signal of aggressive) {
+    if (executedCount >= aggressiveSlots) break;
+    if (signal.skipReason) continue;
+    if (isPaused) {
+      signal.skipReason = 'paused';
+      continue;
+    }
+
+    // Calculate position size
+    signal.positionSizeUsd = calculateDualModePositionSize(
+      signal.confidence,
+      portfolioValue,
+      'aggressive',
+      settings
+    ) * (signal.positionMultiplier || 1);
+
+    // Check if we can afford
+    if (remainingCash < signal.positionSizeUsd * 0.9) {
+      signal.skipReason = 'insufficient_balance';
+      continue;
+    }
+
+    // Execute
+    const trade = await executeDualModeTrade(userId, signal, settings);
+    if (trade) {
+      await logSignal(userId, signal, true, trade.id);
+      executedCount++;
+      remainingCash -= signal.positionSizeUsd;
+    }
+  }
+
+  logger.info('Dual-mode trading complete', {
+    userId,
+    conservativeSignals: conservative.length,
+    aggressiveSignals: aggressive.length,
+    conservativeReady: conservative.filter(s => !s.skipReason).length,
+    aggressiveReady: aggressive.filter(s => !s.skipReason).length,
+    remainingCash: remainingCash.toFixed(2),
+  });
+}
+
+/**
+ * Execute an auto trade (long position - spot buy)
  */
 async function executeAutoTrade(
   userId: string,
@@ -664,6 +1404,7 @@ async function executeAutoTrade(
   logger.info('Executing auto trade', {
     userId,
     symbol: signal.symbol,
+    direction: signal.direction,
     confidence: signal.confidence.toFixed(2),
     rsi: signal.rsi.toFixed(1),
     volumeRatio: signal.volumeRatio.toFixed(2),
@@ -681,9 +1422,9 @@ async function executeAutoTrade(
       notes: `Auto trade: RSI ${signal.rsi.toFixed(1)}, Vol ${signal.volumeRatio.toFixed(1)}x, Conf ${(signal.confidence * 100).toFixed(0)}%`,
     });
 
-    // Mark as auto trade
+    // Mark as auto trade with position side
     await pool.query(
-      `UPDATE trades SET auto_trade = true WHERE id = $1`,
+      `UPDATE trades SET auto_trade = true, position_side = 'long' WHERE id = $1`,
       [trade.id]
     );
 
@@ -733,6 +1474,87 @@ async function executeAutoTrade(
 }
 
 /**
+ * Execute a margin SHORT trade
+ * Opens a short position at 1x leverage using margin
+ */
+async function executeMarginShort(
+  userId: string,
+  signal: AutoSignal,
+  settings: AutoTradingSettings
+): Promise<{ id: string } | null> {
+  logger.info('Executing margin short', {
+    userId,
+    symbol: signal.symbol,
+    confidence: signal.confidence.toFixed(2),
+    rsi: signal.rsi.toFixed(1),
+    leverage: settings.marginLeverage,
+  });
+
+  try {
+    // Place margin short order via trading service
+    const trade = await tradingService.placeMarginOrder(userId, {
+      symbol: signal.symbol,
+      side: 'short',
+      type: 'market',
+      quoteAmount: signal.positionSizeUsd,
+      leverage: settings.marginLeverage,
+      stopLoss: signal.stopLoss,
+      takeProfit: signal.takeProfit,
+    });
+
+    // Mark as auto trade with position side
+    await pool.query(
+      `UPDATE trades SET auto_trade = true, position_side = 'short' WHERE id = $1`,
+      [trade.id]
+    );
+
+    // Update state
+    await pool.query(
+      `INSERT INTO auto_trading_state (user_id, date, trades_count)
+       VALUES ($1, CURRENT_DATE, 1)
+       ON CONFLICT (user_id, date) DO UPDATE SET
+         trades_count = auto_trading_state.trades_count + 1,
+         updated_at = NOW()`,
+      [userId]
+    );
+
+    // Send notification
+    const priceDecimals = signal.currentPrice < 1 ? 6 : 2;
+    await deliveryService.sendTradingNotification(
+      userId,
+      `Auto SHORT: ${signal.symbol}`,
+      `Shorted $${signal.positionSizeUsd.toFixed(0)} at $${signal.currentPrice.toFixed(priceDecimals)}\nRSI: ${signal.rsi.toFixed(1)} (overbought)\nSL: $${signal.stopLoss.toFixed(priceDecimals)} | TP: $${signal.takeProfit.toFixed(priceDecimals)}`,
+      'trading.auto_trade_opened',
+      5,
+      { tradeId: trade.id, symbol: signal.symbol, direction: 'short' }
+    );
+
+    // Add cooldown
+    await addSymbolCooldown(userId, signal.symbol, settings.symbolCooldownMinutes || 15);
+
+    logger.info('Margin short executed successfully', {
+      userId,
+      tradeId: trade.id,
+      symbol: signal.symbol,
+      amount: signal.positionSizeUsd,
+      leverage: settings.marginLeverage,
+    });
+
+    return { id: trade.id };
+  } catch (error) {
+    // Add short cooldown on failure
+    await addSymbolCooldown(userId, signal.symbol, 5);
+
+    logger.error('Failed to execute margin short', {
+      userId,
+      symbol: signal.symbol,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+    return null;
+  }
+}
+
+/**
  * Handle trade close (called by order-monitor when SL/TP hits)
  */
 export async function handleTradeClose(
@@ -749,13 +1571,14 @@ export async function handleTradeClose(
   const portfolioValue = portfolio?.totalValueUsdt || 1000;
   const pnlPct = (pnlUsd / portfolioValue) * 100;
 
-  // Update state
+  // Update state - increment trades_count on CLOSE (not open) for accurate win rate
   if (outcome === 'win') {
     await pool.query(
-      `INSERT INTO auto_trading_state (user_id, date, wins_count, daily_pnl_usd, daily_pnl_pct, consecutive_losses)
-       VALUES ($1, CURRENT_DATE, 1, $2, $3, 0)
+      `INSERT INTO auto_trading_state (user_id, date, wins_count, trades_count, daily_pnl_usd, daily_pnl_pct, consecutive_losses)
+       VALUES ($1, CURRENT_DATE, 1, 1, $2, $3, 0)
        ON CONFLICT (user_id, date) DO UPDATE SET
          wins_count = auto_trading_state.wins_count + 1,
+         trades_count = auto_trading_state.trades_count + 1,
          daily_pnl_usd = auto_trading_state.daily_pnl_usd + $2,
          daily_pnl_pct = auto_trading_state.daily_pnl_pct + $3,
          consecutive_losses = 0,
@@ -765,10 +1588,11 @@ export async function handleTradeClose(
   } else {
     // Loss
     const stateResult = await pool.query(
-      `INSERT INTO auto_trading_state (user_id, date, losses_count, daily_pnl_usd, daily_pnl_pct, consecutive_losses)
-       VALUES ($1, CURRENT_DATE, 1, $2, $3, 1)
+      `INSERT INTO auto_trading_state (user_id, date, losses_count, trades_count, daily_pnl_usd, daily_pnl_pct, consecutive_losses)
+       VALUES ($1, CURRENT_DATE, 1, 1, $2, $3, 1)
        ON CONFLICT (user_id, date) DO UPDATE SET
          losses_count = auto_trading_state.losses_count + 1,
+         trades_count = auto_trading_state.trades_count + 1,
          daily_pnl_usd = auto_trading_state.daily_pnl_usd + $2,
          daily_pnl_pct = auto_trading_state.daily_pnl_pct + $3,
          consecutive_losses = auto_trading_state.consecutive_losses + 1,
@@ -937,6 +1761,12 @@ async function processUserAutoTrading(userId: string): Promise<void> {
   // Detect current market regime
   const regimeData = await detectMarketRegime();
 
+  // DUAL-MODE: Use separate logic for dual-mode trading
+  if (settings.dualModeEnabled) {
+    await processDualModeTrading(userId, settings, state, portfolio, regimeData, availableUsd, isPaused);
+    return;
+  }
+
   // Select strategy based on mode
   let activeStrategy: StrategyId;
   if (settings.strategyMode === 'auto') {
@@ -1000,17 +1830,25 @@ async function processUserAutoTrading(userId: string): Promise<void> {
       signal.confidence,
       portfolio.totalValueUsdt,
       settings.minPositionPct,
-      settings.maxPositionPct
+      settings.maxPositionPct,
+      settings.minPositionUsd,
+      settings.maxPositionUsd
     );
     signal.positionSizeUsd = baseSize * (signal.positionMultiplier || 1);
 
     // Ensure we have enough cash for this trade
     const canAfford = remainingCash >= signal.positionSizeUsd * 0.9; // 90% to account for fees
 
+    // Check minimum profit threshold (to cover fees)
+    const expectedProfitPct = ((signal.takeProfit - signal.currentPrice) / signal.currentPrice) * 100;
+    const meetsMinProfit = expectedProfitPct >= settings.minProfitPct;
+
     // Determine skip reason if any
     if (!signal.skipReason) {
       if (isPaused) {
         signal.skipReason = 'paused';
+      } else if (!meetsMinProfit) {
+        signal.skipReason = 'profit_below_fee_threshold';
       } else if (executedCount >= availableSlots) {
         signal.skipReason = 'max_positions';
       } else if (!canAfford) {
@@ -1038,6 +1876,80 @@ async function processUserAutoTrading(userId: string): Promise<void> {
       // Log skipped signal for backtesting
       await logSignal(userId, signal, false);
     }
+  }
+
+  // MARGIN SHORTS: Scan for short signals if margin mode is enabled
+  if (settings.marginEnabled && settings.shortEnabled) {
+    logger.info('Scanning for margin short signals', {
+      userId,
+      marginLeverage: settings.marginLeverage,
+      shortRsiThreshold: settings.shortRsiThreshold,
+    });
+
+    const shortSignals = await scanForShortSignals(userId, settings, regimeData);
+
+    logger.info('Short signal scan complete', {
+      userId,
+      shortSignalsFound: shortSignals.length,
+      shortSignalsReady: shortSignals.filter(s => !s.skipReason).length,
+    });
+
+    // Process short signals (separate from long positions)
+    let shortExecutedCount = 0;
+    const maxShortPositions = Math.max(1, Math.floor(settings.maxPositions / 2)); // Allow half as many shorts
+
+    for (const signal of shortSignals) {
+      // Calculate position size for short
+      signal.positionSizeUsd = calculatePositionSize(
+        signal.confidence,
+        portfolio.totalValueUsdt,
+        settings.minPositionPct,
+        settings.maxPositionPct,
+        settings.minPositionUsd,
+        settings.maxPositionUsd
+      );
+
+      // Check if we can afford margin for this position
+      const canAffordMargin = availableUsd >= signal.positionSizeUsd * 0.5; // Margin requires less capital
+
+      // For shorts: expected profit is when price goes DOWN
+      const expectedProfitPct = ((signal.currentPrice - signal.takeProfit) / signal.currentPrice) * 100;
+      const meetsMinProfit = expectedProfitPct >= settings.minProfitPct;
+
+      // Determine skip reason
+      if (!signal.skipReason) {
+        if (isPaused) {
+          signal.skipReason = 'paused';
+        } else if (!meetsMinProfit) {
+          signal.skipReason = 'profit_below_fee_threshold';
+        } else if (shortExecutedCount >= maxShortPositions) {
+          signal.skipReason = 'max_short_positions';
+        } else if (!canAffordMargin) {
+          signal.skipReason = 'insufficient_margin';
+        } else if (signal.positionSizeUsd < 10) {
+          signal.skipReason = 'insufficient_size';
+        }
+      }
+
+      const shouldExecuteShort = !signal.skipReason && shortExecutedCount < maxShortPositions;
+
+      if (shouldExecuteShort) {
+        const trade = await executeMarginShort(userId, signal, settings);
+
+        if (trade) {
+          await logSignal(userId, signal, true, trade.id);
+          shortExecutedCount++;
+        }
+      } else {
+        await logSignal(userId, signal, false);
+      }
+    }
+
+    logger.info('Margin short processing complete', {
+      userId,
+      shortSignalsProcessed: shortSignals.length,
+      shortPositionsOpened: shortExecutedCount,
+    });
   }
 }
 
@@ -1322,6 +2234,161 @@ export async function getStrategyPerformance(userId: string) {
 export { StrategyId, MarketRegime };
 export { recordTradeResult } from './auto-mode-selector.service.js';
 
+// ============================================================================
+// PORTFOLIO RECONCILIATION
+// ============================================================================
+
+export interface OrphanPosition {
+  symbol: string;
+  asset: string;
+  amount: number;
+  valueUsd: number;
+  currentPrice: number;
+  hasActiveTrade: boolean;
+  trailingStopAdded: boolean;
+}
+
+export interface ReconciliationResult {
+  orphanPositions: OrphanPosition[];
+  missingFromPortfolio: string[];
+  reconciled: number;
+  lastReconcileAt: string;
+}
+
+/**
+ * Reconcile portfolio holdings with active trades
+ * Detects orphan positions (holdings > $20 without active trade) and auto-creates trailing SL
+ */
+export async function reconcilePortfolio(userId: string): Promise<ReconciliationResult> {
+  const portfolio = await tradingService.getPortfolio(userId);
+
+  // If no portfolio data, return empty result
+  if (!portfolio || !portfolio.holdings) {
+    return {
+      orphanPositions: [],
+      missingFromPortfolio: [],
+      reconciled: 0,
+      lastReconcileAt: new Date().toISOString(),
+    };
+  }
+
+  // Get active trades from database
+  const tradesResult = await pool.query(
+    `SELECT symbol, quantity, filled_price FROM trades
+     WHERE user_id = $1 AND status = 'filled' AND closed_at IS NULL AND quantity > 0`,
+    [userId]
+  );
+
+  // Normalize trade symbols to base asset for comparison
+  // Trades use format like BONK_USD, portfolio uses BONKUSDT
+  const tradeBaseAssets = new Set(
+    tradesResult.rows.map((t) => getBaseQuote(t.symbol).base.toUpperCase())
+  );
+  const orphans: OrphanPosition[] = [];
+  const settings = await getSettings(userId);
+  const trailingPct = settings.initialStopLossPct || 5.0;
+
+  // Find orphan positions (in portfolio but no active trade)
+  for (const holding of portfolio.holdings) {
+    // Skip USD/USDT/USDC - these are quote currencies
+    if (['USD', 'USDT', 'USDC'].includes(holding.asset)) continue;
+
+    // Normalize holding symbol to base asset for comparison
+    const holdingBase = (getBaseQuote(holding.symbol).base || holding.asset).toUpperCase();
+
+    if (holding.valueUsdt > 20 && !tradeBaseAssets.has(holdingBase)) {
+      orphans.push({
+        symbol: holding.symbol,
+        asset: holding.asset,
+        amount: holding.amount,
+        valueUsd: holding.valueUsdt,
+        currentPrice: holding.price,
+        hasActiveTrade: false,
+        trailingStopAdded: false,
+      });
+    }
+  }
+
+  // Auto-create trades with trailing SL for orphans
+  let reconciled = 0;
+  for (const orphan of orphans) {
+    try {
+      await createOrphanTrade(userId, orphan, trailingPct);
+      orphan.trailingStopAdded = true;
+      reconciled++;
+      logger.info('Created orphan trade with trailing SL', {
+        userId,
+        symbol: orphan.symbol,
+        amount: orphan.amount,
+        valueUsd: orphan.valueUsd.toFixed(2),
+        trailingPct,
+      });
+    } catch (err) {
+      logger.error('Failed to create orphan trade', {
+        userId,
+        symbol: orphan.symbol,
+        error: (err as Error).message,
+      });
+    }
+  }
+
+  // Find trades missing from portfolio (manual sells)
+  // Normalize portfolio symbols to base asset for comparison
+  const portfolioBaseAssets = new Set(
+    portfolio.holdings.map((h) => (getBaseQuote(h.symbol).base || h.asset).toUpperCase())
+  );
+  const missingFromPortfolio: string[] = [];
+
+  for (const trade of tradesResult.rows) {
+    const tradeBase = getBaseQuote(trade.symbol).base.toUpperCase();
+    if (!portfolioBaseAssets.has(tradeBase)) {
+      missingFromPortfolio.push(trade.symbol);
+      // Mark trade as closed (manual sell)
+      await pool.query(
+        `UPDATE trades SET status = 'cancelled', close_reason = 'manual_sell', closed_at = NOW()
+         WHERE user_id = $1 AND symbol = $2 AND status = 'filled' AND closed_at IS NULL`,
+        [userId, trade.symbol]
+      );
+      logger.info('Detected manual sell - closed trade', { userId, symbol: trade.symbol, tradeBase });
+    }
+  }
+
+  return {
+    orphanPositions: orphans,
+    missingFromPortfolio,
+    reconciled,
+    lastReconcileAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Create a synthetic trade record for an orphan position with trailing SL
+ */
+async function createOrphanTrade(
+  userId: string,
+  orphan: OrphanPosition,
+  trailingStopPct: number
+): Promise<void> {
+  const tradeId = crypto.randomUUID();
+
+  await pool.query(
+    `INSERT INTO trades (
+      id, user_id, symbol, side, order_type, quantity, filled_price,
+      total, status, trailing_stop_pct, notes, auto_trade, filled_at, exchange
+    ) VALUES ($1, $2, $3, 'buy', 'market', $4, $5, $6, 'filled', $7, $8, true, NOW(), 'crypto_com')`,
+    [
+      tradeId,
+      userId,
+      orphan.symbol,
+      orphan.amount,
+      orphan.currentPrice,
+      orphan.valueUsd,
+      trailingStopPct,
+      `Auto-created for orphan position (no active trade found). Trailing SL: ${trailingStopPct}%`,
+    ]
+  );
+}
+
 export default {
   getSettings,
   updateSettings,
@@ -1337,4 +2404,5 @@ export default {
   getAvailableStrategies,
   getMarketRegime,
   getStrategyPerformance,
+  reconcilePortfolio,
 };

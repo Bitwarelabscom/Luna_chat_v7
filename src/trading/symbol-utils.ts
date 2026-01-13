@@ -18,30 +18,42 @@ export function toBinanceSymbol(symbol: string): string {
 }
 
 /**
- * Convert symbol to Crypto.com format (underscore separator)
+ * Convert symbol to Crypto.com format (underscore separator, USDT quote)
  * BTCUSDT -> BTC_USDT
  * BTC/USDT -> BTC_USDT
  * BTC_USDT -> BTC_USDT (already correct)
+ * BTC_USD -> BTC_USDT (convert USD to USDT for Crypto.com API)
  */
 export function toCryptoComSymbol(symbol: string): string {
-  // If already has underscore, normalize and return
+  let result: string;
+
+  // If already has underscore, normalize and potentially fix quote currency
   if (symbol.includes('_')) {
-    return symbol.toUpperCase();
+    result = symbol.toUpperCase();
+  } else if (symbol.includes('/') || symbol.includes('-')) {
+    // If has other separators, replace with underscore
+    result = symbol.replace(/[/\-]/g, '_').toUpperCase();
+  } else {
+    // No separator - need to parse base and quote
+    const { base, quote } = getBaseQuote(symbol);
+    if (base && quote) {
+      result = `${base}_${quote}`;
+    } else {
+      // Fallback - return as-is uppercase
+      result = symbol.toUpperCase();
+    }
   }
 
-  // If has other separators, replace with underscore
-  if (symbol.includes('/') || symbol.includes('-')) {
-    return symbol.replace(/[/\-]/g, '_').toUpperCase();
+  // Crypto.com uses USD as quote currency - convert _USDT to _USD
+  if (result.endsWith('_USDT')) {
+    result = result.slice(0, -5) + '_USD';
+  }
+  // Also handle USDC
+  if (result.endsWith('_USDC')) {
+    result = result.slice(0, -5) + '_USD';
   }
 
-  // No separator - need to parse base and quote
-  const { base, quote } = getBaseQuote(symbol);
-  if (base && quote) {
-    return `${base}_${quote}`;
-  }
-
-  // Fallback - return as-is uppercase
-  return symbol.toUpperCase();
+  return result;
 }
 
 /**
@@ -191,7 +203,7 @@ const TOP_50_BASES = [
   'RUNE', 'SEI', 'TIA', 'AAVE', 'GRT',
   'ALGO', 'SAND', 'MANA', 'AXS', 'THETA',
   'EGLD', 'FLOW', 'XTZ', 'SNX', 'CHZ',
-  'GALA', 'APE', 'CRV', 'DYDX', 'BONK',
+  'GALA', 'APE', 'CRV', 'DYDX', 'BONK', 'PONKE',
 ];
 
 /**

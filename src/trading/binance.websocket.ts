@@ -13,6 +13,13 @@ import WebSocket from 'ws';
 import logger from '../utils/logger.js';
 import * as redisTradingService from './redis-trading.service.js';
 import { TOP_50_PAIRS, TIMEFRAMES, Timeframe } from './redis-trading.service.js';
+import { toCryptoComSymbol } from './symbol-utils.js';
+
+// Coins only available on Crypto.com (not on Binance) - need fallback data fetching
+const CRYPTO_COM_ONLY_COINS = ['PONKEUSDT'];
+
+// Crypto.com API base URL
+const CRYPTO_COM_API_BASE = 'https://api.crypto.com/exchange/v1';
 
 // Binance WebSocket endpoints
 const BINANCE_WS_BASE = 'wss://stream.binance.com:9443/stream';
@@ -302,9 +309,67 @@ function scheduleReconnect(): void {
 }
 
 /**
+ * Fetch historical klines from Crypto.com API (for coins not on Binance)
+ */
+async function fetchCryptoComHistoricalKlines(symbol: string, timeframe: Timeframe, limit: number = 500): Promise<void> {
+  try {
+    // Map timeframe to Crypto.com format
+    const timeframeMap: Record<string, string> = {
+      '1m': '1m', '5m': '5m', '15m': '15m', '30m': '30m',
+      '1h': '1h', '4h': '4h', '1d': '1D',
+    };
+    const cryptoComTimeframe = timeframeMap[timeframe] || timeframe;
+    const cryptoComSymbol = toCryptoComSymbol(symbol);
+
+    const url = `${CRYPTO_COM_API_BASE}/public/get-candlestick?instrument_name=${cryptoComSymbol}&timeframe=${cryptoComTimeframe}&count=${limit}`;
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const json = await response.json() as {
+      code: number;
+      result?: { data: Array<{ t: number; o: string; h: string; l: string; c: string; v: string }> };
+    };
+
+    if (json.code !== 0 || !json.result?.data) {
+      throw new Error(`Crypto.com API error: ${json.code}`);
+    }
+
+    const candles: redisTradingService.OHLCV[] = json.result.data.map(k => ({
+      timestamp: k.t,
+      open: parseFloat(k.o),
+      high: parseFloat(k.h),
+      low: parseFloat(k.l),
+      close: parseFloat(k.c),
+      volume: parseFloat(k.v),
+    }));
+
+    // Sort by timestamp ascending (Crypto.com returns newest first)
+    candles.sort((a, b) => a.timestamp - b.timestamp);
+
+    await redisTradingService.addCandles(symbol, timeframe, candles);
+    logger.debug('Fetched Crypto.com historical klines', { symbol, timeframe, count: candles.length });
+  } catch (error) {
+    logger.error('Failed to fetch Crypto.com historical klines', {
+      symbol,
+      timeframe,
+      error: (error as Error).message,
+    });
+  }
+}
+
+/**
  * Fetch initial historical klines from REST API
+ * Uses Binance for most coins, Crypto.com for coins not on Binance
  */
 async function fetchHistoricalKlines(symbol: string, timeframe: Timeframe, limit: number = 500): Promise<void> {
+  // Check if this coin is only on Crypto.com
+  if (CRYPTO_COM_ONLY_COINS.includes(symbol)) {
+    return fetchCryptoComHistoricalKlines(symbol, timeframe, limit);
+  }
+
   try {
     const interval = timeframe;
     const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
@@ -334,6 +399,72 @@ async function fetchHistoricalKlines(symbol: string, timeframe: Timeframe, limit
       timeframe,
       error: (error as Error).message,
     });
+  }
+}
+
+/**
+ * Fetch current prices for Crypto.com-only coins
+ */
+async function fetchCryptoComPrices(): Promise<void> {
+  for (const symbol of CRYPTO_COM_ONLY_COINS) {
+    try {
+      const cryptoComSymbol = toCryptoComSymbol(symbol);
+      const url = `${CRYPTO_COM_API_BASE}/public/get-tickers?instrument_name=${cryptoComSymbol}`;
+
+      const response = await fetch(url);
+      if (!response.ok) continue;
+
+      // Crypto.com tickers response: i=instrument, a=ask, b=bid, h=high, l=low, v=volume, c=change, t=timestamp
+      const json = await response.json() as {
+        code: number;
+        result?: { data: Array<{ i: string; a: string; b: string; h: string; l: string; v: string; c: string; t: number }> };
+      };
+
+      if (json.code !== 0 || !json.result?.data?.[0]) continue;
+
+      const ticker = json.result.data[0];
+      const priceData: redisTradingService.PriceData = {
+        symbol,
+        price: parseFloat(ticker.a), // Best ask price
+        timestamp: ticker.t || Date.now(),
+        change24h: parseFloat(ticker.c) || 0, // 24h change percentage
+        high24h: parseFloat(ticker.h),
+        low24h: parseFloat(ticker.l),
+        volume24h: parseFloat(ticker.v),
+        source: 'crypto_com',
+      };
+
+      await redisTradingService.setPrice(priceData);
+      logger.debug('Fetched Crypto.com price', { symbol, price: priceData.price });
+    } catch (error) {
+      logger.error('Failed to fetch Crypto.com price', { symbol, error: (error as Error).message });
+    }
+  }
+}
+
+// Price polling interval for Crypto.com-only coins
+let cryptoComPriceInterval: NodeJS.Timeout | null = null;
+
+/**
+ * Start polling prices for Crypto.com-only coins
+ */
+function startCryptoComPricePolling(): void {
+  // Poll every 5 seconds
+  cryptoComPriceInterval = setInterval(() => {
+    fetchCryptoComPrices().catch(() => {});
+  }, 5000);
+
+  // Fetch immediately
+  fetchCryptoComPrices().catch(() => {});
+}
+
+/**
+ * Stop polling prices for Crypto.com-only coins
+ */
+function stopCryptoComPricePolling(): void {
+  if (cryptoComPriceInterval) {
+    clearInterval(cryptoComPriceInterval);
+    cryptoComPriceInterval = null;
   }
 }
 
@@ -406,9 +537,16 @@ export async function initializeBinanceWebSocket(options?: {
     });
   }
 
+  // Start polling prices for Crypto.com-only coins (like PONKE)
+  if (CRYPTO_COM_ONLY_COINS.length > 0) {
+    startCryptoComPricePolling();
+    logger.info('Started Crypto.com price polling', { coins: CRYPTO_COM_ONLY_COINS });
+  }
+
   logger.info('Binance WebSocket service initialized', {
     pairs: TOP_50_PAIRS.length,
     klineTimeframes,
+    cryptoComOnlyCoins: CRYPTO_COM_ONLY_COINS.length,
   });
 }
 
@@ -439,6 +577,9 @@ export function shutdownBinanceWebSocket(): void {
 
   priceCallbacks.length = 0;
   klineCallbacks.length = 0;
+
+  // Stop Crypto.com price polling
+  stopCryptoComPricePolling();
 
   logger.info('Binance WebSocket service shut down');
 }

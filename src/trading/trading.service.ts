@@ -560,12 +560,40 @@ async function getCryptoComPortfolio(userId: string): Promise<Portfolio | null> 
     // Sort by value descending
     holdings.sort((a, b) => b.valueUsdt - a.valueUsdt);
 
+    // Calculate daily P&L from snapshot (same as Binance path)
+    let dailyPnl = 0;
+    let dailyPnlPct = 0;
+
+    // Get first snapshot of today for baseline
+    const snapshotResult = await pool.query(
+      `SELECT total_value_usdt FROM portfolio_snapshots
+       WHERE user_id = $1 AND snapshot_time >= CURRENT_DATE
+       ORDER BY snapshot_time ASC LIMIT 1`,
+      [userId]
+    );
+
+    if (snapshotResult.rows.length > 0) {
+      const baselineValue = parseFloat(snapshotResult.rows[0].total_value_usdt);
+      if (baselineValue > 0) {
+        dailyPnl = totalValueUsdt - baselineValue;
+        dailyPnlPct = (dailyPnl / baselineValue) * 100;
+        dailyPnlPct = Math.max(-99999999, Math.min(99999999, dailyPnlPct));
+      }
+    }
+
+    // Save snapshot
+    await pool.query(
+      `INSERT INTO portfolio_snapshots (user_id, total_value_usdt, holdings, daily_pnl, daily_pnl_pct)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [userId, totalValueUsdt, JSON.stringify(holdings), dailyPnl, dailyPnlPct]
+    );
+
     return {
       totalValueUsdt,
       availableUsdt,
       holdings,
-      dailyPnl: 0,
-      dailyPnlPct: 0,
+      dailyPnl,
+      dailyPnlPct,
     };
   } catch (error) {
     logger.error('Failed to get Crypto.com portfolio', { userId, error: (error as Error).message });

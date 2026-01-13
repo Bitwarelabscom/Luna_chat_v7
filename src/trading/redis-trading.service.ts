@@ -196,23 +196,43 @@ export async function getAllPrices(): Promise<PriceData[]> {
 /**
  * Get prices for multiple symbols in a single batch operation
  * Much more efficient than calling getPrice() in a loop
+ * Handles symbol format normalization (BTC_USD -> BTCUSDT for cache lookup)
  */
 export async function getPricesBatch(symbols: string[]): Promise<Map<string, number>> {
   const priceMap = new Map<string, number>();
   if (symbols.length === 0) return priceMap;
 
-  const pipeline = redis.pipeline();
+  // Build mapping: original symbol -> normalized symbol for cache lookup
+  const symbolMapping = new Map<string, string>();
   for (const symbol of symbols) {
-    pipeline.hget(`${PRICE_PREFIX}${symbol}`, 'price');
+    symbolMapping.set(symbol, normalizeSymbolForCache(symbol));
+  }
+
+  // Get unique normalized symbols for Redis lookup
+  const normalizedSymbols = [...new Set(symbolMapping.values())];
+
+  const pipeline = redis.pipeline();
+  for (const normalizedSymbol of normalizedSymbols) {
+    pipeline.hget(`${PRICE_PREFIX}${normalizedSymbol}`, 'price');
   }
 
   const results = await pipeline.exec();
   if (!results) return priceMap;
 
-  for (let i = 0; i < symbols.length; i++) {
+  // Build reverse mapping: normalized -> price
+  const normalizedPrices = new Map<string, number>();
+  for (let i = 0; i < normalizedSymbols.length; i++) {
     const [err, price] = results[i] as [Error | null, string | null];
     if (!err && price) {
-      priceMap.set(symbols[i], parseFloat(price));
+      normalizedPrices.set(normalizedSymbols[i], parseFloat(price));
+    }
+  }
+
+  // Map back to original symbols so callers get prices with their original symbol format
+  for (const [originalSymbol, normalizedSymbol] of symbolMapping) {
+    const price = normalizedPrices.get(normalizedSymbol);
+    if (price !== undefined) {
+      priceMap.set(originalSymbol, price);
     }
   }
 
@@ -511,6 +531,7 @@ export const TOP_50_PAIRS = [
   'ALGOUSDT', 'SANDUSDT', 'MANAUSDT', 'AXSUSDT', 'THETAUSDT',
   'EGLDUSDT', 'FLOWUSDT', 'XTZUSDT', 'SNXUSDT', 'CHZUSDT',
   'GALAUSDT', 'APEUSDT', 'CRVUSDT', 'DYDXUSDT', 'BONKUSDT',
+  'PONKEUSDT', // Crypto.com only - uses fallback data fetching
 ];
 
 // Standard timeframes

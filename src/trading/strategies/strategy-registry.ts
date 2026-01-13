@@ -6,30 +6,39 @@
 
 import { TradingStrategy, StrategyMeta, MarketRegime } from './strategy.interface.js';
 import { rsiOversoldStrategy } from './rsi-oversold.strategy.js';
+import { rsiOverboughtShortStrategy } from './rsi-overbought-short.strategy.js';
 import { trendFollowingStrategy } from './trend-following.strategy.js';
 import { meanReversionStrategy } from './mean-reversion.strategy.js';
 import { momentumStrategy } from './momentum.strategy.js';
 import { btcCorrelationStrategy } from './btc-correlation.strategy.js';
+import { confluenceStrategy } from './confluence.strategy.js';
+import { tripleSignalStrategy } from './triple-signal.strategy.js';
 
 /**
  * Strategy IDs
  */
 export type StrategyId =
   | 'rsi_oversold'
+  | 'rsi_overbought_short'
   | 'trend_following'
   | 'mean_reversion'
   | 'momentum'
-  | 'btc_correlation';
+  | 'btc_correlation'
+  | 'confluence'
+  | 'triple_signal';
 
 /**
  * All available strategies
  */
 const strategies = new Map<StrategyId, TradingStrategy>();
 strategies.set('rsi_oversold', rsiOversoldStrategy);
+strategies.set('rsi_overbought_short', rsiOverboughtShortStrategy);
 strategies.set('trend_following', trendFollowingStrategy);
 strategies.set('mean_reversion', meanReversionStrategy);
 strategies.set('momentum', momentumStrategy);
 strategies.set('btc_correlation', btcCorrelationStrategy);
+strategies.set('confluence', confluenceStrategy);
+strategies.set('triple_signal', tripleSignalStrategy);
 
 /**
  * Get a strategy by ID
@@ -96,8 +105,11 @@ export function getDefaultStrategyId(): StrategyId {
 
 export {
   rsiOversoldStrategy,
+  rsiOverboughtShortStrategy,
   trendFollowingStrategy,
   meanReversionStrategy,
   momentumStrategy,
   btcCorrelationStrategy,
+  confluenceStrategy,
+  tripleSignalStrategy,
 };

@@ -1,6 +1,5 @@
 import { pool } from '../db/index.js';
 import { createCompletion } from '../llm/router.js';
-import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
 
 export interface MoodEntry {
@@ -36,15 +35,16 @@ Only include emotions that are clearly present. Return JSON only.`;
  */
 export async function analyzeMood(message: string): Promise<Omit<MoodEntry, 'id' | 'sessionId' | 'detectedAt'> | null> {
   try {
-    // Use local Ollama qwen2.5:3b for fast mood analysis
+    // Use GPT-5-nano for accurate sentiment classification
+    // Note: GPT-5-nano uses internal reasoning tokens, so we need higher maxTokens
     const response = await createCompletion(
-      'ollama',
-      config.ollama.chatModel,
+      'openai',
+      'gpt-5-nano',
       [
         { role: 'system', content: MOOD_ANALYSIS_PROMPT },
         { role: 'user', content: message },
       ],
-      { temperature: 0.1, maxTokens: 2000 }
+      { maxTokens: 2000 }
     );
 
     const content = response.content || '';

@@ -18,10 +18,13 @@ export {
 
 // Strategy implementations
 export { RsiOversoldStrategy, rsiOversoldStrategy } from './rsi-oversold.strategy.js';
+export { RsiOverboughtShortStrategy, rsiOverboughtShortStrategy } from './rsi-overbought-short.strategy.js';
 export { TrendFollowingStrategy, trendFollowingStrategy } from './trend-following.strategy.js';
 export { MeanReversionStrategy, meanReversionStrategy } from './mean-reversion.strategy.js';
 export { MomentumStrategy, momentumStrategy } from './momentum.strategy.js';
 export { BtcCorrelationStrategy, btcCorrelationStrategy } from './btc-correlation.strategy.js';
+export { ConfluenceStrategy, confluenceStrategy } from './confluence.strategy.js';
+export { TripleSignalStrategy, tripleSignalStrategy } from './triple-signal.strategy.js';
 
 // Registry
 export {

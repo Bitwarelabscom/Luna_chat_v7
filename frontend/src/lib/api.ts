@@ -2183,6 +2183,10 @@ export interface AutoTradingSettings {
   dailyLossLimitPct: number;
   maxConsecutiveLosses: number;
   symbolCooldownMinutes: number;
+  minProfitPct: number;
+  // Fixed USD position sizing
+  minPositionUsd?: number;
+  maxPositionUsd?: number;
   strategy: 'rsi_oversold' | 'trend_following' | 'mean_reversion' | 'momentum' | 'btc_correlation';
   strategyMode: 'manual' | 'auto';
   excludedSymbols: string[];
@@ -2190,15 +2194,32 @@ export interface AutoTradingSettings {
   btcTrendFilter: boolean;
   btcMomentumBoost: boolean;
   btcCorrelationSkip: boolean;
-  currentStrategy?: 'rsi_oversold' | 'trend_following' | 'mean_reversion' | 'momentum' | 'btc_correlation'; // Actual strategy in auto mode
+  currentStrategy?: 'rsi_oversold' | 'trend_following' | 'mean_reversion' | 'momentum' | 'btc_correlation';
+  // Dual-mode settings
+  dualModeEnabled?: boolean;
+  conservativeCapitalPct?: number;
+  aggressiveCapitalPct?: number;
+  trailingEnabled?: boolean;
+  trailActivationPct?: number;
+  trailDistancePct?: number;
+  initialStopLossPct?: number;
+  conservativeSymbols?: string[];
+  aggressiveSymbols?: string[];
+  conservativeMinConfidence?: number;
+  aggressiveMinConfidence?: number;
 }
 
 export interface AutoTradingState {
-  running: boolean;
-  lastScanAt?: string;
-  signalsToday: number;
-  tradesExecuted: number;
-  currentPositions: number;
+  isRunning: boolean;
+  isPaused: boolean;
+  pauseReason: string | null;
+  dailyPnlUsd: number;
+  dailyPnlPct: number;
+  consecutiveLosses: number;
+  activePositions: number;
+  tradesCount: number;
+  winsCount: number;
+  lossesCount: number;
 }
 
 export interface MarketRegime {
@@ -2221,6 +2242,23 @@ export interface StrategyInfo {
     totalTrades: number;
     avgProfit: number;
   };
+}
+
+export interface OrphanPosition {
+  symbol: string;
+  asset: string;
+  amount: number;
+  valueUsd: number;
+  currentPrice: number;
+  hasActiveTrade: boolean;
+  trailingStopAdded: boolean;
+}
+
+export interface ReconciliationResult {
+  orphanPositions: OrphanPosition[];
+  missingFromPortfolio: string[];
+  reconciled: number;
+  lastReconcileAt: string;
 }
 
 export interface ResearchSignal {
@@ -2629,6 +2667,9 @@ export const tradingApi = {
 
   getAutoTradingStrategies: () =>
     api<{ strategies: StrategyInfo[] }>('/api/trading/auto/strategies'),
+
+  reconcilePortfolio: () =>
+    api<ReconciliationResult>('/api/trading/auto/reconcile', { method: 'POST' }),
 
   // Trading Rules (Visual Builder)
   getTradingRules: () =>

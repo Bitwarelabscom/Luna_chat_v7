@@ -1651,4 +1651,16 @@ router.get('/auto/strategy-performance', async (req: Request, res: Response) => 
   }
 });
 
+// Reconcile portfolio with active trades - detects orphans and manual sells
+router.post('/auto/reconcile', async (req: Request, res: Response) => {
+  try {
+    const userId = getUserId(req);
+    const result = await autoTradingService.reconcilePortfolio(userId);
+    res.json(result);
+  } catch (error) {
+    logger.error('Failed to reconcile portfolio', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to reconcile portfolio' });
+  }
+});
+
 export default router;

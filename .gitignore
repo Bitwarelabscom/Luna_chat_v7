@@ -57,7 +57,4 @@ CLAUDE.md
 .claude/
 
 # Trading engine files (proprietary)
-src/trading/conditional-order.service.ts
-src/trading/intent-parser.ts
-src/trading/paper-portfolio.service.ts
-src/trading/tradecore.client.ts
+src/trading/

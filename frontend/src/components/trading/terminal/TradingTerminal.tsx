@@ -13,6 +13,7 @@ import {
   ChevronRight,
   Settings,
   ListOrdered,
+  Zap,
 } from 'lucide-react';
 import { tradingApi, type TradingSettings, type Portfolio, type PriceData, type TradeRecord, type BotConfig } from '@/lib/api';
 import { useTradingWebSocket, type PriceUpdate } from '@/hooks/useTradingWebSocket';
@@ -26,8 +27,9 @@ import ExecutionsTab from './ExecutionsTab';
 import RulesTab from './RulesTab';
 import TerminalChat from './TerminalChat';
 import ActiveTab from '../ActiveTab';
+import AutoTab from './AutoTab';
 
-type TabType = 'overview' | 'portfolio' | 'orders' | 'signals' | 'algorithms' | 'executions' | 'rules';
+type TabType = 'overview' | 'portfolio' | 'orders' | 'signals' | 'algorithms' | 'executions' | 'rules' | 'auto';
 
 interface TradingTerminalProps {
   onClose: () => void;
@@ -124,6 +126,7 @@ export default function TradingTerminal({ onClose, userId }: TradingTerminalProp
     { id: 'orders', label: 'Orders', icon: <ListOrdered size={14} /> },
     { id: 'signals', label: 'Signals', icon: <Activity size={14} /> },
     { id: 'algorithms', label: 'Algorithms', icon: <Bot size={14} /> },
+    { id: 'auto', label: 'Auto', icon: <Zap size={14} /> },
     { id: 'executions', label: 'Executions', icon: <History size={14} /> },
     { id: 'rules', label: 'Rules', icon: <FileCode2 size={14} /> },
   ];
@@ -176,6 +179,8 @@ export default function TradingTerminal({ onClose, userId }: TradingTerminalProp
         return <ExecutionsTab trades={trades} loading={loading} />;
       case 'rules':
         return <RulesTab />;
+      case 'auto':
+        return <AutoTab />;
       default:
         return null;
     }
@@ -211,7 +216,7 @@ export default function TradingTerminal({ onClose, userId }: TradingTerminalProp
           </div>
 
           <span style={{ fontSize: '10px', color: 'var(--terminal-text-muted)', marginLeft: '0.5rem' }}>
-            BUILD_28DEC_V3
+            BUILD_04JAN_V1
           </span>
         </div>
 

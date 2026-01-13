@@ -12,6 +12,7 @@ import {
 import { getUserModelConfig } from '../llm/model-config.service.js';
 import { getTradingPrompt } from '../persona/trading.persona.js';
 import * as tradingService from '../trading/trading.service.js';
+import * as autoTradingService from '../trading/auto-trading.service.js';
 import * as botExecutorService from '../trading/bot-executor.service.js';
 import * as tradingTelegramService from '../triggers/trading-telegram.service.js';
 import * as conditionalOrderService from '../trading/conditional-order.service.js';
@@ -706,6 +707,111 @@ Rules can have multiple conditions (AND/OR logic) and multiple actions.`,
   },
 };
 
+// Auto Trading Tools
+const getAutoTradingStateTool = {
+  type: 'function' as const,
+  function: {
+    name: 'get_auto_trading_state',
+    description: `Get the current state of auto trading including:
+- Whether auto trading is running or paused
+- Daily P&L (realized)
+- Number of active positions
+- Win/loss counts for today
+- Pause reason if paused (e.g., max losses, daily limit)`,
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+};
+
+const getAutoTradingSettingsTool = {
+  type: 'function' as const,
+  function: {
+    name: 'get_auto_trading_settings',
+    description: `Get the user's auto trading configuration including:
+- Strategy and mode (manual/auto)
+- Position sizing (min/max USD)
+- Risk limits (daily loss limit, max consecutive losses)
+- Symbol cooldown, max positions
+- Dual-mode settings if enabled`,
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+};
+
+const getAutoTradingSignalsTool = {
+  type: 'function' as const,
+  function: {
+    name: 'get_auto_trading_signals',
+    description: `Get recent auto trading signals with backtest results.
+Shows signals detected, whether executed or skipped, and backtest outcome (win/loss).
+Use this to see what trades the system is finding and how well they would have performed.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        limit: {
+          type: 'number',
+          description: 'Number of signals to return (default: 50, max: 100)',
+        },
+      },
+      required: [],
+    },
+  },
+};
+
+const getAutoTradingHistoryTool = {
+  type: 'function' as const,
+  function: {
+    name: 'get_auto_trading_history',
+    description: `Get today's auto trade history with outcomes.
+Shows actual trades executed by the auto trading system, their entry/exit prices, and P&L.`,
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+};
+
+const controlAutoTradingTool = {
+  type: 'function' as const,
+  function: {
+    name: 'control_auto_trading',
+    description: `Start or stop auto trading for the user. Use with caution - this enables/disables automated trading.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['start', 'stop'],
+          description: 'Start or stop auto trading',
+        },
+      },
+      required: ['action'],
+    },
+  },
+};
+
+const getAutoTradingPerformanceTool = {
+  type: 'function' as const,
+  function: {
+    name: 'get_auto_trading_performance',
+    description: `Get performance metrics for auto trading strategies.
+Shows win rate, average P&L, and total trades for each strategy.
+Useful for understanding which strategies work best.`,
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+};
+
 const tradingTools = [
   getPortfolioTool,
   getActiveTradesTool,
@@ -725,6 +831,13 @@ const tradingTools = [
   searchAlphaTokensTool,
   searchMarketNewsTool,
   manageTradingRuleTool,
+  // Auto trading tools
+  getAutoTradingStateTool,
+  getAutoTradingSettingsTool,
+  getAutoTradingSignalsTool,
+  getAutoTradingHistoryTool,
+  controlAutoTradingTool,
+  getAutoTradingPerformanceTool,
 ];
 
 export interface TradingChatInput {
@@ -2078,6 +2191,102 @@ Order Type: ${args.orderType || 'market'}`;
 
               default:
                 toolResult = `Unknown rule action: ${ruleAction}. Valid actions: create, list, update, delete, toggle`;
+            }
+            break;
+          }
+
+          // Auto Trading Tools
+          case 'get_auto_trading_state': {
+            const state = await autoTradingService.getState(userId);
+            const settings = await autoTradingService.getSettings(userId);
+            const statusEmoji = settings.enabled && state.isRunning ? '🟢' : state.isPaused ? '🟡' : '🔴';
+            toolResult = `**Auto Trading Status** ${statusEmoji}
+
+Enabled: ${settings.enabled ? 'Yes' : 'No'}
+Running: ${state.isRunning ? 'Yes' : 'No'}${state.isPaused ? ` (Paused: ${state.pauseReason})` : ''}
+Active Positions: ${state.activePositions}
+Today's P&L: ${state.dailyPnlUsd >= 0 ? '+' : ''}$${state.dailyPnlUsd.toFixed(2)} (${state.dailyPnlPct.toFixed(2)}%)
+Trades Today: ${state.tradesCount} (${state.winsCount} wins, ${state.lossesCount} losses)
+Consecutive Losses: ${state.consecutiveLosses}`;
+            break;
+          }
+
+          case 'get_auto_trading_settings': {
+            const settings = await autoTradingService.getSettings(userId);
+            toolResult = `**Auto Trading Settings**
+
+Enabled: ${settings.enabled ? 'Yes' : 'No'}
+Strategy: ${settings.strategy} (${settings.strategyMode} mode)
+Position Size: $${settings.minPositionUsd} - $${settings.maxPositionUsd}
+Max Positions: ${settings.maxPositions}
+Daily Loss Limit: ${settings.dailyLossLimitPct}%
+Max Consecutive Losses: ${settings.maxConsecutiveLosses}
+Symbol Cooldown: ${settings.symbolCooldownMinutes} minutes
+Min Profit Threshold: ${settings.minProfitPct}%
+Dual Mode: ${settings.dualModeEnabled ? 'Enabled' : 'Disabled'}
+Exclude Top 10: ${settings.excludeTop10 ? 'Yes' : 'No'}
+BTC Trend Filter: ${settings.btcTrendFilter ? 'On' : 'Off'}`;
+            break;
+          }
+
+          case 'get_auto_trading_signals': {
+            const limit = Math.min((args.limit as number) || 50, 100);
+            const signals = await autoTradingService.getSignalHistory(userId, limit);
+            if (signals.length === 0) {
+              toolResult = 'No auto trading signals in history.';
+            } else {
+              const signalList = signals.slice(0, 15).map(s => {
+                const statusIcon = s.executed ? '✅' : '⏭️';
+                const backtestIcon = s.backtestStatus === 'win' ? '🟢' : s.backtestStatus === 'loss' ? '🔴' : '⏳';
+                const symbol = s.symbol.replace('_USD', '').replace('USDT', '');
+                return `${statusIcon} ${symbol}: RSI ${s.rsi.toFixed(1)}, Conf ${(s.confidence * 100).toFixed(0)}% ${backtestIcon}${s.skipReason ? ` (${s.skipReason})` : ''}`;
+              }).join('\n');
+              toolResult = `**Recent Auto Trading Signals** (${signals.length} total)\n\n${signalList}`;
+            }
+            break;
+          }
+
+          case 'get_auto_trading_history': {
+            const history = await autoTradingService.getHistory(userId);
+            if (history.length === 0) {
+              toolResult = 'No auto trades today.';
+            } else {
+              const tradeList = history.slice(0, 15).map(t => {
+                const pnlPct = t.closePrice && t.entryPrice
+                  ? (((t.closePrice - t.entryPrice) / t.entryPrice) * 100).toFixed(2)
+                  : 'open';
+                const outcomeIcon = t.outcome === 'win' ? '🟢' : t.outcome === 'loss' ? '🔴' : '⏳';
+                const symbol = t.symbol.replace('_USD', '').replace('USDT', '');
+                return `${outcomeIcon} ${symbol}: $${t.entryPrice.toFixed(4)} -> ${t.closePrice ? '$' + t.closePrice.toFixed(4) : 'open'} (${pnlPct}%)`;
+              }).join('\n');
+              toolResult = `**Today's Auto Trades** (${history.length})\n\n${tradeList}`;
+            }
+            break;
+          }
+
+          case 'control_auto_trading': {
+            const action = args.action as string;
+            if (action === 'start') {
+              await autoTradingService.startAutoTrading(userId);
+              const state = await autoTradingService.getState(userId);
+              toolResult = `Auto trading started! Active positions: ${state.activePositions}, Daily P&L: $${state.dailyPnlUsd.toFixed(2)}`;
+            } else {
+              await autoTradingService.stopAutoTrading(userId);
+              toolResult = 'Auto trading stopped.';
+            }
+            break;
+          }
+
+          case 'get_auto_trading_performance': {
+            const performance = await autoTradingService.getStrategyPerformance(userId);
+            if (Object.keys(performance).length === 0) {
+              toolResult = 'No strategy performance data available yet. Execute some auto trades to collect data.';
+            } else {
+              const perfList = Object.entries(performance).map(([strategy, stats]) => {
+                const winRate = stats.totalTrades > 0 ? ((stats.wins / stats.totalTrades) * 100).toFixed(0) : '0';
+                return `**${strategy}**: ${stats.totalTrades} trades, ${winRate}% win rate, avg P&L ${stats.avgPnlPct >= 0 ? '+' : ''}${stats.avgPnlPct.toFixed(2)}%`;
+              }).join('\n');
+              toolResult = `**Strategy Performance**\n\n${perfList}`;
             }
             break;
           }

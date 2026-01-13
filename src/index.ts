@@ -100,8 +100,11 @@ app.use(helmet({
 app.use(cors({
   origin: (origin, callback) => {
     // Allow requests with no origin (mobile apps, curl, etc)
-    // WireGuard network requests, and local hostname access
-    if (!origin || origin.includes('10.0.0.') || origin.includes('://luna:') || origin === config.cors.origin) {
+    // WireGuard network requests (10.0.0.x) and local hostname only
+    if (!origin ||
+        origin.includes('10.0.0.') ||
+        origin.includes('://luna:') ||
+        origin === config.cors.origin) {
       callback(null, true);
     } else {
       callback(null, false);

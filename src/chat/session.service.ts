@@ -179,11 +179,12 @@ export async function getSessionMessages(
     params.push(before);
   }
 
-  sql += ' ORDER BY created_at ASC LIMIT $' + (params.length + 1);
+  // Get most recent messages (DESC), then reverse to chronological order for LLM
+  sql += ' ORDER BY created_at DESC LIMIT $' + (params.length + 1);
   params.push(limit);
 
   const messages = await query<DbMessage>(sql, params);
-  return messages.map(mapDbMessage);
+  return messages.map(mapDbMessage).reverse();
 }
 
 export async function addMessage(data: MessageCreate): Promise<Message> {
