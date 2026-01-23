@@ -52,6 +52,7 @@ export function handleBrowserWsConnection(ws: WebSocket, request: IncomingMessag
   }
 
   if (!token) {
+    ws.send(JSON.stringify({ type: 'error', error: 'Authentication required', code: 4001 }));
     ws.close(4001, 'Missing authentication token');
     return;
   }
@@ -62,6 +63,7 @@ export function handleBrowserWsConnection(ws: WebSocket, request: IncomingMessag
     const payload = verifyToken(token);
     userId = payload.userId;
   } catch (error) {
+    ws.send(JSON.stringify({ type: 'error', error: 'Invalid or expired token', code: 4002 }));
     ws.close(4002, 'Invalid authentication token');
     return;
   }

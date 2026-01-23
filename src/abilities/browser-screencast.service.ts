@@ -22,6 +22,8 @@ interface BrowserSession {
   currentUrl: string | null;
   lastActivityAt: Date;
   isActive: boolean;
+  frameCount: number;
+  lastFrameLogAt: number;
 }
 
 const activeSessions = new Map<string, BrowserSession>();
@@ -55,6 +57,8 @@ export async function startBrowserSession(userId: string, wsClient: WS): Promise
     currentUrl: null,
     lastActivityAt: new Date(),
     isActive: false,
+    frameCount: 0,
+    lastFrameLogAt: 0,
   };
 
   activeSessions.set(userId, session);
@@ -119,16 +123,50 @@ const { chromium } = require('/usr/lib/node_modules/playwright');
   console.log(JSON.stringify({ type: 'ready', debugPort: ${debugPort} }));
 
   // Keep alive - listen for commands on stdin
+  let stdinBuffer = '';
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', async (data) => {
-    try {
-      const cmd = JSON.parse(data.toString().trim());
+    stdinBuffer += data.toString();
+    const lines = stdinBuffer.split('\\n');
+    stdinBuffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const cmd = JSON.parse(line.trim());
 
       if (cmd.action === 'navigate' && cmd.url) {
-        await page.goto(cmd.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        console.log(JSON.stringify({ type: 'navigated', url: cmd.url }));
+        try {
+          await page.goto(cmd.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        } catch (navError) {
+          // Retry once if ERR_ABORTED (can happen if previous action was still processing)
+          if (navError.message.includes('ERR_ABORTED')) {
+            await page.waitForTimeout(1000);
+            await page.goto(cmd.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+          } else {
+            throw navError;
+          }
+        }
+        // Wait for page to render and screencast to capture frames
+        await page.waitForLoadState('networkidle').catch(() => {});
+        await page.waitForTimeout(500);
+        console.log(JSON.stringify({ type: 'navigated', url: page.url() }));
       } else if (cmd.action === 'click' && cmd.x !== undefined && cmd.y !== undefined) {
+        const urlBefore = page.url();
+
+        // Click at coordinates
         await page.mouse.click(cmd.x, cmd.y);
+
+        // Wait for potential navigation
+        await page.waitForTimeout(1000);
+        await page.waitForLoadState('domcontentloaded').catch(() => {});
+
+        // Check if URL changed
+        const urlAfter = page.url();
+        if (urlAfter !== urlBefore) {
+          console.log(JSON.stringify({ type: 'navigated', url: urlAfter }));
+        }
+
         console.log(JSON.stringify({ type: 'clicked', x: cmd.x, y: cmd.y }));
       } else if (cmd.action === 'scroll' && cmd.deltaY !== undefined) {
         await page.mouse.wheel(0, cmd.deltaY);
@@ -142,7 +180,21 @@ const { chromium } = require('/usr/lib/node_modules/playwright');
       } else if (cmd.action === 'clickSelector' && cmd.selector) {
         // Click element by CSS selector
         try {
+          const urlBefore = page.url();
+
+          // Click the element
           await page.click(cmd.selector, { timeout: 10000 });
+
+          // Wait for potential navigation to complete
+          await page.waitForTimeout(2000);
+          await page.waitForLoadState('domcontentloaded').catch(() => {});
+
+          // Check if URL changed
+          const urlAfter = page.url();
+          if (urlAfter !== urlBefore) {
+            console.log(JSON.stringify({ type: 'navigated', url: urlAfter }));
+          }
+
           console.log(JSON.stringify({ type: 'clicked', selector: cmd.selector }));
         } catch (e) {
           console.log(JSON.stringify({ type: 'error', error: 'Selector not found: ' + cmd.selector }));
@@ -173,8 +225,9 @@ const { chromium } = require('/usr/lib/node_modules/playwright');
         await browser.close();
         process.exit(0);
       }
-    } catch (error) {
-      console.log(JSON.stringify({ type: 'error', error: error.message }));
+      } catch (error) {
+        console.log(JSON.stringify({ type: 'error', error: error.message }));
+      }
     }
   });
 
@@ -243,6 +296,11 @@ function handleBrowserMessage(userId: string, msg: { type: string; [key: string]
 
   session.lastActivityAt = new Date();
 
+  // Log non-frame messages for debugging
+  if (msg.type !== 'frame') {
+    logger.info('Browser message received', { userId, type: msg.type, url: msg.url, selector: msg.selector, error: msg.error });
+  }
+
   if (msg.type === 'frame') {
     // Send frame to client
     session.wsClient.send(JSON.stringify({
@@ -251,6 +309,13 @@ function handleBrowserMessage(userId: string, msg: { type: string; [key: string]
       metadata: msg.metadata,
       timestamp: Date.now(),
     }));
+    // Log frame count periodically
+    session.frameCount++;
+    const now = Date.now();
+    if (now - session.lastFrameLogAt > 5000) {
+      logger.info('Browser frames sent', { userId, frameCount: session.frameCount, currentUrl: session.currentUrl });
+      session.lastFrameLogAt = now;
+    }
   } else if (msg.type === 'ready') {
     session.wsClient.send(JSON.stringify({
       type: 'browser_ready',

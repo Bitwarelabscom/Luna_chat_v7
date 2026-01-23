@@ -98,6 +98,27 @@ export async function createChatCompletion(
 
   const modelToUse = model || config.openai.model;
 
+  // Route Sanhedrin to native provider (no tool support)
+  if (provider === 'sanhedrin') {
+    if (tools && tools.length > 0) {
+      throw new Error('Sanhedrin provider does not support tool calling. Use a different provider for voice chat.');
+    }
+    const sanhedrinProvider = await import('./providers/sanhedrin.provider.js');
+    const result = await sanhedrinProvider.createCompletion(
+      modelToUse,
+      messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
+      { temperature, maxTokens }
+    );
+    return {
+      content: result.content,
+      tokensUsed: result.tokensUsed,
+      promptTokens: 0,
+      completionTokens: 0,
+      toolCalls: undefined,
+      finishReason: 'stop',
+    };
+  }
+
   // Route Anthropic to native provider (required for tool calling, also works without tools)
   if (provider === 'anthropic') {
     if (tools && tools.length > 0) {

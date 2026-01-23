@@ -3,6 +3,7 @@ import { z } from 'zod';
 import rateLimit from 'express-rate-limit';
 import * as authService from './auth.service.js';
 import { authenticate } from './auth.middleware.js';
+import { generateWsToken } from './jwt.js';
 import logger from '../utils/logger.js';
 import { config } from '../config/index.js';
 import type { AuthTokens } from '../types/index.js';
@@ -286,6 +287,12 @@ router.get('/me', authenticate, async (req: Request, res: Response) => {
     logger.error('Get user failed', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to get user' });
   }
+});
+
+// POST /api/auth/ws-token - Get short-lived WebSocket token
+router.post('/ws-token', authenticate, (req: Request, res: Response) => {
+  const wsToken = generateWsToken(req.user!.userId);
+  res.json({ token: wsToken });
 });
 
 export default router;

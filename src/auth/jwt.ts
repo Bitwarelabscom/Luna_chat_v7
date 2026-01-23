@@ -66,3 +66,17 @@ export function getRefreshExpiry(): Date {
   const seconds = parseExpiry(config.jwt.refreshExpiresIn);
   return new Date(Date.now() + seconds * 1000);
 }
+
+/**
+ * Generate a short-lived WebSocket token for browser connections
+ */
+export function generateWsToken(userId: string): string {
+  const payload = {
+    userId,
+    type: 'ws',
+  };
+
+  return jwt.sign(payload, config.jwt.secret, {
+    expiresIn: '30s',
+  } as jwt.SignOptions);
+}

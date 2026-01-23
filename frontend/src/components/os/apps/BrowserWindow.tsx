@@ -33,93 +33,142 @@ export function BrowserWindow({ initialUrl = 'https://www.google.com' }: Browser
 
   // Connect to browser WebSocket
   useEffect(() => {
-    // Determine WebSocket URL
-    // In production (via nginx), use same host
-    // In development or direct access, use the API server
-    const isProduction = window.location.hostname === 'luna.bitwarelabs.com';
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    let ws: WebSocket | null = null;
+    let heartbeat: NodeJS.Timeout | null = null;
+    let cancelled = false;
 
-    let wsUrl: string;
-    if (isProduction) {
-      // Production: WebSocket through nginx proxy
-      wsUrl = `${protocol}//${window.location.host}/ws/browser`;
-    } else {
-      // Development/direct access: Connect to API server directly
-      // API is on port 3005 on the same network
-      const apiHost = window.location.hostname === 'localhost'
-        ? 'localhost:3005'
-        : `${window.location.hostname.replace(':3004', '')}:3005`;
-      wsUrl = `ws://${apiHost}/ws/browser`;
-    }
-
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      setIsConnected(true);
-      setError(null);
-    };
-
-    ws.onmessage = (event) => {
+    const connect = async () => {
       try {
-        const msg = JSON.parse(event.data);
+        // Fetch short-lived WebSocket token
+        const tokenRes = await fetch('/api/auth/ws-token', {
+          method: 'POST',
+          credentials: 'include',
+        });
 
-        switch (msg.type) {
-          case 'browser_ready':
-            setIsLoading(false);
-            // Navigate to initial URL (could be pending visual browse URL)
-            if (startUrl) {
-              navigate(startUrl);
-            }
-            break;
-
-          case 'browser_frame':
-            setFrame(`data:image/jpeg;base64,${msg.data}`);
-            break;
-
-          case 'browser_navigated':
-            setUrl(msg.url);
-            setInputUrl(msg.url);
-            setIsLoading(false);
-            break;
-
-          case 'browser_error':
-            setError(msg.error);
-            setIsLoading(false);
-            break;
-
-          case 'error':
-            setError(msg.error);
-            break;
-
-          case 'pong':
-            // Heartbeat response
-            break;
+        if (!tokenRes.ok) {
+          if (tokenRes.status === 401) {
+            setError('Authentication required - please log in');
+          } else {
+            setError('Failed to get authentication token');
+          }
+          return;
         }
-      } catch (e) {
-        // Ignore parse errors
+
+        const { token } = await tokenRes.json();
+
+        if (cancelled) return;
+
+        // Determine WebSocket URL
+        // In production (via nginx), use same host
+        // In development or direct access, use the API server
+        const isProduction = window.location.hostname === 'luna.bitwarelabs.com';
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+
+        let wsUrl: string;
+        if (isProduction) {
+          // Production: WebSocket through nginx proxy
+          wsUrl = `${protocol}//${window.location.host}/ws/browser?token=${encodeURIComponent(token)}`;
+        } else {
+          // Development/direct access: Connect to API server directly
+          // API is on port 3005 on the same network
+          const apiHost = window.location.hostname === 'localhost'
+            ? 'localhost:3005'
+            : `${window.location.hostname.replace(':3004', '')}:3005`;
+          wsUrl = `ws://${apiHost}/ws/browser?token=${encodeURIComponent(token)}`;
+        }
+
+        ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
+
+        ws.onopen = () => {
+          setIsConnected(true);
+          setError(null);
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data);
+
+            switch (msg.type) {
+              case 'browser_ready':
+                setIsLoading(false);
+                // Navigate to initial URL (could be pending visual browse URL)
+                if (startUrl) {
+                  navigate(startUrl);
+                }
+                break;
+
+              case 'browser_frame':
+                setFrame(`data:image/jpeg;base64,${msg.data}`);
+                break;
+
+              case 'browser_navigated':
+                setUrl(msg.url);
+                setInputUrl(msg.url);
+                setIsLoading(false);
+                break;
+
+              case 'browser_error':
+                setError(msg.error);
+                setIsLoading(false);
+                break;
+
+              case 'error':
+                // Handle authentication errors from server
+                if (msg.code === 4001) {
+                  setError('Authentication required - please log in');
+                } else if (msg.code === 4002) {
+                  setError('Session expired - please refresh the page');
+                } else {
+                  setError(msg.error || 'Connection error');
+                }
+                break;
+
+              case 'pong':
+                // Heartbeat response
+                break;
+            }
+          } catch (e) {
+            // Ignore parse errors
+          }
+        };
+
+        ws.onerror = () => {
+          setError('WebSocket connection error');
+          setIsConnected(false);
+        };
+
+        ws.onclose = (event) => {
+          setIsConnected(false);
+          // Show meaningful error based on close code
+          if (event.code === 4001) {
+            setError('Authentication required - please log in');
+          } else if (event.code === 4002) {
+            setError('Session expired - please refresh the page');
+          } else if (event.code === 4003) {
+            setError('Failed to start browser session');
+          }
+        };
+
+        // Heartbeat
+        heartbeat = setInterval(() => {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'ping' }));
+          }
+        }, 30000);
+
+      } catch (err) {
+        console.error('Failed to connect to browser:', err);
+        setError('Failed to connect to browser');
       }
     };
 
-    ws.onerror = () => {
-      setError('WebSocket connection error');
-      setIsConnected(false);
-    };
-
-    ws.onclose = () => {
-      setIsConnected(false);
-    };
-
-    // Heartbeat
-    const heartbeat = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'ping' }));
-      }
-    }, 30000);
+    connect();
 
     return () => {
-      clearInterval(heartbeat);
-      ws.close();
+      cancelled = true;
+      if (heartbeat) clearInterval(heartbeat);
+      if (ws) ws.close();
     };
   }, [startUrl]);
 

@@ -148,10 +148,32 @@ export default function VoiceChatArea() {
       playAudio(response.content);
     } catch (error) {
       console.error('Failed to send message:', error);
-      addAssistantMessage(
-        'Sorry, I had trouble processing that. Could you try again?',
-        `error-${Date.now()}`
-      );
+
+      // Determine user-friendly error message based on error response
+      let errorMessage = 'Sorry, I had trouble processing that. Could you try again?';
+
+      if (error instanceof Error) {
+        // Check if error has code property (from ApiError)
+        const anyError = error as { code?: string; status?: number };
+        const errorCode = anyError.code;
+        const status = anyError.status;
+
+        if (errorCode === 'MODEL_ERROR') {
+          errorMessage = 'I had trouble thinking about that. Let me try again in a moment.';
+        } else if (errorCode === 'TOOL_ERROR') {
+          errorMessage = 'I had trouble performing that action. Could you rephrase your request?';
+        } else if (errorCode === 'TIMEOUT_ERROR') {
+          errorMessage = 'That took too long. Could you try a simpler question?';
+        } else if (errorCode === 'DATABASE_ERROR') {
+          errorMessage = 'I had trouble accessing my memory. Please try again.';
+        } else if (status === 401 || error.message.includes('unauthorized')) {
+          errorMessage = 'Your session has expired. Please refresh the page and log in again.';
+        } else if (error.message.includes('network') || error.message.includes('fetch') || error.message.includes('Failed to fetch')) {
+          errorMessage = 'I lost connection. Please check your internet and try again.';
+        }
+      }
+
+      addAssistantMessage(errorMessage, `error-${Date.now()}`);
     } finally {
       setIsSending(false);
       setStatusMessage('');

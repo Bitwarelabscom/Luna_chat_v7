@@ -21,7 +21,7 @@ interface ApiOptions {
 }
 
 class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(public status: number, message: string, public code?: string) {
     super(message);
     this.name = 'ApiError';
   }
@@ -62,7 +62,7 @@ export async function api<T>(endpoint: string, options: ApiOptions = {}): Promis
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Request failed' }));
-    throw new ApiError(response.status, error.error || 'Request failed');
+    throw new ApiError(response.status, error.error || 'Request failed', error.code);
   }
 
   // Handle 204 No Content (e.g., DELETE responses)

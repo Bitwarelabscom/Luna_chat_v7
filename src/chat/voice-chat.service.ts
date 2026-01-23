@@ -506,7 +506,18 @@ export async function processMessage(input: VoiceChatInput): Promise<VoiceChatOu
   const startTime = Date.now();
 
   // Get model config (use fast model for voice)
-  const modelConfig = await getUserModelConfig(userId, 'fast_llm');
+  let modelConfig = await getUserModelConfig(userId, 'fast_llm');
+
+  // Voice chat requires tool support - fall back to xai/grok if provider doesn't support tools
+  const providersWithToolSupport = ['anthropic', 'openai', 'groq', 'xai', 'openrouter'];
+  if (!providersWithToolSupport.includes(modelConfig.provider)) {
+    logger.info('Voice chat falling back to xai/grok (configured provider does not support tools)', {
+      configuredProvider: modelConfig.provider,
+      userId,
+    });
+    modelConfig = { provider: 'xai', model: 'grok-4.1-fast' };
+  }
+
   logger.info('Voice chat using model', { provider: modelConfig.provider, model: modelConfig.model, userId });
 
   // Get user name for personalization
@@ -540,14 +551,43 @@ export async function processMessage(input: VoiceChatInput): Promise<VoiceChatOu
   await addMessage(sessionId, 'user', message);
 
   // Call LLM with voice tools
-  let completion = await createChatCompletion({
-    messages,
-    tools: voiceTools,
+  logger.debug('Voice LLM call starting', {
+    sessionId,
+    userId,
     provider: modelConfig.provider,
     model: modelConfig.model,
-    maxTokens: 300, // Short responses for voice
-    temperature: 0.7,
+    messageCount: messages.length,
+    toolCount: voiceTools.length,
   });
+
+  let completion;
+  try {
+    completion = await createChatCompletion({
+      messages,
+      tools: voiceTools,
+      provider: modelConfig.provider,
+      model: modelConfig.model,
+      maxTokens: 300, // Short responses for voice
+      temperature: 0.7,
+    });
+    logger.debug('Voice LLM call completed', {
+      sessionId,
+      hasToolCalls: !!(completion.toolCalls && completion.toolCalls.length > 0),
+      toolCallCount: completion.toolCalls?.length || 0,
+      tokensUsed: completion.tokensUsed,
+      contentLength: completion.content?.length || 0,
+    });
+  } catch (llmError) {
+    logger.error('Voice LLM call failed', {
+      sessionId,
+      userId,
+      provider: modelConfig.provider,
+      model: modelConfig.model,
+      error: (llmError as Error).message,
+      stack: (llmError as Error).stack,
+    });
+    throw llmError;
+  }
 
   // Handle tool calls - max 2 iterations for speed
   let toolCallIterations = 0;
@@ -882,11 +922,16 @@ export async function processMessage(input: VoiceChatInput): Promise<VoiceChatOu
             toolResult = `Unknown tool: ${toolCall.function.name}`;
         }
       } catch (error) {
-        logger.error('Voice tool error', {
+        const err = error as Error;
+        logger.error('Voice tool execution failed', {
+          sessionId,
+          userId,
           tool: toolCall.function.name,
-          error: (error as Error).message,
+          args: toolCall.function.arguments,
+          error: err.message,
+          stack: err.stack,
         });
-        toolResult = `Error: ${(error as Error).message}`;
+        toolResult = `Error: ${err.message}`;
       }
 
       // Add tool result to conversation
@@ -898,14 +943,37 @@ export async function processMessage(input: VoiceChatInput): Promise<VoiceChatOu
     }
 
     // Get response after tool execution
-    completion = await createChatCompletion({
-      messages,
-      tools: voiceTools,
-      provider: modelConfig.provider,
-      model: modelConfig.model,
-      maxTokens: 300,
-      temperature: 0.7,
+    logger.debug('Voice LLM tool response call starting', {
+      sessionId,
+      iteration: toolCallIterations,
+      messageCount: messages.length,
     });
+
+    try {
+      completion = await createChatCompletion({
+        messages,
+        tools: voiceTools,
+        provider: modelConfig.provider,
+        model: modelConfig.model,
+        maxTokens: 300,
+        temperature: 0.7,
+      });
+      logger.debug('Voice LLM tool response call completed', {
+        sessionId,
+        iteration: toolCallIterations,
+        hasMoreToolCalls: !!(completion.toolCalls && completion.toolCalls.length > 0),
+        contentLength: completion.content?.length || 0,
+      });
+    } catch (llmError) {
+      logger.error('Voice LLM tool response call failed', {
+        sessionId,
+        userId,
+        iteration: toolCallIterations,
+        error: (llmError as Error).message,
+        stack: (llmError as Error).stack,
+      });
+      throw llmError;
+    }
   }
 
   // Handle empty response
