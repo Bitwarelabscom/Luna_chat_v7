@@ -314,6 +314,7 @@ export function parseTaskFromText(text: string): Partial<CreateTaskInput> {
   const task: Partial<CreateTaskInput> = { title: text };
 
   // Parse due date patterns
+  const today = /\b(today)\b/i;
   const tomorrow = /\b(tomorrow)\b/i;
   const nextWeek = /\bnext\s+week\b/i;
   const inDays = /\bin\s+(\d+)\s+days?\b/i;
@@ -321,7 +322,12 @@ export function parseTaskFromText(text: string): Partial<CreateTaskInput> {
 
   const now = new Date();
 
-  if (tomorrow.test(text)) {
+  if (today.test(text)) {
+    const due = new Date(now);
+    due.setHours(17, 0, 0, 0); // Default to 5 PM (end of day)
+    task.dueAt = due;
+    task.title = text.replace(today, '').trim();
+  } else if (tomorrow.test(text)) {
     const due = new Date(now);
     due.setDate(due.getDate() + 1);
     due.setHours(9, 0, 0, 0);
@@ -337,23 +343,31 @@ export function parseTaskFromText(text: string): Partial<CreateTaskInput> {
     const match = text.match(inDays);
     if (match) {
       const days = parseInt(match[1], 10);
-      const due = new Date(now);
-      due.setDate(due.getDate() + days);
-      due.setHours(9, 0, 0, 0);
-      task.dueAt = due;
-      task.title = text.replace(inDays, '').trim();
+      // Validate: reject negative or zero days
+      if (days > 0) {
+        const due = new Date(now);
+        due.setDate(due.getDate() + days);
+        due.setHours(9, 0, 0, 0);
+        task.dueAt = due;
+        task.title = text.replace(inDays, '').trim();
+      }
     }
   }
 
-  // Parse time
+  // Parse time - handle both with and without existing date
   const timeMatch = text.match(atTime);
-  if (timeMatch && task.dueAt) {
+  if (timeMatch) {
     let hours = parseInt(timeMatch[1], 10);
     const minutes = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
     const meridiem = timeMatch[3]?.toLowerCase();
 
     if (meridiem === 'pm' && hours < 12) hours += 12;
     if (meridiem === 'am' && hours === 12) hours = 0;
+
+    // If no date was set, assume today
+    if (!task.dueAt) {
+      task.dueAt = new Date(now);
+    }
 
     task.dueAt.setHours(hours, minutes, 0, 0);
     task.remindAt = new Date(task.dueAt);

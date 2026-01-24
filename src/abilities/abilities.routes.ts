@@ -24,30 +24,62 @@ function getUserId(req: Request): string {
   return req.user!.userId;
 }
 
-// Parse date string as Swedish time (Europe/Stockholm) and return UTC Date
-function parseSwedishTime(dateStr: string): Date {
-  // dateStr format: "2025-12-08T12:30" or "2025-12-08T12:30:00"
-  // Parse as Swedish timezone and convert to UTC
+/**
+ * Parse date string in user's timezone and return UTC Date
+ * @param dateStr - Date string in format "2025-12-08T12:30" or "2025-12-08T12:30:00" (no timezone)
+ * @param userTimezone - IANA timezone string (e.g., "Europe/Stockholm", "America/New_York")
+ * @returns Date object in UTC
+ */
+function parseUserTime(dateStr: string, userTimezone: string = 'Europe/Stockholm'): Date {
+  // Validate timezone is a valid IANA timezone
+  let timezone = userTimezone;
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: timezone });
+  } catch {
+    logger.warn('Invalid timezone provided, falling back to Europe/Stockholm', { provided: userTimezone });
+    timezone = 'Europe/Stockholm';
+  }
 
-  // Get the offset for Swedish timezone at the given date
-  const testDate = new Date(dateStr + 'Z'); // Parse as UTC first to get approximate date
+  // Parse the date components from the input string
+  const [datePart, timePart] = dateStr.split('T');
+  const [year, month, day] = datePart.split('-').map(Number);
+  const [hours, minutes, seconds = 0] = (timePart || '00:00:00').split(':').map(s => parseInt(s) || 0);
+
+  // Create a date object representing this time in the user's timezone
+  // We do this by finding the UTC offset for this specific date/time in the user's timezone
   const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Europe/Stockholm',
-    timeZoneName: 'shortOffset',
+    timeZone: timezone,
+    timeZoneName: 'longOffset',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
   });
 
-  // Get the offset string (like "GMT+1" or "GMT+2")
-  const parts = formatter.formatToParts(testDate);
+  // Create a reference date to get the timezone offset
+  // We use the target date to correctly handle DST
+  const refDate = new Date(Date.UTC(year, month - 1, day, hours, minutes, seconds));
+  const parts = formatter.formatToParts(refDate);
   const tzPart = parts.find(p => p.type === 'timeZoneName');
-  const offsetStr = tzPart?.value || 'GMT+1';
+  const offsetStr = tzPart?.value || 'GMT+01:00';
 
-  // Parse offset (GMT+1 -> 1, GMT+2 -> 2)
-  const match = offsetStr.match(/GMT([+-])(\d+)/);
-  const offsetHours = match ? parseInt(match[2]) * (match[1] === '+' ? 1 : -1) : 1;
+  // Parse offset (GMT+01:00 -> +60, GMT-05:00 -> -300)
+  const offsetMatch = offsetStr.match(/GMT([+-])(\d{2}):(\d{2})/);
+  let offsetMinutes = 60; // Default to +1 hour (Stockholm standard time)
+  if (offsetMatch) {
+    const sign = offsetMatch[1] === '+' ? 1 : -1;
+    const offsetHours = parseInt(offsetMatch[2]);
+    const offsetMins = parseInt(offsetMatch[3]);
+    offsetMinutes = sign * (offsetHours * 60 + offsetMins);
+  }
 
-  // Parse the date string and subtract the offset to get UTC
-  const localDate = new Date(dateStr);
-  return new Date(localDate.getTime() - offsetHours * 60 * 60 * 1000);
+  // Create the UTC date by subtracting the offset
+  // If user says "14:00" in Stockholm (GMT+1), UTC is "13:00"
+  const utcTime = Date.UTC(year, month - 1, day, hours, minutes, seconds) - offsetMinutes * 60 * 1000;
+  return new Date(utcTime);
 }
 
 const router = Router();
@@ -903,16 +935,18 @@ router.get('/calendar/status', async (req: Request, res: Response) => {
 
 router.post('/calendar/events', async (req: Request, res: Response) => {
   try {
-    const { title, description, startAt, endAt, location, isAllDay, reminderMinutes } = req.body;
+    const { title, description, startAt, endAt, location, isAllDay, reminderMinutes, timezone } = req.body;
     if (!title || !startAt || !endAt) {
       res.status(400).json({ error: 'title, startAt, and endAt are required' });
       return;
     }
+    // Use provided timezone or default to Europe/Stockholm
+    const userTimezone = timezone || 'Europe/Stockholm';
     const event = await calendar.createEvent(getUserId(req), {
       title,
       description,
-      startAt: parseSwedishTime(startAt),
-      endAt: parseSwedishTime(endAt),
+      startAt: parseUserTime(startAt, userTimezone),
+      endAt: parseUserTime(endAt, userTimezone),
       location,
       isAllDay: isAllDay || false,
       reminderMinutes: reminderMinutes !== undefined ? reminderMinutes : null,
@@ -940,12 +974,14 @@ router.get('/calendar/events/:id', async (req: Request, res: Response) => {
 
 router.put('/calendar/events/:id', async (req: Request, res: Response) => {
   try {
-    const { title, description, startAt, endAt, location, isAllDay, reminderMinutes } = req.body;
+    const { title, description, startAt, endAt, location, isAllDay, reminderMinutes, timezone } = req.body;
+    // Use provided timezone or default to Europe/Stockholm
+    const userTimezone = timezone || 'Europe/Stockholm';
     const event = await calendar.updateEvent(getUserId(req), req.params.id, {
       title,
       description,
-      startAt: startAt ? parseSwedishTime(startAt) : undefined,
-      endAt: endAt ? parseSwedishTime(endAt) : undefined,
+      startAt: startAt ? parseUserTime(startAt, userTimezone) : undefined,
+      endAt: endAt ? parseUserTime(endAt, userTimezone) : undefined,
       location,
       isAllDay,
       reminderMinutes: reminderMinutes !== undefined ? reminderMinutes : undefined,

@@ -38,6 +38,23 @@ export interface SendResult {
 }
 
 // ============================================
+// Email Validation
+// ============================================
+
+// RFC 5322 compliant email regex (simplified but robust)
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * Validate email address format
+ */
+export function isValidEmailFormat(email: string): boolean {
+  if (!email || typeof email !== 'string') {
+    return false;
+  }
+  return EMAIL_REGEX.test(email.trim());
+}
+
+// ============================================
 // SMTP Transport (Sending)
 // ============================================
 
@@ -45,6 +62,8 @@ let smtpTransport: nodemailer.Transporter | null = null;
 
 function getSmtpTransport(): nodemailer.Transporter {
   if (!smtpTransport) {
+    // In production, enforce TLS certificate validation
+    const isProduction = process.env.NODE_ENV === 'production';
     const transportConfig = {
       host: config.email.smtp.host,
       port: config.email.smtp.port,
@@ -55,17 +74,18 @@ function getSmtpTransport(): nodemailer.Transporter {
         pass: config.email.smtp.password,
       } : undefined,
       tls: {
-        rejectUnauthorized: false,
+        rejectUnauthorized: isProduction, // Enforce in production, allow self-signed in dev
         minVersion: 'TLSv1.2' as const,
       },
-      logger: true,
-      debug: true,
+      logger: !isProduction, // Only log in non-production
+      debug: !isProduction,
     };
     logger.info('Creating SMTP transport', {
       host: transportConfig.host,
       port: transportConfig.port,
       secure: transportConfig.secure,
       requireTLS: transportConfig.requireTLS,
+      rejectUnauthorized: transportConfig.tls.rejectUnauthorized,
     });
     smtpTransport = nodemailer.createTransport(transportConfig);
   }
@@ -138,6 +158,17 @@ export function filterApprovedRecipients(recipients: string[]): {
 export async function sendEmail(message: EmailMessage): Promise<SendResult> {
   if (!config.email.enabled) {
     return { success: false, error: 'Email is disabled' };
+  }
+
+  // Validate email format for all recipients
+  const invalidEmails = message.to.filter(email => !isValidEmailFormat(email));
+  if (invalidEmails.length > 0) {
+    logger.warn('Invalid email format detected', { invalidEmails });
+    return {
+      success: false,
+      error: `Invalid email format: ${invalidEmails.join(', ')}`,
+      blockedRecipients: invalidEmails,
+    };
   }
 
   // Filter recipients
@@ -215,13 +246,14 @@ export async function sendEmail(message: EmailMessage): Promise<SendResult> {
  * Fetch recent emails from inbox with timeout
  */
 async function fetchRecentEmailsInternal(limit: number): Promise<EmailMessage[]> {
+  const isProduction = process.env.NODE_ENV === 'production';
   const imapConfig: Imap.Config = {
     user: config.email.imap.user,
     password: config.email.imap.password || '',
     host: config.email.imap.host,
     port: config.email.imap.port,
     tls: config.email.imap.secure,
-    tlsOptions: { rejectUnauthorized: false },
+    tlsOptions: { rejectUnauthorized: isProduction },
     connTimeout: 10000,
     authTimeout: 10000,
   };
@@ -340,13 +372,14 @@ export async function fetchRecentEmails(limit: number = 10): Promise<EmailMessag
  * Fetch unread emails with timeout
  */
 async function fetchUnreadEmailsInternal(): Promise<EmailMessage[]> {
+  const isProduction = process.env.NODE_ENV === 'production';
   const imapConfig: Imap.Config = {
     user: config.email.imap.user,
     password: config.email.imap.password || '',
     host: config.email.imap.host,
     port: config.email.imap.port,
     tls: config.email.imap.secure,
-    tlsOptions: { rejectUnauthorized: false },
+    tlsOptions: { rejectUnauthorized: isProduction },
     connTimeout: 10000,
     authTimeout: 10000,
   };
@@ -512,6 +545,7 @@ export async function testImapConnection(): Promise<boolean> {
     return false;
   }
 
+  const isProduction = process.env.NODE_ENV === 'production';
   return new Promise((resolve) => {
     const imapConfig: Imap.Config = {
       user: config.email.imap.user,
@@ -519,7 +553,7 @@ export async function testImapConnection(): Promise<boolean> {
       host: config.email.imap.host,
       port: config.email.imap.port,
       tls: config.email.imap.secure,
-      tlsOptions: { rejectUnauthorized: false },
+      tlsOptions: { rejectUnauthorized: isProduction },
     };
 
     const imap = new Imap(imapConfig);
@@ -597,13 +631,14 @@ export async function fetchEmailByUid(uid: number): Promise<EmailMessage | null>
     return null;
   }
 
+  const isProduction = process.env.NODE_ENV === 'production';
   const imapConfig: Imap.Config = {
     user: config.email.imap.user,
     password: config.email.imap.password || '',
     host: config.email.imap.host,
     port: config.email.imap.port,
     tls: config.email.imap.secure,
-    tlsOptions: { rejectUnauthorized: false },
+    tlsOptions: { rejectUnauthorized: isProduction },
     connTimeout: 10000,
     authTimeout: 10000,
   };
@@ -689,13 +724,14 @@ export async function deleteEmail(uid: number): Promise<boolean> {
     return false;
   }
 
+  const isProduction = process.env.NODE_ENV === 'production';
   const imapConfig: Imap.Config = {
     user: config.email.imap.user,
     password: config.email.imap.password || '',
     host: config.email.imap.host,
     port: config.email.imap.port,
     tls: config.email.imap.secure,
-    tlsOptions: { rejectUnauthorized: false },
+    tlsOptions: { rejectUnauthorized: isProduction },
     connTimeout: 10000,
     authTimeout: 10000,
   };
@@ -759,13 +795,14 @@ export async function markEmailRead(uid: number, isRead: boolean): Promise<boole
     return false;
   }
 
+  const isProduction = process.env.NODE_ENV === 'production';
   const imapConfig: Imap.Config = {
     user: config.email.imap.user,
     password: config.email.imap.password || '',
     host: config.email.imap.host,
     port: config.email.imap.port,
     tls: config.email.imap.secure,
-    tlsOptions: { rejectUnauthorized: false },
+    tlsOptions: { rejectUnauthorized: isProduction },
     connTimeout: 10000,
     authTimeout: 10000,
   };
@@ -912,6 +949,7 @@ export default {
   replyToEmail,
   getApprovedRecipients,
   isRecipientApproved,
+  isValidEmailFormat,
   filterApprovedRecipients,
   testSmtpConnection,
   testImapConnection,

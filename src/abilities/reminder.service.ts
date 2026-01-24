@@ -12,6 +12,9 @@ export interface QuickReminder {
   deliveredAt: Date | null;
 }
 
+// Maximum reminder delay: 30 days in minutes
+const MAX_DELAY_MINUTES = 43200;
+
 /**
  * Create a new quick reminder
  */
@@ -20,6 +23,14 @@ export async function createReminder(
   message: string,
   delayMinutes: number
 ): Promise<QuickReminder> {
+  // Validate delay
+  if (delayMinutes <= 0) {
+    throw new Error('Reminder delay must be a positive number of minutes');
+  }
+  if (delayMinutes > MAX_DELAY_MINUTES) {
+    throw new Error(`Reminder delay cannot exceed ${MAX_DELAY_MINUTES} minutes (30 days)`);
+  }
+
   const remindAt = new Date(Date.now() + delayMinutes * 60 * 1000);
 
   const result = await pool.query(
