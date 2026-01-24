@@ -1053,7 +1053,6 @@ Planned features and integrations for future releases:
 |---------|-------------|--------|
 | **Home Assistant** | Smart home control and automation triggers | Exploring |
 | **Notion Sync** | Bidirectional sync with Notion databases | Exploring |
-| **iOS App** | Native iOS companion app | Exploring |
 | **Plugin System** | User-installable plugins for custom integrations | Exploring |
 
 Want to contribute or suggest features? [Open an issue](https://github.com/bitwarelabs/luna-chat/issues)!
