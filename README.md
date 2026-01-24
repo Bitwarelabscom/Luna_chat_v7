@@ -50,6 +50,7 @@ Built with a **Local-First** ethos, Luna integrates deeply with your digital lif
 - [Configuration](#configuration)
 - [Security](#security)
 - [Development](#development)
+- [Roadmap](#roadmap)
 - [License](#license)
 
 ---
@@ -1025,6 +1026,37 @@ Luna expresses emotions through media:
 - AI-generated images via DALL-E
 - Cached for performance
 - 8 emotion dimensions
+
+---
+
+## Roadmap
+
+Planned features and integrations for future releases:
+
+### Automation & Workflow
+| Feature | Description | Status |
+|---------|-------------|--------|
+| **n8n Integration** | Connect Luna to n8n workflows for complex automations | Planned |
+| **Webhook Triggers** | Trigger Luna actions from external workflow events | Planned |
+| **Action Nodes** | Luna as an n8n node for AI-powered workflow steps | Planned |
+
+### Knowledge Management
+| Feature | Description | Status |
+|---------|-------------|--------|
+| **Obsidian Integration** | Sync with Obsidian vaults for bidirectional knowledge | Planned |
+| **Markdown Sync** | Read/write Obsidian notes as Luna's knowledge base | Planned |
+| **Graph Visualization** | Visualize knowledge connections like Obsidian's graph view | Planned |
+| **Daily Notes** | Auto-generate daily notes from Luna interactions | Planned |
+
+### Additional Planned Features
+| Feature | Description | Status |
+|---------|-------------|--------|
+| **Home Assistant** | Smart home control and automation triggers | Exploring |
+| **Notion Sync** | Bidirectional sync with Notion databases | Exploring |
+| **iOS App** | Native iOS companion app | Exploring |
+| **Plugin System** | User-installable plugins for custom integrations | Exploring |
+
+Want to contribute or suggest features? [Open an issue](https://github.com/bitwarelabs/luna-chat/issues)!
 
 ---
 
