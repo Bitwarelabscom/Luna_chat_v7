@@ -85,9 +85,11 @@ Most AI assistants are stateless query engines. Luna is a **stateful companion**
 - **Proactive Insights**: Generates insights from accumulated knowledge
 
 ### Trading (Trader Luna)
-- **Binance Integration**: Connect your Binance account for live trading
-- **Portfolio Management**: Real-time portfolio tracking and P&L
+- **Multi-Exchange Support**: Binance (Spot + Margin) and Crypto.com integration
+- **Dual Mode Trading**: Switch between Spot and Margin trading modes
+- **Portfolio Management**: Real-time portfolio tracking and P&L with margin metrics
 - **Order Execution**: Market and limit orders with TP/SL
+- **Auto Trading**: AI-driven autonomous trading with configurable strategies
 - **Trading Bots**: Grid, DCA, and RSI-based automated strategies
 - **Research Mode**: Technical analysis with RSI, MACD, Bollinger Bands
 - **Paper Trading**: Test strategies without risking real funds
@@ -109,7 +111,7 @@ Most AI assistants are stateless query engines. Luna is a **stateful companion**
 - **Web Search**: SearXNG integration for web research
 - **Text-to-Speech**: ElevenLabs integration for voice responses
 - **Spotify**: Music playback control and recommendations
-- **Quick Reminders**: Set reminders via natural language
+- **Quick Reminders**: Set reminders via natural language (validated: 1 min to 30 days)
 
 ### Developer Tools
 - **Activity Window**: Real-time activity logging for debugging
@@ -119,9 +121,11 @@ Most AI assistants are stateless query engines. Luna is a **stateful companion**
 ### Security
 - **Docker Secrets**: Encrypted credential storage
 - **AES-256-GCM**: OAuth tokens encrypted at rest
+- **WebSocket Auth**: Authenticated WebSocket connections for real-time data
 - **Fail2ban Integration**: Auto-blocks suspicious IPs
 - **Rate Limiting**: Configurable per-endpoint limits
 - **SSRF Protection**: URL validation on external requests
+- **TLS Enforcement**: Production-grade TLS validation on email/IMAP
 
 ---
 
@@ -139,18 +143,22 @@ Task-focused, efficient communication for getting things done.
 - Structured explanations for clarity
 
 ### Companion Mode
-Friendly, supportive conversation for companionship.
+Friendly, supportive conversation for companionship with optimized performance.
 - Empathetic listening and understanding
 - Shares thoughts and perspectives
 - Balanced talking and listening
 - Expresses genuine interest in your shares
+- Trimmed system prompt and tools for faster responses
+- Focus on emotional connection over task execution
 
 ### Voice Mode
-Optimized for text-to-speech and spoken conversation.
+Optimized for text-to-speech and spoken conversation with fast response times (3-5 seconds).
 - Short, conversational responses (1-3 sentences)
 - Emotion tags for expressive voice: `[laughs]`, `[sighs]`, `[excited]`
 - No markdown, code blocks, or bullet points
 - Natural, flowing speech patterns
+- Lightweight tool access (web search, calendar, tasks, email)
+- Bypasses heavy processing for sub-5-second responses
 
 ---
 
@@ -170,6 +178,7 @@ Luna has an extensive set of tools and abilities she can use during conversation
 | Ability | Description |
 |---------|-------------|
 | Create Tasks | Add tasks with priority and due dates |
+| Natural Language | Parse "today", "tomorrow", "next week", "in X days", "at 3pm" |
 | Track Progress | Status: pending, in_progress, completed, cancelled |
 | Recurrence | Set up recurring tasks |
 | Pattern Analysis | Identifies struggle areas and postponement patterns |
@@ -196,6 +205,7 @@ Luna has an extensive set of tools and abilities she can use during conversation
 | View Events | See upcoming calendar events |
 | Create Events | Schedule new events via natural language |
 | Edit Events | Modify existing events |
+| Timezone Support | Configurable timezone (defaults to Europe/Stockholm) |
 | Multiple Calendars | Google, Microsoft, self-hosted CalDAV |
 
 ### Email Integration
@@ -258,20 +268,31 @@ Configure MCP servers in Settings > MCP Servers:
 
 ## Trading (Trader Luna)
 
-Trader Luna is a **separate, specialized trading assistant** focused entirely on cryptocurrency trading via Binance. She operates independently from the main Luna persona with no access to personal data, calendar, or email - purely trading-focused.
+Trader Luna is a **separate, specialized trading assistant** focused entirely on cryptocurrency trading. She operates independently from the main Luna persona with no access to personal data, calendar, or email - purely trading-focused.
 
 ### Key Features
 
 | Feature | Description |
 |---------|-------------|
-| **Portfolio View** | Real-time holdings, balances, and P&L |
+| **Multi-Exchange** | Binance (Spot + Margin) and Crypto.com support |
+| **Dual Trading Mode** | Switch between Spot and Margin trading |
+| **Portfolio View** | Real-time holdings, balances, margin metrics, and P&L |
 | **Order Execution** | Market and limit orders with confirmation |
 | **Take Profit/Stop Loss** | Automatic TP/SL order management |
+| **Auto Trading** | AI-driven autonomous trading with rule-based execution |
 | **Trading Bots** | Automated Grid, DCA, and RSI strategies |
 | **Research Mode** | Technical analysis and signal generation |
 | **Paper Trading** | Test strategies without real funds |
 | **Binance Alpha** | Access to new token listings |
 | **Trade Notifications** | Telegram alerts for orders, fills, and bot activity |
+
+### Auto Trading
+
+Luna can autonomously execute trades based on configurable rules:
+- **Signal-Based**: Execute on research signal triggers (RSI, MACD crossover)
+- **Rule Engine**: Define entry/exit conditions with position sizing
+- **Risk Management**: Stop-loss, take-profit, and max position limits
+- **Telegram Control**: Start/stop and monitor via Telegram commands
 
 ### Trading Bots
 
@@ -898,13 +919,16 @@ Luna includes comprehensive security measures:
 | **Secrets Management** | Docker secrets, never in code |
 | **Token Encryption** | AES-256-GCM for OAuth tokens |
 | **Authentication** | JWT with access/refresh flow |
+| **WebSocket Auth** | Token-based WebSocket authentication |
 | **Rate Limiting** | Redis-backed, per-endpoint |
 | **Fail2ban** | IP-based login tracking |
 | **SSRF Protection** | URL validation on external requests |
 | **Input Validation** | Zod schemas on all endpoints |
+| **Email Validation** | RFC 5322 format validation on recipients |
 | **SQL Injection** | Parameterized queries |
 | **Command Injection** | spawn() not exec() |
 | **XSS Prevention** | Content Security Policy headers |
+| **TLS Enforcement** | Production-mode TLS certificate validation |
 | **Sandbox Isolation** | Docker-based code execution |
 
 ---
