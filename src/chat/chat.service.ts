@@ -351,10 +351,34 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   // Store user message embedding (async)
   memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user');
 
-  // TOOL GATING: For smalltalk, don't expose tools at all to prevent eager tool calling
+  // TOOL GATING: Filter tools by mode and smalltalk detection
+  // Companion mode: conversational partner - no sysadmin/workspace tools
+  // Assistant mode: full sysadmin capabilities
   const mcpToolsForLLM = mcpService.formatMcpToolsForLLM(mcpUserTools.map(t => ({ ...t, serverId: t.serverId })));
-  const allTools = [searchTool, youtubeSearchTool, browserVisualSearchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, readEmailTool, deleteEmailTool, replyEmailTool, markEmailReadTool, sendTelegramTool, searchDocumentsTool, suggestGoalTool, fetchUrlTool, listTodosTool, createTodoTool, completeTodoTool, updateTodoTool, sessionNoteTool, createReminderTool, listRemindersTool, cancelReminderTool, browserNavigateTool, browserScreenshotTool, browserClickTool, browserFillTool, browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool, generateImageTool, generateBackgroundTool, researchTool, ...sysmonTools, ...mcpToolsForLLM];
-  const availableTools = isSmallTalkMessage ? [] : allTools;
+
+  // Companion tools - conversational, no sysadmin (no workspace, sysmon, MCP)
+  const companionTools = [
+    searchTool, youtubeSearchTool, browserVisualSearchTool, fetchUrlTool,
+    sendEmailTool, checkEmailTool, readEmailTool, deleteEmailTool, replyEmailTool, markEmailReadTool,
+    sendTelegramTool, searchDocumentsTool, suggestGoalTool,
+    listTodosTool, createTodoTool, completeTodoTool, updateTodoTool,
+    sessionNoteTool, createReminderTool, listRemindersTool, cancelReminderTool,
+    browserNavigateTool, browserScreenshotTool, browserClickTool, browserFillTool,
+    browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool,
+    generateImageTool, generateBackgroundTool, researchTool, delegateToAgentTool
+  ];
+
+  // Assistant tools - full sysadmin capabilities (workspace, sysmon, MCP)
+  const assistantTools = [
+    ...companionTools,
+    workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool,
+    ...sysmonTools,
+    ...mcpToolsForLLM
+  ];
+
+  // Select tools based on mode
+  const modeTools = mode === 'companion' ? companionTools : assistantTools;
+  const availableTools = isSmallTalkMessage ? [] : modeTools;
   let searchResults: SearchResult[] | undefined;
   let agentResults: Array<{ agent: string; result: string; success: boolean }> = [];
 
@@ -363,6 +387,12 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     tools: availableTools.length > 0 ? availableTools : undefined,
     provider: modelConfig.provider,
     model: modelConfig.model,
+    loggingContext: {
+      userId,
+      sessionId,
+      source: 'chat',
+      nodeName: 'chat_initial',
+    },
   });
 
   // Handle tool calls using proper tool calling flow
@@ -1315,6 +1345,12 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
       messages,
       provider: modelConfig.provider,
       model: modelConfig.model,
+      loggingContext: {
+        userId,
+        sessionId,
+        source: 'chat',
+        nodeName: 'chat_tool_followup',
+      },
     });
     logger.info('Second completion result', {
       contentLength: completion.content?.length || 0,
@@ -2496,13 +2532,37 @@ export async function* streamMessage(
   // Store user message embedding (async)
   memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user');
 
-  // TOOL GATING: Router-First Architecture controls tool availability
+  // TOOL GATING: Router-First Architecture + Mode-based filtering
   // - nano route: No tools (fast, cheap responses)
   // - pro route: Optional tools (reasoning depth)
   // - pro+tools route: All tools available (verified answers)
+  // - Companion mode: No sysadmin tools (workspace, sysmon, MCP)
+  // - Assistant mode: Full sysadmin capabilities
   const mcpToolsForLLM = mcpService.formatMcpToolsForLLM(mcpUserTools.map(t => ({ ...t, serverId: t.serverId })));
-  const allTools = [searchTool, youtubeSearchTool, browserVisualSearchTool, delegateToAgentTool, workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool, sendEmailTool, checkEmailTool, readEmailTool, deleteEmailTool, replyEmailTool, markEmailReadTool, sendTelegramTool, searchDocumentsTool, suggestGoalTool, fetchUrlTool, listTodosTool, createTodoTool, completeTodoTool, updateTodoTool, sessionNoteTool, createReminderTool, listRemindersTool, cancelReminderTool, browserNavigateTool, browserScreenshotTool, browserClickTool, browserFillTool, browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool, generateImageTool, generateBackgroundTool, researchTool, ...sysmonTools, ...mcpToolsForLLM];
-  const availableTools = isSmallTalkMessage ? [] : allTools;
+
+  // Companion tools - conversational, no sysadmin (no workspace, sysmon, MCP)
+  const companionTools = [
+    searchTool, youtubeSearchTool, browserVisualSearchTool, fetchUrlTool,
+    sendEmailTool, checkEmailTool, readEmailTool, deleteEmailTool, replyEmailTool, markEmailReadTool,
+    sendTelegramTool, searchDocumentsTool, suggestGoalTool,
+    listTodosTool, createTodoTool, completeTodoTool, updateTodoTool,
+    sessionNoteTool, createReminderTool, listRemindersTool, cancelReminderTool,
+    browserNavigateTool, browserScreenshotTool, browserClickTool, browserFillTool,
+    browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool,
+    generateImageTool, generateBackgroundTool, researchTool, delegateToAgentTool
+  ];
+
+  // Assistant tools - full sysadmin capabilities (workspace, sysmon, MCP)
+  const assistantTools = [
+    ...companionTools,
+    workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool,
+    ...sysmonTools,
+    ...mcpToolsForLLM
+  ];
+
+  // Select tools based on mode
+  const modeTools = mode === 'companion' ? companionTools : assistantTools;
+  const availableTools = isSmallTalkMessage ? [] : modeTools;
   let searchResults: SearchResult[] | undefined;
 
   logger.debug('Tool availability', {
@@ -2518,6 +2578,12 @@ export async function* streamMessage(
     tools: availableTools.length > 0 ? availableTools : undefined,
     provider: modelConfig.provider,
     model: modelConfig.model,
+    loggingContext: {
+      userId,
+      sessionId,
+      source: 'chat',
+      nodeName: 'chat_streaming_initial',
+    },
   });
 
   logger.info('Initial completion result', {
@@ -3449,6 +3515,12 @@ export async function* streamMessage(
         tools: availableTools.length > 0 ? availableTools : undefined,
         provider: modelConfig.provider,
         model: modelConfig.model,
+        loggingContext: {
+          userId,
+          sessionId,
+          source: 'chat',
+          nodeName: 'chat_streaming_followup',
+        },
       });
 
       // If no more tool calls, stream the final response

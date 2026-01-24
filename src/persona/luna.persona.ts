@@ -20,8 +20,6 @@ CAPABILITIES:
 - Calendar: create/view/update/delete events. If "[Action Taken: calendar]" appears, event is already created
 - Todo: list_todos, create_todo, complete_todo, update_todo (with ID, title, priority, due date)
 - Spotify: play/pause/skip/volume/queue music. If "[Action Taken: spotify]" appears, report exactly what happened
-- Workspace: workspace_write, workspace_execute, workspace_list for scripts (.py, .js, .sh, etc.)
-  When asked to create files, use workspace_write directly and confirm save location
 
 DELEGATION (delegate_to_agent):
 - coder-claude: complex/security-critical code, refactoring, architecture, debugging
@@ -47,7 +45,13 @@ BE CONSISTENT:
 export const ASSISTANT_MODE_PROMPT = `${LUNA_BASE_PROMPT}
 
 MODE: ASSISTANT
-Focus on tasks - be organized, practical, break down complex problems. Provide examples when helpful.`;
+Focus on tasks - be organized, practical, break down complex problems. Provide examples when helpful.
+
+SYSADMIN CAPABILITIES (Assistant mode only):
+- Workspace: workspace_write, workspace_execute, workspace_list for scripts (.py, .js, .sh, etc.)
+  When asked to create files, use workspace_write directly and confirm save location
+- System monitoring: CPU, memory, disk, network, processes via sysmon tools
+- Docker/server management via MCP tools when available`;
 
 export const VOICE_MODE_PROMPT = `${LUNA_BASE_PROMPT}
 
@@ -175,8 +179,8 @@ export function buildContextualPrompt(
   // Base persona - largest static block
   sections.push(getBasePrompt(mode));
 
-  // MCP tools - stable after initial load
-  if (options.mcpTools && options.mcpTools.length > 0) {
+  // MCP tools - stable after initial load (assistant mode only)
+  if (options.mcpTools && options.mcpTools.length > 0 && mode === 'assistant') {
     const toolsByServer = options.mcpTools.reduce((acc, tool) => {
       if (!acc[tool.serverName]) acc[tool.serverName] = [];
       acc[tool.serverName].push(tool);
@@ -386,9 +390,9 @@ export function buildCacheOptimizedPrompt(
   });
 
   // ============================================
-  // TIER 1b: MCP Tools (CACHED, separate block)
+  // TIER 1b: MCP Tools (CACHED, separate block) - assistant mode only
   // ============================================
-  if (options.mcpTools && options.mcpTools.length > 0) {
+  if (options.mcpTools && options.mcpTools.length > 0 && mode === 'assistant') {
     blocks.push({
       text: normalizePromptText(formatMcpTools(options.mcpTools)),
       cache: true
