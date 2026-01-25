@@ -42,9 +42,8 @@ secrets/
 workspace/
 workspace-backup/
 
-# Generated images
-images/generated/
-images/moods/
+# Images
+images/
 
 # Video files (too large for git)
 *.mp4
