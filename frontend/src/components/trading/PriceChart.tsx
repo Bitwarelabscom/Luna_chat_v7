@@ -270,7 +270,7 @@ export default function PriceChart({ symbol }: PriceChartProps) {
             fontFamily: 'JetBrains Mono, monospace',
           }}>
             <div style={{ color: '#607080', marginBottom: '4px' }}>
-              {new Date(hoveredCandle.openTime).toLocaleString()}
+              {new Date(hoveredCandle.openTime).toLocaleString('sv-SE')}
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'auto auto', gap: '2px 12px' }}>
               <span style={{ color: '#607080' }}>O:</span>

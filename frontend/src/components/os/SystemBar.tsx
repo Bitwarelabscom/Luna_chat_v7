@@ -426,7 +426,7 @@ export function SystemBar({ onSpotlightOpen, onSettingsOpen, onAppOpen, onNewFil
             style={{ borderColor: 'rgba(255, 255, 255, 0.1)' }}
           >
             <span>{time.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</span>
-            <span className="font-medium">{time.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</span>
+            <span className="font-medium">{time.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false })}</span>
           </button>
 
           {showUserMenu && (

@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Activity,
   RefreshCw,
@@ -20,6 +20,13 @@ import {
   WifiOff,
   DollarSign,
   Zap,
+  ChevronDown,
+  ChevronRight,
+  MessageSquare,
+  Code,
+  FileText,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { useActivityStream } from '@/hooks/useActivityStream';
 import {
@@ -68,6 +75,28 @@ export default function ActivityWindow() {
   const setLevelFilter = useActivityStore((state) => state.setLevelFilter);
   const setSearchQuery = useActivityStore((state) => state.setSearchQuery);
 
+  // Track expanded activities
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const toggleExpanded = (id: string) => {
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const copyToClipboard = async (text: string, id: string) => {
+    await navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
+
   // Filter activities
   const filteredActivities = useMemo(() => {
     return activities.filter((activity) => {
@@ -100,10 +129,11 @@ export default function ActivityWindow() {
   };
 
   const formatTime = (date: Date) => {
-    return date.toLocaleTimeString(undefined, {
+    return date.toLocaleTimeString('en-GB', {
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit',
+      hour12: false,
     });
   };
 
@@ -118,8 +148,8 @@ export default function ActivityWindow() {
     return tokens.toString();
   };
 
-  // Render activity details based on category
-  const renderDetails = (activity: ActivityType) => {
+  // Render compact details (shown when collapsed)
+  const renderCompactDetails = (activity: ActivityType) => {
     const details = activity.details;
     if (!details) return null;
 
@@ -161,6 +191,287 @@ export default function ActivityWindow() {
       <p className="text-xs mt-0.5 truncate" style={{ color: 'var(--theme-text-muted)' }}>
         {activity.message || JSON.stringify(details)}
       </p>
+    );
+  };
+
+  // Render expanded details (shown when clicked)
+  const renderExpandedDetails = (activity: ActivityType) => {
+    const details = activity.details;
+    if (!details) return null;
+
+    if (activity.category === 'llm_call') {
+      const messages = details.messages as Array<{ role: string; content: string; tool_calls?: unknown[]; tool_call_id?: string }> | undefined;
+      const tools = details.tools as Array<{ name: string; description?: string }> | undefined;
+      const response = details.response as { content: string; finishReason: string; toolCalls?: Array<{ name: string; arguments: string }> } | undefined;
+      const temperature = details.temperature as number | undefined;
+      const maxTokens = details.maxTokens as number | undefined;
+      const reasoning = details.reasoning as string | undefined;
+
+      return (
+        <div
+          className="mt-3 space-y-3 text-xs border-t pt-3"
+          style={{ borderColor: 'var(--theme-border-default)' }}
+        >
+          {/* Request Parameters */}
+          <div className="flex items-center gap-4" style={{ color: 'var(--theme-text-muted)' }}>
+            {temperature !== undefined && <span>temp: {temperature}</span>}
+            {maxTokens !== undefined && <span>max_tokens: {maxTokens}</span>}
+            {tools && tools.length > 0 && <span>tools: {tools.length}</span>}
+          </div>
+
+          {/* Messages */}
+          {messages && messages.length > 0 && (
+            <div>
+              <div className="flex items-center gap-2 mb-2" style={{ color: 'var(--theme-text-secondary)' }}>
+                <MessageSquare className="w-3.5 h-3.5" />
+                <span className="font-medium">Messages ({messages.length})</span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    copyToClipboard(JSON.stringify(messages, null, 2), `${activity.id}-messages`);
+                  }}
+                  className="ml-auto p-1 rounded hover:bg-[var(--theme-bg-tertiary)]"
+                  title="Copy messages"
+                >
+                  {copiedId === `${activity.id}-messages` ? (
+                    <Check className="w-3 h-3 text-green-400" />
+                  ) : (
+                    <Copy className="w-3 h-3" style={{ color: 'var(--theme-text-muted)' }} />
+                  )}
+                </button>
+              </div>
+              <div
+                className="space-y-2 max-h-64 overflow-auto rounded p-2"
+                style={{ background: 'var(--theme-bg-tertiary)' }}
+              >
+                {messages.map((msg, idx) => (
+                  <div key={idx} className="border-l-2 pl-2" style={{
+                    borderColor: msg.role === 'system' ? '#a855f7' :
+                                 msg.role === 'user' ? '#3b82f6' :
+                                 msg.role === 'assistant' ? '#10b981' :
+                                 msg.role === 'tool' ? '#f59e0b' : 'var(--theme-border-default)'
+                  }}>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="font-medium" style={{
+                        color: msg.role === 'system' ? '#a855f7' :
+                               msg.role === 'user' ? '#3b82f6' :
+                               msg.role === 'assistant' ? '#10b981' :
+                               msg.role === 'tool' ? '#f59e0b' : 'var(--theme-text-primary)'
+                      }}>
+                        {msg.role}
+                      </span>
+                      {msg.tool_call_id && (
+                        <span className="text-xs px-1 rounded" style={{ background: 'var(--theme-bg-secondary)', color: 'var(--theme-text-muted)' }}>
+                          {msg.tool_call_id}
+                        </span>
+                      )}
+                    </div>
+                    <pre
+                      className="whitespace-pre-wrap break-words text-xs"
+                      style={{ color: 'var(--theme-text-primary)', fontFamily: 'JetBrains Mono, monospace' }}
+                    >
+                      {msg.content || (msg.tool_calls ? JSON.stringify(msg.tool_calls, null, 2) : '[empty]')}
+                    </pre>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Tools */}
+          {tools && tools.length > 0 && (
+            <div>
+              <div className="flex items-center gap-2 mb-2" style={{ color: 'var(--theme-text-secondary)' }}>
+                <Wrench className="w-3.5 h-3.5" />
+                <span className="font-medium">Tools Available ({tools.length})</span>
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {tools.map((tool, idx) => (
+                  <span
+                    key={idx}
+                    className="px-2 py-0.5 rounded text-xs"
+                    style={{ background: 'var(--theme-bg-tertiary)', color: 'var(--theme-text-muted)' }}
+                    title={tool.description}
+                  >
+                    {tool.name}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Response */}
+          {response && (
+            <div>
+              <div className="flex items-center gap-2 mb-2" style={{ color: 'var(--theme-text-secondary)' }}>
+                <FileText className="w-3.5 h-3.5" />
+                <span className="font-medium">Response</span>
+                <span className="text-xs px-1 rounded" style={{ background: 'var(--theme-bg-tertiary)', color: 'var(--theme-text-muted)' }}>
+                  {response.finishReason}
+                </span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    copyToClipboard(response.content, `${activity.id}-response`);
+                  }}
+                  className="ml-auto p-1 rounded hover:bg-[var(--theme-bg-tertiary)]"
+                  title="Copy response"
+                >
+                  {copiedId === `${activity.id}-response` ? (
+                    <Check className="w-3 h-3 text-green-400" />
+                  ) : (
+                    <Copy className="w-3 h-3" style={{ color: 'var(--theme-text-muted)' }} />
+                  )}
+                </button>
+              </div>
+              <div
+                className="rounded p-2 max-h-48 overflow-auto"
+                style={{ background: 'var(--theme-bg-tertiary)' }}
+              >
+                <pre
+                  className="whitespace-pre-wrap break-words text-xs"
+                  style={{ color: 'var(--theme-text-primary)', fontFamily: 'JetBrains Mono, monospace' }}
+                >
+                  {response.content || '[empty response]'}
+                </pre>
+                {response.toolCalls && response.toolCalls.length > 0 && (
+                  <div className="mt-2 pt-2 border-t" style={{ borderColor: 'var(--theme-border-default)' }}>
+                    <span className="text-xs font-medium" style={{ color: '#f59e0b' }}>Tool Calls:</span>
+                    {response.toolCalls.map((tc, idx) => (
+                      <div key={idx} className="mt-1">
+                        <span className="text-xs font-medium" style={{ color: 'var(--theme-text-secondary)' }}>{tc.name}</span>
+                        <pre
+                          className="whitespace-pre-wrap break-words text-xs mt-0.5"
+                          style={{ color: 'var(--theme-text-muted)', fontFamily: 'JetBrains Mono, monospace' }}
+                        >
+                          {tc.arguments}
+                        </pre>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Reasoning */}
+          {reasoning && (
+            <div>
+              <div className="flex items-center gap-2 mb-2" style={{ color: 'var(--theme-text-secondary)' }}>
+                <Brain className="w-3.5 h-3.5" />
+                <span className="font-medium">Reasoning</span>
+              </div>
+              <div
+                className="rounded p-2 max-h-32 overflow-auto"
+                style={{ background: 'var(--theme-bg-tertiary)' }}
+              >
+                <pre
+                  className="whitespace-pre-wrap break-words text-xs"
+                  style={{ color: 'var(--theme-text-muted)', fontFamily: 'JetBrains Mono, monospace' }}
+                >
+                  {reasoning}
+                </pre>
+              </div>
+            </div>
+          )}
+
+          {/* Copy full JSON */}
+          <div className="flex justify-end pt-2 border-t" style={{ borderColor: 'var(--theme-border-default)' }}>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                copyToClipboard(JSON.stringify(details, null, 2), `${activity.id}-full`);
+              }}
+              className="flex items-center gap-1 px-2 py-1 rounded text-xs hover:bg-[var(--theme-bg-tertiary)]"
+              style={{ color: 'var(--theme-text-muted)' }}
+            >
+              {copiedId === `${activity.id}-full` ? (
+                <>
+                  <Check className="w-3 h-3 text-green-400" />
+                  Copied!
+                </>
+              ) : (
+                <>
+                  <Code className="w-3 h-3" />
+                  Copy Full JSON
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // For tool invocations, show args and result
+    if (activity.category === 'tool_invoke') {
+      const args = details.args as Record<string, unknown> | undefined;
+      const resultPreview = details.resultPreview as string | undefined;
+
+      return (
+        <div
+          className="mt-3 space-y-3 text-xs border-t pt-3"
+          style={{ borderColor: 'var(--theme-border-default)' }}
+        >
+          {args && (
+            <div>
+              <div className="flex items-center gap-2 mb-2" style={{ color: 'var(--theme-text-secondary)' }}>
+                <Code className="w-3.5 h-3.5" />
+                <span className="font-medium">Arguments</span>
+              </div>
+              <div
+                className="rounded p-2 max-h-32 overflow-auto"
+                style={{ background: 'var(--theme-bg-tertiary)' }}
+              >
+                <pre
+                  className="whitespace-pre-wrap break-words text-xs"
+                  style={{ color: 'var(--theme-text-primary)', fontFamily: 'JetBrains Mono, monospace' }}
+                >
+                  {JSON.stringify(args, null, 2)}
+                </pre>
+              </div>
+            </div>
+          )}
+          {resultPreview && (
+            <div>
+              <div className="flex items-center gap-2 mb-2" style={{ color: 'var(--theme-text-secondary)' }}>
+                <FileText className="w-3.5 h-3.5" />
+                <span className="font-medium">Result Preview</span>
+              </div>
+              <div
+                className="rounded p-2 max-h-32 overflow-auto"
+                style={{ background: 'var(--theme-bg-tertiary)' }}
+              >
+                <pre
+                  className="whitespace-pre-wrap break-words text-xs"
+                  style={{ color: 'var(--theme-text-muted)', fontFamily: 'JetBrains Mono, monospace' }}
+                >
+                  {resultPreview}
+                </pre>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // Generic expanded view - show all details as JSON
+    return (
+      <div
+        className="mt-3 text-xs border-t pt-3"
+        style={{ borderColor: 'var(--theme-border-default)' }}
+      >
+        <div
+          className="rounded p-2 max-h-48 overflow-auto"
+          style={{ background: 'var(--theme-bg-tertiary)' }}
+        >
+          <pre
+            className="whitespace-pre-wrap break-words text-xs"
+            style={{ color: 'var(--theme-text-primary)', fontFamily: 'JetBrains Mono, monospace' }}
+          >
+            {JSON.stringify(details, null, 2)}
+          </pre>
+        </div>
+      </div>
     );
   };
 
@@ -322,13 +633,26 @@ export default function ActivityWindow() {
               const LevelIcon = levelIcons[activity.level];
               const CategoryIcon = categoryIcons[activity.category];
               const categoryCfg = categoryConfig[activity.category];
+              const isExpanded = expandedIds.has(activity.id);
+              const hasDetails = activity.details && Object.keys(activity.details).length > 0;
 
               return (
                 <div
                   key={activity.id}
-                  className="px-4 py-3 hover:bg-[var(--theme-bg-tertiary)] transition"
+                  className={`px-4 py-3 transition ${hasDetails ? 'cursor-pointer hover:bg-[var(--theme-bg-tertiary)]' : ''}`}
+                  onClick={() => hasDetails && toggleExpanded(activity.id)}
                 >
                   <div className="flex items-start gap-3">
+                    {/* Expand indicator */}
+                    {hasDetails && (
+                      <div className="pt-0.5">
+                        {isExpanded ? (
+                          <ChevronDown className="w-4 h-4" style={{ color: 'var(--theme-text-muted)' }} />
+                        ) : (
+                          <ChevronRight className="w-4 h-4" style={{ color: 'var(--theme-text-muted)' }} />
+                        )}
+                      </div>
+                    )}
                     {/* Level indicator */}
                     <div className={`p-1 rounded ${levelCfg.bg}`}>
                       <LevelIcon className={`w-4 h-4 ${levelCfg.color}`} />
@@ -356,8 +680,10 @@ export default function ActivityWindow() {
                           {formatTime(activity.createdAt)}
                         </span>
                       </div>
-                      {/* Details */}
-                      {renderDetails(activity)}
+                      {/* Compact Details (always shown) */}
+                      {renderCompactDetails(activity)}
+                      {/* Expanded Details (shown when clicked) */}
+                      {isExpanded && renderExpandedDetails(activity)}
                       {/* Source */}
                       {activity.source && !activity.details && (
                         <p className="text-xs mt-0.5" style={{ color: 'var(--theme-text-muted)' }}>

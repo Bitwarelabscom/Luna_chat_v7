@@ -678,9 +678,9 @@ export async function executeAgentTask(
       // User-configured API provider/model for coding tasks
       return executeWithCoderAPI(task.agentName, systemPrompt, userMessage, startTime, userId);
     } else if (task.agentName === 'researcher') {
-      return executeResearcherWithWebSearch(task.agentName, systemPrompt, userMessage, startTime);
+      return executeResearcherWithWebSearch(task.agentName, systemPrompt, userMessage, startTime, userId);
     } else {
-      return executeWithOpenAI(task.agentName, systemPrompt, userMessage, temperature, startTime);
+      return executeWithOpenAI(task.agentName, systemPrompt, userMessage, temperature, startTime, userId);
     }
   } catch (error) {
     logger.error('Agent task failed', {
@@ -734,7 +734,8 @@ async function executeWithOpenAI(
   systemPrompt: string,
   userMessage: string,
   _temperature: number,
-  startTime: number
+  startTime: number,
+  userId: string
 ): Promise<AgentResult> {
   logger.info('Executing agent task via OpenAI o4-mini', { agentName });
 
@@ -746,6 +747,11 @@ async function executeWithOpenAI(
     ],
     provider: 'openai',
     model: 'o4-mini',
+    loggingContext: {
+      userId,
+      source: 'agents',
+      nodeName: agentName,
+    },
   });
 
   const result = completion.content || 'No response generated';
@@ -771,7 +777,8 @@ async function executeResearcherWithWebSearch(
   agentName: string,
   systemPrompt: string,
   userMessage: string,
-  startTime: number
+  startTime: number,
+  userId: string
 ): Promise<AgentResult> {
   logger.info('Executing researcher with web search', { agentName });
 
@@ -823,6 +830,11 @@ Based on these search results, provide a comprehensive answer. Include specific 
       ],
       provider: 'openai',
       model: 'o4-mini',
+      loggingContext: {
+        userId,
+        source: 'agents',
+        nodeName: 'researcher_synthesis',
+      },
     });
 
     // Append sources to the result
@@ -1133,6 +1145,11 @@ async function executeWithCoderAPI(
       ],
       provider: settings.coderApiProvider,
       model: settings.coderApiModel,
+      loggingContext: {
+        userId,
+        source: 'agents',
+        nodeName: 'coder',
+      },
     });
 
     let result = completion.content || 'No response generated';

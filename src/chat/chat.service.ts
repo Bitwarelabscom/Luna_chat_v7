@@ -17,6 +17,7 @@ import {
   replyEmailTool,
   markEmailReadTool,
   sendTelegramTool,
+  sendFileToTelegramTool,
   searchDocumentsTool,
   suggestGoalTool,
   fetchUrlTool,
@@ -41,10 +42,13 @@ import {
   generateImageTool,
   generateBackgroundTool,
   researchTool,
+  loadContextTool,
+  correctSummaryTool,
   formatSearchResultsForContext,
   formatAgentResultForContext,
   type ChatMessage,
 } from '../llm/openai.client.js';
+import * as loadContextHandler from '../context/load-context.handler.js';
 import * as browserScreencast from '../abilities/browser-screencast.service.js';
 
 /**
@@ -371,13 +375,14 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   const companionTools = [
     searchTool, youtubeSearchTool, browserVisualSearchTool, fetchUrlTool,
     sendEmailTool, checkEmailTool, readEmailTool, deleteEmailTool, replyEmailTool, markEmailReadTool,
-    sendTelegramTool, searchDocumentsTool, suggestGoalTool,
+    sendTelegramTool, sendFileToTelegramTool, searchDocumentsTool, suggestGoalTool,
     listTodosTool, createTodoTool, completeTodoTool, updateTodoTool,
     createCalendarEventTool, listCalendarEventsTool,
     sessionNoteTool, createReminderTool, listRemindersTool, cancelReminderTool,
     browserNavigateTool, browserScreenshotTool, browserClickTool, browserFillTool,
     browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool,
-    generateImageTool, generateBackgroundTool, researchTool, delegateToAgentTool
+    generateImageTool, generateBackgroundTool, researchTool, delegateToAgentTool,
+    loadContextTool, correctSummaryTool
   ];
 
   // Assistant tools - full sysadmin capabilities (workspace, sysmon, MCP)
@@ -698,6 +703,51 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
               role: 'tool',
               tool_call_id: toolCall.id,
               content: `Failed to send Telegram message: ${(error as Error).message}`,
+            } as ChatMessage);
+          }
+        }
+      } else if (toolCall.function.name === 'send_file_to_telegram') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Luna sending file to Telegram', { userId, filename: args.filename });
+
+        const connection = await telegramService.getTelegramConnection(userId);
+
+        if (!connection || !connection.isActive) {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: 'Telegram is not connected for this user.',
+          } as ChatMessage);
+        } else {
+          try {
+            const exists = await workspace.fileExists(userId, args.filename);
+            if (!exists) {
+               messages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: `File "${args.filename}" not found in workspace.`,
+              } as ChatMessage);
+            } else {
+              const filePath = `${workspace.getUserWorkspacePath(userId)}/${args.filename}`;
+              const success = await telegramService.sendTelegramDocument(
+                connection.chatId,
+                filePath,
+                args.caption
+              );
+              
+              messages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: success 
+                  ? 'File sent successfully to Telegram.' 
+                  : 'Failed to send file to Telegram.',
+              } as ChatMessage);
+            }
+          } catch (error) {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Failed to send file: ${(error as Error).message}`,
             } as ChatMessage);
           }
         }
@@ -1255,6 +1305,17 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
         try {
           const result = await imageGeneration.generateImage(userId, args.prompt);
           if (result.success && result.imageUrl) {
+            
+            // Send to Telegram if connected
+            const connection = await telegramService.getTelegramConnection(userId);
+            if (connection && connection.isActive && result.filePath) {
+              telegramService.sendTelegramPhoto(
+                connection.chatId,
+                result.filePath,
+                `Generated image: ${args.prompt.substring(0, 100)}`
+              ).catch(err => logger.error('Failed to send generated image to Telegram', { error: (err as Error).message }));
+            }
+
             const imageBlock = imageGeneration.formatImageForChat(
               result.imageUrl,
               `Generated image: ${args.prompt.substring(0, 100)}${args.prompt.length > 100 ? '...' : ''}`
@@ -1351,6 +1412,46 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
             role: 'tool',
             tool_call_id: toolCall.id,
             content: `Research error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'load_context') {
+        // Context loading tool - fetch session/intent context on demand
+        const args = JSON.parse(toolCall.function.arguments || '{}');
+        logger.info('Load context tool called', { userId, params: args });
+        try {
+          const result = await loadContextHandler.handleLoadContext(userId, args);
+          const formatted = loadContextHandler.formatLoadContextResult(result);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: formatted,
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Load context tool failed', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Error loading context: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'correct_summary') {
+        // Context correction tool - fix incorrect summaries
+        const args = JSON.parse(toolCall.function.arguments || '{}');
+        logger.info('Correct summary tool called', { userId, params: args });
+        try {
+          const result = await loadContextHandler.handleCorrectSummary(userId, args);
+          const formatted = loadContextHandler.formatCorrectSummaryResult(result);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: formatted,
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Correct summary tool failed', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Error correcting summary: ${(error as Error).message}`,
           } as ChatMessage);
         }
       } else if (toolCall.function.name.startsWith('system_') ||
@@ -2631,13 +2732,14 @@ export async function* streamMessage(
   const companionTools = [
     searchTool, youtubeSearchTool, browserVisualSearchTool, fetchUrlTool,
     sendEmailTool, checkEmailTool, readEmailTool, deleteEmailTool, replyEmailTool, markEmailReadTool,
-    sendTelegramTool, searchDocumentsTool, suggestGoalTool,
+    sendTelegramTool, sendFileToTelegramTool, searchDocumentsTool, suggestGoalTool,
     listTodosTool, createTodoTool, completeTodoTool, updateTodoTool,
     createCalendarEventTool, listCalendarEventsTool,
     sessionNoteTool, createReminderTool, listRemindersTool, cancelReminderTool,
     browserNavigateTool, browserScreenshotTool, browserClickTool, browserFillTool,
     browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool,
-    generateImageTool, generateBackgroundTool, researchTool, delegateToAgentTool
+    generateImageTool, generateBackgroundTool, researchTool, delegateToAgentTool,
+    loadContextTool, correctSummaryTool
   ];
 
   // Assistant tools - full sysadmin capabilities (workspace, sysmon, MCP)
@@ -2898,6 +3000,52 @@ export async function* streamMessage(
               role: 'tool',
               tool_call_id: toolCall.id,
               content: `Failed to send Telegram message: ${(error as Error).message}`,
+            } as ChatMessage);
+          }
+        }
+      } else if (toolCall.function.name === 'send_file_to_telegram') {
+        const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'status', status: 'Sending file to Telegram...' };
+        logger.info('Luna sending file to Telegram', { userId, filename: args.filename });
+
+        const connection = await telegramService.getTelegramConnection(userId);
+
+        if (!connection || !connection.isActive) {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: 'Telegram is not connected for this user.',
+          } as ChatMessage);
+        } else {
+          try {
+            const exists = await workspace.fileExists(userId, args.filename);
+            if (!exists) {
+               messages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: `File "${args.filename}" not found in workspace.`,
+              } as ChatMessage);
+            } else {
+              const filePath = `${workspace.getUserWorkspacePath(userId)}/${args.filename}`;
+              const success = await telegramService.sendTelegramDocument(
+                connection.chatId,
+                filePath,
+                args.caption
+              );
+              
+              messages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: success 
+                  ? 'File sent successfully to Telegram.' 
+                  : 'Failed to send file to Telegram.',
+              } as ChatMessage);
+            }
+          } catch (error) {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Failed to send file: ${(error as Error).message}`,
             } as ChatMessage);
           }
         }
@@ -3474,6 +3622,17 @@ export async function* streamMessage(
         try {
           const result = await imageGeneration.generateImage(userId, args.prompt);
           if (result.success && result.imageUrl) {
+            
+            // Send to Telegram if connected
+            const connection = await telegramService.getTelegramConnection(userId);
+            if (connection && connection.isActive && result.filePath) {
+              telegramService.sendTelegramPhoto(
+                connection.chatId,
+                result.filePath,
+                `Generated image: ${args.prompt.substring(0, 100)}`
+              ).catch(err => logger.error('Failed to send generated image to Telegram', { error: (err as Error).message }));
+            }
+
             const imageBlock = imageGeneration.formatImageForChat(
               result.imageUrl,
               `Generated image: ${args.prompt.substring(0, 100)}${args.prompt.length > 100 ? '...' : ''}`
@@ -3575,6 +3734,48 @@ export async function* streamMessage(
             role: 'tool',
             tool_call_id: toolCall.id,
             content: `Research error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'load_context') {
+        // Context loading tool - fetch session/intent context on demand
+        const args = JSON.parse(toolCall.function.arguments || '{}');
+        yield { type: 'status', status: 'Loading context...' };
+        logger.info('Load context tool called (stream)', { userId, params: args });
+        try {
+          const result = await loadContextHandler.handleLoadContext(userId, args);
+          const formatted = loadContextHandler.formatLoadContextResult(result);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: formatted,
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Load context tool failed (stream)', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Error loading context: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'correct_summary') {
+        // Context correction tool - fix incorrect summaries
+        const args = JSON.parse(toolCall.function.arguments || '{}');
+        yield { type: 'status', status: 'Correcting context...' };
+        logger.info('Correct summary tool called (stream)', { userId, params: args });
+        try {
+          const result = await loadContextHandler.handleCorrectSummary(userId, args);
+          const formatted = loadContextHandler.formatCorrectSummaryResult(result);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: formatted,
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Correct summary tool failed (stream)', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Error correcting summary: ${(error as Error).message}`,
           } as ChatMessage);
         }
       } else if (toolCall.function.name.startsWith('system_') ||

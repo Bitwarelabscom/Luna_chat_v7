@@ -238,9 +238,10 @@ export default function TerminalChat({ onTradeExecuted, currentTab: _currentTab 
                 textAlign: msg.role === 'user' ? 'right' : 'left',
               }}
             >
-              {new Date(msg.timestamp).toLocaleTimeString('en-US', {
+              {new Date(msg.timestamp).toLocaleTimeString('en-GB', {
                 hour: '2-digit',
                 minute: '2-digit',
+                hour12: false,
               })}
             </div>
           </div>

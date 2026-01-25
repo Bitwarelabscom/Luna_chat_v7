@@ -122,7 +122,7 @@ export async function fetchPage(
 
 export async function fetchAndSummarize(
   url: string,
-  _userId: string,
+  userId: string,
   prompt?: string
 ): Promise<{ page: FetchedPage; summary: string }> {
   const page = await fetchPage(url);
@@ -147,6 +147,11 @@ Focus on facts, data, and actionable insights.`;
       { role: 'user', content: userPrompt },
     ],
     maxTokens: 1000,
+    loggingContext: {
+      userId,
+      source: 'webfetch',
+      nodeName: 'page_summary',
+    },
   });
 
   const summary = result.content || 'Unable to generate summary.';

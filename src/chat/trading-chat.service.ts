@@ -1012,6 +1012,12 @@ ${topHoldings}`;
     tools: tradingTools,
     provider: modelConfig.provider,
     model: modelConfig.model,
+    loggingContext: {
+      userId,
+      sessionId,
+      source: 'trading-chat',
+      nodeName: 'trading_initial',
+    },
   });
 
   // Handle tool calls - loop until no more tool calls
@@ -2316,6 +2322,12 @@ BTC Trend Filter: ${settings.btcTrendFilter ? 'On' : 'Off'}`;
       tools: tradingTools,
       provider: modelConfig.provider,
       model: modelConfig.model,
+      loggingContext: {
+        userId,
+        sessionId,
+        source: 'trading-chat',
+        nodeName: 'trading_tool_followup',
+      },
     });
   }
 

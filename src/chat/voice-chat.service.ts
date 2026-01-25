@@ -21,6 +21,7 @@ import logger from '../utils/logger.js';
 import * as tasksService from '../abilities/tasks.service.js';
 import * as calendarService from '../abilities/calendar.service.js';
 import * as emailService from '../abilities/email.service.js';
+import * as loadContextHandler from '../context/load-context.handler.js';
 
 // Voice-specific tools - minimal set for fast responses
 const webSearchTool = {
@@ -383,6 +384,36 @@ const deleteEmailTool = {
   },
 };
 
+// Context loading tool
+const loadContextTool = {
+  type: 'function' as const,
+  function: {
+    name: 'load_context',
+    description: `Load context from previous sessions or intents. Use when:
+- User says "continue where we left off", "what were we working on"
+- User references past work: "that thing we discussed", "the bug we fixed"
+- User asks about decisions: "what did we decide about X"`,
+    parameters: {
+      type: 'object',
+      properties: {
+        intent_id: {
+          type: 'string',
+          description: 'Specific intent ID to load (from breadcrumbs)',
+        },
+        session_id: {
+          type: 'string',
+          description: 'Specific session ID to load',
+        },
+        query: {
+          type: 'string',
+          description: 'Search query to find relevant context by keywords',
+        },
+      },
+      required: [],
+    },
+  },
+};
+
 const voiceTools = [
   webSearchTool,
   fetchUrlTool,
@@ -404,6 +435,8 @@ const voiceTools = [
   sendEmailTool,
   replyEmailTool,
   deleteEmailTool,
+  // Context tools
+  loadContextTool,
 ];
 
 export interface VoiceChatInput {
@@ -569,6 +602,12 @@ export async function processMessage(input: VoiceChatInput): Promise<VoiceChatOu
       model: modelConfig.model,
       maxTokens: 300, // Short responses for voice
       temperature: 0.7,
+      loggingContext: {
+        userId,
+        sessionId,
+        source: 'voice-chat',
+        nodeName: 'voice_initial',
+      },
     });
     logger.debug('Voice LLM call completed', {
       sessionId,
@@ -918,6 +957,17 @@ export async function processMessage(input: VoiceChatInput): Promise<VoiceChatOu
             break;
           }
 
+          case 'load_context': {
+            const result = await loadContextHandler.handleLoadContext(userId, {
+              intent_id: args.intent_id,
+              session_id: args.session_id,
+              query: args.query,
+              depth: 'brief', // Voice needs brief responses
+            });
+            toolResult = loadContextHandler.formatLoadContextResult(result);
+            break;
+          }
+
           default:
             toolResult = `Unknown tool: ${toolCall.function.name}`;
         }
@@ -957,6 +1007,12 @@ export async function processMessage(input: VoiceChatInput): Promise<VoiceChatOu
         model: modelConfig.model,
         maxTokens: 300,
         temperature: 0.7,
+        loggingContext: {
+          userId,
+          sessionId,
+          source: 'voice-chat',
+          nodeName: 'voice_tool_followup',
+        },
       });
       logger.debug('Voice LLM tool response call completed', {
         sessionId,

@@ -444,7 +444,7 @@ export default function IntegrationsTab() {
                 <div className="flex items-center justify-between">
                   <span className="text-theme-text-muted">Last sync</span>
                   <span className="text-theme-text-primary text-sm">
-                    {new Date(calendarStatus.lastSync).toLocaleString()}
+                    {new Date(calendarStatus.lastSync).toLocaleString('sv-SE')}
                   </span>
                 </div>
               )}

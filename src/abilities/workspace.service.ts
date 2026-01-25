@@ -11,7 +11,8 @@ const MAX_FILES_PER_USER = 100;
 // Allowed file extensions for workspace
 const ALLOWED_EXTENSIONS = new Set([
   '.py', '.js', '.ts', '.json', '.txt', '.md', '.csv', '.xml', '.yaml', '.yml',
-  '.html', '.css', '.sql', '.sh', '.r', '.ipynb'
+  '.html', '.css', '.sql', '.sh', '.r', '.ipynb',
+  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.pptx'
 ]);
 
 export interface WorkspaceFile {
@@ -87,6 +88,18 @@ export async function writeFile(
   filename: string,
   content: string
 ): Promise<WorkspaceFile> {
+  const contentBuffer = Buffer.from(content, 'utf-8');
+  return writeBuffer(userId, filename, contentBuffer);
+}
+
+/**
+ * Write a binary buffer to user's workspace
+ */
+export async function writeBuffer(
+  userId: string,
+  filename: string,
+  buffer: Buffer
+): Promise<WorkspaceFile> {
   // Validate filename
   const validation = validateFilename(filename);
   if (!validation.valid) {
@@ -94,8 +107,7 @@ export async function writeFile(
   }
 
   // Check content size
-  const contentBuffer = Buffer.from(content, 'utf-8');
-  if (contentBuffer.length > MAX_FILE_SIZE) {
+  if (buffer.length > MAX_FILE_SIZE) {
     throw new Error(`File too large. Max size: ${MAX_FILE_SIZE / 1024 / 1024}MB`);
   }
 
@@ -111,7 +123,7 @@ export async function writeFile(
 
   try {
     // Write file
-    await fs.writeFile(filePath, contentBuffer, { mode: 0o640 });
+    await fs.writeFile(filePath, buffer, { mode: 0o640 });
 
     // Get file stats
     const fileStat = await fs.stat(filePath);
@@ -307,6 +319,12 @@ function getMimeType(filename: string): string {
     '.sh': 'application/x-sh',
     '.r': 'text/x-r',
     '.ipynb': 'application/x-ipynb+json',
+    '.pdf': 'application/pdf',
+    '.doc': 'application/msword',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.xls': 'application/vnd.ms-excel',
+    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   };
   return mimeTypes[ext] || 'text/plain';
 }

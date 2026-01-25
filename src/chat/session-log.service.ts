@@ -12,6 +12,8 @@ import { query, queryOne } from '../db/postgres.js';
 import { createCompletion } from '../llm/router.js';
 import { config } from '../config/index.js';
 import * as tasksService from '../abilities/tasks.service.js';
+import * as contextSummaryService from '../context/context-summary.service.js';
+import type { SessionSummary, SessionArtifact } from '../context/context-summary.types.js';
 import logger from '../utils/logger.js';
 
 // ============================================
@@ -384,6 +386,143 @@ export async function analyzeSession(
   }
 }
 
+// ============================================
+// Detailed Session Summary (for context loading)
+// ============================================
+
+const DETAILED_ANALYSIS_PROMPT = `Analyze this chat session in depth and extract structured information.
+
+For the session below, provide:
+1. title: A short title (5-10 words) describing the main topic
+2. oneLiner: A one-sentence summary (max 15 words)
+3. summary: A 2-3 sentence summary of what happened
+4. topics: Array of 2-5 topic keywords
+5. keywords: Array of 5-10 search keywords (names, technical terms, etc.)
+6. decisions: Array of decisions made during the session (empty if none)
+7. openQuestions: Array of unresolved questions or topics (empty if none)
+8. actionItems: Array of tasks/todos mentioned (empty if none)
+9. moodArc: Brief description of emotional trajectory (e.g., "started frustrated, ended satisfied")
+10. artifacts: Array of things created (files, code, tasks, etc.)
+
+Respond in this exact JSON format:
+{
+  "title": "...",
+  "oneLiner": "...",
+  "summary": "...",
+  "topics": ["..."],
+  "keywords": ["..."],
+  "decisions": ["..."],
+  "openQuestions": ["..."],
+  "actionItems": ["..."],
+  "moodArc": "...",
+  "artifacts": [{"type": "file|code|task|knowledge|calendar_event|email", "name": "...", "description": "..."}]
+}
+
+Chat messages:
+`;
+
+/**
+ * Generate a detailed session summary for context loading
+ * This is richer than the basic analyzeSession and stores to Redis
+ */
+export async function generateDetailedSessionSummary(
+  sessionId: string,
+  userId: string,
+  messages: Array<{ role: string; content: string }>,
+  intentsActive: string[] = [],
+  intentsResolved: string[] = [],
+  toolsUsed: string[] = [],
+  startedAt: Date,
+  endedAt: Date
+): Promise<SessionSummary | null> {
+  try {
+    // Format messages for analysis (limit to avoid token overflow)
+    const formatted = messages
+      .slice(-30) // Last 30 messages for more context
+      .map(m => `${m.role}: ${m.content.slice(0, 300)}`)
+      .join('\n');
+
+    const response = await createCompletion(
+      'ollama',
+      config.ollama.chatModel,
+      [{ role: 'user', content: DETAILED_ANALYSIS_PROMPT + formatted }],
+      { temperature: 0.3, maxTokens: 800 }
+    );
+
+    const content = response.content || '';
+
+    // Parse JSON response
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      logger.warn('Failed to parse detailed session summary', { sessionId });
+      return null;
+    }
+
+    const parsed = JSON.parse(jsonMatch[0]);
+
+    // Build the full summary
+    const summary: SessionSummary = {
+      sessionId,
+      userId,
+      title: parsed.title || 'Chat session',
+      oneLiner: parsed.oneLiner || parsed.summary?.split('.')[0] || 'Session completed',
+      topics: parsed.topics || [],
+      keywords: parsed.keywords || [],
+      summary: parsed.summary || 'Session completed',
+      decisions: parsed.decisions || [],
+      openQuestions: parsed.openQuestions || [],
+      actionItems: parsed.actionItems || [],
+      moodArc: parsed.moodArc || 'neutral',
+      energyEnd: inferEnergy(parsed.moodArc),
+      artifacts: (parsed.artifacts || []).map((a: SessionArtifact) => ({
+        type: a.type || 'code',
+        name: a.name || 'Unknown',
+        description: a.description,
+      })),
+      intentsActive,
+      intentsResolved,
+      messageCount: messages.length,
+      toolsUsed,
+      startedAt,
+      endedAt,
+      generatedAt: new Date(),
+    };
+
+    // Store in Redis
+    await contextSummaryService.storeSessionSummary(summary);
+
+    logger.info('Generated detailed session summary', {
+      sessionId,
+      title: summary.title,
+      decisions: summary.decisions.length,
+      actionItems: summary.actionItems.length,
+    });
+
+    return summary;
+  } catch (error) {
+    logger.error('Failed to generate detailed session summary', {
+      error: (error as Error).message,
+      sessionId,
+    });
+    return null;
+  }
+}
+
+/**
+ * Infer energy level from mood arc description
+ */
+function inferEnergy(moodArc: string): 'high' | 'medium' | 'low' {
+  const lower = (moodArc || '').toLowerCase();
+
+  if (/excit|energi|enthus|happy|satisf|accomplish/i.test(lower)) {
+    return 'high';
+  }
+  if (/tired|exhaust|frustrat|drain|low|sad|confus/i.test(lower)) {
+    return 'low';
+  }
+  return 'medium';
+}
+
 export default {
   createSessionLog,
   updateSessionLog,
@@ -393,4 +532,5 @@ export default {
   getIdleUnfinalizedLogs,
   formatLogsForContext,
   analyzeSession,
+  generateDetailedSessionSummary,
 };

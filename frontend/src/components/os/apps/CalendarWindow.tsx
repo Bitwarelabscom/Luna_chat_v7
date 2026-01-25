@@ -115,8 +115,8 @@ export default function CalendarWindow() {
   const formatEventTime = (startTime: string, endTime: string) => {
     const start = new Date(startTime);
     const end = new Date(endTime);
-    const startStr = start.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-    const endStr = end.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    const startStr = start.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+    const endStr = end.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
     return `${startStr} - ${endStr}`;
   };
 

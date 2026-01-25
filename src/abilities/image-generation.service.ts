@@ -17,6 +17,8 @@ if (!fs.existsSync(GENERATED_DIR)) {
 export interface ImageResult {
   success: boolean;
   imageUrl?: string;
+  filename?: string;
+  filePath?: string;
   error?: string;
   executionTimeMs?: number;
 }
@@ -127,6 +129,8 @@ export async function generateImage(
     return {
       success: true,
       imageUrl,
+      filename,
+      filePath: outputPath,
       executionTimeMs: Date.now() - startTime,
     };
   } catch (error) {

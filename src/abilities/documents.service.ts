@@ -6,6 +6,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { fileTypeFromBuffer } from 'file-type';
 import * as vision from './vision.service.js';
+import pdfParse from 'pdf-parse';
 
 const DOCUMENTS_DIR = process.env.DOCUMENTS_DIR || '/app/documents';
 const MAX_CHUNK_SIZE = 1000; // characters per chunk
@@ -213,9 +214,13 @@ Be detailed and specific so this description can be used for search and referenc
         .replace(/\s+/g, ' ')
         .trim();
     } else if (mimeType === 'application/pdf') {
-      // For PDF, we'd need a library like pdf-parse
-      // For now, mark as error if we can't process
-      throw new Error('PDF processing requires additional setup. Please upload text files for now.');
+      try {
+        const data = await (pdfParse as any)(content);
+        text = data.text;
+      } catch (pdfError) {
+        logger.error('PDF parsing failed', { docId, error: (pdfError as Error).message });
+        throw new Error('Failed to extract text from PDF');
+      }
     } else {
       // Try to read as text
       text = content.toString('utf-8');

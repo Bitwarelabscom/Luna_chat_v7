@@ -4,6 +4,7 @@ import logger from '../utils/logger.js';
 import type { SearchResult } from '../types/index.js';
 import type { ProviderId } from './types.js';
 import * as anthropicProvider from './providers/anthropic.provider.js';
+import { activityHelpers } from '../activity/activity.service.js';
 
 // Provider clients cache
 const clients: Partial<Record<ProviderId, OpenAI>> = {};
@@ -63,6 +64,17 @@ export interface ChatMessage {
   tool_call_id?: string;
 }
 
+/**
+ * Logging context for automatic activity logging
+ */
+export interface LLMLoggingContext {
+  userId: string;
+  sessionId?: string;
+  turnId?: string;
+  source: string;  // 'voice-chat', 'trading-chat', 'chat', 'agents', etc.
+  nodeName: string;  // Specific node name for the activity log
+}
+
 export interface ChatCompletionOptions {
   messages: ChatMessage[];
   tools?: OpenAI.Chat.Completions.ChatCompletionTool[];
@@ -72,6 +84,7 @@ export interface ChatCompletionOptions {
   provider?: ProviderId;
   model?: string;
   reasoning?: boolean;  // For xAI Grok 4.1 Fast reasoning models
+  loggingContext?: LLMLoggingContext;  // Optional logging context for activity tracking
 }
 
 export interface ChatCompletionResult {
@@ -94,9 +107,57 @@ export async function createChatCompletion(
     provider = 'openai',
     model,
     reasoning,
+    loggingContext,
   } = options;
 
   const modelToUse = model || config.openai.model;
+  const startTime = Date.now();
+
+  // Helper to log LLM call if logging context is provided
+  const logActivity = (result: ChatCompletionResult) => {
+    if (loggingContext) {
+      const durationMs = Date.now() - startTime;
+      activityHelpers.logLLMCall(
+        loggingContext.userId,
+        loggingContext.sessionId,
+        loggingContext.turnId,
+        loggingContext.nodeName,
+        modelToUse,
+        provider,
+        {
+          input: result.promptTokens,
+          output: result.completionTokens,
+        },
+        durationMs,
+        undefined, // cost
+        undefined, // reasoning
+        {
+          // Full request details for debugging/optimization
+          messages: messages.map(m => ({
+            role: m.role,
+            content: m.content,
+            tool_calls: m.tool_calls,
+            tool_call_id: m.tool_call_id,
+          })),
+          tools: tools?.map(t => ({
+            name: t.function.name,
+            description: t.function.description,
+          })),
+          temperature,
+          maxTokens,
+          // Response details
+          response: {
+            content: result.content,
+            finishReason: result.finishReason,
+            toolCalls: result.toolCalls?.map(tc => ({
+              name: tc.function.name,
+              arguments: tc.function.arguments,
+            })),
+          },
+        }
+      ).catch(() => {}); // Non-blocking
+    }
+  };
 
   // Route Sanhedrin to native provider (no tool support)
   if (provider === 'sanhedrin') {
@@ -109,7 +170,7 @@ export async function createChatCompletion(
       messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
       { temperature, maxTokens }
     );
-    return {
+    const completionResult: ChatCompletionResult = {
       content: result.content,
       tokensUsed: result.tokensUsed,
       promptTokens: 0,
@@ -117,6 +178,8 @@ export async function createChatCompletion(
       toolCalls: undefined,
       finishReason: 'stop',
     };
+    logActivity(completionResult);
+    return completionResult;
   }
 
   // Route Anthropic to native provider (required for tool calling, also works without tools)
@@ -129,7 +192,7 @@ export async function createChatCompletion(
         tools as anthropicProvider.OpenAITool[],
         { temperature, maxTokens }
       );
-      return {
+      const completionResult: ChatCompletionResult = {
         content: result.content,
         tokensUsed: result.tokensUsed,
         promptTokens: result.promptTokens,
@@ -137,6 +200,8 @@ export async function createChatCompletion(
         toolCalls: result.toolCalls as OpenAI.Chat.Completions.ChatCompletionMessageToolCall[],
         finishReason: result.finishReason,
       };
+      logActivity(completionResult);
+      return completionResult;
     } else {
       // No tools - use regular Anthropic completion
       logger.debug('Routing to native Anthropic provider (no tools)', { model: modelToUse });
@@ -145,7 +210,7 @@ export async function createChatCompletion(
         messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
         { temperature, maxTokens }
       );
-      return {
+      const completionResult: ChatCompletionResult = {
         content: result.content,
         tokensUsed: result.tokensUsed,
         promptTokens: result.inputTokens || 0,
@@ -153,6 +218,8 @@ export async function createChatCompletion(
         toolCalls: undefined,
         finishReason: 'stop',
       };
+      logActivity(completionResult);
+      return completionResult;
     }
   }
 
@@ -193,7 +260,7 @@ export async function createChatCompletion(
 
     const choice = response.choices[0];
 
-    return {
+    const completionResult: ChatCompletionResult = {
       content: choice.message.content || '',
       tokensUsed: response.usage?.total_tokens || 0,
       promptTokens: response.usage?.prompt_tokens || 0,
@@ -201,6 +268,8 @@ export async function createChatCompletion(
       toolCalls: choice.message.tool_calls,
       finishReason: choice.finish_reason || 'stop',
     };
+    logActivity(completionResult);
+    return completionResult;
   } catch (error) {
     logger.error('Chat completion error', {
       error: (error as Error).message,
@@ -616,6 +685,28 @@ export const sendTelegramTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   },
 };
 
+export const sendFileToTelegramTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'send_file_to_telegram',
+    description: `Send a file from your workspace to the user via Telegram. Use this when you want to send a document, image, report, or any file you have created or saved.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        filename: {
+          type: 'string',
+          description: 'The name of the file in the workspace to send (e.g., "report.pdf", "image.png")',
+        },
+        caption: {
+          type: 'string',
+          description: 'Optional caption to send with the file',
+        },
+      },
+      required: ['filename'],
+    },
+  },
+};
+
 export const searchDocumentsTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: 'function',
   function: {
@@ -706,13 +797,13 @@ export const createTodoTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: 'function',
   function: {
     name: 'create_todo',
-    description: `Create a new todo item for the user. Use when the user asks you to add something to their todo list, remind them about something, or when they mention a task they need to do.`,
+    description: `Create a new todo item for the user. Use when the user asks you to add something to their todo list, remind them about something, or when they mention a task they need to do. IMPORTANT: Extract ONLY the core task action for the title - do NOT include conversational phrases like "can you add a todo that..." or "remind me to...". The title should be the actual task like "buy coffee" or "call mom", NOT the user's full request.`,
     parameters: {
       type: 'object',
       properties: {
         title: {
           type: 'string',
-          description: 'The todo title - what needs to be done',
+          description: 'The core task action only (e.g., "buy coffee", "call mom", "finish report"). Extract ONLY the actual task - do NOT include the user\'s conversational phrasing like "can you add...", "remind me to...", "i should...", etc.',
         },
         notes: {
           type: 'string',
@@ -725,7 +816,11 @@ export const createTodoTool: OpenAI.Chat.Completions.ChatCompletionTool = {
         },
         dueDate: {
           type: 'string',
-          description: 'Optional due date in ISO format (YYYY-MM-DD) or natural language like "tomorrow", "next week"',
+          description: 'Due date with optional time in ISO format (YYYY-MM-DDTHH:MM) or natural language like "today at 12:00", "tomorrow 3pm", "next week". Include time if user specifies it.',
+        },
+        remindMinutesBefore: {
+          type: 'number',
+          description: 'How many minutes before the due date/time to send a reminder notification. E.g., 60 for 1 hour before, 30 for 30 minutes before.',
         },
       },
       required: ['title'],
@@ -748,6 +843,66 @@ export const completeTodoTool: OpenAI.Chat.Completions.ChatCompletionTool = {
         title: {
           type: 'string',
           description: 'Alternative: the title/text of the todo to complete (will match partially)',
+        },
+      },
+      required: [],
+    },
+  },
+};
+
+export const createCalendarEventTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'create_calendar_event',
+    description: `Create a calendar event. Use when user explicitly asks to add something to their CALENDAR (not todo list). IMPORTANT: Extract ONLY the event title from the user's message - do NOT include conversational phrasing. A todo/task request should use create_todo instead, NOT this tool.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        title: {
+          type: 'string',
+          description: 'The event title only (e.g., "Coffee with Alex", "Doctor appointment", "Team meeting"). Extract ONLY the actual event name.',
+        },
+        description: {
+          type: 'string',
+          description: 'Optional description or notes for the event',
+        },
+        startTime: {
+          type: 'string',
+          description: 'Start date and time in ISO format (YYYY-MM-DDTHH:MM) or natural language like "today at 14:00", "tomorrow 3pm", "next Monday 10:00"',
+        },
+        endTime: {
+          type: 'string',
+          description: 'Optional end time. If not provided, defaults to 1 hour after start time.',
+        },
+        location: {
+          type: 'string',
+          description: 'Optional location for the event',
+        },
+        isAllDay: {
+          type: 'boolean',
+          description: 'Whether this is an all-day event (no specific time)',
+        },
+        reminderMinutes: {
+          type: 'number',
+          description: 'How many minutes before the event to send a reminder. E.g., 15 for 15 minutes, 60 for 1 hour.',
+        },
+      },
+      required: ['title', 'startTime'],
+    },
+  },
+};
+
+export const listCalendarEventsTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'list_calendar_events',
+    description: `List upcoming calendar events. Use when user asks what's on their calendar, their schedule, or upcoming events.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        days: {
+          type: 'number',
+          description: 'How many days ahead to look. Default: 7',
         },
       },
       required: [],
@@ -1097,6 +1252,78 @@ export const generateBackgroundTool: OpenAI.Chat.Completions.ChatCompletionTool 
   },
 };
 
+// Context loading tool - fetch session/intent context on demand
+export const loadContextTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'load_context',
+    description: `Load context from previous sessions or intents. Use when:
+- User says "continue where we left off", "what were we working on"
+- User references past work: "that thing we discussed", "the bug we fixed"
+- User asks about decisions: "what did we decide about X"
+- You need more context about an ongoing task or goal`,
+    parameters: {
+      type: 'object',
+      properties: {
+        intent_id: {
+          type: 'string',
+          description: 'Specific intent ID to load (from breadcrumbs)',
+        },
+        session_id: {
+          type: 'string',
+          description: 'Specific session ID to load',
+        },
+        query: {
+          type: 'string',
+          description: 'Search query to find relevant context by keywords',
+        },
+        depth: {
+          type: 'string',
+          enum: ['brief', 'summary', 'detailed'],
+          description: 'How much detail to load. Default: summary',
+        },
+      },
+      required: [],
+    },
+  },
+};
+
+// Context correction tool - fix incorrect summaries
+export const correctSummaryTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'correct_summary',
+    description: `Correct an incorrect summary when user indicates stored context is wrong. Use when:
+- User says "that's not what we decided"
+- User says "actually, we tried X not Y"
+- User corrects a stored decision, approach, or blocker`,
+    parameters: {
+      type: 'object',
+      properties: {
+        type: {
+          type: 'string',
+          enum: ['session', 'intent'],
+          description: 'Type of summary to correct',
+        },
+        id: {
+          type: 'string',
+          description: 'ID of the session or intent to correct',
+        },
+        field: {
+          type: 'string',
+          enum: ['decision', 'approach', 'blocker', 'summary'],
+          description: 'Which field to correct',
+        },
+        correction: {
+          type: 'string',
+          description: 'The correct value or information',
+        },
+      },
+      required: ['type', 'id', 'field', 'correction'],
+    },
+  },
+};
+
 // Research agent tool - uses Claude CLI for in-depth research
 export const researchTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: 'function',
@@ -1158,6 +1385,8 @@ export default {
   deleteEmailTool,
   replyEmailTool,
   markEmailReadTool,
+  sendTelegramTool,
+  sendFileToTelegramTool,
   searchDocumentsTool,
   suggestGoalTool,
   fetchUrlTool,
@@ -1178,6 +1407,8 @@ export default {
   browserCloseTool,
   generateImageTool,
   generateBackgroundTool,
+  loadContextTool,
+  correctSummaryTool,
   formatSearchResultsForContext,
   formatAgentResultForContext,
 };

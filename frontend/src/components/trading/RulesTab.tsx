@@ -867,7 +867,7 @@ export default function RulesTab() {
                   </span>
                   {rule.expiresAt && rule.status === 'active' && (
                     <span style={{ color: '#f59e0b' }}>
-                      Expires: {new Date(rule.expiresAt).toLocaleString()}
+                      Expires: {new Date(rule.expiresAt).toLocaleString('sv-SE')}
                     </span>
                   )}
                 </div>

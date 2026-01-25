@@ -19,6 +19,8 @@ import * as hintInjection from '../layered-agent/services/hint-injection.service
 import * as selfCorrection from '../layered-agent/services/self-correction.service.js';
 import * as sessionActivityService from '../chat/session-activity.service.js';
 import * as intentService from '../intents/intent.service.js';
+import * as contextSummaryService from '../context/context-summary.service.js';
+import * as intentSummaryGenerator from '../context/intent-summary-generator.service.js';
 import { activityHelpers } from '../activity/activity.service.js';
 import logger from '../utils/logger.js';
 
@@ -233,6 +235,28 @@ const jobs: Job[] = [
     enabled: true,
     running: false,
     handler: pruneIntentCache,
+  },
+  // Context summary jobs
+  {
+    name: 'contextSummaryGenerator',
+    intervalMs: 30 * 60 * 1000, // Every 30 minutes (with sessionLogFinalizer)
+    enabled: true,
+    running: false,
+    handler: generateContextSummaries,
+  },
+  {
+    name: 'searchIndexMaintenance',
+    intervalMs: 6 * 60 * 60 * 1000, // Every 6 hours
+    enabled: true,
+    running: false,
+    handler: maintainSearchIndex,
+  },
+  {
+    name: 'intentSummaryRefresh',
+    intervalMs: 24 * 60 * 60 * 1000, // Daily
+    enabled: true,
+    running: false,
+    handler: refreshIntentSummaries,
   },
 ];
 
@@ -1029,6 +1053,187 @@ async function pruneIntentCache(): Promise<void> {
     }
   } catch (error) {
     logger.error('Intent cache prune job failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+// ============================================
+// Context Summary Job Handlers
+// ============================================
+
+/**
+ * Generate context summaries for recently finalized sessions
+ * Works alongside sessionLogFinalizer to create rich summaries
+ */
+async function generateContextSummaries(): Promise<void> {
+  try {
+    // Find sessions that have been finalized but don't have context summaries
+    const result = await pool.query(`
+      SELECT sl.session_id, sl.user_id, sl.summary, sl.topics, sl.mood, sl.energy,
+             sl.started_at, sl.ended_at, sl.message_count, sl.tools_used
+      FROM session_logs sl
+      LEFT JOIN context_summary_metadata csm
+        ON csm.user_id = sl.user_id
+        AND csm.summary_type = 'session'
+        AND csm.reference_id = sl.session_id
+      WHERE sl.ended_at IS NOT NULL
+        AND sl.ended_at > NOW() - INTERVAL '6 hours'
+        AND csm.id IS NULL
+      ORDER BY sl.ended_at DESC
+      LIMIT 10
+    `);
+
+    if (result.rows.length === 0) {
+      logger.debug('No sessions need context summaries');
+      return;
+    }
+
+    let generated = 0;
+
+    for (const row of result.rows) {
+      try {
+        // Get messages for this session
+        const messagesResult = await pool.query(
+          `SELECT role, content FROM messages
+           WHERE session_id = $1
+           ORDER BY created_at ASC`,
+          [row.session_id]
+        );
+
+        if (messagesResult.rows.length < 2) continue;
+
+        // Get active intents for this session
+        const intentsResult = await pool.query(
+          `SELECT DISTINCT intent_id FROM intent_touches
+           WHERE session_id = $1`,
+          [row.session_id]
+        );
+        const intentIds = intentsResult.rows.map(r => r.intent_id);
+
+        // Generate detailed summary
+        await sessionLogService.generateDetailedSessionSummary(
+          row.session_id,
+          row.user_id,
+          messagesResult.rows,
+          intentIds,
+          [], // Resolved intents - would need additional query
+          row.tools_used || [],
+          new Date(row.started_at),
+          new Date(row.ended_at)
+        );
+
+        generated++;
+      } catch (err) {
+        logger.warn('Failed to generate context summary for session', {
+          sessionId: row.session_id,
+          error: (err as Error).message,
+        });
+      }
+    }
+
+    if (generated > 0) {
+      logger.info('Context summary generation completed', { generated });
+    }
+  } catch (error) {
+    logger.error('Context summary generation job failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+/**
+ * Maintain search index - clean up and rebuild if needed
+ */
+async function maintainSearchIndex(): Promise<void> {
+  try {
+    // Clean up expired summaries
+    const cleaned = await contextSummaryService.cleanupExpiredSummaries();
+
+    // Get users with recent activity
+    const result = await pool.query(`
+      SELECT DISTINCT user_id FROM session_logs
+      WHERE ended_at > NOW() - INTERVAL '7 days'
+      LIMIT 50
+    `);
+
+    let rebuilt = 0;
+
+    for (const row of result.rows) {
+      try {
+        // Check if index seems healthy (has some entries)
+        const searchResults = await contextSummaryService.searchContext(
+          row.user_id,
+          'test'
+        );
+
+        // If no results found, might need rebuild
+        const recentSessions = await contextSummaryService.getRecentSessionIds(
+          row.user_id,
+          5
+        );
+
+        if (recentSessions.length > 0 && searchResults.length === 0) {
+          // Rebuild this user's index
+          await contextSummaryService.rebuildSearchIndex(row.user_id);
+          rebuilt++;
+        }
+      } catch (err) {
+        logger.warn('Search index check failed for user', {
+          userId: row.user_id,
+          error: (err as Error).message,
+        });
+      }
+    }
+
+    if (cleaned > 0 || rebuilt > 0) {
+      logger.info('Search index maintenance completed', {
+        expired: cleaned,
+        rebuilt,
+      });
+    }
+  } catch (error) {
+    logger.error('Search index maintenance job failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+/**
+ * Refresh intent summaries for active intents
+ * Ensures intent context stays up-to-date
+ */
+async function refreshIntentSummaries(): Promise<void> {
+  try {
+    // Get users with active intents
+    const result = await pool.query(`
+      SELECT DISTINCT user_id FROM user_intents
+      WHERE status IN ('active', 'suspended')
+        AND last_touched_at > NOW() - INTERVAL '7 days'
+      LIMIT 20
+    `);
+
+    let refreshed = 0;
+
+    for (const row of result.rows) {
+      try {
+        const count = await intentSummaryGenerator.refreshUserIntentSummaries(
+          row.user_id
+        );
+        refreshed += count;
+      } catch (err) {
+        logger.warn('Intent summary refresh failed for user', {
+          userId: row.user_id,
+          error: (err as Error).message,
+        });
+      }
+    }
+
+    if (refreshed > 0) {
+      logger.info('Intent summary refresh completed', { refreshed });
+    }
+  } catch (error) {
+    logger.error('Intent summary refresh job failed', {
       error: (error as Error).message,
     });
   }

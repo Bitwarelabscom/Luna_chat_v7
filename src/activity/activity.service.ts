@@ -308,9 +308,44 @@ export async function cleanupOldArchives(daysToKeep: number = 90): Promise<numbe
 // Helper Functions for Common Activity Types
 // ============================================
 
+/**
+ * Detailed LLM call data for activity logging
+ */
+export interface LLMCallDetails {
+  nodeName: string;
+  model: string;
+  provider: string;
+  tokens: { input: number; output: number; cache?: number };
+  durationMs: number;
+  cost?: number;
+  // Request details
+  messages?: Array<{
+    role: string;
+    content: string;
+    tool_calls?: unknown[];
+    tool_call_id?: string;
+  }>;
+  tools?: Array<{
+    name: string;
+    description?: string;
+  }>;
+  temperature?: number;
+  maxTokens?: number;
+  // Response details
+  response?: {
+    content: string;
+    finishReason: string;
+    toolCalls?: Array<{
+      name: string;
+      arguments: string;
+    }>;
+  };
+  reasoning?: string;
+}
+
 export const activityHelpers = {
   /**
-   * Log an LLM call activity
+   * Log an LLM call activity with full details
    */
   logLLMCall: async (
     userId: string,
@@ -322,8 +357,29 @@ export const activityHelpers = {
     tokens: { input: number; output: number; cache?: number },
     durationMs: number,
     cost?: number,
-    reasoning?: string
+    reasoning?: string,
+    fullDetails?: Omit<LLMCallDetails, 'nodeName' | 'model' | 'provider' | 'tokens' | 'durationMs' | 'cost' | 'reasoning'>
   ): Promise<ActivityLog> => {
+    // Truncate message content for storage efficiency while preserving structure
+    const truncateMessages = (msgs?: LLMCallDetails['messages']) => {
+      if (!msgs) return undefined;
+      return msgs.map(m => ({
+        role: m.role,
+        content: m.content.length > 2000 ? m.content.substring(0, 2000) + '...[truncated]' : m.content,
+        tool_calls: m.tool_calls,
+        tool_call_id: m.tool_call_id,
+      }));
+    };
+
+    const truncateResponse = (resp?: LLMCallDetails['response']) => {
+      if (!resp) return undefined;
+      return {
+        content: resp.content.length > 2000 ? resp.content.substring(0, 2000) + '...[truncated]' : resp.content,
+        finishReason: resp.finishReason,
+        toolCalls: resp.toolCalls,
+      };
+    };
+
     return logActivityAndBroadcast({
       userId,
       sessionId,
@@ -342,9 +398,15 @@ export const activityHelpers = {
         cacheTokens: tokens.cache || 0,
         totalTokens: tokens.input + tokens.output,
         cost,
-        reasoning: reasoning ? reasoning.substring(0, 200) : undefined,
+        reasoning: reasoning ? reasoning.substring(0, 500) : undefined,
+        // Full request/response details for debugging
+        messages: truncateMessages(fullDetails?.messages),
+        tools: fullDetails?.tools,
+        temperature: fullDetails?.temperature,
+        maxTokens: fullDetails?.maxTokens,
+        response: truncateResponse(fullDetails?.response),
       },
-      source: 'layered-agent',
+      source: nodeName.includes('_') ? nodeName.split('_')[0] : 'llm',
       durationMs,
     });
   },

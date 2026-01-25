@@ -401,6 +401,11 @@ export async function summarizeCollection(
       },
     ],
     maxTokens: 1500,
+    loggingContext: {
+      userId,
+      source: 'research',
+      nodeName: 'collection_summary',
+    },
   });
 
   return result.content || 'Unable to generate summary.';

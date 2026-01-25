@@ -318,7 +318,8 @@ export function parseTaskFromText(text: string): Partial<CreateTaskInput> {
   const tomorrow = /\b(tomorrow)\b/i;
   const nextWeek = /\bnext\s+week\b/i;
   const inDays = /\bin\s+(\d+)\s+days?\b/i;
-  const atTime = /\bat\s+(\d{1,2}):?(\d{2})?\s*(am|pm)?\b/i;
+  // Support both : and . as time separators (12:00 and 12.00)
+  const atTime = /\bat\s+(\d{1,2})[:.]?(\d{2})?\s*(am|pm)?\b/i;
 
   const now = new Date();
 

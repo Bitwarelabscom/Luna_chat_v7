@@ -85,19 +85,20 @@ export default function EmailWindow() {
     const now = new Date();
     const isToday = date.toDateString() === now.toDateString();
     if (isToday) {
-      return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+      return date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
     }
     return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   };
 
   const formatFullDate = (dateStr: string) => {
-    return new Date(dateStr).toLocaleString(undefined, {
+    return new Date(dateStr).toLocaleString('en-GB', {
       weekday: 'short',
       year: 'numeric',
       month: 'short',
       day: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
+      hour12: false,
     });
   };
 

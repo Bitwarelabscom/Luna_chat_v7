@@ -4,6 +4,10 @@ import crypto from 'crypto';
 import * as chatService from '../chat/chat.service.js';
 import * as sessionService from '../chat/session.service.js';
 import * as contextCompression from '../chat/context-compression.service.js';
+import * as workspaceService from '../abilities/workspace.service.js';
+import * as documentsService from '../abilities/documents.service.js';
+import * as fs from 'fs/promises';
+import * as path from 'path';
 
 // ============================================
 // Telegram Idle Timer System
@@ -119,6 +123,14 @@ interface TelegramPhoto {
   file_size?: number;
 }
 
+interface TelegramDocument {
+  file_id: string;
+  file_unique_id: string;
+  file_name?: string;
+  mime_type?: string;
+  file_size?: number;
+}
+
 interface TelegramUpdate {
   update_id: number;
   message?: {
@@ -135,6 +147,7 @@ interface TelegramUpdate {
     };
     text?: string;
     photo?: TelegramPhoto[];
+    document?: TelegramDocument;
     caption?: string;
   };
   callback_query?: {
@@ -226,6 +239,91 @@ async function telegramRequest(method: string, body?: Record<string, unknown>): 
   }
 
   return result.result;
+}
+
+async function telegramMultipartRequest(method: string, formData: FormData): Promise<unknown> {
+  const token = getBotToken();
+  if (!token) {
+    throw new Error('Telegram bot token not configured');
+  }
+
+  const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  const result = await response.json() as TelegramApiResponse;
+
+  if (!result.ok) {
+    logger.error('Telegram API error', { method, error: result.description });
+    throw new Error(result.description || 'Telegram API error');
+  }
+
+  return result.result;
+}
+
+/**
+ * Send a document/file to a Telegram chat
+ */
+export async function sendTelegramDocument(
+  chatId: number,
+  filePath: string,
+  caption?: string
+): Promise<boolean> {
+  try {
+    const fileName = path.basename(filePath);
+    const buffer = await fs.readFile(filePath);
+    const blob = new Blob([buffer]);
+
+    const formData = new FormData();
+    formData.append('chat_id', chatId.toString());
+    formData.append('document', blob, fileName);
+    if (caption) {
+      formData.append('caption', caption);
+    }
+
+    await telegramMultipartRequest('sendDocument', formData);
+    return true;
+  } catch (error) {
+    logger.error('Failed to send Telegram document', {
+      chatId,
+      filePath,
+      error: (error as Error).message,
+    });
+    return false;
+  }
+}
+
+/**
+ * Send a photo to a Telegram chat
+ */
+export async function sendTelegramPhoto(
+  chatId: number,
+  filePath: string,
+  caption?: string
+): Promise<boolean> {
+  try {
+    const fileName = path.basename(filePath);
+    const buffer = await fs.readFile(filePath);
+    const blob = new Blob([buffer]);
+
+    const formData = new FormData();
+    formData.append('chat_id', chatId.toString());
+    formData.append('photo', blob, fileName);
+    if (caption) {
+      formData.append('caption', caption);
+    }
+
+    await telegramMultipartRequest('sendPhoto', formData);
+    return true;
+  } catch (error) {
+    logger.error('Failed to send Telegram photo', {
+      chatId,
+      filePath,
+      error: (error as Error).message,
+    });
+    return false;
+  }
 }
 
 /**
@@ -669,6 +767,12 @@ export async function processUpdate(update: TelegramUpdate): Promise<void> {
     return;
   }
 
+  // Handle document messages
+  if (update.message?.document) {
+    await handleDocumentMessage(update.message);
+    return;
+  }
+
   // Require text for other message handling
   if (!update.message?.text) return;
 
@@ -969,6 +1073,127 @@ async function handlePhotoMessage(
     await sendTelegramMessage(
       chatId,
       'Sorry, I had trouble processing that image. Please try again.'
+    );
+  }
+}
+
+async function handleDocumentMessage(
+  message: NonNullable<TelegramUpdate['message']>
+): Promise<void> {
+  const chatId = message.chat.id;
+  const connection = await getConnectionByChatId(chatId);
+
+  if (!connection) {
+    await sendTelegramMessage(
+      chatId,
+      'Your Telegram is not linked to a Luna account. Go to Settings > Triggers > Telegram to link it.'
+    );
+    return;
+  }
+
+  if (!message.document) return;
+
+  try {
+    // Send upload action
+    await telegramRequest('sendChatAction', {
+      chat_id: chatId,
+      action: 'upload_document',
+    });
+
+    const fileId = message.document.file_id;
+    const fileName = message.document.file_name || `telegram_${fileId}`;
+
+    // Get file path from Telegram
+    const fileInfo = await telegramRequest('getFile', {
+      file_id: fileId,
+    }) as { file_path: string };
+
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    const fileUrl = `https://api.telegram.org/file/bot${token}/${fileInfo.file_path}`;
+
+    // Download file
+    const response = await fetch(fileUrl);
+    if (!response.ok) throw new Error(`Failed to download file: ${response.statusText}`);
+    
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    const ext = path.extname(fileName).toLowerCase();
+    const docExtensions = ['.pdf', '.txt', '.md', '.json', '.csv', '.html', '.xml', '.js', '.ts'];
+    let savedName = fileName;
+    let location = 'workspace';
+    
+    if (docExtensions.includes(ext)) {
+      try {
+        const doc = await documentsService.uploadDocument(connection.userId, {
+          buffer,
+          originalname: fileName,
+          mimetype: message.document.mime_type || 'application/octet-stream'
+        });
+        savedName = doc.originalName;
+        location = 'documents';
+      } catch (docError) {
+        logger.warn('Document upload failed, falling back to workspace', { userId: connection.userId, error: (docError as Error).message });
+        const savedFile = await workspaceService.writeBuffer(connection.userId, fileName, buffer);
+        savedName = savedFile.name;
+      }
+    } else {
+      const savedFile = await workspaceService.writeBuffer(connection.userId, fileName, buffer);
+      savedName = savedFile.name;
+    }
+
+    await sendTelegramMessage(
+      chatId,
+      location === 'documents' 
+        ? `Saved "${savedName}" to documents. I am reading it now...`
+        : `Saved "${savedName}" to workspace.`
+    );
+
+    // Notify Luna
+    const notification = location === 'documents'
+      ? `[User uploaded a document: "${savedName}"]\nI have saved it to your documents library and started processing it. You can search it using 'search_documents'.`
+      : `[User uploaded a file: "${savedName}"]\nI have saved it to your workspace.`;
+    
+    // Get or create session
+    const sessionId = await getOrCreateTelegramSession(connection.userId);
+
+    // Process through Luna
+    const chatResponse = await chatService.processMessage({
+      sessionId,
+      userId: connection.userId,
+      message: notification,
+      mode: 'companion',
+      source: 'telegram',
+    });
+
+    // Update last message time
+    await updateLastMessageTime(connection.userId);
+
+    // Send response
+    const maxLength = 4000;
+    let content = chatResponse.content;
+    while (content.length > 0) {
+      const chunk = content.slice(0, maxLength);
+      content = content.slice(maxLength);
+      await sendTelegramMessage(chatId, chunk, { parseMode: 'Markdown' });
+    }
+
+    resetTelegramIdleTimer(connection.userId, sessionId);
+
+    logger.info('Telegram document processed', {
+      userId: connection.userId,
+      fileName: savedName,
+      location,
+    });
+
+  } catch (error) {
+    logger.error('Failed to process Telegram document', {
+      userId: connection.userId,
+      error: (error as Error).message,
+    });
+    await sendTelegramMessage(
+      chatId,
+      `Failed to save file: ${(error as Error).message}`
     );
   }
 }

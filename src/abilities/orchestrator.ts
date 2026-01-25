@@ -411,11 +411,11 @@ function parseDateTimeFromText(text: string, now: Date): { startAt?: Date; endAt
     }
   }
 
-  // Parse time
+  // Parse time - support both : and . as separators (12:00 and 12.00)
   const timePatterns = [
-    /\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i,
-    /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i,
-    /\b(\d{1,2}):(\d{2})\b/,
+    /\bat\s+(\d{1,2})(?:[.:](\d{2}))?\s*(am|pm)?/i,
+    /\b(\d{1,2})(?:[.:](\d{2}))?\s*(am|pm)\b/i,
+    /\b(\d{1,2})[.:](\d{2})\b/,
   ];
 
   for (const pattern of timePatterns) {

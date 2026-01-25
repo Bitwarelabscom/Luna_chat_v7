@@ -5,6 +5,7 @@
 
 import { pool } from '../db/index.js';
 import { redis } from '../db/redis.js';
+import * as intentSummaryGenerator from '../context/intent-summary-generator.service.js';
 import logger from '../utils/logger.js';
 import {
   Intent,
@@ -428,6 +429,14 @@ export async function resolveIntent(
       label: intent.label,
     });
 
+    // Generate/update intent context summary (non-blocking)
+    intentSummaryGenerator.generateIntentSummary(intent, []).catch(err => {
+      logger.warn('Failed to generate intent summary on resolve', {
+        intentId,
+        error: (err as Error).message,
+      });
+    });
+
     return intent;
   }
 
@@ -449,6 +458,15 @@ export async function suspendIntent(intentId: string): Promise<Intent | null> {
   if (result.rows[0]) {
     const intent = mapRowToIntent(result.rows[0]);
     await invalidateCache(intent.userId);
+
+    // Generate/update intent context summary (non-blocking)
+    intentSummaryGenerator.generateIntentSummary(intent, []).catch(err => {
+      logger.warn('Failed to generate intent summary on suspend', {
+        intentId,
+        error: (err as Error).message,
+      });
+    });
+
     return intent;
   }
 

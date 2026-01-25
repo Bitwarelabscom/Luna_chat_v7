@@ -717,7 +717,7 @@ export default function TriggersTab() {
                         </p>
                         {schedule.nextTriggerAt && (
                           <p className="text-xs text-theme-text-muted mt-2">
-                            Next: {new Date(schedule.nextTriggerAt).toLocaleString()}
+                            Next: {new Date(schedule.nextTriggerAt).toLocaleString('sv-SE')}
                           </p>
                         )}
                       </div>
@@ -833,7 +833,7 @@ export default function TriggersTab() {
                       </div>
                       <p className="text-sm text-theme-text-primary">{item.messageSent}</p>
                       <p className="text-xs text-theme-text-muted mt-2">
-                        {new Date(item.createdAt).toLocaleString()}
+                        {new Date(item.createdAt).toLocaleString('sv-SE')}
                       </p>
                     </div>
                     {item.userResponded && (

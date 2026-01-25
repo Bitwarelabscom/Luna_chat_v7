@@ -39,11 +39,12 @@ export default function ExecutionsTab({ trades, loading }: ExecutionsTabProps) {
 
   const formatDate = (dateInput: string | Date) => {
     const date = dateInput instanceof Date ? dateInput : new Date(dateInput);
-    return date.toLocaleString('en-US', {
+    return date.toLocaleString('en-GB', {
       month: 'short',
       day: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
+      hour12: false,
     });
   };
 

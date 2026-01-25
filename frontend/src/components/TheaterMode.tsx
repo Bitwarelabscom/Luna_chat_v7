@@ -575,7 +575,7 @@ export default function TheaterMode({ sessionId, onClose }: TheaterModeProps) {
                     )}
                     <div className="text-xs text-white/70 whitespace-pre-wrap">{note.content}</div>
                     <div className="text-xs text-white/30 mt-2">
-                      {new Date(note.createdAt).toLocaleTimeString()}
+                      {new Date(note.createdAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false })}
                     </div>
                   </div>
                 ))

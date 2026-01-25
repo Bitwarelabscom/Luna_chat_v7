@@ -260,11 +260,12 @@ export default function RulesTab({ onRuleCreated }: RulesTabProps) {
   const formatDate = (dateStr?: string) => {
     if (!dateStr) return 'Never';
     const date = new Date(dateStr);
-    return date.toLocaleString('en-US', {
+    return date.toLocaleString('en-GB', {
       month: 'short',
       day: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
+      hour12: false,
     });
   };
 
