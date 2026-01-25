@@ -98,6 +98,8 @@ import * as backgroundSummarization from './background-summarization.service.js'
 import * as sessionLogService from './session-log.service.js';
 import * as sessionActivityService from './session-activity.service.js';
 import * as authService from '../auth/auth.service.js';
+import * as intentContextService from '../intents/intent-context.service.js';
+import * as intentDetection from '../intents/intent-detection.service.js';
 import logger from '../utils/logger.js';
 import { sysmonTools, executeSysmonTool } from '../abilities/sysmon.service.js';
 import * as researchAgent from '../abilities/research.agent.service.js';
@@ -225,6 +227,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     memoryContext,
     abilityContext,
     prefGuidelines,
+    intentContext,
   ] = await Promise.all([
     // Get user's model configuration - use fast model for smalltalk
     getUserModelConfig(userId, isSmallTalkMessage ? 'smalltalk' : 'main_chat'),
@@ -240,6 +243,10 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     abilities.buildAbilityContext(userId, message, sessionId, contextOptions),
     // Get personalization preferences - lightweight, always load
     preferencesService.getResponseGuidelines(userId),
+    // Get intent context - lightweight, always load (uses Redis cache)
+    isSmallTalkMessage
+      ? Promise.resolve({ activeIntents: [], suspendedIntents: [], recentlyResolved: [] })
+      : intentContextService.getIntentContext(userId),
   ]);
 
   // Check if forced sync summarization is needed (context approaching limit)
@@ -266,6 +273,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   const memoryPrompt = memoryService.formatMemoryForPrompt(memoryContext);
   const abilityPrompt = abilities.formatAbilityContextForPrompt(abilityContext);
   const prefPrompt = preferencesService.formatGuidelinesForPrompt(prefGuidelines);
+  const intentPrompt = intentContextService.formatIntentsForPrompt(intentContext);
 
   // Detect and learn from feedback signals
   const feedbackSignal = preferencesService.detectFeedbackSignals(message);
@@ -302,7 +310,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   }
 
   // Combine all context
-  const fullContext = [memoryPrompt, abilityPrompt, prefPrompt, abilityActionResult].filter(Boolean).join('\n\n');
+  const fullContext = [memoryPrompt, abilityPrompt, prefPrompt, intentPrompt, abilityActionResult].filter(Boolean).join('\n\n');
 
   // Build messages array with MCP tool info and compressed context
   const mcpToolsForPrompt = mcpUserTools.map(t => ({
@@ -1478,6 +1486,15 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     }
   }
 
+  // Process message for intent updates (async, non-blocking)
+  intentDetection.processMessageForIntents(
+    userId,
+    sessionId,
+    message,
+    completion.content,
+    intentContext
+  ).catch(() => {});
+
   return {
     messageId: assistantMessage.id,
     content: completion.content,
@@ -2464,6 +2481,7 @@ export async function* streamMessage(
     memoryContext,
     abilityContext,
     prefGuidelines,
+    intentContext,
   ] = await Promise.all([
     // Get user's model configuration - use fast model for smalltalk
     getUserModelConfig(userId, isSmallTalkMessage ? 'smalltalk' : 'main_chat'),
@@ -2479,6 +2497,10 @@ export async function* streamMessage(
     abilities.buildAbilityContext(userId, message, sessionId, contextOptions),
     // Get personalization preferences - lightweight, always load
     preferencesService.getResponseGuidelines(userId),
+    // Get intent context - lightweight, always load (uses Redis cache)
+    isSmallTalkMessage
+      ? Promise.resolve({ activeIntents: [], suspendedIntents: [], recentlyResolved: [] })
+      : intentContextService.getIntentContext(userId),
   ]);
 
   // Check if forced sync summarization is needed (context approaching limit)
@@ -2509,6 +2531,7 @@ export async function* streamMessage(
   const memoryPrompt = memoryService.formatMemoryForPrompt(memoryContext);
   const abilityPrompt = abilities.formatAbilityContextForPrompt(abilityContext);
   const prefPrompt = preferencesService.formatGuidelinesForPrompt(prefGuidelines);
+  const intentPrompt = intentContextService.formatIntentsForPrompt(intentContext);
 
   // Detect and learn from feedback signals
   const feedbackSignal = preferencesService.detectFeedbackSignals(message);
@@ -2544,7 +2567,7 @@ export async function* streamMessage(
   }
 
   // Combine all context
-  const fullContext = [memoryPrompt, abilityPrompt, prefPrompt, abilityActionResult].filter(Boolean).join('\n\n');
+  const fullContext = [memoryPrompt, abilityPrompt, prefPrompt, intentPrompt, abilityActionResult].filter(Boolean).join('\n\n');
 
   // Build messages array with MCP tool info and compressed context
   const mcpToolsForPrompt = mcpUserTools.map(t => ({
@@ -3997,6 +4020,15 @@ export async function* streamMessage(
   if (uniqueToolsUsed.length > 0) {
     sessionLogService.updateSessionLog(sessionId, { toolsUsed: uniqueToolsUsed }).catch(() => {});
   }
+
+  // Process message for intent updates (async, non-blocking)
+  intentDetection.processMessageForIntents(
+    userId,
+    sessionId,
+    message,
+    fullContent,
+    intentContext
+  ).catch(() => {});
 
   yield {
     type: 'done',

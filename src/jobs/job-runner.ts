@@ -18,6 +18,7 @@ import * as reminderService from '../abilities/reminder.service.js';
 import * as hintInjection from '../layered-agent/services/hint-injection.service.js';
 import * as selfCorrection from '../layered-agent/services/self-correction.service.js';
 import * as sessionActivityService from '../chat/session-activity.service.js';
+import * as intentService from '../intents/intent.service.js';
 import { activityHelpers } from '../activity/activity.service.js';
 import logger from '../utils/logger.js';
 
@@ -217,6 +218,21 @@ const jobs: Job[] = [
     enabled: true,
     running: false,
     handler: cleanupCritiqueData,
+  },
+  // Intent persistence jobs
+  {
+    name: 'intentDecay',
+    intervalMs: 24 * 60 * 60 * 1000, // Daily
+    enabled: true,
+    running: false,
+    handler: decayStaleIntents,
+  },
+  {
+    name: 'intentCachePrune',
+    intervalMs: 15 * 60 * 1000, // Every 15 minutes
+    enabled: true,
+    running: false,
+    handler: pruneIntentCache,
   },
 ];
 
@@ -975,6 +991,44 @@ async function cleanupCritiqueData(): Promise<void> {
     }
   } catch (error) {
     logger.error('Critique data cleanup job failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+// ============================================
+// Intent Persistence Job Handlers
+// ============================================
+
+/**
+ * Decay stale intents that haven't been touched in 7 days
+ */
+async function decayStaleIntents(): Promise<void> {
+  try {
+    const count = await intentService.decayStaleIntents(7);
+    if (count > 0) {
+      logger.info('Intent decay job completed', { decayed: count });
+    } else {
+      logger.debug('Intent decay job completed - no stale intents');
+    }
+  } catch (error) {
+    logger.error('Intent decay job failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+/**
+ * Prune expired intent cache entries
+ */
+async function pruneIntentCache(): Promise<void> {
+  try {
+    const count = await intentService.pruneIntentCache();
+    if (count > 0) {
+      logger.debug('Intent cache prune completed', { pruned: count });
+    }
+  } catch (error) {
+    logger.error('Intent cache prune job failed', {
       error: (error as Error).message,
     });
   }
