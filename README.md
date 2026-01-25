@@ -43,6 +43,8 @@ Built with a **Local-First** ethos, Luna integrates deeply with your digital lif
 - [The Council & Friends](#the-council--friends)
 - [Autonomous Mode](#autonomous-mode)
 - [Memory System](#memory-system)
+  - [Intent Persistence](#intent-persistence)
+  - [MemoryCore Integration](#memorycore-integration)
 - [LLM Providers](#llm-providers)
 - [Architecture](#architecture)
 - [Installation](#installation)
@@ -82,6 +84,7 @@ Most AI assistants are stateless query engines. Luna is a **stateful companion**
 - **Council System**: Four AI personas (Polaris, Aurora, Vega, Sol) deliberate on complex decisions
 - **Friend Mode**: AI friends (Nova, Sage, Celer) discuss observations to build deeper understanding
 - **Goal Tracking**: Set and track personal/professional goals with milestone support
+- **Intent Persistence**: Tracks what you're working on across sessions - understands "try again" and "that worked!"
 - **RSS Monitoring**: Autonomous feed checking and summarization
 - **Proactive Insights**: Generates insights from accumulated knowledge
 
@@ -526,6 +529,52 @@ Luna's memory system enables true long-term relationships through sophisticated 
 
 Memory is split into stable (facts, learnings) and volatile (semantic search) tiers for optimal prompt caching with Anthropic's API.
 
+### Intent Persistence
+
+Luna tracks **active intents** - what you're trying to accomplish - separately from retrospective memory. This enables understanding of ambiguous references ("try again"), context across topic switches, and goal completion awareness.
+
+#### Intent Types
+
+| Type | Description | Example |
+|------|-------------|---------|
+| **Task** | Specific action to complete | "I'm trying to debug the OAuth token refresh" |
+| **Goal** | Longer-term objective | "My goal is to learn Rust" |
+| **Exploration** | Open-ended curiosity | "I'm curious about quantum computing" |
+| **Companion** | Social/emotional need | "I need to vent about work" |
+
+#### Detection Patterns
+
+| Pattern Type | Confidence | Example Triggers |
+|--------------|------------|------------------|
+| **Explicit** | >= 0.85 | "I'm working on...", "Help me with...", "My goal is..." |
+| **Implicit** | 0.6-0.84 | "Back to...", "Still can't...", "That worked!" |
+
+#### Intent Lifecycle
+
+| Status | Description |
+|--------|-------------|
+| **Active** | Currently being worked on (max 5, max 3 high priority) |
+| **Suspended** | Paused due to topic switch or limit reached |
+| **Resolved** | Completed, abandoned, merged, or superseded |
+| **Decayed** | Untouched for 7+ days, auto-archived |
+
+#### Context Injection
+
+Active intents are automatically injected into Luna's context:
+
+```markdown
+## Active Intents
+**[HIGH] Debugging Luna email notifications**
+- Goal: Get daily email summaries working
+- Current approach: Testing with Gmail app password
+- Blocker: Token expires after 1 hour
+
+## Suspended Intents
+- BitwareTunes album sequencing (paused 3 days ago)
+```
+
+This allows Luna to understand references like "let's try a different approach" or "that fixed it!" without explicit context.
+
 ### MemoryCore Integration
 
 Luna integrates with **MemoryCore** for three-tier memory consolidation and consciousness metrics, enabling genuine temporal memory integration where past experiences shape present processing.
@@ -636,6 +685,10 @@ luna-chat/
 |   |   |-- research.service.ts     # Web research
 |   |   |-- rss.service.ts          # RSS monitoring
 |   |-- auth/               # Authentication
+|   |-- intents/            # Intent persistence
+|   |   |-- intent.service.ts         # CRUD, lifecycle, caching
+|   |   |-- intent-detection.service.ts  # Pattern matching
+|   |   |-- intent-context.service.ts    # Prompt formatting
 |   |-- chat/               # Chat processing
 |   |   |-- chat.service.ts         # Message processing
 |   |   |-- session.service.ts      # Session management
