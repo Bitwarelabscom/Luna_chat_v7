@@ -24,6 +24,8 @@ import {
   createTodoTool,
   completeTodoTool,
   updateTodoTool,
+  createCalendarEventTool,
+  listCalendarEventsTool,
   sessionNoteTool,
   createReminderTool,
   listRemindersTool,
@@ -76,6 +78,7 @@ import * as telegramService from '../triggers/telegram.service.js';
 import * as documents from '../abilities/documents.service.js';
 import * as youtube from '../abilities/youtube.service.js';
 import * as tasksService from '../abilities/tasks.service.js';
+import * as calendarService from '../abilities/calendar.service.js';
 import * as reminderService from '../abilities/reminder.service.js';
 import * as browser from '../abilities/browser.service.js';
 import * as imageGeneration from '../abilities/image-generation.service.js';
@@ -362,6 +365,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     sendEmailTool, checkEmailTool, readEmailTool, deleteEmailTool, replyEmailTool, markEmailReadTool,
     sendTelegramTool, searchDocumentsTool, suggestGoalTool,
     listTodosTool, createTodoTool, completeTodoTool, updateTodoTool,
+    createCalendarEventTool, listCalendarEventsTool,
     sessionNoteTool, createReminderTool, listRemindersTool, cancelReminderTool,
     browserNavigateTool, browserScreenshotTool, browserClickTool, browserFillTool,
     browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool,
@@ -770,19 +774,27 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
         } as ChatMessage);
       } else if (toolCall.function.name === 'create_todo') {
         const args = JSON.parse(toolCall.function.arguments);
-        logger.info('Luna creating todo', { title: args.title });
+        logger.info('Luna creating todo', { title: args.title, dueDate: args.dueDate, remindMinutesBefore: args.remindMinutesBefore });
         const parsed = tasksService.parseTaskFromText(args.dueDate || '');
+        // Calculate remindAt from dueAt and remindMinutesBefore
+        let remindAt: Date | undefined;
+        if (parsed.dueAt && args.remindMinutesBefore) {
+          remindAt = new Date(parsed.dueAt.getTime() - args.remindMinutesBefore * 60 * 1000);
+        }
         const todo = await tasksService.createTask(userId, {
           title: args.title,
           description: args.notes,
           priority: args.priority || 'medium',
           dueAt: parsed.dueAt,
+          remindAt: remindAt,
           sourceSessionId: sessionId,
         });
+        const dueStr = todo.dueAt ? ` - due: ${new Date(todo.dueAt).toLocaleString('sv-SE', { dateStyle: 'short', timeStyle: 'short' })}` : '';
+        const remindStr = remindAt ? ` (reminder ${args.remindMinutesBefore} min before)` : '';
         messages.push({
           role: 'tool',
           tool_call_id: toolCall.id,
-          content: `Created todo: "${todo.title}" [${todo.id.slice(0, 8)}]${todo.dueAt ? ` - due: ${new Date(todo.dueAt).toLocaleDateString()}` : ''}`,
+          content: `Created todo: "${todo.title}" [${todo.id.slice(0, 8)}]${dueStr}${remindStr}`,
         } as ChatMessage);
       } else if (toolCall.function.name === 'complete_todo') {
         const args = JSON.parse(toolCall.function.arguments);
@@ -870,6 +882,58 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
             content: 'Could not find a matching todo. Use list_todos to see available todos.',
           } as ChatMessage);
         }
+      } else if (toolCall.function.name === 'create_calendar_event') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Luna creating calendar event', { title: args.title, startTime: args.startTime });
+        try {
+          const parsed = tasksService.parseTaskFromText(args.startTime || '');
+          const startAt = parsed.dueAt || new Date();
+          let endAt: Date;
+          if (args.endTime) {
+            const endParsed = tasksService.parseTaskFromText(args.endTime);
+            endAt = endParsed.dueAt || new Date(startAt.getTime() + 60 * 60 * 1000);
+          } else {
+            endAt = new Date(startAt.getTime() + 60 * 60 * 1000); // 1 hour default
+          }
+          const event = await calendarService.createEvent(userId, {
+            title: args.title,
+            description: args.description,
+            startAt,
+            endAt,
+            location: args.location,
+            isAllDay: args.isAllDay || false,
+            reminderMinutes: args.reminderMinutes,
+          });
+          const dateStr = new Date(event.startAt).toLocaleString('sv-SE', { dateStyle: 'short', timeStyle: 'short' });
+          const reminderStr = args.reminderMinutes ? ` (reminder ${args.reminderMinutes} min before)` : '';
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Created calendar event: "${event.title}" on ${dateStr}${event.location ? ` @ ${event.location}` : ''}${reminderStr}`,
+          } as ChatMessage);
+        } catch (error) {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to create calendar event: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'list_calendar_events') {
+        const args = JSON.parse(toolCall.function.arguments);
+        const days = args.days || 7;
+        const events = await calendarService.getUpcomingEvents(userId, { days, limit: 10 });
+        const eventList = events.length > 0
+          ? events.map(e => {
+              const d = new Date(e.startAt);
+              const dateStr = d.toLocaleString('sv-SE', { dateStyle: 'short', timeStyle: 'short' });
+              return `- ${e.title} (${dateStr})${e.location ? ` @ ${e.location}` : ''}`;
+            }).join('\n')
+          : 'No upcoming events.';
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: `Calendar events (next ${days} days):\n${eventList}`,
+        } as ChatMessage);
       } else if (toolCall.function.name === 'session_note') {
         // Session note tool - appends notes to session log for future reference
         const args = JSON.parse(toolCall.function.arguments);
@@ -2546,6 +2610,7 @@ export async function* streamMessage(
     sendEmailTool, checkEmailTool, readEmailTool, deleteEmailTool, replyEmailTool, markEmailReadTool,
     sendTelegramTool, searchDocumentsTool, suggestGoalTool,
     listTodosTool, createTodoTool, completeTodoTool, updateTodoTool,
+    createCalendarEventTool, listCalendarEventsTool,
     sessionNoteTool, createReminderTool, listRemindersTool, cancelReminderTool,
     browserNavigateTool, browserScreenshotTool, browserClickTool, browserFillTool,
     browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool,
@@ -2897,19 +2962,27 @@ export async function* streamMessage(
       } else if (toolCall.function.name === 'create_todo') {
         const args = JSON.parse(toolCall.function.arguments);
         yield { type: 'status', status: 'Creating todo...' };
-        logger.info('Luna creating todo (stream)', { title: args.title });
+        logger.info('Luna creating todo (stream)', { title: args.title, dueDate: args.dueDate, remindMinutesBefore: args.remindMinutesBefore });
         const parsed = tasksService.parseTaskFromText(args.dueDate || '');
+        // Calculate remindAt from dueAt and remindMinutesBefore
+        let remindAt: Date | undefined;
+        if (parsed.dueAt && args.remindMinutesBefore) {
+          remindAt = new Date(parsed.dueAt.getTime() - args.remindMinutesBefore * 60 * 1000);
+        }
         const todo = await tasksService.createTask(userId, {
           title: args.title,
           description: args.notes,
           priority: args.priority || 'medium',
           dueAt: parsed.dueAt,
+          remindAt: remindAt,
           sourceSessionId: sessionId,
         });
+        const dueStr = todo.dueAt ? ` - due: ${new Date(todo.dueAt).toLocaleString('sv-SE', { dateStyle: 'short', timeStyle: 'short' })}` : '';
+        const remindStr = remindAt ? ` (reminder ${args.remindMinutesBefore} min before)` : '';
         messages.push({
           role: 'tool',
           tool_call_id: toolCall.id,
-          content: `Created todo: "${todo.title}" [${todo.id.slice(0, 8)}]${todo.dueAt ? ` - due: ${new Date(todo.dueAt).toLocaleDateString()}` : ''}`,
+          content: `Created todo: "${todo.title}" [${todo.id.slice(0, 8)}]${dueStr}${remindStr}`,
         } as ChatMessage);
       } else if (toolCall.function.name === 'complete_todo') {
         const args = JSON.parse(toolCall.function.arguments);
@@ -3000,6 +3073,58 @@ export async function* streamMessage(
             content: 'Could not find a matching todo. Use list_todos to see available todos.',
           } as ChatMessage);
         }
+      } else if (toolCall.function.name === 'create_calendar_event') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Luna creating calendar event', { title: args.title, startTime: args.startTime });
+        try {
+          const parsed = tasksService.parseTaskFromText(args.startTime || '');
+          const startAt = parsed.dueAt || new Date();
+          let endAt: Date;
+          if (args.endTime) {
+            const endParsed = tasksService.parseTaskFromText(args.endTime);
+            endAt = endParsed.dueAt || new Date(startAt.getTime() + 60 * 60 * 1000);
+          } else {
+            endAt = new Date(startAt.getTime() + 60 * 60 * 1000); // 1 hour default
+          }
+          const event = await calendarService.createEvent(userId, {
+            title: args.title,
+            description: args.description,
+            startAt,
+            endAt,
+            location: args.location,
+            isAllDay: args.isAllDay || false,
+            reminderMinutes: args.reminderMinutes,
+          });
+          const dateStr = new Date(event.startAt).toLocaleString('sv-SE', { dateStyle: 'short', timeStyle: 'short' });
+          const reminderStr = args.reminderMinutes ? ` (reminder ${args.reminderMinutes} min before)` : '';
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Created calendar event: "${event.title}" on ${dateStr}${event.location ? ` @ ${event.location}` : ''}${reminderStr}`,
+          } as ChatMessage);
+        } catch (error) {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to create calendar event: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'list_calendar_events') {
+        const args = JSON.parse(toolCall.function.arguments);
+        const days = args.days || 7;
+        const events = await calendarService.getUpcomingEvents(userId, { days, limit: 10 });
+        const eventList = events.length > 0
+          ? events.map(e => {
+              const d = new Date(e.startAt);
+              const dateStr = d.toLocaleString('sv-SE', { dateStyle: 'short', timeStyle: 'short' });
+              return `- ${e.title} (${dateStr})${e.location ? ` @ ${e.location}` : ''}`;
+            }).join('\n')
+          : 'No upcoming events.';
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: `Calendar events (next ${days} days):\n${eventList}`,
+        } as ChatMessage);
       } else if (toolCall.function.name === 'session_note') {
         // Session note tool - appends notes to session log for future reference
         const args = JSON.parse(toolCall.function.arguments);
@@ -3622,6 +3747,94 @@ export async function* streamMessage(
             tool_call_id: toolCall.id,
             content: emails.length > 0 ? `Found ${emails.length} email(s):\n${emailService.formatLunaInboxForPrompt(emails)}` : 'No emails found.',
           } as ChatMessage);
+        } else if (toolCall.function.name === 'read_email') {
+          const args = JSON.parse(toolCall.function.arguments);
+          yield { type: 'status', status: 'Reading email...' };
+          logger.info('Luna reading email (follow-up)', { uid: args.uid });
+          try {
+            const email = await emailService.fetchEmailByUid(args.uid);
+            if (email) {
+              messages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: `Email details:\nFrom: ${email.from}\nTo: ${email.to.join(', ')}\nSubject: ${email.subject}\nDate: ${email.date}\n\n${email.body}`,
+              } as ChatMessage);
+            } else {
+              messages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: `Email with UID ${args.uid} not found.`,
+              } as ChatMessage);
+            }
+          } catch (error) {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Failed to read email: ${(error as Error).message}`,
+            } as ChatMessage);
+          }
+        } else if (toolCall.function.name === 'reply_email') {
+          const args = JSON.parse(toolCall.function.arguments);
+          yield { type: 'status', status: 'Sending reply...' };
+          logger.info('Luna replying to email (follow-up)', { uid: args.uid });
+          try {
+            const result = await emailService.replyToEmail(args.uid, args.body);
+            if (result.success) {
+              messages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: `Reply sent successfully. Message ID: ${result.messageId}`,
+              } as ChatMessage);
+            } else {
+              messages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: `Failed to send reply: ${result.error}${result.blockedRecipients ? ` (blocked: ${result.blockedRecipients.join(', ')})` : ''}`,
+              } as ChatMessage);
+            }
+          } catch (error) {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Failed to send reply: ${(error as Error).message}`,
+            } as ChatMessage);
+          }
+        } else if (toolCall.function.name === 'delete_email') {
+          const args = JSON.parse(toolCall.function.arguments);
+          yield { type: 'status', status: 'Deleting email...' };
+          logger.info('Luna deleting email (follow-up)', { uid: args.uid });
+          try {
+            const success = await emailService.deleteEmail(args.uid);
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: success ? `Email with UID ${args.uid} has been deleted successfully.` : `Failed to delete email with UID ${args.uid}.`,
+            } as ChatMessage);
+          } catch (error) {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Failed to delete email: ${(error as Error).message}`,
+            } as ChatMessage);
+          }
+        } else if (toolCall.function.name === 'mark_email_read') {
+          const args = JSON.parse(toolCall.function.arguments);
+          yield { type: 'status', status: 'Updating email status...' };
+          logger.info('Luna marking email read status (follow-up)', { uid: args.uid, isRead: args.isRead });
+          try {
+            const success = await emailService.markEmailRead(args.uid, args.isRead);
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: success ? `Email with UID ${args.uid} has been marked as ${args.isRead ? 'read' : 'unread'}.` : `Failed to update read status for email with UID ${args.uid}.`,
+            } as ChatMessage);
+          } catch (error) {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Failed to mark email: ${(error as Error).message}`,
+            } as ChatMessage);
+          }
         } else if (toolCall.function.name === 'suggest_goal') {
           const args = JSON.parse(toolCall.function.arguments);
           logger.info('Luna suggesting goal (follow-up)', { title: args.title, goalType: args.goalType });

@@ -253,7 +253,7 @@ async function fetchRecentEmailsInternal(limit: number): Promise<EmailMessage[]>
     host: config.email.imap.host,
     port: config.email.imap.port,
     tls: config.email.imap.secure,
-    tlsOptions: { rejectUnauthorized: isProduction },
+    tlsOptions: { rejectUnauthorized: isProduction, servername: config.email.imap.host },
     connTimeout: 10000,
     authTimeout: 10000,
   };
@@ -379,7 +379,7 @@ async function fetchUnreadEmailsInternal(): Promise<EmailMessage[]> {
     host: config.email.imap.host,
     port: config.email.imap.port,
     tls: config.email.imap.secure,
-    tlsOptions: { rejectUnauthorized: isProduction },
+    tlsOptions: { rejectUnauthorized: isProduction, servername: config.email.imap.host },
     connTimeout: 10000,
     authTimeout: 10000,
   };
@@ -553,7 +553,7 @@ export async function testImapConnection(): Promise<boolean> {
       host: config.email.imap.host,
       port: config.email.imap.port,
       tls: config.email.imap.secure,
-      tlsOptions: { rejectUnauthorized: isProduction },
+      tlsOptions: { rejectUnauthorized: isProduction, servername: config.email.imap.host },
     };
 
     const imap = new Imap(imapConfig);
@@ -638,7 +638,7 @@ export async function fetchEmailByUid(uid: number): Promise<EmailMessage | null>
     host: config.email.imap.host,
     port: config.email.imap.port,
     tls: config.email.imap.secure,
-    tlsOptions: { rejectUnauthorized: isProduction },
+    tlsOptions: { rejectUnauthorized: isProduction, servername: config.email.imap.host },
     connTimeout: 10000,
     authTimeout: 10000,
   };
@@ -731,7 +731,7 @@ export async function deleteEmail(uid: number): Promise<boolean> {
     host: config.email.imap.host,
     port: config.email.imap.port,
     tls: config.email.imap.secure,
-    tlsOptions: { rejectUnauthorized: isProduction },
+    tlsOptions: { rejectUnauthorized: isProduction, servername: config.email.imap.host },
     connTimeout: 10000,
     authTimeout: 10000,
   };
@@ -802,7 +802,7 @@ export async function markEmailRead(uid: number, isRead: boolean): Promise<boole
     host: config.email.imap.host,
     port: config.email.imap.port,
     tls: config.email.imap.secure,
-    tlsOptions: { rejectUnauthorized: isProduction },
+    tlsOptions: { rejectUnauthorized: isProduction, servername: config.email.imap.host },
     connTimeout: 10000,
     authTimeout: 10000,
   };
