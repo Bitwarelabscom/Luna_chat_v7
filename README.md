@@ -43,6 +43,7 @@ Built with a **Local-First** ethos, Luna integrates deeply with your digital lif
 - [The Council & Friends](#the-council--friends)
 - [Autonomous Mode](#autonomous-mode)
 - [Memory System](#memory-system)
+  - [Graph-Based Memory Architecture](#graph-based-memory-architecture)
   - [Intent Persistence](#intent-persistence)
   - [MemoryCore Integration](#memorycore-integration)
 - [LLM Providers](#llm-providers)
@@ -499,10 +500,24 @@ Luna's memory system enables true long-term relationships through sophisticated 
 
 > **Deep Dive**: See [docs/MEMORY.md](docs/MEMORY.md) for comprehensive documentation on how Luna's memory works.
 
+### Graph-Based Memory Architecture
+
+Luna uses a biologically-inspired graph memory system where **memory strength is determined by connection density**, not just storage.
+
+> **Deep Dive**: See [graph-memory-architecture.md](graph-memory-architecture.md) for the technical specification.
+
+- **Nodes & Edges**: Concepts (entities, topics, preferences) are nodes; relationships are edges.
+- **Hebbian Learning**: "Neurons that fire together, wire together" - reinforcement increases edge strength.
+- **Origin Tracking**: Strictly distinguishes between **user-originated** facts and **model-inferred** insights to prevent hallucination loops.
+- **NeuralSleep**: An asynchronous consolidation process that decays unused edges, prunes weak nodes, and merges similar concepts.
+- **Soft Merging**: Uses `SAME_AS` edges for identity resolution, ensuring all merges are reversible and auditable.
+
 ### Memory Types
 
 | Type | Description | Storage |
 |------|-------------|---------|
+| **Graph Nodes** | Entities, topics, preferences, events, emotions | PostgreSQL (memory_nodes) |
+| **Graph Edges** | Co-occurrence, semantic, causal, and temporal links | PostgreSQL (memory_edges) |
 | **Facts** | Personal info extracted from conversations | PostgreSQL with confidence scoring |
 | **Embeddings** | Vector representations for semantic search | pgvector (1024 dimensions) |
 | **Summaries** | High-level conversation summaries | Topics, key points, sentiment |
@@ -520,10 +535,12 @@ Luna's memory system enables true long-term relationships through sophisticated 
 
 ### How Memory Works
 1. **During Chat**: Luna detects feedback signals ("shorter please", "explain more")
-2. **On Each Message**: Retrieves relevant facts, similar past conversations, and learnings
-3. **Semantic Search**: Finds related discussions using vector similarity (threshold: 0.75)
-4. **Post-Processing**: Extracts facts and generates summaries asynchronously
-5. **Preference Learning**: Adapts response style based on implicit feedback
+2. **On Each Message**: Retrieves relevant nodes, facts, and past conversations using hybrid search.
+3. **Identity Resolution**: Fast pronoun resolution and soft-matching against existing graph nodes.
+4. **Semantic Search**: Finds related discussions using vector similarity (threshold: 0.75)
+5. **Post-Processing**: Extracts nodes and facts with origin tracking.
+6. **Consolidation**: NeuralSleep runs to reinforce connections and decay isolated memories.
+7. **Preference Learning**: Adapts response style based on implicit feedback.
 
 ### Cache-Optimized Retrieval
 

@@ -51,6 +51,7 @@ images/
 # Internal documentation
 prompting.md
 CLAUDE.md
+GEMINI.md
 
 # Claude Code settings (local development)
 .claude/
