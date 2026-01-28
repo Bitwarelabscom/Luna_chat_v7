@@ -760,7 +760,7 @@ def gen_calendar() -> list[dict]:
 
     # Create events
     events = [
-        "meeting with John", "dentist appointment", "lunch with Sarah", "team standup",
+        "meeting with Henke", "dentist appointment", "lunch with Sarah", "team standup",
         "client call", "doctor appointment", "interview", "team lunch", "1:1 with manager",
         "project review", "demo presentation", "training session", "planning meeting",
     ]
@@ -803,7 +803,7 @@ def gen_email() -> list[dict]:
             examples.append(make_example(var, "get_emails", args, tools, "User wants emails."))
 
     # Search
-    searches = ["John", "project", "invoice", "meeting", "contract", "deployment",
+    searches = ["Henke", "project", "invoice", "meeting", "contract", "deployment",
                 "Amazon", "shipping", "password reset", "order", "receipt", "support"]
 
     for term in searches:
@@ -814,7 +814,7 @@ def gen_email() -> list[dict]:
 
     # Send
     sends = [
-        ("john@example.com", "Report Ready", "The report is ready."),
+        ("henke@example.com", "Report Ready", "The report is ready."),
         ("sarah@company.com", "Meeting", "Reminder about meeting."),
         ("support@vendor.com", "Order", "Order status inquiry."),
         ("team@company.com", "Deadline", "Reminder: deadline Friday."),
@@ -936,7 +936,7 @@ def gen_reminders() -> list[dict]:
     tools = [TOOLS["create_reminder"], TOOLS["list_reminders"]]
 
     reminders = [
-        ("take a break", 30), ("check the oven", 60), ("call John", 15), ("Timer", 5),
+        ("take a break", 30), ("check the oven", 60), ("call Henke", 15), ("Timer", 5),
         ("review PR", 120), ("team meeting", 45), ("stretch", 10), ("pick up laundry", 180),
         ("the call", 20), ("lunch", 90), ("drink water", 30), ("take medicine", 240),
         ("check email", 60), ("stand up", 25), ("save work", 30),

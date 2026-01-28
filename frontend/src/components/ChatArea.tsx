@@ -104,6 +104,7 @@ function StandardChatArea() {
   } | null>(null);
 
   const [input, setInput] = useState('');
+  const [projectMode, setProjectMode] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -214,7 +215,7 @@ function StandardChatArea() {
     try {
       // Stream the response - accumulate content locally to avoid stale closure
       let accumulatedContent = '';
-      for await (const chunk of streamMessage(sessionId, message)) {
+      for await (const chunk of streamMessage(sessionId, message, projectMode)) {
         if (chunk.type === 'status' && chunk.status) {
           setStatusMessage(chunk.status);
         } else if (chunk.type === 'reasoning' && chunk.content) {
@@ -572,9 +573,21 @@ function StandardChatArea() {
                 )}
               </button>
             </div>
-            <p className="text-xs text-theme-text-muted text-center mt-2">
-              Luna can make mistakes. Consider checking important information.
-            </p>
+            <div className="flex justify-between items-center mt-2 px-1">
+              <label className="flex items-center gap-2 text-xs text-theme-text-secondary cursor-pointer hover:text-theme-text-primary transition-colors select-none">
+                <input
+                  type="checkbox"
+                  checked={projectMode}
+                  onChange={(e) => setProjectMode(e.target.checked)}
+                  className="rounded border-theme-border bg-theme-bg-tertiary focus:ring-theme-accent-primary"
+                />
+                <span>Project Mode</span>
+              </label>
+              <p className="text-xs text-theme-text-muted text-center">
+                Luna can make mistakes. Consider checking important information.
+              </p>
+              <div className="w-[80px]"></div> {/* Spacer for centering */}
+            </div>
           </div>
         </div>
       )}

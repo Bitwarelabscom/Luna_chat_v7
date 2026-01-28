@@ -179,10 +179,10 @@ export const chatApi = {
   endSession: (id: string) =>
     api<{ success: boolean }>(`/api/chat/sessions/${id}/end`, { method: 'POST' }),
 
-  sendMessage: (sessionId: string, message: string) =>
+  sendMessage: (sessionId: string, message: string, projectMode?: boolean) =>
     api<{ messageId: string; content: string; tokensUsed: number }>(`/api/chat/sessions/${sessionId}/send`, {
       method: 'POST',
-      body: { message, stream: false },
+      body: { message, stream: false, projectMode },
     }),
 
   editMessage: (sessionId: string, messageId: string, content: string) =>
@@ -198,7 +198,8 @@ export const chatApi = {
 // Streaming helper
 export async function* streamMessage(
   sessionId: string,
-  message: string
+  message: string,
+  projectMode?: boolean
 ): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'reasoning' | 'background_refresh'; content?: string; status?: string; messageId?: string; metrics?: MessageMetrics; action?: string; url?: string }> {
   const response = await fetch(`${API_URL}${API_PREFIX}/api/chat/sessions/${sessionId}/send`, {
     method: 'POST',
@@ -206,7 +207,7 @@ export async function* streamMessage(
       'Content-Type': 'application/json',
     },
     credentials: 'include',
-    body: JSON.stringify({ message, stream: true }),
+    body: JSON.stringify({ message, stream: true, projectMode }),
   });
 
   if (!response.ok) {

@@ -40,7 +40,7 @@ Rules:
 - Categories: personal, work, preference, hobby, relationship, goal, context
 
 Output JSON array of facts:
-[{"category": "personal", "factKey": "name", "factValue": "John", "confidence": 1.0}]
+[{"category": "personal", "factKey": "name", "factValue": "Henke", "confidence": 1.0}]
 
 Return empty array [] if no facts can be extracted.
 Only return the JSON array, no other text.`;

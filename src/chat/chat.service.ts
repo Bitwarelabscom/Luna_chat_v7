@@ -118,6 +118,7 @@ export interface ChatInput {
   message: string;
   mode: 'assistant' | 'companion' | 'voice';
   source?: 'web' | 'telegram' | 'api';
+  projectMode?: boolean;
 }
 
 export interface ChatOutput {
@@ -128,7 +129,7 @@ export interface ChatOutput {
 }
 
 export async function processMessage(input: ChatInput): Promise<ChatOutput> {
-  const { sessionId, userId, message, mode, source = 'web' } = input;
+  const { sessionId, userId, message, mode, source = 'web', projectMode } = input;
 
   // Initialize MemoryCore session for consolidation tracking
   // This enables episodic memory recording and NeuralSleep LNN processing
@@ -219,8 +220,26 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     };
   }
 
+  // PROJECT HANDLING: Check if user has an active project and route accordingly
+  // Respect explicit projectMode flag if provided (default to true if undefined for backward compatibility)
+  const isProjectMode = projectMode !== undefined ? projectMode : true;
+  const activeProject = isProjectMode ? await projectService.getActiveProject(userId) : null;
+  if (activeProject && !isSmallTalk) {
+    // Check if this is a steering message for the active project
+    if (projectService.isSteeringMessage(message)) {
+      logger.info('Detected steering message for active project', {
+        projectId: activeProject.id,
+        projectName: activeProject.name,
+        message: message.substring(0, 100),
+      });
+
+      // Handle steering based on project status
+      return await processMessage(input); // Recursive call or handle appropriately
+    }
+  }
+
   // INTENT GATING: Detect if this is smalltalk FIRST
-  const isSmallTalkMessage = abilities.isSmallTalk(message);
+  const isSmallTalkMessageLegacy = abilities.isSmallTalk(message);
   const contextOptions = abilities.getContextOptions(message);
 
   // OPTIMIZED: Run context loading in parallel, but skip heavy loads for smalltalk
@@ -234,13 +253,13 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     intentContext,
   ] = await Promise.all([
     // Get user's model configuration - use fast model for smalltalk
-    getUserModelConfig(userId, isSmallTalkMessage ? 'smalltalk' : 'main_chat'),
+    getUserModelConfig(userId, isSmallTalkMessageLegacy ? 'smalltalk' : 'main_chat'),
     // Get user profile for personalization
     authService.getUserById(userId),
     // Get conversation history (higher limit for compression to work with)
     sessionService.getSessionMessages(sessionId, { limit: 50 }),
     // Build memory context - skip volatile parts for smalltalk, but load stable facts in companion mode
-    isSmallTalkMessage
+    isSmallTalkMessageLegacy
       ? (mode === 'companion' ? memoryService.buildStableMemoryOnly(userId) : Promise.resolve({ stable: { facts: '', learnings: '' }, volatile: { relevantHistory: '', conversationContext: '' } }))
       : memoryService.buildMemoryContext(userId, message, sessionId),
     // Build ability context - uses contextOptions for selective loading
@@ -248,7 +267,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     // Get personalization preferences - lightweight, always load
     preferencesService.getResponseGuidelines(userId),
     // Get intent context - lightweight, always load (uses Redis cache)
-    isSmallTalkMessage
+    isSmallTalkMessageLegacy
       ? Promise.resolve({ activeIntents: [], suspendedIntents: [], recentlyResolved: [] })
       : intentContextService.getIntentContext(userId),
   ]);
@@ -367,11 +386,11 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user');
 
   // TOOL GATING: Filter tools by mode and smalltalk detection
-  // Companion mode: conversational partner - no sysadmin/workspace tools
+  // Companion mode: conversational partner + workspace tools
   // Assistant mode: full sysadmin capabilities
   const mcpToolsForLLM = mcpService.formatMcpToolsForLLM(mcpUserTools.map(t => ({ ...t, serverId: t.serverId })));
 
-  // Companion tools - conversational, no sysadmin (no workspace, sysmon, MCP)
+  // Companion tools - conversational (includes workspace tools)
   const companionTools = [
     searchTool, youtubeSearchTool, browserVisualSearchTool, fetchUrlTool,
     sendEmailTool, checkEmailTool, readEmailTool, deleteEmailTool, replyEmailTool, markEmailReadTool,
@@ -382,20 +401,20 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     browserNavigateTool, browserScreenshotTool, browserClickTool, browserFillTool,
     browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool,
     generateImageTool, generateBackgroundTool, researchTool, delegateToAgentTool,
-    loadContextTool, correctSummaryTool
+    loadContextTool, correctSummaryTool,
+    workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool
   ];
 
-  // Assistant tools - full sysadmin capabilities (workspace, sysmon, MCP)
+  // Assistant tools - full sysadmin capabilities (sysmon, MCP)
   const assistantTools = [
     ...companionTools,
-    workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool,
     ...sysmonTools,
     ...mcpToolsForLLM
   ];
 
   // Select tools based on mode
   const modeTools = mode === 'companion' ? companionTools : assistantTools;
-  const availableTools = isSmallTalkMessage ? [] : modeTools;
+  const availableTools = isSmallTalkMessageLegacy ? [] : modeTools;
   let searchResults: SearchResult[] | undefined;
   let agentResults: Array<{ agent: string; result: string; success: boolean }> = [];
 
@@ -549,6 +568,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
         }
       } else if (toolCall.function.name === 'send_email') {
         const args = JSON.parse(toolCall.function.arguments);
+
         logger.info('Luna sending email', { to: args.to, subject: args.subject });
         const result = await emailService.sendLunaEmail(
           [args.to],
@@ -571,6 +591,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
       } else if (toolCall.function.name === 'check_email') {
         const args = JSON.parse(toolCall.function.arguments);
         const unreadOnly = args.unreadOnly !== false;
+
         logger.info('Luna checking email', { unreadOnly });
         const emails = unreadOnly
           ? await emailService.getLunaUnreadEmails()
@@ -727,7 +748,8 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
                 tool_call_id: toolCall.id,
                 content: `File "${args.filename}" not found in workspace.`,
               } as ChatMessage);
-            } else {
+            }
+             else {
               const filePath = `${workspace.getUserWorkspacePath(userId)}/${args.filename}`;
               const success = await telegramService.sendTelegramDocument(
                 connection.chatId,
@@ -1223,24 +1245,6 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
           } as ChatMessage);
         } catch (error) {
           logger.error('Browser wait failed', { error: (error as Error).message });
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Browser error: ${(error as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'browser_close') {
-        // Browser close tool
-        logger.info('Browser close', { userId });
-        try {
-          const result = await browser.closeBrowser(userId);
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: browser.formatBrowserResultForPrompt(result),
-          } as ChatMessage);
-        } catch (error) {
-          logger.error('Browser close failed', { error: (error as Error).message });
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
@@ -2221,7 +2225,7 @@ export interface StreamMetrics {
 export async function* streamMessage(
   input: ChatInput
 ): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'background_refresh'; content?: string; status?: string; messageId?: string; tokensUsed?: number; metrics?: StreamMetrics; action?: string; url?: string }> {
-  const { sessionId, userId, message, mode, source = 'web' } = input;
+  const { sessionId, userId, message, mode, source = 'web', projectMode } = input;
 
   // Initialize MemoryCore session for consolidation tracking
   // This enables episodic memory recording and NeuralSleep LNN processing
@@ -2356,7 +2360,9 @@ export async function* streamMessage(
   }
 
   // PROJECT HANDLING: Check if user has an active project and route accordingly
-  const activeProject = await projectService.getActiveProject(userId);
+  // Respect explicit projectMode flag if provided (default to true if undefined for backward compatibility)
+  const isProjectMode = projectMode !== undefined ? projectMode : true;
+  const activeProject = isProjectMode ? await projectService.getActiveProject(userId) : null;
   if (activeProject && !isSmallTalkMessage) {
     // Check if this is a steering message for the active project
     if (projectService.isSteeringMessage(message)) {
@@ -2724,11 +2730,11 @@ export async function* streamMessage(
   // - nano route: No tools (fast, cheap responses)
   // - pro route: Optional tools (reasoning depth)
   // - pro+tools route: All tools available (verified answers)
-  // - Companion mode: No sysadmin tools (workspace, sysmon, MCP)
+  // - Companion mode: Conversational + Workspace tools (no sysmon/MCP)
   // - Assistant mode: Full sysadmin capabilities
   const mcpToolsForLLM = mcpService.formatMcpToolsForLLM(mcpUserTools.map(t => ({ ...t, serverId: t.serverId })));
 
-  // Companion tools - conversational, no sysadmin (no workspace, sysmon, MCP)
+  // Companion tools - conversational (includes workspace tools)
   const companionTools = [
     searchTool, youtubeSearchTool, browserVisualSearchTool, fetchUrlTool,
     sendEmailTool, checkEmailTool, readEmailTool, deleteEmailTool, replyEmailTool, markEmailReadTool,
@@ -2739,13 +2745,13 @@ export async function* streamMessage(
     browserNavigateTool, browserScreenshotTool, browserClickTool, browserFillTool,
     browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool,
     generateImageTool, generateBackgroundTool, researchTool, delegateToAgentTool,
-    loadContextTool, correctSummaryTool
+    loadContextTool, correctSummaryTool,
+    workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool
   ];
 
-  // Assistant tools - full sysadmin capabilities (workspace, sysmon, MCP)
+  // Assistant tools - full sysadmin capabilities (sysmon, MCP)
   const assistantTools = [
     ...companionTools,
-    workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool,
     ...sysmonTools,
     ...mcpToolsForLLM
   ];
@@ -3386,6 +3392,7 @@ export async function* streamMessage(
       } else if (toolCall.function.name === 'browser_navigate') {
         // Browser navigate tool
         const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'status', status: `Navigating to ${args.url}...` };
         // Signal frontend to open browser window
         yield { type: 'browser_action', action: 'open', url: args.url };
         logger.info('Browser navigate (stream)', { userId, url: args.url });
@@ -3409,6 +3416,7 @@ export async function* streamMessage(
       } else if (toolCall.function.name === 'browser_screenshot') {
         // Browser screenshot tool - takes screenshot and saves to disk for display
         const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'status', status: 'Taking screenshot...' };
         // Signal frontend to open browser window
         yield { type: 'browser_action', action: 'open', url: args.url };
         logger.info('Browser screenshot (stream)', { userId, url: args.url, fullPage: args.fullPage });
@@ -3462,6 +3470,7 @@ export async function* streamMessage(
       } else if (toolCall.function.name === 'browser_click') {
         // Browser click tool
         const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'status', status: 'Clicking element...' };
         // Signal frontend to open browser window
         yield { type: 'browser_action', action: 'open', url: args.url };
         logger.info('Browser click (stream)', { userId, url: args.url, selector: args.selector });
@@ -3483,6 +3492,7 @@ export async function* streamMessage(
       } else if (toolCall.function.name === 'browser_fill') {
         // Browser fill tool
         const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'status', status: 'Filling form...' };
         // Signal frontend to open browser window
         yield { type: 'browser_action', action: 'open', url: args.url };
         logger.info('Browser fill (stream)', { userId, url: args.url, selector: args.selector });
@@ -3504,6 +3514,7 @@ export async function* streamMessage(
       } else if (toolCall.function.name === 'browser_extract') {
         // Browser extract tool
         const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'status', status: 'Extracting content...' };
         // Signal frontend to open browser window
         yield { type: 'browser_action', action: 'open', url: args.url };
         logger.info('Browser extract (stream)', { userId, url: args.url, selector: args.selector });
@@ -3527,6 +3538,7 @@ export async function* streamMessage(
       } else if (toolCall.function.name === 'browser_wait') {
         // Browser wait tool
         const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'status', status: 'Waiting for element...' };
         // Signal frontend to open browser window
         yield { type: 'browser_action', action: 'open', url: args.url };
         logger.info('Browser wait (stream)', { userId, url: args.url, selector: args.selector });
@@ -3547,6 +3559,7 @@ export async function* streamMessage(
         }
       } else if (toolCall.function.name === 'browser_close') {
         // Browser close tool
+        yield { type: 'status', status: 'Closing browser...' };
         logger.info('Browser close', { userId });
         try {
           const result = await browser.closeBrowser(userId);

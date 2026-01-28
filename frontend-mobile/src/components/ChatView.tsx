@@ -26,6 +26,7 @@ export function ChatView() {
   } = useChatStore();
 
   const [input, setInput] = useState('');
+  const [projectMode, setProjectMode] = useState(true);
   const [showSessions, setShowSessions] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -61,7 +62,7 @@ export function ChatView() {
       let fullContent = '';
       let messageId = '';
 
-      for await (const chunk of streamMessage(sessionId, message)) {
+      for await (const chunk of streamMessage(sessionId, message, projectMode)) {
         if (chunk.type === 'content' && chunk.content) {
           fullContent += chunk.content;
           appendStreamingContent(chunk.content);
@@ -201,6 +202,17 @@ export function ChatView() {
 
       {/* Input */}
       <div className="p-4 border-t border-[var(--terminal-border)]">
+        <div className="flex items-center gap-2 mb-2 px-1">
+          <label className="flex items-center gap-2 text-xs text-[var(--terminal-text-muted)]">
+            <input
+              type="checkbox"
+              checked={projectMode}
+              onChange={(e) => setProjectMode(e.target.checked)}
+              className="rounded border-[var(--terminal-border)] bg-[var(--terminal-surface)] accent-[var(--terminal-accent)]"
+            />
+            <span>Project Mode</span>
+          </label>
+        </div>
         <div className="flex items-end gap-2">
           <textarea
             ref={inputRef}

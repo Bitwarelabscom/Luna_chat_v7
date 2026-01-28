@@ -251,7 +251,7 @@ async function extractFactsFromMessages(userId, sessionId, messages) {
 ```
 
 **Confidence Levels:**
-- `1.0` - Explicit statement ("My name is John")
+- `1.0` - Explicit statement ("My name is Henke")
 - `0.8` - Strongly implied ("I've been coding for 10 years" -> work: software developer)
 - `0.6` - Somewhat implied (requires some inference)
 
