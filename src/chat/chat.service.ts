@@ -2224,7 +2224,7 @@ export interface StreamMetrics {
 
 export async function* streamMessage(
   input: ChatInput
-): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'background_refresh'; content?: string; status?: string; messageId?: string; tokensUsed?: number; metrics?: StreamMetrics; action?: string; url?: string }> {
+): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'background_refresh' | 'reasoning'; content?: string; status?: string; messageId?: string; tokensUsed?: number; metrics?: StreamMetrics; action?: string; url?: string }> {
   const { sessionId, userId, message, mode, source = 'web', projectMode } = input;
 
   // Initialize MemoryCore session for consolidation tracking
@@ -2805,7 +2805,7 @@ export async function* streamMessage(
     for (const toolCall of initialCompletion.toolCalls) {
       if (toolCall.function.name === 'web_search') {
         const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'status', status: `Searching: ${args.query}` };
+        yield { type: 'reasoning', content: `> Searching: "${args.query}"\n` };
         searchResults = await searxng.search(args.query);
         logger.info('Search executed in stream', { query: args.query, results: searchResults?.length || 0 });
 
@@ -2820,7 +2820,7 @@ export async function* streamMessage(
         } as ChatMessage);
       } else if (toolCall.function.name === 'youtube_search') {
         const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'status', status: `Searching YouTube: ${args.query}` };
+        yield { type: 'reasoning', content: `> Searching YouTube: "${args.query}"\n` };
         logger.info('YouTube search executing (stream)', { query: args.query, limit: args.limit });
 
         const results = await youtube.searchYouTube(args.query, args.limit || 3);
@@ -2836,7 +2836,7 @@ export async function* streamMessage(
         const searchUrl = browserScreencast.getSearchUrl(args.query, searchEngine);
         logger.info('Browser visual search (stream)', { query: args.query, searchEngine, searchUrl });
 
-        yield { type: 'status', status: `Opening browser to search: ${args.query}` };
+        yield { type: 'reasoning', content: `> Opening visual browser: "${args.query}"\n` };
 
         // Signal frontend to open browser window
         yield { type: 'browser_action', action: 'open', url: searchUrl };
@@ -2845,7 +2845,7 @@ export async function* streamMessage(
         browserScreencast.setPendingVisualBrowse(userId, searchUrl);
 
         // Also do a text search to get content for the LLM to summarize
-        yield { type: 'status', status: 'Fetching search results...' };
+        yield { type: 'reasoning', content: '> Fetching search results for context...\n' };
         const searchResults = await searxng.search(args.query);
         const searchContext = searchResults && searchResults.length > 0
           ? formatSearchResultsForContext(searchResults)
@@ -2858,7 +2858,7 @@ export async function* streamMessage(
         } as ChatMessage);
       } else if (toolCall.function.name === 'delegate_to_agent') {
         const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'status', status: `Invoking ${args.agent} agent...` };
+        yield { type: 'reasoning', content: `> Invoking agent: ${args.agent}...\n` };
         logger.info('Delegating to agent in stream', { agent: args.agent, task: args.task?.substring(0, 100) });
 
         const result = await agents.executeAgentTask(userId, {
@@ -2867,7 +2867,7 @@ export async function* streamMessage(
           context: args.context,
         });
 
-        yield { type: 'status', status: `${args.agent} agent completed` };
+        yield { type: 'reasoning', content: `> Agent ${args.agent} completed.\n` };
         logger.info('Agent completed in stream', { agent: args.agent, success: result.success, timeMs: result.executionTimeMs });
 
         // Add tool result to conversation
@@ -2879,7 +2879,7 @@ export async function* streamMessage(
       } else if (toolCall.function.name === 'workspace_write') {
         const args = JSON.parse(toolCall.function.arguments);
         logger.info('Workspace write tool called (stream)', { userId, filename: args.filename, contentLength: args.content?.length });
-        yield { type: 'status', status: `Saving ${args.filename}...` };
+        yield { type: 'reasoning', content: `> Saving file: ${args.filename}\n` };
         try {
           const file = await workspace.writeFile(userId, args.filename, args.content);
           logger.info('Workspace file written successfully (stream)', { userId, filename: args.filename, size: file.size });
@@ -2898,7 +2898,7 @@ export async function* streamMessage(
         }
       } else if (toolCall.function.name === 'workspace_execute') {
         const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'status', status: `Executing ${args.filename}...` };
+        yield { type: 'reasoning', content: `> Executing script: ${args.filename}\n` };
         const result = await sandbox.executeWorkspaceFile(userId, args.filename, sessionId, args.args || []);
         messages.push({
           role: 'tool',
@@ -2908,7 +2908,7 @@ export async function* streamMessage(
             : `Execution error:\n${result.error}`,
         } as ChatMessage);
       } else if (toolCall.function.name === 'workspace_list') {
-        yield { type: 'status', status: 'Listing workspace files...' };
+        yield { type: 'reasoning', content: '> Listing workspace files...\n' };
         const files = await workspace.listFiles(userId);
         const fileList = files.length > 0
           ? files.map(f => `- ${f.name} (${f.size} bytes, ${f.mimeType})`).join('\n')
@@ -2920,7 +2920,7 @@ export async function* streamMessage(
         } as ChatMessage);
       } else if (toolCall.function.name === 'workspace_read') {
         const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'status', status: `Reading ${args.filename}...` };
+        yield { type: 'reasoning', content: `> Reading file: ${args.filename}\n` };
         try {
           const content = await workspace.readFile(userId, args.filename);
           messages.push({
@@ -2937,7 +2937,7 @@ export async function* streamMessage(
         }
       } else if (toolCall.function.name === 'send_email') {
         const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'status', status: `Sending email to ${args.to}...` };
+        yield { type: 'reasoning', content: `> Sending email to: ${args.to}\n` };
         logger.info('Luna sending email', { to: args.to, subject: args.subject });
         const result = await emailService.sendLunaEmail(
           [args.to],
@@ -2960,7 +2960,7 @@ export async function* streamMessage(
       } else if (toolCall.function.name === 'check_email') {
         const args = JSON.parse(toolCall.function.arguments);
         const unreadOnly = args.unreadOnly !== false;
-        yield { type: 'status', status: 'Checking inbox...' };
+        yield { type: 'reasoning', content: '> Checking inbox...\n' };
         logger.info('Luna checking email', { unreadOnly });
         const emails = unreadOnly
           ? await emailService.getLunaUnreadEmails()
@@ -2980,7 +2980,7 @@ export async function* streamMessage(
         }
       } else if (toolCall.function.name === 'send_telegram') {
         const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'status', status: 'Sending to Telegram...' };
+        yield { type: 'reasoning', content: '> Sending Telegram message...\n' };
         logger.info('Luna sending Telegram message', { userId });
 
         const connection = await telegramService.getTelegramConnection(userId);
@@ -3011,7 +3011,7 @@ export async function* streamMessage(
         }
       } else if (toolCall.function.name === 'send_file_to_telegram') {
         const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'status', status: 'Sending file to Telegram...' };
+        yield { type: 'reasoning', content: `> Sending file to Telegram: ${args.filename}\n` };
         logger.info('Luna sending file to Telegram', { userId, filename: args.filename });
 
         const connection = await telegramService.getTelegramConnection(userId);
@@ -3057,7 +3057,7 @@ export async function* streamMessage(
         }
       } else if (toolCall.function.name === 'search_documents') {
         const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'status', status: 'Searching documents...' };
+        yield { type: 'reasoning', content: `> Searching documents for: "${args.query}"\n` };
         logger.info('Luna searching documents', { query: args.query });
         const chunks = await documents.searchDocuments(userId, args.query);
         if (chunks.length > 0) {
@@ -3117,7 +3117,7 @@ export async function* streamMessage(
         }
       } else if (toolCall.function.name === 'list_todos') {
         const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'status', status: 'Checking your todos...' };
+        yield { type: 'reasoning', content: '> Checking todo list...\n' };
         logger.info('Luna listing todos (stream)', { includeCompleted: args.includeCompleted });
         const todos = await tasksService.getTasks(userId, {
           status: args.includeCompleted ? undefined : 'pending',
@@ -3138,8 +3138,8 @@ export async function* streamMessage(
         } as ChatMessage);
       } else if (toolCall.function.name === 'create_todo') {
         const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'status', status: 'Creating todo...' };
-        logger.info('Luna creating todo (stream)', { title: args.title, dueDate: args.dueDate, remindMinutesBefore: args.remindMinutesBefore });
+        yield { type: 'reasoning', content: `> Creating todo: "${args.title}"\n` };
+        logger.info('Luna creating todo (stream)', { title: args.title, dueDate: args.dueDate });
         const parsed = tasksService.parseTaskFromText(args.dueDate || '');
         // Calculate remindAt from dueAt and remindMinutesBefore
         let remindAt: Date | undefined;
@@ -3163,7 +3163,7 @@ export async function* streamMessage(
         } as ChatMessage);
       } else if (toolCall.function.name === 'complete_todo') {
         const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'status', status: 'Completing todo...' };
+        yield { type: 'reasoning', content: '> Completing todo...\n' };
         logger.info('Luna completing todo (stream)', { todoId: args.todoId, title: args.title });
         let todoId = args.todoId;
 
@@ -3202,7 +3202,7 @@ export async function* streamMessage(
         }
       } else if (toolCall.function.name === 'update_todo') {
         const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'status', status: 'Updating todo...' };
+        yield { type: 'reasoning', content: '> Updating todo...\n' };
         logger.info('Luna updating todo (stream)', { todoId: args.todoId, title: args.title });
         let todoId = args.todoId;
 
@@ -3392,7 +3392,7 @@ export async function* streamMessage(
       } else if (toolCall.function.name === 'browser_navigate') {
         // Browser navigate tool
         const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'status', status: `Navigating to ${args.url}...` };
+        yield { type: 'reasoning', content: `> Browser: Navigating to ${args.url}\n` };
         // Signal frontend to open browser window
         yield { type: 'browser_action', action: 'open', url: args.url };
         logger.info('Browser navigate (stream)', { userId, url: args.url });
@@ -3416,7 +3416,7 @@ export async function* streamMessage(
       } else if (toolCall.function.name === 'browser_screenshot') {
         // Browser screenshot tool - takes screenshot and saves to disk for display
         const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'status', status: 'Taking screenshot...' };
+        yield { type: 'reasoning', content: '> Browser: Taking screenshot...\n' };
         // Signal frontend to open browser window
         yield { type: 'browser_action', action: 'open', url: args.url };
         logger.info('Browser screenshot (stream)', { userId, url: args.url, fullPage: args.fullPage });
@@ -3470,7 +3470,7 @@ export async function* streamMessage(
       } else if (toolCall.function.name === 'browser_click') {
         // Browser click tool
         const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'status', status: 'Clicking element...' };
+        yield { type: 'reasoning', content: '> Browser: Clicking element...\n' };
         // Signal frontend to open browser window
         yield { type: 'browser_action', action: 'open', url: args.url };
         logger.info('Browser click (stream)', { userId, url: args.url, selector: args.selector });
@@ -3492,7 +3492,7 @@ export async function* streamMessage(
       } else if (toolCall.function.name === 'browser_fill') {
         // Browser fill tool
         const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'status', status: 'Filling form...' };
+        yield { type: 'reasoning', content: '> Browser: Filling form...\n' };
         // Signal frontend to open browser window
         yield { type: 'browser_action', action: 'open', url: args.url };
         logger.info('Browser fill (stream)', { userId, url: args.url, selector: args.selector });
@@ -3514,7 +3514,7 @@ export async function* streamMessage(
       } else if (toolCall.function.name === 'browser_extract') {
         // Browser extract tool
         const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'status', status: 'Extracting content...' };
+        yield { type: 'reasoning', content: '> Browser: Extracting content...\n' };
         // Signal frontend to open browser window
         yield { type: 'browser_action', action: 'open', url: args.url };
         logger.info('Browser extract (stream)', { userId, url: args.url, selector: args.selector });
@@ -3538,7 +3538,7 @@ export async function* streamMessage(
       } else if (toolCall.function.name === 'browser_wait') {
         // Browser wait tool
         const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'status', status: 'Waiting for element...' };
+        yield { type: 'reasoning', content: '> Browser: Waiting for element...\n' };
         // Signal frontend to open browser window
         yield { type: 'browser_action', action: 'open', url: args.url };
         logger.info('Browser wait (stream)', { userId, url: args.url, selector: args.selector });
@@ -3559,7 +3559,7 @@ export async function* streamMessage(
         }
       } else if (toolCall.function.name === 'browser_close') {
         // Browser close tool
-        yield { type: 'status', status: 'Closing browser...' };
+        yield { type: 'reasoning', content: '> Browser: Closing...\n' };
         logger.info('Browser close', { userId });
         try {
           const result = await browser.closeBrowser(userId);
@@ -3583,7 +3583,7 @@ export async function* streamMessage(
         const htmlContent = decodeHtmlEntities(args.html);
         const pageTitle = args.title || 'Luna HTML Page';
         logger.info('Browser render HTML', { userId, htmlLength: htmlContent.length, title: pageTitle });
-        yield { type: 'status', status: 'Rendering HTML page...' };
+        yield { type: 'reasoning', content: '> Rendering HTML page...\n' };
         try {
           const result = await browser.renderHtml(userId, htmlContent);
 
@@ -3673,7 +3673,7 @@ export async function* streamMessage(
       } else if (toolCall.function.name === 'generate_desktop_background') {
         // Desktop background generation tool (streaming)
         const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'status', status: 'Generating desktop background...' };
+        yield { type: 'reasoning', content: '> Generating desktop background...\n' };
         logger.info('Generate desktop background (stream)', { userId, promptLength: args.prompt?.length, style: args.style });
         try {
           const result = await backgroundService.generateBackground(
@@ -3717,7 +3717,7 @@ export async function* streamMessage(
         // Research agent tool - uses Claude CLI for in-depth research (streaming)
         const args = JSON.parse(toolCall.function.arguments);
         const depthLabel = args.depth === 'quick' ? 'Quick research' : 'Deep research';
-        yield { type: 'status', status: `${depthLabel}: ${args.query?.substring(0, 50)}...` };
+        yield { type: 'reasoning', content: `> ${depthLabel}: ${args.query?.substring(0, 50)}...\n` };
         logger.info('Research tool called (stream)', { userId, query: args.query?.substring(0, 100), depth: args.depth });
         try {
           const result = await researchAgent.executeResearch(args.query, userId, {
@@ -3752,7 +3752,7 @@ export async function* streamMessage(
       } else if (toolCall.function.name === 'load_context') {
         // Context loading tool - fetch session/intent context on demand
         const args = JSON.parse(toolCall.function.arguments || '{}');
-        yield { type: 'status', status: 'Loading context...' };
+        yield { type: 'reasoning', content: '> Loading additional context...\n' };
         logger.info('Load context tool called (stream)', { userId, params: args });
         try {
           const result = await loadContextHandler.handleLoadContext(userId, args);
@@ -3773,7 +3773,7 @@ export async function* streamMessage(
       } else if (toolCall.function.name === 'correct_summary') {
         // Context correction tool - fix incorrect summaries
         const args = JSON.parse(toolCall.function.arguments || '{}');
-        yield { type: 'status', status: 'Correcting context...' };
+        yield { type: 'reasoning', content: '> Correcting context summary...\n' };
         logger.info('Correct summary tool called (stream)', { userId, params: args });
         try {
           const result = await loadContextHandler.handleCorrectSummary(userId, args);
@@ -3800,7 +3800,7 @@ export async function* streamMessage(
                  toolCall.function.name.startsWith('maintenance_')) {
         // System monitoring tools
         const args = JSON.parse(toolCall.function.arguments || '{}');
-        yield { type: 'status', status: `Checking ${toolCall.function.name.replace(/_/g, ' ')}...` };
+        yield { type: 'reasoning', content: `> Checking ${toolCall.function.name.replace(/_/g, ' ')}...\n` };
         logger.info('Sysmon tool called (stream)', { tool: toolCall.function.name, args });
         try {
           const result = await executeSysmonTool(toolCall.function.name, args);
@@ -3822,7 +3822,7 @@ export async function* streamMessage(
         const parsed = mcpService.parseMcpToolName(toolCall.function.name);
         if (parsed) {
           const args = JSON.parse(toolCall.function.arguments || '{}');
-          yield { type: 'status', status: `Calling MCP tool ${parsed.toolName}...` };
+          yield { type: 'reasoning', content: `> Calling MCP tool: ${parsed.toolName}\n` };
           logger.info('MCP tool called (stream)', { tool: toolCall.function.name, serverId: parsed.serverId, toolName: parsed.toolName, args });
 
           const mcpTool = mcpUserTools.find(t => t.serverId.startsWith(parsed.serverId) && t.name === parsed.toolName);
