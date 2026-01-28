@@ -245,6 +245,8 @@ router.post('/sessions/:id/send', rateLimit, async (req: Request, res: Response)
       for await (const chunk of stream) {
         if (chunk.type === 'status') {
           res.write(`data: ${JSON.stringify({ type: 'status', status: chunk.status })}\n\n`);
+        } else if (chunk.type === 'reasoning') {
+          res.write(`data: ${JSON.stringify({ type: 'reasoning', content: chunk.content })}\n\n`);
         } else if (chunk.type === 'content') {
           res.write(`data: ${JSON.stringify({ type: 'content', content: chunk.content })}\n\n`);
         } else if (chunk.type === 'browser_action') {
@@ -476,6 +478,8 @@ router.post('/sessions/:sessionId/messages/:messageId/regenerate', rateLimit, as
     for await (const chunk of stream) {
       if (chunk.type === 'status') {
         res.write(`data: ${JSON.stringify({ type: 'status', status: chunk.status })}\n\n`);
+      } else if (chunk.type === 'reasoning') {
+        res.write(`data: ${JSON.stringify({ type: 'reasoning', content: chunk.content })}\n\n`);
       } else if (chunk.type === 'content') {
         res.write(`data: ${JSON.stringify({ type: 'content', content: chunk.content })}\n\n`);
       } else if (chunk.type === 'browser_action') {
