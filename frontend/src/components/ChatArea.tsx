@@ -561,17 +561,29 @@ function StandardChatArea() {
                 className="flex-1 bg-transparent px-4 py-3 outline-none resize-none max-h-[50vh] text-theme-text-primary placeholder-theme-text-muted"
                 disabled={isSending}
               />
-              <button
-                onClick={handleSend}
-                disabled={!input.trim() || isSending}
-                className="p-3 m-1 bg-theme-accent-primary hover:bg-theme-accent-hover disabled:bg-theme-bg-tertiary disabled:cursor-not-allowed rounded-lg transition text-theme-text-primary"
-              >
-                {isSending ? (
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                ) : (
-                  <Send className="w-5 h-5" />
-                )}
-              </button>
+              <div className="flex items-center gap-1 p-1">
+                <button
+                  onClick={async () => {
+                    const session = await createSession('voice');
+                    await loadSession(session.id);
+                  }}
+                  className="p-2 text-theme-text-muted hover:text-theme-accent-primary transition-colors rounded-lg"
+                  title="Switch to Voice Mode"
+                >
+                  <Mic className="w-5 h-5" />
+                </button>
+                <button
+                  onClick={handleSend}
+                  disabled={!input.trim() || isSending}
+                  className="p-2 bg-theme-accent-primary hover:bg-theme-accent-hover disabled:bg-theme-bg-tertiary disabled:cursor-not-allowed rounded-lg transition text-theme-text-primary"
+                >
+                  {isSending ? (
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  ) : (
+                    <Send className="w-5 h-5" />
+                  )}
+                </button>
+              </div>
             </div>
             <div className="flex justify-between items-center mt-2 px-1">
               <label className="flex items-center gap-2 text-xs text-theme-text-secondary cursor-pointer hover:text-theme-text-primary transition-colors select-none">

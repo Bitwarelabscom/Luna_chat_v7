@@ -191,6 +191,15 @@ const configSchema = z.object({
     clientSecret: z.string().optional(),
     enabled: z.coerce.boolean().default(true),
   }).optional(),
+
+  stt: z.object({
+    provider: z.enum(['openai', 'groq', 'local']).default('openai'),
+    model: z.string().default('whisper-1'),
+    language: z.string().optional(),
+    silenceDetection: z.coerce.boolean().default(true),
+    silenceThreshold: z.coerce.number().default(-50), // dB
+    silenceDuration: z.coerce.number().default(700), // ms
+  }),
 });
 
 const rawConfig = {
@@ -354,6 +363,15 @@ const rawConfig = {
     clientId: secrets.spotifyClientId,
     clientSecret: secrets.spotifyClientSecret,
     enabled: process.env.SPOTIFY_ENABLED,
+  },
+
+  stt: {
+    provider: process.env.STT_PROVIDER,
+    model: process.env.STT_MODEL,
+    language: process.env.STT_LANGUAGE,
+    silenceDetection: process.env.STT_SILENCE_DETECTION,
+    silenceThreshold: process.env.STT_SILENCE_THRESHOLD,
+    silenceDuration: process.env.STT_SILENCE_DURATION,
   },
 };
 

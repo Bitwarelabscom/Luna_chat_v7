@@ -38,6 +38,7 @@ import {
   shutdownTradingWebSocket,
 } from './trading/trading.websocket.js';
 import { handleBrowserWsConnection } from './abilities/browser.websocket.js';
+import { handleVoiceWsConnection } from './voice/voice.websocket.js';
 import { handleEditorWsUpgrade } from './editor/editor.websocket.js';
 import { shutdownHocuspocusServer } from './editor/hocuspocus.server.js';
 
@@ -225,6 +226,9 @@ const wss = new WebSocketServer({ noServer: true });
 // Create WebSocket server for browser
 const browserWss = new WebSocketServer({ noServer: true });
 
+// Create WebSocket server for voice
+const voiceWss = new WebSocketServer({ noServer: true });
+
 // Handle WebSocket upgrade requests
 server.on('upgrade', (request, socket, head) => {
   const pathname = new URL(request.url || '', `http://${request.headers.host}`).pathname;
@@ -236,6 +240,10 @@ server.on('upgrade', (request, socket, head) => {
   } else if (pathname === '/ws/browser') {
     browserWss.handleUpgrade(request, socket, head, (ws) => {
       handleBrowserWsConnection(ws, request);
+    });
+  } else if (pathname === '/ws/voice') {
+    voiceWss.handleUpgrade(request, socket, head, (ws) => {
+      handleVoiceWsConnection(ws, request);
     });
   } else if (pathname === '/ws/editor') {
     // Hocuspocus handles the upgrade internally

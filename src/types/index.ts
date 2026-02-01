@@ -27,6 +27,20 @@ export interface UserCreate {
 }
 
 // Session types
+export const intentSchema = z.object({
+  id: z.string().uuid(),
+  userId: z.string().uuid(),
+  name: z.string(),
+  description: z.string().nullable(),
+  confidenceScore: z.number(),
+  status: z.enum(['active', 'dormant', 'closed']),
+  createdAt: z.date(),
+  lastActiveAt: z.date(),
+  metadata: z.record(z.unknown()),
+});
+
+export type Intent = z.infer<typeof intentSchema>;
+
 export const sessionSchema = z.object({
   id: z.string().uuid(),
   userId: z.string().uuid(),
@@ -36,6 +50,8 @@ export const sessionSchema = z.object({
   createdAt: z.date(),
   updatedAt: z.date(),
   metadata: z.record(z.unknown()),
+  primaryIntentId: z.string().uuid().nullable().optional(),
+  secondaryIntentIds: z.array(z.string().uuid()).optional(),
 });
 
 export type Session = z.infer<typeof sessionSchema>;

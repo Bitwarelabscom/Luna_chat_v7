@@ -118,6 +118,13 @@ Most AI assistants are stateless query engines. Luna is a **stateful companion**
 - **Spotify**: Music playback control and recommendations
 - **Quick Reminders**: Set reminders via natural language (validated: 1 min to 30 days)
 
+### Voice Intelligence
+- **Real-time Voice Chat**: WebSocket-based low-latency voice interface with streaming responses
+- **Whisper Transcription**: High-accuracy speech-to-text using OpenAI's Whisper model
+- **Server-side VAD**: Intelligent silence detection for hands-free conversational flow
+- **Telegram Voice**: Support for "Calling Luna" via Telegram voice notes with high-speed response pipeline
+- **Expressive Speech**: Multi-engine TTS support (OpenAI, ElevenLabs) with emotional expression tags
+
 ### Developer Tools
 - **Activity Window**: Real-time activity logging for debugging
 - **System Monitoring**: CPU, memory, and process monitoring
@@ -157,13 +164,13 @@ Friendly, supportive conversation for companionship with optimized performance.
 - Focus on emotional connection over task execution
 
 ### Voice Mode
-Optimized for text-to-speech and spoken conversation with fast response times (3-5 seconds).
-- Short, conversational responses (1-3 sentences)
-- Emotion tags for expressive voice: `[laughs]`, `[sighs]`, `[excited]`
-- No markdown, code blocks, or bullet points
-- Natural, flowing speech patterns
-- Lightweight tool access (web search, calendar, tasks, email)
-- Bypasses heavy processing for sub-5-second responses
+Optimized for text-to-speech and spoken conversation with ultra-low latency.
+- **WebSocket Streaming**: End-to-end streaming from audio capture to response playback
+- **Hands-Free Experience**: Server-side Voice Activity Detection (VAD) automatically detects when you finish speaking
+- **High-Accuracy STT**: Powered by OpenAI Whisper Large for superior transcription
+- **Expressive Responses**: Short, conversational replies with emotion tags for natural speech
+- **Optimized Pipeline**: Bypasses heavy background processing for sub-2-second response times
+- **Telegram Integration**: Send voice notes to the Telegram bot for a "phone call" style experience
 
 ---
 
@@ -851,6 +858,7 @@ npm start
 | PATCH | `/api/chat/sessions/:sid/messages/:mid` | Edit message |
 | POST | `/api/chat/sessions/:sid/messages/:mid/regenerate` | Regenerate response |
 | POST | `/api/chat/tts` | Text-to-speech |
+| WS | `/ws/voice` | Real-time streaming voice chat (PCM audio) |
 
 ### Abilities Endpoints
 

@@ -8,6 +8,10 @@ import * as workspaceService from '../abilities/workspace.service.js';
 import * as documentsService from '../abilities/documents.service.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { synthesizeWithOpenAI } from '../llm/tts.service.js';
+import * as voiceChatService from '../chat/voice-chat.service.js';
+import OpenAI from 'openai';
+import { config } from '../config/index.js';
 
 // ============================================
 // Telegram Idle Timer System
@@ -64,11 +68,14 @@ async function summarizeTelegramSession(userId: string, sessionId: string): Prom
  */
 async function checkTokenLimitAndSummarize(userId: string, sessionId: string): Promise<void> {
   try {
+    // Estimate current context size based on character count (approx 4 chars per token)
+    // We do NOT use SUM(input_tokens) because that is cumulative API usage history,
+    // whereas we only care about the current size of the conversation context.
     const result = await pool.query(
-      `SELECT COALESCE(SUM(input_tokens), 0) as total_tokens FROM messages WHERE session_id = $1`,
+      `SELECT CEIL(SUM(LENGTH(content)) / 4.0) as estimated_tokens FROM messages WHERE session_id = $1`,
       [sessionId]
     );
-    const totalTokens = parseInt(result.rows[0]?.total_tokens || '0', 10);
+    const totalTokens = parseInt(result.rows[0]?.estimated_tokens || '0', 10);
 
     if (totalTokens >= TELEGRAM_TOKEN_LIMIT) {
       logger.warn('Telegram session exceeds token limit, forcing summarization', {
@@ -131,6 +138,14 @@ interface TelegramDocument {
   file_size?: number;
 }
 
+interface TelegramVoice {
+  file_id: string;
+  file_unique_id: string;
+  duration: number;
+  mime_type?: string;
+  file_size?: number;
+}
+
 interface TelegramUpdate {
   update_id: number;
   message?: {
@@ -148,6 +163,7 @@ interface TelegramUpdate {
     text?: string;
     photo?: TelegramPhoto[];
     document?: TelegramDocument;
+    voice?: TelegramVoice;
     caption?: string;
   };
   callback_query?: {
@@ -320,6 +336,34 @@ export async function sendTelegramPhoto(
     logger.error('Failed to send Telegram photo', {
       chatId,
       filePath,
+      error: (error as Error).message,
+    });
+    return false;
+  }
+}
+
+/**
+ * Send a voice note to a Telegram chat
+ */
+export async function sendTelegramVoice(
+  chatId: number,
+  audioBuffer: Buffer,
+  caption?: string
+): Promise<boolean> {
+  try {
+    const blob = new Blob([audioBuffer]);
+    const formData = new FormData();
+    formData.append('chat_id', chatId.toString());
+    formData.append('voice', blob, 'voice.mp3');
+    if (caption) {
+      formData.append('caption', caption);
+    }
+
+    await telegramMultipartRequest('sendVoice', formData);
+    return true;
+  } catch (error) {
+    logger.error('Failed to send Telegram voice', {
+      chatId,
       error: (error as Error).message,
     });
     return false;
@@ -773,6 +817,12 @@ export async function processUpdate(update: TelegramUpdate): Promise<void> {
     return;
   }
 
+  // Handle voice messages
+  if (update.message?.voice) {
+    await handleVoiceMessage(update.message);
+    return;
+  }
+
   // Require text for other message handling
   if (!update.message?.text) return;
 
@@ -991,6 +1041,117 @@ async function handleCallbackQuery(callback: NonNullable<TelegramUpdate['callbac
   }
 
   await answerCallbackQuery(callback.id);
+}
+
+async function handleVoiceMessage(
+  message: NonNullable<TelegramUpdate['message']>
+): Promise<void> {
+  const chatId = message.chat.id;
+  const connection = await getConnectionByChatId(chatId);
+
+  if (!connection) {
+    await sendTelegramMessage(
+      chatId,
+      'Your Telegram is not linked to a Luna account. Go to Settings > Triggers > Telegram to link it.'
+    );
+    return;
+  }
+
+  if (!message.voice) return;
+
+  try {
+    // Send typing indicator (upload_voice action isn't available, typing is good enough or record_voice)
+    await telegramRequest('sendChatAction', {
+      chat_id: chatId,
+      action: 'record_voice',
+    });
+
+    const fileId = message.voice.file_id;
+
+    // Get file path from Telegram
+    const fileInfo = await telegramRequest('getFile', {
+      file_id: fileId,
+    }) as { file_path: string };
+
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    const fileUrl = `https://api.telegram.org/file/bot${token}/${fileInfo.file_path}`;
+
+    // Download voice file (usually OGG/OGA from Telegram)
+    const response = await fetch(fileUrl);
+    if (!response.ok) throw new Error(`Failed to download voice file: ${response.statusText}`);
+    
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    
+    // Transcribe with Whisper
+    // We need to send it as a file to OpenAI
+    // OpenAI supports: flac, mp3, mp4, mpeg, mpga, m4a, ogg, wav, webm
+    // Telegram usually sends OGG (Opus) which OpenAI supports.
+    const file = new File([buffer], 'voice.ogg', { type: 'audio/ogg' });
+
+    const openai = new OpenAI({ apiKey: config.openai.apiKey });
+    
+    let transcript = '';
+    try {
+      const transcription = await openai.audio.transcriptions.create({
+        file: file,
+        model: 'whisper-1', 
+        language: 'en', // Optional: auto-detect if removed
+      });
+      transcript = transcription.text.trim();
+    } catch (sttError) {
+      logger.error('STT failed for Telegram voice', { error: (sttError as Error).message });
+      await sendTelegramMessage(chatId, 'Sorry, I could not understand the audio.');
+      return;
+    }
+
+    if (!transcript) {
+      await sendTelegramMessage(chatId, 'I heard silence.');
+      return;
+    }
+
+    logger.info('Telegram voice transcribed', { userId: connection.userId, transcript });
+
+    // Process through Luna Voice Service (Fast Path)
+    // This bypasses the layered agent for speed and uses voice-specific tools
+    const sessionId = await voiceChatService.getOrCreateVoiceSession(connection.userId);
+
+    const chatResponse = await voiceChatService.processMessage({
+      sessionId,
+      userId: connection.userId,
+      message: transcript,
+    });
+
+    // Update last message time (for connection tracking)
+    await updateLastMessageTime(connection.userId);
+
+    // Generate Audio Response (TTS) - Enforce OpenAI for speed
+    await telegramRequest('sendChatAction', {
+      chat_id: chatId,
+      action: 'record_voice',
+    });
+
+    try {
+      const audioBuffer = await synthesizeWithOpenAI(chatResponse.content, 'nova');
+      await sendTelegramVoice(chatId, audioBuffer);
+    } catch (ttsError) {
+      logger.error('TTS failed for Telegram response', { error: (ttsError as Error).message });
+      // Fallback to text
+      await sendTelegramMessage(chatId, chatResponse.content);
+    }
+
+    // No need to reset idle timer for voice sessions (they don't use the same summarization logic)
+
+  } catch (error) {
+    logger.error('Failed to process Telegram voice message', {
+      userId: connection.userId,
+      error: (error as Error).message,
+    });
+    await sendTelegramMessage(
+      chatId,
+      'Sorry, I encountered an error processing your voice message.'
+    );
+  }
 }
 
 async function handlePhotoMessage(

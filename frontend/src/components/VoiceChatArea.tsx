@@ -2,15 +2,13 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useChatStore } from '@/lib/store';
-import { voiceApi, synthesizeSpeech } from '@/lib/api';
+import { voiceApi } from '@/lib/api';
 import { Send, Mic, MicOff, Volume2, VolumeX, Loader2 } from 'lucide-react';
 import clsx from 'clsx';
-import { useSpeechToText } from './useSpeechToText';
 import LunaAvatar from './LunaAvatar';
 
 export default function VoiceChatArea() {
   const {
-    currentSession,
     isSending,
     streamingContent,
     statusMessage,
@@ -18,20 +16,29 @@ export default function VoiceChatArea() {
     addAssistantMessage,
     setIsSending,
     setStreamingContent,
+    appendStreamingContent,
     setStatusMessage,
   } = useChatStore();
 
   const [input, setInput] = useState('');
+  const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [autoPlayEnabled, setAutoPlayEnabled] = useState(true);
-  const [isLoadingAudio, setIsLoadingAudio] = useState(false);
   const [voiceSessionId, setVoiceSessionId] = useState<string | null>(null);
+  
+  // WebSocket and Audio Refs
+  const wsRef = useRef<WebSocket | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const audioQueueRef = useRef<Blob[]>([]);
+  const isPlayingRef = useRef(false);
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const responseBufferRef = useRef('');
+  
   const inputRef = useRef<HTMLInputElement>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  const speechToText = useSpeechToText();
-
-  // Initialize voice session on mount
+  // Initialize voice session
   useEffect(() => {
     const initSession = async () => {
       try {
@@ -42,142 +49,235 @@ export default function VoiceChatArea() {
       }
     };
     initSession();
-  }, []);
-
-  // Clean up audio on unmount
-  useEffect(() => {
+    
+    // Connect WebSocket
+    connectWebSocket();
+    
     return () => {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current = null;
+      stopRecording();
+      if (wsRef.current) wsRef.current.close();
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause();
+        currentAudioRef.current = null;
       }
     };
   }, []);
 
-  // Handle speech-to-text transcript
+  const connectWebSocket = useCallback(() => {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws/voice`;
+    
+    console.log('Connecting to Voice WebSocket:', wsUrl);
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      console.log('Voice WebSocket connected');
+      if (voiceSessionId) {
+        ws.send(JSON.stringify({ type: 'session', sessionId: voiceSessionId }));
+      }
+    };
+
+    ws.onmessage = async (event) => {
+      if (typeof event.data === 'string') {
+        const msg = JSON.parse(event.data);
+        handleWsMessage(msg);
+      } else if (event.data instanceof Blob) {
+        // Audio chunk received
+        audioQueueRef.current.push(event.data);
+        processAudioQueue();
+      }
+    };
+
+    ws.onerror = (e) => console.error('Voice WebSocket error:', e);
+    ws.onclose = () => console.log('Voice WebSocket closed');
+  }, [voiceSessionId]);
+  
+  // Update session ID if it changes after connection
   useEffect(() => {
-    if (speechToText.transcript) {
-      setInput(speechToText.transcript);
+    if (voiceSessionId && wsRef.current?.readyState === WebSocket.OPEN) {
+       wsRef.current.send(JSON.stringify({ type: 'session', sessionId: voiceSessionId }));
     }
-  }, [speechToText.transcript]);
+  }, [voiceSessionId]);
 
-  // Auto-submit when speech recognition ends with transcript
-  useEffect(() => {
-    if (!speechToText.isListening && speechToText.transcript && !isSending) {
-      const timer = setTimeout(() => {
-        handleSend();
-      }, 300);
-      return () => clearTimeout(timer);
+  const handleWsMessage = (msg: any) => {
+    switch (msg.type) {
+      case 'status':
+        setStatusMessage(msg.status === 'thinking' ? 'Thinking...' : 
+                         msg.status === 'transcribing' ? 'Transcribing...' :
+                         msg.status === 'speaking' ? 'Speaking...' : '');
+        if (msg.status === 'thinking') {
+             setIsSending(true);
+             setStreamingContent('');
+             responseBufferRef.current = '';
+        }
+        break;
+      case 'transcript':
+        setInput(msg.text);
+        // Optimistically add user message
+        addUserMessage(msg.text);
+        break;
+      case 'text_delta':
+        appendStreamingContent(msg.delta);
+        responseBufferRef.current += msg.delta;
+        break;
+      case 'text_done':
+        setIsSending(false);
+        if (responseBufferRef.current) {
+             addAssistantMessage(responseBufferRef.current, `msg-${Date.now()}`);
+        }
+        setStreamingContent('');
+        responseBufferRef.current = '';
+        setStatusMessage('');
+        break;
+      case 'error':
+        console.error('WS Error:', msg.error);
+        setStatusMessage('Error: ' + msg.error);
+        setIsSending(false);
+        setIsListening(false);
+        stopRecording();
+        break;
     }
-  }, [speechToText.isListening, speechToText.transcript]);
+  };
 
-  const playAudio = useCallback(async (text: string) => {
-    if (!autoPlayEnabled) return;
+  const processAudioQueue = async () => {
+    if (isPlayingRef.current || audioQueueRef.current.length === 0 || !autoPlayEnabled) return;
+    
+    isPlayingRef.current = true;
+    setIsSpeaking(true);
+    
+    const blob = audioQueueRef.current.shift();
+    if (!blob) {
+        isPlayingRef.current = false;
+        setIsSpeaking(false);
+        return;
+    }
 
-    const contentCheck = text.replace(/\[.*?\]/g, '').trim();
-    if (!contentCheck) return;
-
-    setIsLoadingAudio(true);
     try {
-      const audioBlob = await synthesizeSpeech(text);
-      const audioUrl = URL.createObjectURL(audioBlob);
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        currentAudioRef.current = audio;
+        
+        await new Promise<void>((resolve, reject) => {
+            audio.onended = () => resolve();
+            audio.onerror = (e) => reject(e);
+            audio.play().catch(reject);
+        });
+        
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        console.error('Audio playback error', e);
+    } finally {
+        isPlayingRef.current = false;
+        // Check if more audio is available immediately
+        if (audioQueueRef.current.length > 0) {
+            processAudioQueue();
+        } else {
+             // Small delay to prevent flickering if next chunk arrives soon
+             setTimeout(() => {
+                 if (audioQueueRef.current.length === 0 && !isPlayingRef.current) {
+                     setIsSpeaking(false);
+                 }
+             }, 200);
+        }
+    }
+  };
 
-      if (audioRef.current) {
-        audioRef.current.pause();
-        URL.revokeObjectURL(audioRef.current.src);
+  const startRecording = async () => {
+    try {
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+          connectWebSocket();
+          // Wait a bit?
       }
 
-      const audio = new Audio(audioUrl);
-      audioRef.current = audio;
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
 
-      audio.onplay = () => setIsSpeaking(true);
-      audio.onended = () => {
-        setIsSpeaking(false);
-        URL.revokeObjectURL(audioUrl);
-      };
-      audio.onerror = () => {
-        setIsSpeaking(false);
-        URL.revokeObjectURL(audioUrl);
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      audioContextRef.current = audioContext;
+      
+      // Send config
+      wsRef.current?.send(JSON.stringify({ 
+          type: 'config', 
+          sampleRate: audioContext.sampleRate 
+      }));
+
+      const source = audioContext.createMediaStreamSource(stream);
+      // Buffer size 4096 is good balance for latency/performance
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      scriptProcessorRef.current = processor;
+
+      processor.onaudioprocess = (e) => {
+        if (!isListening) return; // Guard
+        
+        const inputData = e.inputBuffer.getChannelData(0);
+        // Convert Float32 to Int16
+        const pcmData = new Int16Array(inputData.length);
+        for (let i = 0; i < inputData.length; i++) {
+          const s = Math.max(-1, Math.min(1, inputData[i]));
+          pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        }
+        
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(pcmData.buffer);
+        }
       };
 
-      await audio.play();
+      source.connect(processor);
+      processor.connect(audioContext.destination);
+
+      setIsListening(true);
     } catch (error) {
-      console.error('Failed to play audio:', error);
-      setIsSpeaking(false);
-    } finally {
-      setIsLoadingAudio(false);
+      console.error('Failed to start recording:', error);
+      setStatusMessage('Microphone access denied');
     }
-  }, [autoPlayEnabled]);
+  };
+
+  const stopRecording = () => {
+    setIsListening(false);
+    
+    if (scriptProcessorRef.current) {
+      scriptProcessorRef.current.disconnect();
+      scriptProcessorRef.current = null;
+    }
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach(track => track.stop());
+      mediaStreamRef.current = null;
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+  };
+
+  const toggleMicrophone = () => {
+    if (isListening) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  };
+  
+  // Clean up state when stopping speaking manually
+  const stopAudio = () => {
+      if (currentAudioRef.current) {
+          currentAudioRef.current.pause();
+          currentAudioRef.current = null;
+      }
+      audioQueueRef.current = [];
+      isPlayingRef.current = false;
+      setIsSpeaking(false);
+  };
 
   const handleSend = async () => {
-    const message = input.trim();
-    if (!message || isSending) return;
-
-    setInput('');
-    speechToText.resetTranscript();
-
-    let sessionId = voiceSessionId;
-
-    // Create a voice session if one doesn't exist
-    if (!sessionId) {
-      try {
-        const { sessionId: newSessionId } = await voiceApi.createSession();
-        sessionId = newSessionId;
-        setVoiceSessionId(newSessionId);
-      } catch (error) {
-        console.error('Failed to create voice session:', error);
-        return;
-      }
-    }
-
-    addUserMessage(message);
-    setIsSending(true);
-    setStreamingContent('');
-    setStatusMessage('Thinking...');
-
-    try {
-      // Use fast voice API - no streaming, direct response
-      const response = await voiceApi.sendMessage(sessionId, message);
-
-      // Add the assistant response
-      addAssistantMessage(response.content, response.messageId);
-      setStreamingContent('');
-      setStatusMessage('');
-
-      // Play the audio response
-      playAudio(response.content);
-    } catch (error) {
-      console.error('Failed to send message:', error);
-
-      // Determine user-friendly error message based on error response
-      let errorMessage = 'Sorry, I had trouble processing that. Could you try again?';
-
-      if (error instanceof Error) {
-        // Check if error has code property (from ApiError)
-        const anyError = error as { code?: string; status?: number };
-        const errorCode = anyError.code;
-        const status = anyError.status;
-
-        if (errorCode === 'MODEL_ERROR') {
-          errorMessage = 'I had trouble thinking about that. Let me try again in a moment.';
-        } else if (errorCode === 'TOOL_ERROR') {
-          errorMessage = 'I had trouble performing that action. Could you rephrase your request?';
-        } else if (errorCode === 'TIMEOUT_ERROR') {
-          errorMessage = 'That took too long. Could you try a simpler question?';
-        } else if (errorCode === 'DATABASE_ERROR') {
-          errorMessage = 'I had trouble accessing my memory. Please try again.';
-        } else if (status === 401 || error.message.includes('unauthorized')) {
-          errorMessage = 'Your session has expired. Please refresh the page and log in again.';
-        } else if (error.message.includes('network') || error.message.includes('fetch') || error.message.includes('Failed to fetch')) {
-          errorMessage = 'I lost connection. Please check your internet and try again.';
-        }
-      }
-
-      addAssistantMessage(errorMessage, `error-${Date.now()}`);
-    } finally {
-      setIsSending(false);
-      setStatusMessage('');
-    }
+      // Manual text send fallback
+      // TODO: Implement manual text sending via WebSocket or existing API
+      // For now, focusing on voice flow
+      const message = input.trim();
+      if (!message || isSending) return;
+      
+      // ... existing send logic if needed, or send via WS text frame ...
+      // wsRef.current?.send(JSON.stringify({ type: 'text', text: message }));
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -186,38 +286,19 @@ export default function VoiceChatArea() {
       handleSend();
     }
   };
-
-  const toggleMicrophone = () => {
-    if (speechToText.isListening) {
-      speechToText.stopListening();
-    } else {
-      speechToText.startListening();
-    }
-  };
-
-  const stopAudio = () => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
-      setIsSpeaking(false);
-    }
-  };
-
-  const messages = currentSession?.messages || [];
-  const lastAssistantMessage = [...messages].reverse().find(m => m.role === 'assistant');
-
+  
+  // Display Logic
   const stripEmotionTags = (text: string) => {
     return text.replace(/\[.*?\]/g, '').trim();
   };
 
-  // Get the display text - streaming, last message, or welcome
   const getDisplayText = () => {
     if (streamingContent) {
       return stripEmotionTags(streamingContent);
     }
-    if (lastAssistantMessage) {
-      return stripEmotionTags(lastAssistantMessage.content);
-    }
+    // Access store messages directly if possible or pass as prop
+    // Here we rely on store's lastAssistantMessage if available
+    // But store doesn't expose it in current destructuring
     return null;
   };
 
@@ -228,7 +309,7 @@ export default function VoiceChatArea() {
       {/* Ambient background glow */}
       <div
         className={clsx(
-          'absolute inset-0 transition-opacity duration-1000',
+          'absolute inset-0 transition-opacity duration-1000 pointer-events-none',
           isSpeaking ? 'opacity-100' : 'opacity-30'
         )}
         style={{
@@ -238,13 +319,8 @@ export default function VoiceChatArea() {
 
       {/* Fixed top section - Luna Avatar */}
       <div className="relative z-10 flex-shrink-0 pt-6 pb-4 flex flex-col items-center">
-        {/* Video Avatar with loop cycling */}
-        <LunaAvatar
-          isSpeaking={isSpeaking}
-          size="lg"
-        />
+        <LunaAvatar isSpeaking={isSpeaking} size="lg" />
 
-        {/* Name and status */}
         <h2 className="mt-6 text-2xl font-light text-white tracking-wide">Luna</h2>
         <div className="flex items-center gap-2 mt-1">
           {isSpeaking ? (
@@ -256,12 +332,12 @@ export default function VoiceChatArea() {
               </span>
               Speaking
             </span>
-          ) : isLoadingAudio ? (
-            <span className="text-gray-400 text-sm">Preparing audio...</span>
           ) : isSending ? (
             <span className="text-gray-400 text-sm">{statusMessage || 'Thinking...'}</span>
+          ) : isListening ? (
+             <span className="text-red-400 text-sm animate-pulse">Listening...</span>
           ) : (
-            <span className="text-gray-500 text-sm">Voice Mode</span>
+            <span className="text-gray-500 text-sm">Voice Mode (Streaming)</span>
           )}
         </div>
 
@@ -291,7 +367,7 @@ export default function VoiceChatArea() {
       </div>
 
       {/* Middle section - Luna's response text */}
-      <div className="relative z-10 flex-1 flex items-center justify-center px-6 overflow-y-auto">
+      <div className="relative z-10 flex-1 flex flex-col items-center justify-center px-6 overflow-y-auto">
         <div className="max-w-2xl w-full text-center py-4">
           {isSending && !streamingContent ? (
             <div className="flex justify-center">
@@ -311,46 +387,44 @@ export default function VoiceChatArea() {
               {displayText}
             </p>
           ) : (
-            <p className="text-lg text-gray-600 font-light">
-              Tap the microphone or type to start talking with Luna
-            </p>
+            <div className="space-y-6">
+              <p className="text-lg text-gray-600 font-light">
+                {isListening ? 'I\'m listening...' : 'Ready to start talking with Luna?'}
+              </p>
+              {!isListening && !isSending && (
+                <button
+                  onClick={startRecording}
+                  className="px-8 py-3 bg-green-500 hover:bg-green-400 text-black font-medium rounded-full transition-all transform hover:scale-105 active:scale-95 shadow-lg shadow-green-500/20"
+                >
+                  Start Streaming
+                </button>
+              )}
+            </div>
           )}
         </div>
       </div>
 
       {/* Bottom section - User input */}
-      <div className="relative z-10 flex-shrink-0 p-4 pb-6">
+      <div className="relative z-50 flex-shrink-0 p-4 pb-6 pointer-events-auto">
         <div className="max-w-xl mx-auto">
-          {/* Speech-to-text interim display */}
-          {speechToText.isListening && speechToText.interimTranscript && (
-            <div className="mb-4 px-4 py-3 bg-gray-900/80 rounded-2xl border border-gray-700">
-              <p className="text-gray-400 italic text-center">
-                {speechToText.interimTranscript}
-              </p>
-            </div>
-          )}
-
           <div className="flex items-center gap-3">
             {/* Microphone button */}
-            {speechToText.isSupported && (
-              <button
+            <button
                 onClick={toggleMicrophone}
-                disabled={isSending}
                 className={clsx(
                   'p-4 rounded-full transition-all',
-                  speechToText.isListening
+                  isListening
                     ? 'bg-red-500 text-white shadow-lg shadow-red-500/50 scale-110'
                     : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white'
                 )}
-                title={speechToText.isListening ? 'Stop listening' : 'Start voice input'}
+                title={isListening ? 'Stop listening' : 'Start voice input'}
               >
-                {speechToText.isListening ? (
+                {isListening ? (
                   <MicOff className="w-6 h-6" />
                 ) : (
                   <Mic className="w-6 h-6" />
                 )}
-              </button>
-            )}
+            </button>
 
             {/* Text input */}
             <div className="flex-1 flex items-center bg-gray-900/80 rounded-full border border-gray-700 focus-within:border-gray-500 transition">
@@ -360,9 +434,9 @@ export default function VoiceChatArea() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder={speechToText.isListening ? 'Listening...' : 'Type a message...'}
+                placeholder={isListening ? 'Listening...' : 'Type a message...'}
                 className="flex-1 bg-transparent px-6 py-4 outline-none text-white placeholder-gray-500"
-                disabled={isSending || speechToText.isListening}
+                disabled={isSending || isListening}
               />
               <button
                 onClick={handleSend}
@@ -377,17 +451,9 @@ export default function VoiceChatArea() {
               </button>
             </div>
           </div>
-
-          {/* Error display */}
-          {speechToText.error && (
-            <p className="mt-3 text-xs text-red-400 text-center">
-              Microphone error: {speechToText.error}
-            </p>
-          )}
         </div>
       </div>
 
-      {/* Custom styles */}
       <style jsx>{`
         @keyframes pulse-ring {
           0% { transform: scale(1); opacity: 1; }

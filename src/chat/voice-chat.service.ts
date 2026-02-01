@@ -499,7 +499,7 @@ export async function getSessionMessages(
 /**
  * Add message to voice session
  */
-async function addMessage(
+export async function addMessage(
   sessionId: string,
   role: 'user' | 'assistant',
   content: string

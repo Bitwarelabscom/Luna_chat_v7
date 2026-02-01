@@ -100,7 +100,7 @@ export async function updateTtsSettings(settings: Partial<TTSSettings>): Promise
 /**
  * Synthesize speech using OpenAI TTS API
  */
-async function synthesizeWithOpenAI(text: string, voice: OpenAIVoice): Promise<Buffer> {
+export async function synthesizeWithOpenAI(text: string, voice: OpenAIVoice): Promise<Buffer> {
   const apiKey = config.openai.apiKey;
   if (!apiKey) {
     throw new Error('OpenAI API key not configured');

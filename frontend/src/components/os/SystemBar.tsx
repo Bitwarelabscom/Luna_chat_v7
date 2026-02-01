@@ -20,6 +20,7 @@ import {
   BookOpen,
   MessageSquare,
   Coins,
+  Mic,
 } from 'lucide-react';
 import { useAuthStore } from '@/lib/store';
 import { useNotificationStore } from '@/lib/notification-store';
@@ -222,6 +223,7 @@ export function SystemBar({ onSpotlightOpen, onSettingsOpen, onAppOpen, onNewFil
     tools: {
       label: 'Tools',
       items: [
+        { label: 'Voice Chat', icon: Mic, action: () => { onAppOpen('voice'); setActiveMenu(null); } },
         { label: 'Terminal', icon: Terminal, action: () => { onAppOpen('terminal'); setActiveMenu(null); } },
         { label: 'Browser', icon: Globe, action: () => { onAppOpen('browser'); setActiveMenu(null); } },
         { label: 'Editor', icon: FileText, action: () => { onAppOpen('editor'); setActiveMenu(null); } },
