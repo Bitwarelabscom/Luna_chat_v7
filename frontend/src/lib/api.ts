@@ -2844,7 +2844,7 @@ export interface Project {
   name: string;
   description: string;
   type: 'web' | 'fullstack' | 'python' | 'node';
-  status: 'planning' | 'questioning' | 'building' | 'paused' | 'review' | 'complete' | 'error';
+  status: 'planning' | 'questioning' | 'building' | 'paused' | 'review' | 'complete' | 'error' | 'cancelled';
   currentStep: number;
   plan: ProjectStep[];
   questions: ProjectQuestion[];

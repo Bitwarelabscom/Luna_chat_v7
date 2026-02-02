@@ -5,7 +5,7 @@ import {
   FolderOpen, RefreshCw, Pause,
   FileText, Image as ImageIcon, Code, Eye,
   ChevronRight, Trash2, AlertCircle, CheckCircle2,
-  Clock, Circle
+  Clock, Circle, XCircle
 } from 'lucide-react';
 import { projectsApi, Project, ProjectFile } from '@/lib/api';
 
@@ -56,6 +56,8 @@ function getStatusColor(status: string): string {
       return 'bg-purple-500/20 text-purple-400';
     case 'error':
       return 'bg-red-500/20 text-red-400';
+    case 'cancelled':
+      return 'bg-orange-500/20 text-orange-400';
     default:
       return 'bg-gray-500/20 text-gray-400';
   }
@@ -77,7 +79,7 @@ export default function ProjectWindow() {
       const active = data.projects?.find((p: Project) =>
         p.status === 'building' || p.status === 'questioning' || p.status === 'paused'
       );
-      if (active) {
+      if (active && !selectedProject) {
         setSelectedProject(active);
       }
     } catch (error) {
@@ -85,7 +87,7 @@ export default function ProjectWindow() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [selectedProject]);
 
   const loadProjectFiles = useCallback(async (projectId: string) => {
     try {
@@ -119,6 +121,19 @@ export default function ProjectWindow() {
     }
   };
 
+  const handleCancelProject = async (id: string) => {
+    if (!confirm('Are you sure you want to cancel this project? It will stop any active processes.')) return;
+    try {
+      await projectsApi.updateStatus(id, 'cancelled');
+      if (selectedProject?.id === id) {
+        setSelectedProject({ ...selectedProject, status: 'cancelled' });
+      }
+      await loadProjects();
+    } catch (error) {
+      console.error('Failed to cancel project:', error);
+    }
+  };
+
   const formatDate = (date: string) => {
     return new Date(date).toLocaleDateString(undefined, {
       month: 'short',
@@ -126,6 +141,10 @@ export default function ProjectWindow() {
       hour: '2-digit',
       minute: '2-digit',
     });
+  };
+
+  const isActiveStatus = (status: string) => {
+    return ['questioning', 'planning', 'building', 'paused'].includes(status);
   };
 
   return (
@@ -209,13 +228,26 @@ export default function ProjectWindow() {
                   <h2 className="text-lg font-semibold" style={{ color: 'var(--theme-text-primary)' }}>
                     {selectedProject.name}
                   </h2>
-                  <button
-                    onClick={() => handleDeleteProject(selectedProject.id)}
-                    className="p-1.5 rounded hover:bg-red-500/20 transition"
-                    style={{ color: 'var(--theme-text-muted)' }}
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  <div className="flex items-center gap-1">
+                    {isActiveStatus(selectedProject.status) && (
+                      <button
+                        onClick={() => handleCancelProject(selectedProject.id)}
+                        className="p-1.5 rounded hover:bg-orange-500/20 transition"
+                        style={{ color: 'var(--theme-text-muted)' }}
+                        title="Cancel Project"
+                      >
+                        <XCircle className="w-4 h-4" />
+                      </button>
+                    )}
+                    <button
+                      onClick={() => handleDeleteProject(selectedProject.id)}
+                      className="p-1.5 rounded hover:bg-red-500/20 transition"
+                      style={{ color: 'var(--theme-text-muted)' }}
+                      title="Delete Project"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
                 <p className="text-sm" style={{ color: 'var(--theme-text-muted)' }}>
                   {selectedProject.description || 'No description'}

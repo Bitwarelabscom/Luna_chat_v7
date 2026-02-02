@@ -84,6 +84,19 @@ function isBlockedUrl(url: string): boolean {
 }
 
 /**
+ * Check if URL is local to the sandbox (localhost/127.0.0.1)
+ * These are allowed because the browser runs inside the sandbox container
+ */
+function isLocalSandboxUrl(urlString: string): boolean {
+  try {
+    const url = new URL(urlString);
+    return ['localhost', '127.0.0.1'].includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Check if a file:// URL points to a valid workspace file
  * Security: Uses realpath to prevent symlink attacks and path traversal
  */
@@ -340,6 +353,9 @@ export async function navigate(
     // Use the validated sandbox path
     actualUrl = `file://${fileCheck.sandboxPath}`;
     logger.info('Browser navigating to workspace file', { userId, file: fileCheck.sandboxPath });
+  } else if (isLocalSandboxUrl(url)) {
+    // Allow local sandbox URLs (e.g. http://localhost:3000)
+    logger.info('Browser navigating to local sandbox URL', { userId, url });
   } else {
     // SSRF Protection: validate external URLs before navigating
     try {
@@ -482,6 +498,9 @@ export async function screenshot(
     // Use the validated sandbox path
     actualUrl = `file://${fileCheck.sandboxPath}`;
     logger.info('Browser screenshot of workspace file', { userId, file: fileCheck.sandboxPath });
+  } else if (isLocalSandboxUrl(url)) {
+    // Allow local sandbox URLs
+    logger.info('Browser screenshot of local sandbox URL', { userId, url });
   } else {
     // SSRF Protection: validate external URLs
     try {
@@ -593,15 +612,17 @@ export async function click(
   const startTime = Date.now();
   const { button = 'left', clickCount = 1, delay = 0 } = options;
 
-  // SSRF Protection
-  try {
-    await validateExternalUrl(url, { allowHttp: true });
-  } catch (error) {
-    return {
-      success: false,
-      error: `URL validation failed: ${(error as Error).message}`,
-      executionTimeMs: Date.now() - startTime,
-    };
+  // SSRF Protection (allow local sandbox URLs)
+  if (!isLocalSandboxUrl(url)) {
+    try {
+      await validateExternalUrl(url, { allowHttp: true });
+    } catch (error) {
+      return {
+        success: false,
+        error: `URL validation failed: ${(error as Error).message}`,
+        executionTimeMs: Date.now() - startTime,
+      };
+    }
   }
 
   // If there's an active screencast session, use it instead of creating a new one
@@ -697,15 +718,17 @@ export async function fill(
 ): Promise<BrowserResult> {
   const startTime = Date.now();
 
-  // SSRF Protection
-  try {
-    await validateExternalUrl(url, { allowHttp: true });
-  } catch (error) {
-    return {
-      success: false,
-      error: `URL validation failed: ${(error as Error).message}`,
-      executionTimeMs: Date.now() - startTime,
-    };
+  // SSRF Protection (allow local sandbox URLs)
+  if (!isLocalSandboxUrl(url)) {
+    try {
+      await validateExternalUrl(url, { allowHttp: true });
+    } catch (error) {
+      return {
+        success: false,
+        error: `URL validation failed: ${(error as Error).message}`,
+        executionTimeMs: Date.now() - startTime,
+      };
+    }
   }
 
   // If there's an active screencast session, use it instead of creating a new one
@@ -789,15 +812,17 @@ export async function fill(
 export async function getContent(userId: string, url: string): Promise<BrowserResult> {
   const startTime = Date.now();
 
-  // SSRF Protection
-  try {
-    await validateExternalUrl(url, { allowHttp: true });
-  } catch (error) {
-    return {
-      success: false,
-      error: `URL validation failed: ${(error as Error).message}`,
-      executionTimeMs: Date.now() - startTime,
-    };
+  // SSRF Protection (allow local sandbox URLs)
+  if (!isLocalSandboxUrl(url)) {
+    try {
+      await validateExternalUrl(url, { allowHttp: true });
+    } catch (error) {
+      return {
+        success: false,
+        error: `URL validation failed: ${(error as Error).message}`,
+        executionTimeMs: Date.now() - startTime,
+      };
+    }
   }
 
   const script = wrapPlaywrightScript(`
@@ -882,15 +907,17 @@ export async function extractElements(
 ): Promise<BrowserResult> {
   const startTime = Date.now();
 
-  // SSRF Protection
-  try {
-    await validateExternalUrl(url, { allowHttp: true });
-  } catch (error) {
-    return {
-      success: false,
-      error: `URL validation failed: ${(error as Error).message}`,
-      executionTimeMs: Date.now() - startTime,
-    };
+  // SSRF Protection (allow local sandbox URLs)
+  if (!isLocalSandboxUrl(url)) {
+    try {
+      await validateExternalUrl(url, { allowHttp: true });
+    } catch (error) {
+      return {
+        success: false,
+        error: `URL validation failed: ${(error as Error).message}`,
+        executionTimeMs: Date.now() - startTime,
+      };
+    }
   }
 
   const script = wrapPlaywrightScript(`
@@ -969,15 +996,17 @@ export async function waitFor(
 ): Promise<BrowserResult> {
   const startTime = Date.now();
 
-  // SSRF Protection
-  try {
-    await validateExternalUrl(url, { allowHttp: true });
-  } catch (error) {
-    return {
-      success: false,
-      error: `URL validation failed: ${(error as Error).message}`,
-      executionTimeMs: Date.now() - startTime,
-    };
+  // SSRF Protection (allow local sandbox URLs)
+  if (!isLocalSandboxUrl(url)) {
+    try {
+      await validateExternalUrl(url, { allowHttp: true });
+    } catch (error) {
+      return {
+        success: false,
+        error: `URL validation failed: ${(error as Error).message}`,
+        executionTimeMs: Date.now() - startTime,
+      };
+    }
   }
 
   const script = wrapPlaywrightScript(`

@@ -11,6 +11,7 @@ export interface UserFact {
   confidence: number;
   lastMentioned: Date;
   mentionCount: number;
+  intentId: string | null;
 }
 
 export interface ExtractedFact {
@@ -99,14 +100,15 @@ export async function storeFact(
   userId: string,
   fact: ExtractedFact,
   sourceMessageId?: string,
-  sourceSessionId?: string
+  sourceSessionId?: string,
+  intentId?: string | null
 ): Promise<void> {
   try {
     await pool.query(
       `INSERT INTO user_facts
-        (user_id, category, fact_key, fact_value, confidence, source_message_id, source_session_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       ON CONFLICT (user_id, category, fact_key) DO UPDATE SET
+        (user_id, category, fact_key, fact_value, confidence, source_message_id, source_session_id, intent_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (user_id, category, fact_key, COALESCE(intent_id, '00000000-0000-0000-0000-000000000000'::uuid)) DO UPDATE SET
          fact_value = CASE
            WHEN EXCLUDED.confidence >= user_facts.confidence THEN EXCLUDED.fact_value
            ELSE user_facts.fact_value
@@ -117,13 +119,14 @@ export async function storeFact(
          source_message_id = COALESCE(EXCLUDED.source_message_id, user_facts.source_message_id),
          source_session_id = COALESCE(EXCLUDED.source_session_id, user_facts.source_session_id),
          updated_at = NOW()`,
-      [userId, fact.category, fact.factKey, fact.factValue, fact.confidence, sourceMessageId, sourceSessionId]
+      [userId, fact.category, fact.factKey, fact.factValue, fact.confidence, sourceMessageId, sourceSessionId, intentId || null]
     );
 
     logger.debug('Stored user fact', {
       userId,
       category: fact.category,
-      key: fact.factKey
+      key: fact.factKey,
+      intentId
     });
   } catch (error) {
     logger.error('Failed to store fact', {
@@ -142,27 +145,36 @@ export async function getUserFacts(
   options: {
     category?: string;
     limit?: number;
+    intentId?: string | null;
   } = {}
 ): Promise<UserFact[]> {
-  const { category, limit = 50 } = options;
+  const { category, limit = 50, intentId } = options;
 
   try {
     let query = `
-      SELECT id, category, fact_key, fact_value, confidence, last_mentioned, mention_count
+      SELECT id, category, fact_key, fact_value, confidence, last_mentioned, mention_count, intent_id
       FROM user_facts
       WHERE user_id = $1 AND is_active = true
     `;
-    const params: (string | number)[] = [userId];
+    const params: (string | number | null)[] = [userId];
 
     if (category) {
       query += ` AND category = $2`;
       params.push(category);
     }
 
-    query += ` ORDER BY mention_count DESC, last_mentioned DESC LIMIT $${params.length + 1}`;
+    if (intentId) {
+      query += ` AND (intent_id = $${params.length + 1} OR intent_id IS NULL)`;
+      params.push(intentId);
+    } else {
+      query += ` AND intent_id IS NULL`;
+    }
+
+    query += ` ORDER BY intent_id NULLS LAST, mention_count DESC, last_mentioned DESC LIMIT $${params.length + 1}`;
     params.push(limit);
 
-    const result = await pool.query(query, params);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await pool.query(query, params as any[]);
 
     return result.rows.map((row: Record<string, unknown>) => ({
       id: row.id as string,
@@ -172,6 +184,7 @@ export async function getUserFacts(
       confidence: parseFloat(row.confidence as string),
       lastMentioned: row.last_mentioned as Date,
       mentionCount: row.mention_count as number,
+      intentId: row.intent_id as string | null,
     }));
   } catch (error) {
     logger.error('Failed to get user facts', {
@@ -213,14 +226,15 @@ export function formatFactsForPrompt(facts: UserFact[]): string {
 export async function processConversationFacts(
   userId: string,
   sessionId: string,
-  messages: Array<{ id?: string; role: string; content: string }>
+  messages: Array<{ id?: string; role: string; content: string }>,
+  intentId?: string | null
 ): Promise<void> {
   try {
     const extractedFacts = await extractFactsFromMessages(messages);
 
     for (const fact of extractedFacts) {
       const lastUserMessage = messages.filter(m => m.role === 'user').pop();
-      await storeFact(userId, fact, lastUserMessage?.id, sessionId);
+      await storeFact(userId, fact, lastUserMessage?.id, sessionId, intentId);
     }
 
     if (extractedFacts.length > 0) {
@@ -300,7 +314,7 @@ export async function getFactById(
 ): Promise<UserFact | null> {
   try {
     const result = await pool.query(
-      `SELECT id, category, fact_key, fact_value, confidence, last_mentioned, mention_count
+      `SELECT id, category, fact_key, fact_value, confidence, last_mentioned, mention_count, intent_id
        FROM user_facts
        WHERE id = $1 AND user_id = $2 AND is_active = true`,
       [factId, userId]
@@ -317,6 +331,7 @@ export async function getFactById(
       confidence: parseFloat(row.confidence),
       lastMentioned: row.last_mentioned,
       mentionCount: row.mention_count,
+      intentId: row.intent_id || null,
     };
   } catch (error) {
     logger.error('Failed to get fact by ID', {
@@ -338,7 +353,7 @@ export async function getFactByKey(
 ): Promise<UserFact | null> {
   try {
     let query = `
-      SELECT id, category, fact_key, fact_value, confidence, last_mentioned, mention_count
+      SELECT id, category, fact_key, fact_value, confidence, last_mentioned, mention_count, intent_id
       FROM user_facts
       WHERE user_id = $1 AND fact_key = $2 AND is_active = true
     `;
@@ -364,6 +379,7 @@ export async function getFactByKey(
       confidence: parseFloat(row.confidence),
       lastMentioned: row.last_mentioned,
       mentionCount: row.mention_count,
+      intentId: row.intent_id || null,
     };
   } catch (error) {
     logger.error('Failed to get fact by key', {
@@ -564,7 +580,7 @@ export async function searchFacts(
 ): Promise<UserFact[]> {
   try {
     const result = await pool.query(
-      `SELECT id, category, fact_key, fact_value, confidence, last_mentioned, mention_count
+      `SELECT id, category, fact_key, fact_value, confidence, last_mentioned, mention_count, intent_id
        FROM user_facts
        WHERE user_id = $1 AND is_active = true
          AND (fact_key ILIKE $2 OR fact_value ILIKE $2)
@@ -581,6 +597,7 @@ export async function searchFacts(
       confidence: parseFloat(row.confidence as string),
       lastMentioned: row.last_mentioned as Date,
       mentionCount: row.mention_count as number,
+      intentId: row.intent_id as string | null,
     }));
   } catch (error) {
     logger.error('Failed to search facts', {

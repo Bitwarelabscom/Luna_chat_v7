@@ -2,7 +2,9 @@ import * as embeddingService from './embedding.service.js';
 import * as factsService from './facts.service.js';
 import * as insightsService from '../autonomous/insights.service.js';
 import * as memorycoreClient from './memorycore.client.js';
+import { queryOne } from '../db/postgres.js';
 import logger from '../utils/logger.js';
+import type { Session } from '../types/index.js';
 
 /**
  * Memory context split into stable (cacheable) and volatile (per-query) parts
@@ -94,25 +96,31 @@ export async function buildMemoryContext(
   currentSessionId: string
 ): Promise<MemoryContext> {
   try {
+    // Fetch session to get intent
+    const session = await queryOne<Session>(`SELECT primary_intent_id as "primaryIntentId", secondary_intent_ids as "secondaryIntentIds" FROM sessions WHERE id = $1`, [currentSessionId]);
+    const intentId = session?.primaryIntentId || null;
+
     // Run all queries in parallel for better performance
     const [facts, similarMessages, similarConversations, learningsContext, consciousnessMetrics, consolidatedModel, graphContext] = await Promise.all([
-      // Get user facts
-      factsService.getUserFacts(userId, { limit: 30 }),
-      // Search for relevant past messages (excluding current session)
+      // Get user facts (filtered by intent if available)
+      factsService.getUserFacts(userId, { limit: 30, intentId }),
+      // Search for relevant past messages (excluding current session, scoped to intent)
       embeddingService.searchSimilarMessages(
         currentMessage,
         userId,
         {
           limit: 5,
           threshold: 0.75,
-          excludeSessionId: currentSessionId
+          excludeSessionId: currentSessionId,
+          intentId
         }
       ),
-      // Search for similar conversation summaries
+      // Search for similar conversation summaries (scoped to intent)
       embeddingService.searchSimilarConversations(
         currentMessage,
         userId,
-        3
+        3,
+        intentId
       ),
       // Get active learnings from autonomous sessions
       insightsService.getActiveLearningsForContext(userId, 10),
@@ -329,13 +337,23 @@ export async function processMessageMemory(
   content: string,
   role: string
 ): Promise<void> {
+  // Fetch session to get intent
+  let intentId: string | null = null;
+  try {
+    const session = await queryOne<Session>(`SELECT primary_intent_id as "primaryIntentId" FROM sessions WHERE id = $1`, [sessionId]);
+    intentId = session?.primaryIntentId || null;
+  } catch (err) {
+    logger.error('Failed to fetch session intent for message memory', { error: (err as Error).message });
+  }
+
   // Store embedding asynchronously
   embeddingService.storeMessageEmbedding(
     messageId,
     userId,
     sessionId,
     content,
-    role
+    role,
+    intentId
   ).catch(err => {
     logger.error('Failed to store message embedding', { error: err.message });
   });
@@ -360,8 +378,12 @@ export async function processConversationMemory(
   messages: Array<{ id?: string; role: string; content: string }>
 ): Promise<void> {
   try {
+    // Fetch session to get intent
+    const session = await queryOne<Session>(`SELECT primary_intent_id as "primaryIntentId" FROM sessions WHERE id = $1`, [sessionId]);
+    const intentId = session?.primaryIntentId || null;
+
     // Extract and store facts
-    await factsService.processConversationFacts(userId, sessionId, messages);
+    await factsService.processConversationFacts(userId, sessionId, messages, intentId);
 
     // Generate and store summary if enough messages
     if (messages.length >= 4) {
@@ -374,7 +396,8 @@ export async function processConversationMemory(
           summaryData.topics,
           summaryData.keyPoints,
           messages.length,
-          summaryData.sentiment
+          summaryData.sentiment,
+          intentId
         );
       }
     }

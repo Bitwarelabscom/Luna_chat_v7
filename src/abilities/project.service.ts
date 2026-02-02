@@ -8,7 +8,7 @@ const WORKSPACE_DIR = process.env.WORKSPACE_DIR || '/app/workspace';
 
 // Project types
 export type ProjectType = 'web' | 'fullstack' | 'python' | 'node';
-export type ProjectStatus = 'planning' | 'questioning' | 'building' | 'paused' | 'review' | 'complete' | 'error';
+export type ProjectStatus = 'planning' | 'questioning' | 'building' | 'paused' | 'review' | 'complete' | 'error' | 'cancelled';
 export type StepType = 'question' | 'generate_file' | 'generate_image' | 'execute' | 'preview' | 'modify';
 export type StepStatus = 'pending' | 'active' | 'waiting_input' | 'complete' | 'completed' | 'error' | 'skipped';
 

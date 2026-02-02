@@ -156,7 +156,8 @@ export async function storeMessageEmbedding(
   userId: string,
   sessionId: string,
   content: string,
-  role: string
+  role: string,
+  intentId?: string | null
 ): Promise<void> {
   const maxRetries = 3;
   const retryDelayMs = 500;
@@ -169,13 +170,13 @@ export async function storeMessageEmbedding(
       const vectorString = `[${embedding.join(',')}]`;
 
       await pool.query(
-        `INSERT INTO message_embeddings (message_id, user_id, session_id, content, role, embedding)
-         VALUES ($1, $2, $3, $4, $5, $6::vector)
+        `INSERT INTO message_embeddings (message_id, user_id, session_id, content, role, embedding, intent_id)
+         VALUES ($1, $2, $3, $4, $5, $6::vector, $7)
          ON CONFLICT DO NOTHING`,
-        [messageId, userId, sessionId, content, role, vectorString]
+        [messageId, userId, sessionId, content, role, vectorString, intentId || null]
       );
 
-      logger.debug('Stored message embedding', { messageId, userId });
+      logger.debug('Stored message embedding', { messageId, userId, intentId });
       return; // Success - exit function
     } catch (error) {
       const errorMessage = (error as Error).message;
@@ -211,9 +212,10 @@ export async function searchSimilarMessages(
     limit?: number;
     threshold?: number;
     excludeSessionId?: string;
+    intentId?: string | null;
   } = {}
 ): Promise<SimilarMessage[]> {
-  const { limit = 5, threshold = 0.7, excludeSessionId } = options;
+  const { limit = 5, threshold = 0.7, excludeSessionId, intentId } = options;
 
   try {
     const { embedding } = await generateEmbedding(query);
@@ -232,17 +234,23 @@ export async function searchSimilarMessages(
         AND 1 - (embedding <=> $1::vector) > $3
     `;
 
-    const params: (string | number)[] = [vectorString, userId, threshold];
+    const params: (string | number | null)[] = [vectorString, userId, threshold];
 
     if (excludeSessionId) {
       queryText += ` AND session_id != $4`;
       params.push(excludeSessionId);
     }
 
+    if (intentId) {
+      queryText += ` AND (intent_id = $${params.length + 1} OR intent_id IS NULL)`;
+      params.push(intentId);
+    }
+
     queryText += ` ORDER BY embedding <=> $1::vector LIMIT $${params.length + 1}`;
     params.push(limit);
 
-    const result = await pool.query(queryText, params);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await pool.query(queryText, params as any[]);
 
     return result.rows.map((row: Record<string, unknown>) => ({
       messageId: row.message_id as string,
@@ -271,7 +279,8 @@ export async function storeConversationSummary(
   topics: string[],
   keyPoints: string[],
   messageCount: number,
-  sentiment: string = 'neutral'
+  sentiment: string = 'neutral',
+  intentId?: string | null
 ): Promise<void> {
   try {
     const { embedding } = await generateEmbedding(summary);
@@ -279,8 +288,8 @@ export async function storeConversationSummary(
 
     await pool.query(
       `INSERT INTO conversation_summaries
-         (session_id, user_id, summary, topics, key_points, sentiment, embedding, message_count)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::vector, $8)
+         (session_id, user_id, summary, topics, key_points, sentiment, embedding, message_count, intent_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::vector, $8, $9)
        ON CONFLICT (session_id) DO UPDATE SET
          summary = EXCLUDED.summary,
          topics = EXCLUDED.topics,
@@ -288,11 +297,12 @@ export async function storeConversationSummary(
          sentiment = EXCLUDED.sentiment,
          embedding = EXCLUDED.embedding,
          message_count = EXCLUDED.message_count,
+         intent_id = EXCLUDED.intent_id,
          updated_at = NOW()`,
-      [sessionId, userId, summary, topics, keyPoints, sentiment, vectorString, messageCount]
+      [sessionId, userId, summary, topics, keyPoints, sentiment, vectorString, messageCount, intentId || null]
     );
 
-    logger.debug('Stored conversation summary', { sessionId, userId });
+    logger.debug('Stored conversation summary', { sessionId, userId, intentId });
   } catch (error) {
     logger.error('Failed to store conversation summary', {
       error: (error as Error).message,
@@ -307,7 +317,8 @@ export async function storeConversationSummary(
 export async function searchSimilarConversations(
   query: string,
   userId: string,
-  limit: number = 3
+  limit: number = 3,
+  intentId?: string | null
 ): Promise<Array<{
   sessionId: string;
   summary: string;
@@ -318,8 +329,8 @@ export async function searchSimilarConversations(
     const { embedding } = await generateEmbedding(query);
     const vectorString = `[${embedding.join(',')}]`;
 
-    const result = await pool.query(
-      `SELECT
+    let queryText = `
+      SELECT
         session_id,
         summary,
         topics,
@@ -327,10 +338,20 @@ export async function searchSimilarConversations(
       FROM conversation_summaries
       WHERE user_id = $2
         AND 1 - (embedding <=> $1::vector) > 0.6
-      ORDER BY embedding <=> $1::vector
-      LIMIT $3`,
-      [vectorString, userId, limit]
-    );
+    `;
+
+    const params: (string | number | null)[] = [vectorString, userId];
+
+    if (intentId) {
+      queryText += ` AND (intent_id = $${params.length + 1} OR intent_id IS NULL)`;
+      params.push(intentId);
+    }
+
+    queryText += ` ORDER BY embedding <=> $1::vector LIMIT $${params.length + 1}`;
+    params.push(limit);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await pool.query(queryText, params as any[]);
 
     return result.rows.map((row: Record<string, unknown>) => ({
       sessionId: row.session_id as string,

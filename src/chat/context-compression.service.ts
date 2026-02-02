@@ -9,7 +9,6 @@
 
 import { query, queryOne } from '../db/postgres.js';
 import { createCompletion } from '../llm/router.js';
-import { config } from '../config/index.js';
 import { searchSimilarMessages, type SimilarMessage } from '../memory/embedding.service.js';
 import type { Message } from '../types/index.js';
 import logger from '../utils/logger.js';
@@ -267,10 +266,10 @@ export async function updateRollingSummary(
       .map(m => `${m.role}: ${m.content.slice(0, 300)}`)
       .join('\n');
 
-    // Generate summary using local Ollama
+    // Generate summary using OpenAI gpt-5-nano (faster than local CPU)
     const response = await createCompletion(
-      'ollama',
-      config.ollama.chatModel,
+      'openai',
+      'gpt-5-nano',
       [
         { role: 'user', content: SUMMARY_PROMPT + conversationText }
       ],
@@ -292,8 +291,8 @@ export async function updateRollingSummary(
     let finalSummary = combinedSummary;
     if (combinedSummary.length > 800) {
       const recompressResponse = await createCompletion(
-        'ollama',
-        config.ollama.chatModel,
+        'openai',
+        'gpt-5-nano',
         [
           { role: 'user', content: `Compress this conversation summary into 2-3 sentences, preserving the most important points:\n\n${combinedSummary}` }
         ],

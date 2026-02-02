@@ -939,6 +939,12 @@ WORKSPACE CONTEXT:
 - The workspace is persistent - files will be available in future sessions
 - Use relative paths when creating files (e.g., 'analysis.py' not '/app/workspace/user/analysis.py')
 
+SANDBOX EXECUTION:
+- To run code inside the secure sandbox (REQUIRED for servers, npm install, etc.), use:
+  \`docker exec -w /workspace/${userId} luna-sandbox <command>\`
+- Example: \`docker exec -w /workspace/${userId} luna-sandbox npm install\`
+- The workspace is mounted at \`/workspace/${userId}\` inside the container.
+
 ${userMessage}`;
 
   logger.info('Executing agent task via Claude CLI', {
@@ -1036,6 +1042,12 @@ WORKSPACE CONTEXT:
 - You can create subdirectories within this workspace as needed
 - The workspace is persistent - files will be available in future sessions
 - Use relative paths when creating files (e.g., 'analysis.py' not '/app/workspace/user/analysis.py')
+
+SANDBOX EXECUTION:
+- To run code inside the secure sandbox (REQUIRED for servers, npm install, etc.), use:
+  \`docker exec -w /workspace/${userId} luna-sandbox <command>\`
+- Example: \`docker exec -w /workspace/${userId} luna-sandbox npm install\`
+- The workspace is mounted at \`/workspace/${userId}\` inside the container.
 
 ${userMessage}`;
 

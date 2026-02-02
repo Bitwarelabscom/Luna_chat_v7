@@ -4,6 +4,8 @@
  */
 
 import logger from '../utils/logger.js';
+import { query } from '../db/postgres.js';
+import { createChatCompletion } from '../llm/openai.client.js';
 import {
   IntentSignal,
   IntentType,
@@ -445,6 +447,75 @@ export function detectIntentSignal(
 }
 
 /**
+ * Detect intent using LLM when regex fails
+ */
+async function detectIntentWithLLM(
+  message: string,
+  activeIntents: IntentSummary[]
+): Promise<IntentSignal | null> {
+  const prompt = `
+Analyze the user's intent in this message.
+Active intents:
+${activeIntents.map(i => `- ${i.label} (ID: ${i.id})`).join('\n')}
+
+Message: "${message}"
+
+Determine if this message:
+1. Relates to an active intent (update/continuation).
+2. Starts a NEW distinct intent (goal/task).
+3. Is just casual chat (ignore).
+
+Return JSON only:
+{
+  "action": "create" | "update" | "ignore",
+  "intent_id": "existing_uuid" (if update),
+  "label": "short label" (if create),
+  "type": "task" | "goal" | "exploration" | "companion" (if create),
+  "confidence": 0.0-1.0
+}
+`;
+
+  try {
+    const response = await createChatCompletion({
+      messages: [{ role: 'system', content: prompt }],
+      model: 'gpt-4o-mini',
+      temperature: 0.1,
+      maxTokens: 200,
+    });
+
+    const content = response.content.replace(/```json|```/g, '').trim();
+    const result = JSON.parse(content);
+
+    if (result.confidence < 0.7 || result.action === 'ignore') return null;
+
+    if (result.action === 'update' && result.intent_id) {
+      return {
+        action: 'update',
+        confidence: result.confidence,
+        matchedIntentId: result.intent_id,
+        triggerType: 'implicit',
+      };
+    }
+
+    if (result.action === 'create' && result.label) {
+      return {
+        action: 'create',
+        confidence: result.confidence,
+        type: result.type || 'task',
+        label: result.label,
+        goal: result.label, // Simple goal
+        triggerType: 'implicit',
+      };
+    }
+
+    return null;
+  } catch (error) {
+    logger.warn('LLM intent detection failed', { error: (error as Error).message });
+    return null;
+  }
+}
+
+/**
  * Process message for intent updates
  * Called after response generation to update intent state
  */
@@ -456,98 +527,108 @@ export async function processMessageForIntents(
   context: IntentContext
 ): Promise<void> {
   try {
-    const signal = detectIntentSignal(userMessage, context.activeIntents);
+    let signal = detectIntentSignal(userMessage, context.activeIntents);
+    let activeIntentId: string | null = null;
 
     if (!signal) {
       // Check for approach change without explicit signal
       const newApproach = detectApproachChange(userMessage);
       if (newApproach && context.activeIntents.length > 0) {
-        // Apply to most recent active intent
         const intent = context.activeIntents[0];
         await intentService.addTriedApproach(intent.id, newApproach);
-        await intentService.touchIntent(intent.id, sessionId, userMessage.slice(0, 200), 'approach_change');
+        const updated = await intentService.touchIntent(intent.id, sessionId, userMessage.slice(0, 200), 'approach_change');
+        if (updated) activeIntentId = updated.id;
+        
         logger.debug('Updated intent with new approach', {
           intentId: intent.id,
           approach: newApproach.slice(0, 50),
         });
+      } else if (userMessage.length > 15) {
+        // Fallback to LLM detection for complex intents
+        signal = await detectIntentWithLLM(userMessage, context.activeIntents);
       }
-      return;
     }
 
-    // Skip low confidence signals (just log them for now)
-    if (signal.confidence < INTENT_DEFAULTS.LOG_ONLY_THRESHOLD) {
-      logger.debug('Low confidence intent signal - logging only', {
-        action: signal.action,
-        confidence: signal.confidence,
-      });
-      return;
+    // Process signal if found (either regex or LLM)
+    if (signal && signal.confidence >= INTENT_DEFAULTS.LOG_ONLY_THRESHOLD) {
+      // Process based on action
+      switch (signal.action) {
+        case 'create':
+          if (signal.label && signal.type) {
+            const existing = await intentService.findIntentByLabel(userId, signal.label);
+            if (existing) {
+              const updated = await intentService.touchIntent(existing.id, sessionId, userMessage.slice(0, 200), 'explicit');
+              if (updated) activeIntentId = updated.id;
+              
+              logger.debug('Touched existing intent instead of creating duplicate', {
+                intentId: existing.id,
+                label: signal.label,
+              });
+            } else if (signal.confidence >= INTENT_DEFAULTS.EXPLICIT_MIN_CONFIDENCE) {
+              const newIntent = await intentService.createIntent({
+                userId,
+                type: signal.type,
+                label: signal.label,
+                goal: signal.goal || signal.label,
+                sourceSessionId: sessionId,
+              });
+              activeIntentId = newIntent.id;
+            }
+          }
+          break;
+
+        case 'update':
+          if (signal.matchedIntentId) {
+            const updated = await intentService.touchIntent(
+              signal.matchedIntentId,
+              sessionId,
+              userMessage.slice(0, 200),
+              signal.triggerType
+            );
+            if (updated) activeIntentId = updated.id;
+
+            if (signal.updates?.blockers && signal.updates.blockers.length > 0) {
+              await intentService.addBlocker(signal.matchedIntentId, signal.updates.blockers[0]);
+            }
+          }
+          break;
+
+        case 'resolve':
+          if (signal.matchedIntentId) {
+            await intentService.resolveIntent(signal.matchedIntentId, 'completed');
+            // Don't set activeIntentId for resolved intents
+          }
+          break;
+
+        case 'suspend':
+          if (signal.matchedIntentId) {
+            await intentService.suspendIntent(signal.matchedIntentId);
+          }
+          break;
+
+        case 'switch':
+          if (signal.label) {
+            const existing = await intentService.findIntentByLabel(userId, signal.label);
+            if (existing && existing.status === 'suspended') {
+              const reactivated = await intentService.reactivateIntent(existing.id);
+              if (reactivated) activeIntentId = reactivated.id;
+            }
+          }
+          break;
+      }
+    } else if (!activeIntentId && context.activeIntents.length > 0) {
+       // If no new signal, but we have active intents, implicit continuation of top priority?
+       // Maybe not update timestamp, but we can assume session is related to top intent?
+       // Only if confidence is reasonable? 
+       // For now, let's NOT assume unless signal is present to avoid noise.
+       // However, if we found an "approach change" above, activeIntentId is set.
     }
 
-    // Process based on action
-    switch (signal.action) {
-      case 'create':
-        if (signal.label && signal.type) {
-          // Check for similar existing intent first
-          const existing = await intentService.findIntentByLabel(userId, signal.label);
-          if (existing) {
-            // Touch existing instead of creating duplicate
-            await intentService.touchIntent(existing.id, sessionId, userMessage.slice(0, 200), 'explicit');
-            logger.debug('Touched existing intent instead of creating duplicate', {
-              intentId: existing.id,
-              label: signal.label,
-            });
-          } else if (signal.confidence >= INTENT_DEFAULTS.EXPLICIT_MIN_CONFIDENCE) {
-            // Create new intent
-            await intentService.createIntent({
-              userId,
-              type: signal.type,
-              label: signal.label,
-              goal: signal.goal || signal.label,
-              sourceSessionId: sessionId,
-            });
-          }
-        }
-        break;
-
-      case 'update':
-        if (signal.matchedIntentId) {
-          // Touch the intent
-          await intentService.touchIntent(
-            signal.matchedIntentId,
-            sessionId,
-            userMessage.slice(0, 200),
-            signal.triggerType
-          );
-
-          // Apply specific updates
-          if (signal.updates?.blockers && signal.updates.blockers.length > 0) {
-            await intentService.addBlocker(signal.matchedIntentId, signal.updates.blockers[0]);
-          }
-        }
-        break;
-
-      case 'resolve':
-        if (signal.matchedIntentId) {
-          await intentService.resolveIntent(signal.matchedIntentId, 'completed');
-        }
-        break;
-
-      case 'suspend':
-        if (signal.matchedIntentId) {
-          await intentService.suspendIntent(signal.matchedIntentId);
-        }
-        break;
-
-      case 'switch':
-        // If we have a label, try to find and reactivate that intent
-        if (signal.label) {
-          const existing = await intentService.findIntentByLabel(userId, signal.label);
-          if (existing && existing.status === 'suspended') {
-            await intentService.reactivateIntent(existing.id);
-          }
-        }
-        break;
+    // Tag session with the active intent if one was interacted with
+    if (activeIntentId) {
+      await query(`UPDATE sessions SET primary_intent_id = $1 WHERE id = $2`, [activeIntentId, sessionId]);
     }
+
   } catch (error) {
     logger.warn('Failed to process message for intents', {
       error: (error as Error).message,

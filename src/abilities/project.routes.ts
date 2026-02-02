@@ -1,8 +1,12 @@
 import { Router, Request, Response } from 'express';
 import * as projectService from './project.service.js';
 import logger from '../utils/logger.js';
+import { authenticate } from '../auth/auth.middleware.js';
 
 const router = Router();
+
+// Apply authentication middleware
+router.use(authenticate);
 
 // Helper to get user ID from request
 function getUserId(req: Request): string {
@@ -15,7 +19,9 @@ function getUserId(req: Request): string {
 router.get('/', async (req: Request, res: Response): Promise<void> => {
   try {
     const userId = getUserId(req);
+    logger.info('Listing projects for user', { userId });
     const projects = await projectService.getUserProjects(userId);
+    logger.info('Found projects', { count: projects.length, userId });
     res.json({ projects });
   } catch (error) {
     logger.error('Failed to list projects', { error: (error as Error).message });
