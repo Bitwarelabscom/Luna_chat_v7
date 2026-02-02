@@ -189,7 +189,7 @@ export async function generateBackground(
     if (modelConfig.provider === 'xai') {
       const result = await xaiProvider.generateImage(fullPrompt, {
         model: modelConfig.model,
-        aspect_ratio: '19:6',
+        aspect_ratio: '16:9',
       });
 
       if (result.url) {
