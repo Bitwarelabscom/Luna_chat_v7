@@ -478,7 +478,7 @@ Return JSON only:
   try {
     const response = await createChatCompletion({
       messages: [{ role: 'system', content: prompt }],
-      model: 'gpt-4o-mini',
+      model: 'gpt-5-mini',
       temperature: 0.1,
       maxTokens: 200,
     });
