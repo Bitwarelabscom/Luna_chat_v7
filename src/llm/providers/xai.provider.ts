@@ -143,13 +143,19 @@ export async function generateImage(
 ): Promise<{ url?: string; b64_json?: string }> {
   const xai = getClient();
 
+  // Map OpenAI quality terms to xAI terms (low, medium, high)
+  let quality = options.quality;
+  if (quality === 'standard') quality = 'medium';
+  if (quality === 'hd') quality = 'high';
+  if (!quality) quality = 'high'; // Default to high for best results
+
   try {
     const response = await xai.images.generate({
       model: options.model || 'grok-imagine-image',
       prompt,
       n: options.n || 1,
       size: options.size as any,
-      quality: options.quality as any || 'standard',
+      quality: quality as any,
       aspect_ratio: options.aspect_ratio as any,
       response_format: 'url', // or b64_json
     } as any);
