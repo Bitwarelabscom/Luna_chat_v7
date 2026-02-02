@@ -139,7 +139,7 @@ export function isConfigured(): boolean {
 
 export async function generateImage(
   prompt: string,
-  options: { model?: string; size?: string; quality?: string; n?: number } = {}
+  options: { model?: string; size?: string; quality?: string; n?: number; aspect_ratio?: string } = {}
 ): Promise<{ url?: string; b64_json?: string }> {
   const xai = getClient();
 
@@ -148,10 +148,11 @@ export async function generateImage(
       model: options.model || 'grok-imagine-image',
       prompt,
       n: options.n || 1,
-      size: options.size as any || '1024x1024',
+      size: options.size as any,
       quality: options.quality as any || 'standard',
+      aspect_ratio: options.aspect_ratio as any,
       response_format: 'url', // or b64_json
-    });
+    } as any);
 
     if (!response.data || !response.data[0]) {
       throw new Error('No image data returned from xAI');
