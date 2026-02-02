@@ -145,7 +145,7 @@ export async function generateImage(
 
   try {
     const response = await xai.images.generate({
-      model: options.model || 'grok-2-vision-1212', // or grok-imagine-image if that's the name
+      model: options.model || 'grok-imagine-image',
       prompt,
       n: options.n || 1,
       size: options.size as any || '1024x1024',

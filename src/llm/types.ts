@@ -375,6 +375,13 @@ export const PROVIDERS: LLMProvider[] = [
         costPer1kInput: 0.002,
         costPer1kOutput: 0.01,
       },
+      {
+        id: 'grok-imagine-image',
+        name: 'Grok Imagine',
+        contextWindow: 0,
+        maxOutputTokens: 0,
+        capabilities: ['creative'],
+      },
     ],
   },
   {
