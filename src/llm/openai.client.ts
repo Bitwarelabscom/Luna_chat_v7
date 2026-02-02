@@ -85,6 +85,7 @@ export interface ChatCompletionOptions {
   model?: string;
   reasoning?: boolean;  // For xAI Grok 4.1 Fast reasoning models
   loggingContext?: LLMLoggingContext;  // Optional logging context for activity tracking
+  response_format?: OpenAI.Chat.Completions.ChatCompletionCreateParams['response_format'];
 }
 
 export interface ChatCompletionResult {
@@ -108,6 +109,7 @@ export async function createChatCompletion(
     model,
     reasoning,
     loggingContext,
+    response_format,
   } = options;
 
   const modelToUse = model || config.openai.model;
@@ -254,6 +256,7 @@ export async function createChatCompletion(
       tools,
       ...(skipTemperature ? {} : { temperature }),
       ...tokenParam,
+      response_format,
       // Add reasoning for xAI fast/reasoning models (enabled by default, can be disabled)
       ...(isXAIReasoning && { reasoning: { enabled: reasoning !== false } }),
     } as any);

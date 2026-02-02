@@ -481,6 +481,7 @@ Return JSON only:
       model: 'gpt-5-mini',
       temperature: 0.1,
       maxTokens: 200,
+      response_format: { type: 'json_object' },
     });
 
     const content = response.content.replace(/```json|```/g, '').trim();
