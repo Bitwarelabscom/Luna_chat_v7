@@ -4,6 +4,8 @@ import crypto from 'crypto';
 import OpenAI from 'openai';
 import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
+import { getUserModelConfig } from '../llm/model-config.service.js';
+import * as xaiProvider from '../llm/providers/xai.provider.js';
 
 // Paths
 const IMAGES_DIR = path.join(process.cwd(), 'images');
@@ -64,7 +66,7 @@ function generateFilename(userId: string, prefix: string = 'img', extension: str
 }
 
 /**
- * Generate an image using OpenAI GPT Image 1 Mini
+ * Generate an image using the configured provider (OpenAI or xAI)
  */
 export async function generateImage(
   userId: string,
@@ -73,46 +75,45 @@ export async function generateImage(
   const startTime = Date.now();
 
   try {
-    const openai = new OpenAI({ apiKey: config.openai.apiKey });
+    const modelConfig = await getUserModelConfig(userId, 'image_generation');
+    logger.info('Generating image', { userId, promptLength: prompt.length, provider: modelConfig.provider, model: modelConfig.model });
 
-    logger.info('Generating image', { userId, promptLength: prompt.length });
-
-    const response = await openai.images.generate({
-      model: 'gpt-image-1-mini',
-      prompt,
-      n: 1,
-      size: '1536x1024',
-      quality: 'low',
-    });
-
-    if (!response.data || !response.data[0]) {
-      return {
-        success: false,
-        error: 'No image data returned from OpenAI',
-        executionTimeMs: Date.now() - startTime,
-      };
-    }
-
-    const imageData = response.data[0];
     let imageBuffer: Buffer;
 
-    // Handle both URL and base64 responses
-    if (imageData.url) {
-      // Download from URL
-      const imageResponse = await fetch(imageData.url);
-      if (!imageResponse.ok) {
-        throw new Error(`Failed to download image: ${imageResponse.status}`);
+    if (modelConfig.provider === 'xai') {
+      const result = await xaiProvider.generateImage(prompt, { model: modelConfig.model });
+      if (result.url) {
+        const imageResponse = await fetch(result.url);
+        if (!imageResponse.ok) throw new Error(`Failed to download image: ${imageResponse.status}`);
+        imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
+      } else if (result.b64_json) {
+        imageBuffer = Buffer.from(result.b64_json, 'base64');
+      } else {
+        throw new Error('No image data returned from xAI');
       }
-      imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
-    } else if (imageData.b64_json) {
-      // Decode base64
-      imageBuffer = Buffer.from(imageData.b64_json, 'base64');
     } else {
-      return {
-        success: false,
-        error: 'No image URL or base64 data in response',
-        executionTimeMs: Date.now() - startTime,
-      };
+      // Default to OpenAI
+      const openai = new OpenAI({ apiKey: config.openai.apiKey });
+      const response = await openai.images.generate({
+        model: modelConfig.model || 'gpt-image-1-mini', // Fallback if config is somehow empty
+        prompt,
+        n: 1,
+        size: '1536x1024',
+        quality: 'low',
+      });
+
+      if (!response.data || !response.data[0]) throw new Error('No image data returned from OpenAI');
+      const imageData = response.data[0];
+
+      if (imageData.url) {
+        const imageResponse = await fetch(imageData.url);
+        if (!imageResponse.ok) throw new Error(`Failed to download image: ${imageResponse.status}`);
+        imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
+      } else if (imageData.b64_json) {
+        imageBuffer = Buffer.from(imageData.b64_json, 'base64');
+      } else {
+        throw new Error('No image URL or base64 data in response');
+      }
     }
 
     // Detect actual image type from content and use correct extension
@@ -255,44 +256,44 @@ export async function generateProjectImage(
   const startTime = Date.now();
 
   try {
-    const openai = new OpenAI({ apiKey: config.openai.apiKey });
+    const modelConfig = await getUserModelConfig(userId, 'image_generation');
+    logger.info('Generating project image', { userId, projectDir, promptLength: prompt.length, provider: modelConfig.provider, model: modelConfig.model });
 
-    logger.info('Generating project image', { userId, projectDir, promptLength: prompt.length });
-
-    const response = await openai.images.generate({
-      model: 'gpt-image-1-mini',
-      prompt,
-      n: 1,
-      size: '1536x1024',
-      quality: 'low',
-    });
-
-    if (!response.data || !response.data[0]) {
-      return {
-        success: false,
-        error: 'No image data returned from OpenAI',
-        executionTimeMs: Date.now() - startTime,
-      };
-    }
-
-    const imageData = response.data[0];
     let imageBuffer: Buffer;
 
-    // Handle both URL and base64 responses
-    if (imageData.url) {
-      const imageResponse = await fetch(imageData.url);
-      if (!imageResponse.ok) {
-        throw new Error(`Failed to download image: ${imageResponse.status}`);
+    if (modelConfig.provider === 'xai') {
+      const result = await xaiProvider.generateImage(prompt, { model: modelConfig.model });
+      if (result.url) {
+        const imageResponse = await fetch(result.url);
+        if (!imageResponse.ok) throw new Error(`Failed to download image: ${imageResponse.status}`);
+        imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
+      } else if (result.b64_json) {
+        imageBuffer = Buffer.from(result.b64_json, 'base64');
+      } else {
+        throw new Error('No image data returned from xAI');
       }
-      imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
-    } else if (imageData.b64_json) {
-      imageBuffer = Buffer.from(imageData.b64_json, 'base64');
     } else {
-      return {
-        success: false,
-        error: 'No image URL or base64 data in response',
-        executionTimeMs: Date.now() - startTime,
-      };
+      const openai = new OpenAI({ apiKey: config.openai.apiKey });
+      const response = await openai.images.generate({
+        model: modelConfig.model || 'gpt-image-1-mini',
+        prompt,
+        n: 1,
+        size: '1536x1024',
+        quality: 'low',
+      });
+
+      if (!response.data || !response.data[0]) throw new Error('No image data returned from OpenAI');
+      const imageData = response.data[0];
+
+      if (imageData.url) {
+        const imageResponse = await fetch(imageData.url);
+        if (!imageResponse.ok) throw new Error(`Failed to download image: ${imageResponse.status}`);
+        imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
+      } else if (imageData.b64_json) {
+        imageBuffer = Buffer.from(imageData.b64_json, 'base64');
+      } else {
+        throw new Error('No image URL or base64 data in response');
+      }
     }
 
     // Detect actual image type from content

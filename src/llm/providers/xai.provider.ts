@@ -136,3 +136,33 @@ export async function* streamCompletion(
 export function isConfigured(): boolean {
   return !!config.xai?.apiKey;
 }
+
+export async function generateImage(
+  prompt: string,
+  options: { model?: string; size?: string; quality?: string; n?: number } = {}
+): Promise<{ url?: string; b64_json?: string }> {
+  const xai = getClient();
+
+  try {
+    const response = await xai.images.generate({
+      model: options.model || 'grok-2-vision-1212', // or grok-imagine-image if that's the name
+      prompt,
+      n: options.n || 1,
+      size: options.size as any || '1024x1024',
+      quality: options.quality as any || 'standard',
+      response_format: 'url', // or b64_json
+    });
+
+    if (!response.data || !response.data[0]) {
+      throw new Error('No image data returned from xAI');
+    }
+
+    return {
+      url: response.data[0].url,
+      b64_json: response.data[0].b64_json,
+    };
+  } catch (error) {
+    logger.error('xAI image generation failed', { error: (error as Error).message });
+    throw error;
+  }
+}

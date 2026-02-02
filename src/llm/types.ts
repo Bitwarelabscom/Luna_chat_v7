@@ -815,7 +815,8 @@ export type ConfigurableTask =
   | 'smalltalk'
   | 'fast_llm'
   | 'fast_plan'
-  | 'fast_draft';
+  | 'fast_draft'
+  | 'image_generation';
 
 export interface TaskModelConfig {
   taskType: ConfigurableTask;
@@ -909,6 +910,13 @@ export const CONFIGURABLE_TASKS: TaskModelConfig[] = [
     description: 'Quick draft generation for sub-5s responses (fast path)',
     defaultProvider: 'xai',
     defaultModel: 'grok-4-1-fast',
+  },
+  {
+    taskType: 'image_generation',
+    displayName: 'Image Generation',
+    description: 'Model used for generating images from text descriptions',
+    defaultProvider: 'openai',
+    defaultModel: 'gpt-image-1-mini',
   },
 ];
 
