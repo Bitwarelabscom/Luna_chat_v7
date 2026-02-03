@@ -2,6 +2,7 @@ import * as embeddingService from './embedding.service.js';
 import * as factsService from './facts.service.js';
 import * as insightsService from '../autonomous/insights.service.js';
 import * as memorycoreClient from './memorycore.client.js';
+import * as neo4jService from '../graph/neo4j.service.js';
 import { queryOne } from '../db/postgres.js';
 import logger from '../utils/logger.js';
 import type { Session } from '../types/index.js';
@@ -16,6 +17,7 @@ export interface MemoryContext {
     facts: string;      // User facts - sorted alphabetically for determinism
     learnings: string;  // Luna's learnings - sorted for determinism
     graphMemory?: string;  // Graph memory narrative (connections, relationships)
+    localGraphMemory?: string;  // Local Neo4j graph memory (fallback/supplement)
     consciousness?: {   // Consciousness metrics from NeuralSleep
       phi: number;
       temporalIntegration: number;
@@ -41,6 +43,11 @@ export function formatStableMemory(context: MemoryContext): string {
   // This goes first as it provides structured relationship context
   if (context.stable.graphMemory) {
     parts.push(context.stable.graphMemory);
+  }
+
+  // Local graph memory (Neo4j fallback/supplement for intent dependencies and co-occurrences)
+  if (context.stable.localGraphMemory) {
+    parts.push(context.stable.localGraphMemory);
   }
 
   if (context.stable.facts) {
@@ -101,7 +108,7 @@ export async function buildMemoryContext(
     const intentId = session?.primaryIntentId || null;
 
     // Run all queries in parallel for better performance
-    const [facts, similarMessages, similarConversations, learningsContext, consciousnessMetrics, consolidatedModel, graphContext] = await Promise.all([
+    const [facts, similarMessages, similarConversations, learningsContext, consciousnessMetrics, consolidatedModel, graphContext, localGraphContext] = await Promise.all([
       // Get user facts (filtered by intent if available)
       factsService.getUserFacts(userId, { limit: 30, intentId }),
       // Search for relevant past messages (excluding current session, scoped to intent)
@@ -130,6 +137,8 @@ export async function buildMemoryContext(
       memorycoreClient.getConsolidatedModel(userId),
       // Get graph memory context (narrative format)
       memorycoreClient.getGraphContext(userId),
+      // Get local graph context from Neo4j (fallback/supplement)
+      neo4jService.buildLocalGraphContext(userId),
     ]);
 
     // Format facts with alphabetical sorting for cache determinism
@@ -182,11 +191,15 @@ export async function buildMemoryContext(
     // Get formatted graph memory (narrative format from MemoryCore)
     const graphMemory = memorycoreClient.formatGraphContext(graphContext);
 
+    // Get local graph memory (Neo4j - fallback/supplement)
+    const localGraphMemory = neo4jService.formatLocalGraphContext(localGraphContext);
+
     return {
       stable: {
         facts: factsPrompt,
         learnings,
         graphMemory,
+        localGraphMemory,
         consciousness,
         consolidatedPatterns,
       },
@@ -214,12 +227,13 @@ export async function buildMemoryContext(
  */
 export async function buildStableMemoryOnly(userId: string): Promise<MemoryContext> {
   try {
-    const [facts, learningsContext, consciousnessMetrics, consolidatedModel, graphContext] = await Promise.all([
+    const [facts, learningsContext, consciousnessMetrics, consolidatedModel, graphContext, localGraphContext] = await Promise.all([
       factsService.getUserFacts(userId, { limit: 30 }),
       insightsService.getActiveLearningsForContext(userId, 10),
       memorycoreClient.getConsciousnessMetrics(userId),
       memorycoreClient.getConsolidatedModel(userId),
       memorycoreClient.getGraphContext(userId),
+      neo4jService.buildLocalGraphContext(userId),
     ]);
 
     const factsPrompt = factsService.formatFactsForPrompt(facts);
@@ -251,11 +265,15 @@ export async function buildStableMemoryOnly(userId: string): Promise<MemoryConte
     // Get formatted graph memory (narrative format from MemoryCore)
     const graphMemory = memorycoreClient.formatGraphContext(graphContext);
 
+    // Get local graph memory (Neo4j - fallback/supplement)
+    const localGraphMemory = neo4jService.formatLocalGraphContext(localGraphContext);
+
     return {
       stable: {
         facts: factsPrompt,
         learnings,
         graphMemory,
+        localGraphMemory,
         consciousness,
         consolidatedPatterns,
       },
@@ -286,6 +304,11 @@ export function formatMemoryForPrompt(context: MemoryContext): string {
   // Graph memory (narrative format - primary knowledge source)
   if (context.stable.graphMemory) {
     parts.push(context.stable.graphMemory);
+  }
+
+  // Local graph memory (Neo4j fallback/supplement)
+  if (context.stable.localGraphMemory) {
+    parts.push(context.stable.localGraphMemory);
   }
 
   // Stable parts

@@ -6,6 +6,7 @@
 import { pool } from '../db/index.js';
 import { redis } from '../db/redis.js';
 import * as intentSummaryGenerator from '../context/intent-summary-generator.service.js';
+import * as intentGraphService from '../graph/intent-graph.service.js';
 import logger from '../utils/logger.js';
 import {
   Intent,
@@ -149,6 +150,11 @@ export async function createIntent(input: CreateIntentInput): Promise<Intent> {
 
   // Invalidate cache
   await invalidateCache(input.userId);
+
+  // Sync to Neo4j (non-blocking)
+  intentGraphService.syncIntentToGraph(intent).catch(err => {
+    logger.warn('Failed to sync intent to Neo4j', { intentId: intent.id, error: (err as Error).message });
+  });
 
   logger.info('Created intent', {
     intentId: intent.id,
@@ -437,6 +443,11 @@ export async function resolveIntent(
       });
     });
 
+    // Update Neo4j status (non-blocking)
+    intentGraphService.updateIntentStatus(intentId, 'resolved').catch(err => {
+      logger.warn('Failed to update intent status in Neo4j', { intentId, error: (err as Error).message });
+    });
+
     return intent;
   }
 
@@ -465,6 +476,11 @@ export async function suspendIntent(intentId: string): Promise<Intent | null> {
         intentId,
         error: (err as Error).message,
       });
+    });
+
+    // Update Neo4j status (non-blocking)
+    intentGraphService.updateIntentStatus(intentId, 'suspended').catch(err => {
+      logger.warn('Failed to update intent status in Neo4j', { intentId, error: (err as Error).message });
     });
 
     return intent;
@@ -517,6 +533,11 @@ export async function createIntentRelation(
     );
 
     if (result.rows[0]) {
+      // Sync to Neo4j (non-blocking)
+      intentGraphService.syncIntentRelationToGraph(fromIntentId, toIntentId, relationType).catch(err => {
+        logger.warn('Failed to sync intent relation to Neo4j', { error: (err as Error).message });
+      });
+
       return {
         id: result.rows[0].id,
         fromIntentId: result.rows[0].from_intent_id,
@@ -547,6 +568,92 @@ export async function getRelatedIntents(intentId: string): Promise<Intent[]> {
     [intentId]
   );
   return result.rows.map(mapRowToIntent);
+}
+
+/**
+ * Get related intent graph using Neo4j for multi-hop traversal
+ * Falls back to single-hop PostgreSQL query if Neo4j unavailable
+ */
+export async function getRelatedIntentsGraph(
+  intentId: string,
+  depth: number = 2
+): Promise<{
+  nodes: Array<{ id: string; label: string; status: string; type: string }>;
+  edges: Array<{ fromId: string; toId: string; type: string }>;
+}> {
+  try {
+    const graph = await intentGraphService.getRelatedIntentGraph(intentId, depth);
+    if (graph.nodes.length > 0) {
+      return {
+        nodes: graph.nodes.map(n => ({
+          id: n.id,
+          label: n.label,
+          status: n.status,
+          type: n.type,
+        })),
+        edges: graph.edges.map(e => ({
+          fromId: e.fromId,
+          toId: e.toId,
+          type: e.type,
+        })),
+      };
+    }
+  } catch (error) {
+    logger.warn('Neo4j graph query failed, falling back to PostgreSQL', {
+      error: (error as Error).message,
+    });
+  }
+
+  // Fallback to single-hop PostgreSQL
+  const related = await getRelatedIntents(intentId);
+  const nodes = related.map(i => ({
+    id: i.id,
+    label: i.label,
+    status: i.status,
+    type: i.type,
+  }));
+
+  // Get edges from PostgreSQL
+  const edgeResult = await pool.query(
+    `SELECT from_intent_id, to_intent_id, relation_type FROM intent_relations
+     WHERE from_intent_id = $1 OR to_intent_id = $1`,
+    [intentId]
+  );
+
+  const edges = edgeResult.rows.map(r => ({
+    fromId: r.from_intent_id,
+    toId: r.to_intent_id,
+    type: r.relation_type,
+  }));
+
+  return { nodes, edges };
+}
+
+/**
+ * Get intent dependency chain using Neo4j for efficient multi-hop traversal
+ * Returns all intents that block the given intent
+ */
+export async function getIntentDependencyChain(intentId: string): Promise<IntentSummary[]> {
+  try {
+    const chain = await intentGraphService.getIntentDependencyChain(intentId);
+    return chain.map(i => ({
+      id: i.id,
+      type: i.type as Intent['type'],
+      label: i.label,
+      status: i.status as IntentStatus,
+      priority: i.priority as IntentPriority,
+      goal: i.goal || '',
+      currentApproach: null,
+      blockers: [],
+      lastTouchedAt: i.lastTouchedAt,
+      touchCount: 0,
+    }));
+  } catch (error) {
+    logger.warn('Failed to get intent dependency chain from Neo4j', {
+      error: (error as Error).message,
+    });
+    return [];
+  }
 }
 
 // ============================================
@@ -728,6 +835,8 @@ export default {
   reactivateIntent,
   createIntentRelation,
   getRelatedIntents,
+  getRelatedIntentsGraph,
+  getIntentDependencyChain,
   getIntentContext,
   getRecoveryIntents,
   findSimilarIntents,

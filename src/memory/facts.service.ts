@@ -1,6 +1,7 @@
 import { pool } from '../db/index.js';
 import { createCompletion } from '../llm/router.js';
 import { config } from '../config/index.js';
+import * as knowledgeGraphService from '../graph/knowledge-graph.service.js';
 import logger from '../utils/logger.js';
 
 export interface UserFact {
@@ -128,6 +129,31 @@ export async function storeFact(
       key: fact.factKey,
       intentId
     });
+
+    // Sync to Neo4j (non-blocking) - get the stored fact ID
+    pool.query(
+      `SELECT id, mention_count, last_mentioned FROM user_facts
+       WHERE user_id = $1 AND category = $2 AND fact_key = $3
+       AND (intent_id = $4 OR (intent_id IS NULL AND $4 IS NULL))
+       LIMIT 1`,
+      [userId, fact.category, fact.factKey, intentId || null]
+    ).then(result => {
+      if (result.rows[0]) {
+        const storedFact: UserFact = {
+          id: result.rows[0].id,
+          category: fact.category,
+          factKey: fact.factKey,
+          factValue: fact.factValue,
+          confidence: fact.confidence,
+          lastMentioned: result.rows[0].last_mentioned,
+          mentionCount: result.rows[0].mention_count,
+          intentId: intentId || null,
+        };
+        knowledgeGraphService.syncFactToGraph(userId, storedFact).catch(err => {
+          logger.warn('Failed to sync fact to Neo4j', { error: (err as Error).message });
+        });
+      }
+    }).catch(() => {});
   } catch (error) {
     logger.error('Failed to store fact', {
       error: (error as Error).message,

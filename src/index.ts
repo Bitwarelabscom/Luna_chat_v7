@@ -9,6 +9,7 @@ import { healthCheck as postgresHealth, closePool } from './db/postgres.js';
 import { healthCheck as redisHealth, closeRedis } from './db/redis.js';
 import { healthCheck as searxngHealth } from './search/searxng.client.js';
 import { healthCheck as memorycoreHealth } from './memory/memorycore.client.js';
+import { neo4jService, neo4jClient } from './graph/index.js';
 import authRoutes from './auth/auth.routes.js';
 import chatRoutes from './chat/chat.routes.js';
 import abilitiesRoutes from './abilities/abilities.routes.js';
@@ -142,11 +143,12 @@ app.use((req, res, next) => {
 
 // Health check endpoint
 app.get('/api/health', async (_req, res) => {
-  const [postgres, redis, searxng, memorycore] = await Promise.all([
+  const [postgres, redis, searxng, memorycore, neo4j] = await Promise.all([
     postgresHealth(),
     redisHealth(),
     searxngHealth(),
     memorycoreHealth(),
+    neo4jClient.healthCheck(),
   ]);
 
   const healthy = postgres && redis;
@@ -158,6 +160,7 @@ app.get('/api/health', async (_req, res) => {
       redis: redis ? 'up' : 'down',
       searxng: searxng ? 'up' : 'down',
       memorycore: memorycore ? 'up' : 'down',
+      neo4j: neo4j ? 'up' : 'down',
     },
     timestamp: new Date().toISOString(),
   });
@@ -209,6 +212,7 @@ async function shutdown() {
   shutdownTradingWebSocket();
   shutdownHocuspocusServer();
   await shutdownCritiqueQueue();
+  await neo4jService.close();
   await closePool();
   await closeRedis();
   process.exit(0);
@@ -275,6 +279,11 @@ server.listen(config.port, () => {
 
   // Start background jobs
   startJobs();
+
+  // Initialize Neo4j (schema and connectivity)
+  neo4jService.initialize().catch(err => {
+    logger.error('Failed to initialize Neo4j on startup', { error: err.message });
+  });
 });
 
 export default app;

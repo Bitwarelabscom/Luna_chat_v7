@@ -13,6 +13,7 @@
     "test:coverage": "jest --coverage",
     "migrate": "tsx src/db/migrate.ts",
     "migrate:create": "tsx src/db/create-migration.ts",
+    "migrate:neo4j": "tsx scripts/migrate-to-neo4j.ts",
     "lint": "eslint src --ext .ts",
     "format": "prettier --write \"src/**/*.ts\""
   },
@@ -47,6 +48,7 @@
     "jsonwebtoken": "^9.0.2",
     "mailparser": "^3.9.0",
     "multer": "^2.0.2",
+    "neo4j-driver": "^5.28.3",
     "nodemailer": "^7.0.11",
     "openai": "^4.68.0",
     "pdf-parse": "^1.1.1",

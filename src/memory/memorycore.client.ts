@@ -1,4 +1,5 @@
 import { config } from '../config/index.js';
+import * as neo4jService from '../graph/neo4j.service.js';
 import logger from '../utils/logger.js';
 import type { MemoryContext, ConsciousnessMetrics, ConsolidatedUserModel } from '../types/index.js';
 
@@ -517,9 +518,13 @@ export function formatMemoryWithConsciousness(memory: MemoryContext | null): str
 /**
  * Get graph memory context for a user
  * Returns narrative context formatted for prompt injection
+ * Falls back to local Neo4j if MemoryCore is unavailable
  */
 export async function getGraphContext(userId: string): Promise<GraphMemoryContext | null> {
-  if (!config.memorycore.enabled) return null;
+  if (!config.memorycore.enabled) {
+    // Fallback to local Neo4j graph context
+    return getLocalGraphContextFallback(userId);
+  }
 
   try {
     const response = await fetch(`${config.memorycore.url}/api/graph/context/${userId}`, {
@@ -531,7 +536,8 @@ export async function getGraphContext(userId: string): Promise<GraphMemoryContex
 
     if (!response.ok) {
       if (response.status === 404) {
-        return null;
+        // Try local Neo4j as supplement
+        return getLocalGraphContextFallback(userId);
       }
       throw new Error(`MemoryCore returned ${response.status}`);
     }
@@ -539,7 +545,51 @@ export async function getGraphContext(userId: string): Promise<GraphMemoryContex
     const data = await response.json() as { success: boolean; data: GraphMemoryContext };
     return data.data;
   } catch (error) {
-    logger.warn('Failed to get graph context', { userId, error: (error as Error).message });
+    logger.warn('Failed to get graph context from MemoryCore, trying local Neo4j', {
+      userId,
+      error: (error as Error).message,
+    });
+    // Fallback to local Neo4j
+    return getLocalGraphContextFallback(userId);
+  }
+}
+
+/**
+ * Get graph context from local Neo4j as fallback
+ */
+async function getLocalGraphContextFallback(userId: string): Promise<GraphMemoryContext | null> {
+  try {
+    const localContext = await neo4jService.buildLocalGraphContext(userId);
+    if (!localContext) return null;
+
+    const formattedContext = neo4jService.formatLocalGraphContext(localContext);
+    if (!formattedContext) return null;
+
+    return {
+      formattedContext,
+      narrative: {
+        coreMemories: [],
+        activeTopics: [],
+        relationships: [],
+        preferences: [],
+        emotionalContext: [],
+        stats: {
+          nodesIncluded: localContext.intents.activeCount + localContext.knowledge.factCount,
+          edgesIncluded: localContext.entities.strongCoOccurrences.length,
+          queryTimeMs: 0,
+        },
+      },
+      stats: {
+        nodesIncluded: localContext.intents.activeCount + localContext.knowledge.factCount,
+        edgesIncluded: localContext.entities.strongCoOccurrences.length,
+        queryTimeMs: 0,
+      },
+    };
+  } catch (error) {
+    logger.warn('Failed to get local graph context fallback', {
+      userId,
+      error: (error as Error).message,
+    });
     return null;
   }
 }

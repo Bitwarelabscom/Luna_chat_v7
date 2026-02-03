@@ -36,7 +36,7 @@ export type ResolutionType = 'completed' | 'abandoned' | 'merged' | 'superseded'
 /**
  * Relation types between intents
  */
-export type IntentRelationType = 'blocks' | 'depends_on' | 'related_to' | 'supersedes';
+export type IntentRelationType = 'blocks' | 'depends_on' | 'related_to' | 'supersedes' | 'subtask_of';
 
 /**
  * Touch type for tracking how an intent was engaged

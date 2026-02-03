@@ -5,6 +5,8 @@ secrets:
     file: ./secrets/jwt_secret.txt
   redis_password:
     file: ./secrets/redis_password.txt
+  neo4j_password:
+    file: ./secrets/neo4j_password.txt
   openai_api_key:
     file: ./secrets/openai_api_key.txt
   groq_api_key:
@@ -161,10 +163,15 @@ services:
       - SANHEDRIN_ENABLED=${SANHEDRIN_ENABLED:-false}
       - SANHEDRIN_BASE_URL=${SANHEDRIN_BASE_URL:-http://luna-sanhedrin:8000}
       - SANHEDRIN_TIMEOUT=${SANHEDRIN_TIMEOUT:-120000}
+      # Neo4j graph database
+      - NEO4J_URI=bolt://luna-neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_ENABLED=${NEO4J_ENABLED:-true}
     secrets:
       - postgres_password
       - jwt_secret
       - redis_password
+      - neo4j_password
       - openai_api_key
       - groq_api_key
       - anthropic_api_key
@@ -191,6 +198,8 @@ services:
       luna-postgres:
         condition: service_healthy
       luna-redis:
+        condition: service_healthy
+      luna-neo4j:
         condition: service_healthy
       docker-proxy:
         condition: service_started
@@ -268,6 +277,38 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  luna-neo4j:
+    image: neo4j:5.15-community
+    container_name: luna-neo4j
+    restart: unless-stopped
+    # SECURITY: Internal only - not exposed to host
+    expose:
+      - "7474"   # HTTP browser (internal)
+      - "7687"   # Bolt protocol (internal)
+    environment:
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-changeme}
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+      - NEO4J_dbms_memory_heap_initial__size=512m
+      - NEO4J_dbms_memory_heap_max__size=1G
+      - NEO4J_dbms_memory_pagecache_size=512m
+    secrets:
+      - neo4j_password
+    volumes:
+      - luna-neo4j-data:/data
+      - luna-neo4j-logs:/logs
+    networks:
+      - luna-network
+    # SECURITY: Container hardening
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:7474/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
 
   luna-sandbox:
     build:
@@ -439,6 +480,8 @@ services:
 volumes:
   luna-postgres-data:
   luna-redis-data:
+  luna-neo4j-data:
+  luna-neo4j-logs:
   luna-documents:
   luna-workspace:
   luna-ollama-data:

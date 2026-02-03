@@ -9,6 +9,7 @@ const secrets = {
   postgresPassword: getOptionalSecret('postgres_password', 'POSTGRES_PASSWORD') || '',
   jwtSecret: getOptionalSecret('jwt_secret', 'JWT_SECRET') || '',
   redisPassword: getOptionalSecret('redis_password', 'REDIS_PASSWORD'),
+  neo4jPassword: getOptionalSecret('neo4j_password', 'NEO4J_PASSWORD'),
   openaiApiKey: getOptionalSecret('openai_api_key', 'OPENAI_API_KEY') || '',
   groqApiKey: getOptionalSecret('groq_api_key', 'GROQ_API_KEY'),
   anthropicApiKey: getOptionalSecret('anthropic_api_key', 'ANTHROPIC_API_KEY'),
@@ -117,6 +118,13 @@ const configSchema = z.object({
     phiThreshold: z.coerce.number().default(0.5),
   }),
 
+  neo4j: z.object({
+    uri: z.string().default('bolt://luna-neo4j:7687'),
+    user: z.string().default('neo4j'),
+    password: z.string().optional(),
+    enabled: z.coerce.boolean().default(true),
+  }).optional(),
+
   searxng: z.object({
     url: z.string().url(),
     enabled: z.coerce.boolean().default(true),
@@ -158,10 +166,10 @@ const configSchema = z.object({
     }),
     imap: z.object({
       host: z.string().default('imap.example.com'),
-      port: z.number().default(993),
-      secure: z.boolean().default(true),
+      port: z.coerce.number().default(993),
+      secure: z.coerce.boolean().default(true),
       user: z.string().default('luna@example.com'),
-      password: z.string(),
+      password: z.string().optional(),
     }),
     from: z.string().default('Luna <luna@example.com>'),
     approvedRecipients: z.array(z.string()).default([]),
@@ -288,6 +296,13 @@ const rawConfig = {
     enabled: process.env.MEMORYCORE_ENABLED,
     consciousnessEnabled: process.env.MEMORYCORE_CONSCIOUSNESS_ENABLED,
     phiThreshold: process.env.MEMORYCORE_PHI_THRESHOLD,
+  },
+
+  neo4j: {
+    uri: process.env.NEO4J_URI,
+    user: process.env.NEO4J_USER,
+    password: secrets.neo4jPassword,
+    enabled: process.env.NEO4J_ENABLED,
   },
 
   searxng: {

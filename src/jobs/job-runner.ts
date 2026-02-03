@@ -21,6 +21,8 @@ import * as sessionActivityService from '../chat/session-activity.service.js';
 import * as intentService from '../intents/intent.service.js';
 import * as contextSummaryService from '../context/context-summary.service.js';
 import * as intentSummaryGenerator from '../context/intent-summary-generator.service.js';
+import * as graphSyncService from '../graph/graph-sync.service.js';
+import * as neo4jService from '../graph/neo4j.service.js';
 import { activityHelpers } from '../activity/activity.service.js';
 import logger from '../utils/logger.js';
 
@@ -257,6 +259,21 @@ const jobs: Job[] = [
     enabled: true,
     running: false,
     handler: refreshIntentSummaries,
+  },
+  // Neo4j graph sync jobs
+  {
+    name: 'neo4jGraphSync',
+    intervalMs: 6 * 60 * 60 * 1000, // Every 6 hours
+    enabled: true,
+    running: false,
+    handler: syncNeo4jGraph,
+  },
+  {
+    name: 'neo4jCleanup',
+    intervalMs: 24 * 60 * 60 * 1000, // Daily
+    enabled: true,
+    running: false,
+    handler: cleanupNeo4jOrphans,
   },
 ];
 
@@ -1240,6 +1257,55 @@ async function refreshIntentSummaries(): Promise<void> {
 }
 
 // ============================================
+// Neo4j Graph Sync Job Handlers
+// ============================================
+
+/**
+ * Sync recent PostgreSQL data to Neo4j graph database
+ * Runs every 6 hours for users with recent activity
+ */
+async function syncNeo4jGraph(): Promise<void> {
+  try {
+    const result = await graphSyncService.reconcileRecentUsers(6);
+
+    if (result.usersProcessed > 0) {
+      logger.info('Neo4j graph sync completed', {
+        usersProcessed: result.usersProcessed,
+        totalSynced: result.totalSynced,
+        totalFailed: result.totalFailed,
+        durationMs: result.duration,
+      });
+    } else {
+      logger.debug('Neo4j graph sync completed - no users to sync');
+    }
+  } catch (error) {
+    logger.error('Neo4j graph sync job failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+/**
+ * Clean up orphaned nodes in Neo4j (nodes deleted in PostgreSQL)
+ * Runs daily
+ */
+async function cleanupNeo4jOrphans(): Promise<void> {
+  try {
+    const result = await graphSyncService.cleanupOrphanedNodes();
+
+    if (result.deleted > 0) {
+      logger.info('Neo4j orphan cleanup completed', { deleted: result.deleted });
+    } else {
+      logger.debug('Neo4j orphan cleanup completed - no orphans found');
+    }
+  } catch (error) {
+    logger.error('Neo4j orphan cleanup job failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+// ============================================
 // Job Runner
 // ============================================
 
@@ -1279,6 +1345,13 @@ async function runJob(job: Job): Promise<void> {
 export function startJobs(): void {
   logger.info('Starting background jobs');
 
+  // Initialize Neo4j service (schema, connectivity check)
+  neo4jService.initialize().catch(err => {
+    logger.warn('Neo4j initialization failed, graph features disabled', {
+      error: (err as Error).message,
+    });
+  });
+
   // Initialize event-driven indicator calculations (on candle close)
   indicatorCalculatorService.initEventDrivenCalculations();
 
@@ -1308,13 +1381,16 @@ export function startJobs(): void {
 /**
  * Stop all background jobs
  */
-export function stopJobs(): void {
+export async function stopJobs(): Promise<void> {
   logger.info('Stopping background jobs');
 
   for (const interval of intervals) {
     clearInterval(interval);
   }
   intervals = [];
+
+  // Close Neo4j connections
+  await neo4jService.close();
 }
 
 /**

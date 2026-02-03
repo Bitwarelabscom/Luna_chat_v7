@@ -47,6 +47,7 @@ Built with a **Local-First** ethos, Luna integrates deeply with your digital lif
   - [Intent Persistence](#intent-persistence)
   - [MemoryCore Integration](#memorycore-integration)
 - [LLM Providers](#llm-providers)
+- [Modules](#modules)
 - [Architecture](#architecture)
 - [Installation](#installation)
 - [API Reference](#api-reference)
@@ -513,6 +514,8 @@ Luna uses a biologically-inspired graph memory system where **memory strength is
 
 > **Deep Dive**: See [graph-memory-architecture.md](graph-memory-architecture.md) for the technical specification.
 
+- **Hybrid Storage**: Combines **PostgreSQL** (pgvector) for semantic embeddings and **Neo4j** for graph traversals.
+- **Local Graph Memory**: Uses Neo4j to locally manage intent dependencies ("Task A blocks Task B"), topic co-occurrences, and fact associations without external dependencies.
 - **Nodes & Edges**: Concepts (entities, topics, preferences) are nodes; relationships are edges.
 - **Hebbian Learning**: "Neurons that fire together, wire together" - reinforcement increases edge strength.
 - **Origin Tracking**: Strictly distinguishes between **user-originated** facts and **model-inferred** insights to prevent hallucination loops.
@@ -523,8 +526,8 @@ Luna uses a biologically-inspired graph memory system where **memory strength is
 
 | Type | Description | Storage |
 |------|-------------|---------|
-| **Graph Nodes** | Entities, topics, preferences, events, emotions | PostgreSQL (memory_nodes) |
-| **Graph Edges** | Co-occurrence, semantic, causal, and temporal links | PostgreSQL (memory_edges) |
+| **Graph Nodes** | Entities, topics, preferences, events, emotions | PostgreSQL + Neo4j |
+| **Graph Edges** | Co-occurrence, semantic, causal, and temporal links | PostgreSQL + Neo4j |
 | **Facts** | Personal info extracted from conversations | PostgreSQL with confidence scoring |
 | **Embeddings** | Vector representations for semantic search | pgvector (1024 dimensions) |
 | **Summaries** | High-level conversation summaries | Topics, key points, sentiment |
@@ -675,6 +678,12 @@ Configure Settings > Models to point all services to Ollama.
 
 ---
 
+## Modules
+
+- [ultraAPI](https://github.com/Bitwarelabscom/ultraAPI)
+
+---
+
 ## Architecture
 
 ```
@@ -726,6 +735,11 @@ luna-chat/
 |   |   |-- embedding.service.ts    # Vector embeddings
 |   |   |-- facts.service.ts        # Fact extraction
 |   |   |-- memory.service.ts       # Memory retrieval
+|   |-- graph/              # Neo4j Graph Integration
+|   |   |-- neo4j.client.ts         # Driver management
+|   |   |-- neo4j.service.ts        # Service orchestration
+|   |   |-- intent-graph.service.ts # Intent dependencies
+|   |   |-- graph-sync.service.ts   # Postgres sync
 |   |-- persona/            # Personality
 |   |-- search/             # Web search
 |   |-- security/           # Security middleware
@@ -784,6 +798,7 @@ luna-chat/
 | luna-postgres | 5432 | PostgreSQL with pgvector |
 | luna-redis | 6379 | Redis cache |
 | luna-sandbox | - | Code execution sandbox |
+| luna-neo4j | 7474 | Local graph database (Neo4j 5) |
 | luna-ollama | 11434 | Local LLM and embeddings |
 | luna-radicale | 5232 | CalDAV calendar server |
 | tradecore | 9090 | High-performance trading engine (Go) |
@@ -976,6 +991,8 @@ npm start
 | `JWT_SECRET` | JWT signing key | - |
 | `ENCRYPTION_KEY` | Token encryption key | - |
 | `OLLAMA_HOST` | Ollama URL | http://luna-ollama:11434 |
+| `NEO4J_URI` | Neo4j Connection URI | bolt://luna-neo4j:7687 |
+| `NEO4J_ENABLED` | Enable Graph Database | true |
 | `SEARXNG_URL` | Search engine URL | - |
 | `ELEVENLABS_API_KEY` | TTS API key | - |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token | - |

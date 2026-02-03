@@ -1,5 +1,6 @@
 import { pool } from '../db/index.js';
 import { generateEmbedding } from '../memory/embedding.service.js';
+import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
 import { encryptToken, isEncryptionAvailable } from '../utils/encryption.js';
 import * as localEmail from '../integrations/local-email.service.js';
@@ -355,10 +356,7 @@ function mapRowToEmail(row: Record<string, unknown>): Email {
 }
 
 // ============================================
-    // Luna's Local Email
-    if (provider === 'local') {
-      const emailConfig = config.email;
-
+// Luna's Local Email
 // ============================================
 
 /**
@@ -443,7 +441,7 @@ export function formatLunaInboxForPrompt(emails: localEmail.EmailMessage[]): str
     return entry;
   }).join('\n\n');
 
-  return `[Luna's Inbox - ${config.email.user}]\n${formatted}`;
+  return `[Luna's Inbox - ${config.email.imap.user}]\n${formatted}`;
 }
 
 /**
