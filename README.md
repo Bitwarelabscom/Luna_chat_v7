@@ -794,27 +794,35 @@ luna-chat/
 
 ## Installation
 
-### Docker Deployment (Recommended)
+> [!CAUTION]
+> **SECURITY MANDATE: VPN REQUIRED**
+> Luna Chat is designed for **SINGLE USER USAGE ONLY**. It does not include multi-user isolation or robust public-facing security hardening.
+> **DO NOT** expose this application directly to the internet. **You will get compromised** if you communicate with Luna over an unsecured connection.
+> Accessing Luna via a VPN is **NOT A SUGGESTION**, it is a requirement. **Wireguard** is highly recommended for secure, low-latency access.
+
+### Quick Start (Portable Setup)
+
+The easiest way to get started is using the provided setup script:
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/luna-chat.git
+# 1. Clone the repository
+git clone https://github.com/bitwarelabs/luna-chat.git
 cd luna-chat
 
-# Create secrets
-mkdir -p secrets
-echo "your-postgres-password" > secrets/postgres_password.txt
-echo "your-jwt-secret" > secrets/jwt_secret.txt
-echo "your-redis-password" > secrets/redis_password.txt
-echo "your-encryption-key" > secrets/encryption_key.txt
-# Add API keys as needed...
-echo "sk-your-openai-key" > secrets/openai_api_key.txt
-echo "sk-ant-your-anthropic-key" > secrets/anthropic_api_key.txt
+# 2. Run the automated setup
+# This will generate secrets and prepare your environment
+chmod +x setup_luna.sh
+./setup_luna.sh
 
-# Build and start
-docker compose build
-docker compose up -d
+# 3. Configure your API keys
+# Edit the files in the secrets/ directory (openai_api_key.txt, etc.)
+
+# 4. Build and start
+docker compose -f docker-compose.portable.yml build
+docker compose -f docker-compose.portable.yml up -d
 ```
+
+### Manual Docker Deployment
 
 ### Manual Installation
 
