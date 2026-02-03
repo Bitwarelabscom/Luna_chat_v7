@@ -798,7 +798,7 @@ luna-chat/
 
 ```bash
 # Clone the repository
-git clone https://github.com/bitwarelabs/luna-chat.git
+git clone https://github.com/yourusername/luna-chat.git
 cd luna-chat
 
 # Create secrets

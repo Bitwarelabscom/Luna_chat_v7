@@ -35,7 +35,6 @@ function getClient(provider: ProviderId = 'openai'): OpenAI {
           apiKey: config.openrouter.apiKey,
           baseURL: 'https://openrouter.ai/api/v1',
           defaultHeaders: {
-            'HTTP-Referer': 'https://luna-chat.bitwarelabs.com',
             'X-Title': 'Luna Chat',
           },
         });
@@ -550,13 +549,13 @@ export const sendEmailTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: 'function',
   function: {
     name: 'send_email',
-    description: `Send an email from Luna's email account (luna@bitwarelabs.com). IMPORTANT: Can ONLY send to @bitwarelabs.com email addresses. Use this when asked to email someone, send a message, or communicate via email. Always confirm with the user before sending.`,
+    description: `Send an email from Luna's email account. Use this when asked to email someone, send a message, or communicate via email. Always confirm with the user before sending.`,
     parameters: {
       type: 'object',
       properties: {
         to: {
           type: 'string',
-          description: 'The recipient email address (must be @bitwarelabs.com)',
+          description: 'The recipient email address',
         },
         subject: {
           type: 'string',
@@ -576,7 +575,7 @@ export const checkEmailTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: 'function',
   function: {
     name: 'check_email',
-    description: `Check Luna's email inbox (luna@bitwarelabs.com) for new or recent messages. Use when asked about emails, inbox, or messages.`,
+    description: `Check Luna's email inbox for new or recent messages. Use when asked about emails, inbox, or messages.`,
     parameters: {
       type: 'object',
       properties: {

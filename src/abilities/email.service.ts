@@ -355,7 +355,10 @@ function mapRowToEmail(row: Record<string, unknown>): Email {
 }
 
 // ============================================
-// Luna's Local Email (luna@bitwarelabs.com)
+    // Luna's Local Email
+    if (provider === 'local') {
+      const emailConfig = config.email;
+
 // ============================================
 
 /**
@@ -440,7 +443,7 @@ export function formatLunaInboxForPrompt(emails: localEmail.EmailMessage[]): str
     return entry;
   }).join('\n\n');
 
-  return `[Luna's Inbox - luna@bitwarelabs.com]\n${formatted}`;
+  return `[Luna's Inbox - ${config.email.user}]\n${formatted}`;
 }
 
 /**

@@ -130,16 +130,16 @@ services:
       - DOCKER_HOST=${DOCKER_HOST:-tcp://docker-proxy:2375}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       # Luna's local email
-      - EMAIL_SMTP_HOST=${EMAIL_SMTP_HOST:-mail.bitwarelabs.com}
+      - EMAIL_SMTP_HOST=${EMAIL_SMTP_HOST:-smtp.example.com}
       - EMAIL_SMTP_PORT=${EMAIL_SMTP_PORT:-587}
       - EMAIL_SMTP_SECURE=${EMAIL_SMTP_SECURE:-false}
-      - EMAIL_SMTP_USER=${EMAIL_SMTP_USER:-luna@bitwarelabs.com}
-      - EMAIL_IMAP_HOST=${EMAIL_IMAP_HOST:-mail.bitwarelabs.com}
+      - EMAIL_SMTP_USER=${EMAIL_SMTP_USER:-luna@example.com}
+      - EMAIL_IMAP_HOST=${EMAIL_IMAP_HOST:-imap.example.com}
       - EMAIL_IMAP_PORT=${EMAIL_IMAP_PORT:-993}
       - EMAIL_IMAP_SECURE=${EMAIL_IMAP_SECURE:-true}
-      - EMAIL_IMAP_USER=${EMAIL_IMAP_USER:-luna@bitwarelabs.com}
-      - EMAIL_FROM=${EMAIL_FROM:-Luna <luna@bitwarelabs.com>}
-      - EMAIL_APPROVED_RECIPIENTS=${EMAIL_APPROVED_RECIPIENTS:-*@bitwarelabs.com}
+      - EMAIL_IMAP_USER=${EMAIL_IMAP_USER:-luna@example.com}
+      - EMAIL_FROM=${EMAIL_FROM:-Luna <luna@example.com>}
+      - EMAIL_APPROVED_RECIPIENTS=${EMAIL_APPROVED_RECIPIENTS:-*@example.com}
       - EMAIL_ENABLED=${EMAIL_ENABLED:-true}
       - OLLAMA_URL=http://luna-ollama:11434
       - OLLAMA_EMBEDDING_MODEL=${OLLAMA_EMBEDDING_MODEL:-bge-m3}
@@ -182,11 +182,11 @@ services:
       - luna-workspace:/app/workspace  # Shared workspace for scripts and data
       - ./images:/app/images  # Luna media (videos and generated images)
       # Claude CLI credentials
-      - /home/luna/.claude/.credentials.json:/claude-credentials.json:ro
-      - /home/luna/.claude/.credentials.json:/home/node/.claude/.credentials.json:ro
+      - ./secrets/claude_credentials.json:/claude-credentials.json:ro
+      - ./secrets/claude_credentials.json:/home/node/.claude/.credentials.json:ro
       # Gemini CLI credentials (rw needed for token refresh)
-      - /home/luna/.gemini:/home/node/.gemini
-      - /root/ultraAPI:/mcp-servers/ultraAPI:ro  # MCP servers
+      - ./secrets/gemini:/home/node/.gemini
+      - ./secrets/mcp-servers:/mcp-servers:ro  # MCP servers
     depends_on:
       luna-postgres:
         condition: service_healthy
@@ -409,7 +409,7 @@ services:
   # Exposes Claude Code CLI via A2A JSON-RPC
   luna-sanhedrin:
     build:
-      context: /opt/sand/sanhedrin_LunaOS
+      context: ./sanhedrin
       dockerfile: Dockerfile
     container_name: luna-sanhedrin
     restart: unless-stopped
@@ -422,7 +422,7 @@ services:
       - SANHEDRIN_LOG_LEVEL=INFO
     volumes:
       # Claude CLI credentials
-      - /home/henke/.claude/.credentials.json:/home/sanhedrin/.claude/.credentials.json:ro
+      - ./secrets/claude_credentials.json:/home/sanhedrin/.claude/.credentials.json:ro
     networks:
       - luna-network
     security_opt:

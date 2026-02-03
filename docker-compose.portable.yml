@@ -1,0 +1,190 @@
+# Luna Chat - Portable Deployment
+# This configuration is designed to build and run on any machine without external repository dependencies.
+# External services like 'tradecore' and 'luna-sanhedrin' (which require local source code) are removed.
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+  jwt_secret:
+    file: ./secrets/jwt_secret.txt
+  redis_password:
+    file: ./secrets/redis_password.txt
+  openai_api_key:
+    file: ./secrets/openai_api_key.txt
+  groq_api_key:
+    file: ./secrets/groq_api_key.txt
+  anthropic_api_key:
+    file: ./secrets/anthropic_api_key.txt
+  xai_api_key:
+    file: ./secrets/xai_api_key.txt
+  openrouter_api_key:
+    file: ./secrets/openrouter_api_key.txt
+  encryption_key:
+    file: ./secrets/encryption_key.txt
+  email_password:
+    file: ./secrets/email_password.txt
+  google_api_key:
+    file: ./secrets/google_api_key.txt
+  elevenlabs_api_key:
+    file: ./secrets/elevenlabs_api_key.txt
+  allowed_ips:
+    file: ./secrets/allowed_ips.txt
+  spotify_client_id:
+    file: ./secrets/spotify_client_id.txt
+  spotify_client_secret:
+    file: ./secrets/spotify_client_secret.txt
+
+services:
+  luna-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: luna-frontend
+    restart: unless-stopped
+    ports:
+      - "3004:3000"
+    depends_on:
+      - luna-api
+    networks:
+      - luna-network
+
+  luna-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: luna-api
+    restart: unless-stopped
+    ports:
+      - "3005:3003"
+    environment:
+      - NODE_ENV=production
+      - PORT=3003
+      - POSTGRES_HOST=luna-postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=luna
+      - POSTGRES_DB=luna_chat
+      - REDIS_HOST=luna-redis
+      - REDIS_PORT=6379
+      - MEMORYCORE_ENABLED=false # Disabled for basic portable setup
+      - SEARXNG_ENABLED=false    # Disabled for basic portable setup
+      - TRADECORE_ENABLED=false
+      - SANHEDRIN_ENABLED=true
+      - SANHEDRIN_BASE_URL=http://luna-sanhedrin:8000
+      - OLLAMA_URL=http://luna-ollama:11434
+    secrets:
+      - postgres_password
+      - jwt_secret
+      - redis_password
+      - openai_api_key
+      - groq_api_key
+      - anthropic_api_key
+      - xai_api_key
+      - openrouter_api_key
+      - google_api_key
+      - elevenlabs_api_key
+      - encryption_key
+      - email_password
+      - allowed_ips
+      - spotify_client_id
+      - spotify_client_secret
+    volumes:
+      - luna-documents:/app/documents
+      - luna-workspace:/app/workspace
+      - ./images:/app/images
+    depends_on:
+      luna-postgres:
+        condition: service_healthy
+      luna-redis:
+        condition: service_healthy
+      luna-ollama:
+        condition: service_healthy
+      luna-sanhedrin:
+        condition: service_started
+    networks:
+      - luna-network
+
+  luna-sanhedrin:
+    build:
+      context: ./sanhedrin
+      dockerfile: Dockerfile
+    container_name: luna-sanhedrin
+    restart: unless-stopped
+    environment:
+      - SANHEDRIN_ADAPTER=claude-code
+      - SANHEDRIN_HOST=0.0.0.0
+      - SANHEDRIN_PORT=8000
+      - SANHEDRIN_LOG_LEVEL=INFO
+    volumes:
+      # Map local secrets to the container's credential path
+      - ./secrets/claude_credentials.json:/home/sanhedrin/.claude/.credentials.json:ro
+    networks:
+      - luna-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://127.0.0.1:8000/health').raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  luna-postgres:
+    image: pgvector/pgvector:pg15
+    container_name: luna-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=luna
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
+      - POSTGRES_DB=luna_chat
+    secrets:
+      - postgres_password
+    volumes:
+      - luna-postgres-data:/var/lib/postgresql/data
+      - ./src/db/migrations/init.sql:/docker-entrypoint-initdb.d/001_init.sql
+      # (Other migrations should be included here)
+    networks:
+      - luna-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U luna -d luna_chat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  luna-redis:
+    image: redis:7-alpine
+    container_name: luna-redis
+    restart: unless-stopped
+    command: sh -c 'redis-server --requirepass "$$(cat /run/secrets/redis_password)"'
+    secrets:
+      - redis_password
+    volumes:
+      - luna-redis-data:/data
+    networks:
+      - luna-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "$$(cat /run/secrets/redis_password)", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  luna-ollama:
+    image: ollama/ollama:latest
+    container_name: luna-ollama
+    restart: unless-stopped
+    volumes:
+      - luna-ollama-data:/root/.ollama
+    networks:
+      - luna-network
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  luna-postgres-data:
+  luna-redis-data:
+  luna-documents:
+  luna-workspace:
+  luna-ollama-data:
+
+networks:
+  luna-network:
+    driver: bridge
