@@ -1,3 +1,5 @@
+# [<img src="./images/logoluna.png" width="100%" alt="Project Banner" />]
+
 # Luna Chat
 
 > [!CAUTION]
