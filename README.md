@@ -76,8 +76,8 @@ Most AI assistants are stateless query engines. Luna is a **stateful companion**
 
 | Feature | Standard AI | Luna |
 |---------|------------|------|
-| Memory | Session-only | Long-term facts, preferences, conversation history |
-| Thinking | Single response | Council deliberation with multiple perspectives |
+| Thinking | Single response | Council deliberation + **Router-First arbitration** |
+| Memory | Session-only | **Hybrid Graph Memory** (PostgreSQL + Neo4j) |
 | Relationships | None | AI friends who discuss insights about you |
 | Actions | Text only | Code execution, calendar, email, file management |
 | Privacy | Cloud-dependent | Local-first, can run 100% offline |
@@ -88,10 +88,11 @@ Most AI assistants are stateless query engines. Luna is a **stateful companion**
 ## Key Features
 
 ### Core Capabilities
-- **Multi-Model Support**: Routes between OpenAI, Anthropic, Groq, Google, xAI, OpenRouter, and local Ollama models
-- **Three Chat Modes**: Assistant (task-focused), Companion (friendly), Voice (speech-optimized)
-- **Agent System**: Specialized agents for research, coding, writing, analysis, and planning
-- **Long-term Memory**: Remembers facts, preferences, and conversation history with vector embeddings
+- **Router-First Architecture**: Intelligent compute arbitration that routes queries to Nano, Pro, or Pro+Tools models based on risk and cost.
+- **Multi-Model Support**: Routes between OpenAI, Anthropic, Groq, Google, xAI, OpenRouter, and local Ollama models.
+- **Three Chat Modes**: Assistant (task-focused), Companion (friendly), Voice (speech-optimized).
+- **Agent System**: Specialized agents for research, coding, writing, analysis, and planning.
+- **Hybrid Long-term Memory**: Remembers facts, preferences, and conversation history using both vector embeddings (PostgreSQL) and a graph database (Neo4j).
 
 ### Autonomous Intelligence
 - **Council System**: Four AI personas (Polaris, Aurora, Vega, Sol) deliberate on complex decisions
