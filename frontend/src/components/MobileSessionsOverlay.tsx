@@ -10,7 +10,7 @@ interface MobileSessionsOverlayProps {
   isOpen: boolean;
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
-  onCreate: (mode: 'assistant' | 'companion' | 'voice') => void;
+  onCreate: (mode: 'assistant' | 'companion' | 'voice' | 'dj_luna') => void;
   onClose: () => void;
 }
 
@@ -26,7 +26,7 @@ export default function MobileSessionsOverlay({
 }: MobileSessionsOverlayProps) {
   const [showModeSelector, setShowModeSelector] = useState(false);
 
-  const handleCreate = (mode: 'assistant' | 'companion' | 'voice') => {
+  const handleCreate = (mode: 'assistant' | 'companion' | 'voice' | 'dj_luna') => {
     onCreate(mode);
     setShowModeSelector(false);
     onClose();
@@ -187,6 +187,24 @@ export default function MobileSessionsOverlay({
               >
                 <strong style={{ display: 'block', marginBottom: '4px' }}>Voice</strong>
                 <span style={{ color: '#607080', fontSize: '11px' }}>Talk with Luna</span>
+              </button>
+              <button
+                onClick={() => handleCreate('dj_luna')}
+                style={{
+                  width: '100%',
+                  background: 'transparent',
+                  border: 'none',
+                  borderTop: '1px solid #2a3545',
+                  color: '#facc15',
+                  padding: '14px',
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                  fontFamily: 'inherit',
+                }}
+              >
+                <strong style={{ display: 'block', marginBottom: '4px' }}>DJ Luna</strong>
+                <span style={{ color: '#607080', fontSize: '11px' }}>Suno Music Gen</span>
               </button>
             </div>
           )}

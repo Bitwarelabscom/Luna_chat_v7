@@ -63,7 +63,7 @@ interface ChatState {
 
   loadSessions: () => Promise<void>;
   loadSession: (id: string) => Promise<void>;
-  createSession: (mode?: 'assistant' | 'companion' | 'voice') => Promise<Session>;
+  createSession: (mode?: 'assistant' | 'companion' | 'voice' | 'dj_luna') => Promise<Session>;
   addUserMessage: (content: string) => void;
   addAssistantMessage: (content: string, id: string, metrics?: MessageMetrics) => void;
   setStreamingContent: (content: string) => void;

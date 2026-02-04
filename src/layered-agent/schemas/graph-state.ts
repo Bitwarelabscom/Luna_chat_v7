@@ -15,7 +15,7 @@ export const GraphStateSchema = z.object({
   session_id: z.string().uuid(),
   turn_id: z.string().uuid(),
   user_input: z.string(),
-  mode: z.enum(['assistant', 'companion', 'voice']),
+  mode: z.enum(['assistant', 'companion', 'voice', 'dj_luna']),
 
   // Identity (loaded once per session)
   identity: z.custom<IdentityProfile>(),
@@ -51,7 +51,7 @@ export const GraphStateInputSchema = z.object({
   session_id: z.string().uuid(),
   turn_id: z.string().uuid(),
   user_input: z.string(),
-  mode: z.enum(['assistant', 'companion', 'voice']),
+  mode: z.enum(['assistant', 'companion', 'voice', 'dj_luna']),
 });
 export type GraphStateInput = z.infer<typeof GraphStateInputSchema>;
 

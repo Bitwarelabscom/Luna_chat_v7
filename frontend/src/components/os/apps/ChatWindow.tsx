@@ -5,7 +5,7 @@ import { useChatStore } from '@/lib/store';
 import ChatArea from '@/components/ChatArea';
 import {
   MessageSquare, Plus, ChevronLeft, ChevronRight,
-  Trash2, MoreVertical, Mic, Bot
+  Trash2, MoreVertical, Mic, Bot, Music
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -44,7 +44,7 @@ function SessionSidebar({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const handleNewChat = async (mode: 'assistant' | 'companion' | 'voice') => {
+  const handleNewChat = async (mode: 'assistant' | 'companion' | 'voice' | 'dj_luna') => {
     const session = await createSession(mode);
     await loadSession(session.id);
     setShowModeSelector(false);
@@ -64,6 +64,8 @@ function SessionSidebar({
         return <Mic className="w-3.5 h-3.5" />;
       case 'companion':
         return <Bot className="w-3.5 h-3.5 text-pink-400" />;
+      case 'dj_luna':
+        return <Music className="w-3.5 h-3.5 text-yellow-400" />;
       default:
         return <MessageSquare className="w-3.5 h-3.5" />;
     }
@@ -142,6 +144,16 @@ function SessionSidebar({
                   <div style={{ color: 'var(--theme-text-muted)' }}>Talk with Luna</div>
                 </div>
               </button>
+              <button
+                onClick={() => handleNewChat('dj_luna')}
+                className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/10 transition-colors"
+              >
+                <Music className="w-4 h-4 text-yellow-400" />
+                <div className="text-left">
+                  <div style={{ color: 'var(--theme-text-primary)' }}>DJ Luna</div>
+                  <div style={{ color: 'var(--theme-text-muted)' }}>Suno Music Gen</div>
+                </div>
+              </button>
             </div>
           )}
         </div>
@@ -207,6 +219,16 @@ function SessionSidebar({
                   <div className="text-left">
                     <div className="text-sm" style={{ color: 'var(--theme-text-primary)' }}>Voice</div>
                     <div className="text-xs" style={{ color: 'var(--theme-text-muted)' }}>Talk with Luna</div>
+                  </div>
+                </button>
+                <button
+                  onClick={() => handleNewChat('dj_luna')}
+                  className="w-full flex items-center gap-3 px-3 py-2 hover:bg-white/10 transition-colors"
+                >
+                  <Music className="w-4 h-4 text-yellow-400" />
+                  <div className="text-left">
+                    <div className="text-sm" style={{ color: 'var(--theme-text-primary)' }}>DJ Luna</div>
+                    <div className="text-xs" style={{ color: 'var(--theme-text-muted)' }}>Suno Music Gen</div>
                   </div>
                 </button>
               </div>

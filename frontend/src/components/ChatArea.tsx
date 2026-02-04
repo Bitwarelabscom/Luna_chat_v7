@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useChatStore } from '@/lib/store';
 import { useActivityStore } from '@/lib/activity-store';
 import { streamMessage, regenerateMessage, chatApi } from '@/lib/api';
-import { Send, Moon, Loader2, MessageSquare, Bot, Mic, Sparkles } from 'lucide-react';
+import { Send, Moon, Loader2, MessageSquare, Bot, Mic, Sparkles, Music } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import clsx from 'clsx';
 import MessageActions from './MessageActions';
@@ -387,6 +387,19 @@ function StandardChatArea() {
                     </div>
                     <span className="text-lg font-medium text-theme-text-primary mb-1">Voice</span>
                     <span className="text-sm text-theme-text-muted text-center">Talk with Luna</span>
+                  </button>
+                  <button
+                    onClick={async () => {
+                      const session = await createSession('dj_luna');
+                      await loadSession(session.id);
+                    }}
+                    className="flex flex-col items-center p-6 rounded-xl border border-theme-border bg-theme-bg-secondary hover:bg-theme-bg-tertiary hover:border-yellow-500/50 transition-all min-w-[160px] group"
+                  >
+                    <div className="w-12 h-12 rounded-full bg-yellow-500/20 flex items-center justify-center mb-3 group-hover:bg-yellow-500/30 transition-colors">
+                      <Music className="w-6 h-6 text-yellow-400" />
+                    </div>
+                    <span className="text-lg font-medium text-theme-text-primary mb-1">DJ Luna</span>
+                    <span className="text-sm text-theme-text-muted text-center">Suno Music Gen</span>
                   </button>
                 </div>
               </>

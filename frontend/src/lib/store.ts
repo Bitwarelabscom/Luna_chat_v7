@@ -75,7 +75,7 @@ interface ChatState {
   loadSessions: () => Promise<void>;
   loadArchivedSessions: () => Promise<void>;
   loadSession: (id: string) => Promise<void>;
-  createSession: (mode?: 'assistant' | 'companion' | 'voice') => Promise<Session>;
+  createSession: (mode?: 'assistant' | 'companion' | 'voice' | 'dj_luna') => Promise<Session>;
   archiveSession: (id: string) => Promise<void>;
   restoreSession: (id: string) => Promise<void>;
   deleteSession: (id: string) => Promise<void>;

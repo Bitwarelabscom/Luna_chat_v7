@@ -104,12 +104,26 @@ Generate ONLY Luna's greeting.`;
 export async function generateStartupMessage(
   userId: string,
   sessionId: string,
-  mode: 'assistant' | 'companion' | 'voice'
+  mode: 'assistant' | 'companion' | 'voice' | 'dj_luna'
 ): Promise<StartupResult | null> {
   // Assistant mode: no startup message
   if (mode === 'assistant') {
     logger.info('Skipping startup message for assistant mode', { sessionId });
     return null;
+  }
+
+  // DJ Luna mode: specific startup question
+  if (mode === 'dj_luna') {
+    logger.info('Generating startup message for DJ Luna mode', { sessionId });
+    const content = "Yo! DJ Luna in the house. Ready to drop some fire Suno tracks? First, what genre are we vibing with today, and what should the lyrics be about?";
+    const message = await sessionService.addMessage({
+      sessionId,
+      role: 'assistant',
+      content,
+      tokensUsed: 0,
+      model: 'static',
+    });
+    return { message, suggestions: ['Synthwave', 'Epic Orchestral', 'Lo-fi Hip Hop'] };
   }
 
   logger.info('Generating startup message', { userId, sessionId, mode });

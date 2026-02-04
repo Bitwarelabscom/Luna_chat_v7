@@ -36,7 +36,7 @@ async function rateLimit(req: Request, res: Response, next: () => void) {
 
 const createSessionSchema = z.object({
   title: z.string().min(1).max(255).optional(),
-  mode: z.enum(['assistant', 'companion', 'voice']).optional(),
+  mode: z.enum(['assistant', 'companion', 'voice', 'dj_luna']).optional(),
 });
 
 const sendMessageSchema = z.object({
@@ -47,7 +47,7 @@ const sendMessageSchema = z.object({
 
 const updateSessionSchema = z.object({
   title: z.string().min(1).max(255).optional(),
-  mode: z.enum(['assistant', 'companion', 'voice']).optional(),
+  mode: z.enum(['assistant', 'companion', 'voice', 'dj_luna']).optional(),
   isArchived: z.boolean().optional(),
 });
 

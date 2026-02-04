@@ -23,7 +23,7 @@ export interface LayeredAgentInput {
   sessionId: string;
   userId: string;
   message: string;
-  mode: 'assistant' | 'companion' | 'voice';
+  mode: 'assistant' | 'companion' | 'voice' | 'dj_luna';
   source?: 'web' | 'telegram' | 'api';
 }
 

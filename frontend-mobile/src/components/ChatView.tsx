@@ -90,7 +90,8 @@ export function ChatView() {
   };
 
   const handleNewChat = async () => {
-    const session = await createSession('companion');
+    const mode = window.confirm('Start DJ Luna session?') ? 'dj_luna' : 'companion';
+    const session = await createSession(mode);
     await loadSession(session.id);
     setShowSessions(false);
   };

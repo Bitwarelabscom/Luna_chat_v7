@@ -18,6 +18,7 @@ import {
   RotateCcw,
   ChevronDown,
   ChevronRight,
+  Music,
 } from 'lucide-react';
 import clsx from 'clsx';
 import UserMenu from './UserMenu';
@@ -66,15 +67,16 @@ export default function Sidebar() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const getModeIcon = (mode: 'assistant' | 'companion' | 'voice') => {
+  const getModeIcon = (mode: 'assistant' | 'companion' | 'voice' | 'dj_luna') => {
     switch (mode) {
       case 'voice': return <Mic className="w-4 h-4 flex-shrink-0 text-green-400" />;
       case 'companion': return <Heart className="w-4 h-4 flex-shrink-0 text-pink-400" />;
+      case 'dj_luna': return <Music className="w-4 h-4 flex-shrink-0 text-yellow-400" />;
       default: return <MessageSquare className="w-4 h-4 flex-shrink-0" />;
     }
   };
 
-  const handleNewChat = async (mode: 'assistant' | 'companion' | 'voice') => {
+  const handleNewChat = async (mode: 'assistant' | 'companion' | 'voice' | 'dj_luna') => {
     const session = await createSession(mode);
     loadSession(session.id);
     setShowModeSelector(false);
@@ -197,6 +199,16 @@ export default function Sidebar() {
                   <div>
                     <div className="text-sm font-medium text-theme-text-primary">Voice</div>
                     <div className="text-xs text-theme-text-muted">Talk with Luna</div>
+                  </div>
+                </button>
+                <button
+                  onClick={() => handleNewChat('dj_luna')}
+                  className="w-full px-4 py-3 flex items-center gap-3 hover:bg-theme-bg-primary transition text-left border-t border-theme-border"
+                >
+                  <Music className="w-5 h-5 text-yellow-400" />
+                  <div>
+                    <div className="text-sm font-medium text-theme-text-primary">DJ Luna</div>
+                    <div className="text-xs text-theme-text-muted">Suno Music Gen</div>
                   </div>
                 </button>
               </div>

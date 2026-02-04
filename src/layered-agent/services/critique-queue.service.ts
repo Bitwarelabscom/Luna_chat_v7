@@ -25,7 +25,7 @@ export interface CritiqueJobData {
   userInput: string;
   draft: string;
   plan: string | null;
-  mode: 'assistant' | 'companion' | 'voice';
+  mode: 'assistant' | 'companion' | 'voice' | 'dj_luna';
   identityId: string;
   identityVersion: number;
 }

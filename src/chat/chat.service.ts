@@ -116,7 +116,7 @@ export interface ChatInput {
   sessionId: string;
   userId: string;
   message: string;
-  mode: 'assistant' | 'companion' | 'voice';
+  mode: 'assistant' | 'companion' | 'voice' | 'dj_luna';
   source?: 'web' | 'telegram' | 'api';
   projectMode?: boolean;
 }
@@ -259,7 +259,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     // Get conversation history (higher limit for compression to work with)
     sessionService.getSessionMessages(sessionId, { limit: 50 }),
     // Build memory context - skip volatile parts for smalltalk, but load stable facts in companion mode
-    isSmallTalkMessageLegacy
+    isSmallTalkMessageLegacy || mode === 'dj_luna'
       ? (mode === 'companion' ? memoryService.buildStableMemoryOnly(userId) : Promise.resolve({ stable: { facts: '', learnings: '' }, volatile: { relevantHistory: '', conversationContext: '' } }))
       : memoryService.buildMemoryContext(userId, message, sessionId),
     // Build ability context - uses contextOptions for selective loading
@@ -413,7 +413,10 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   ];
 
   // Select tools based on mode
-  const modeTools = mode === 'companion' ? companionTools : assistantTools;
+  let modeTools = mode === 'companion' ? companionTools : assistantTools;
+  if (mode === 'dj_luna') {
+    modeTools = [searchTool, fetchUrlTool];
+  }
   const availableTools = isSmallTalkMessageLegacy ? [] : modeTools;
   let searchResults: SearchResult[] | undefined;
   let agentResults: Array<{ agent: string; result: string; success: boolean }> = [];

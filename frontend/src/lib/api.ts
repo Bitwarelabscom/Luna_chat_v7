@@ -101,7 +101,7 @@ export interface Session {
   id: string;
   userId: string;
   title: string;
-  mode: 'assistant' | 'companion' | 'voice';
+  mode: 'assistant' | 'companion' | 'voice' | 'dj_luna';
   isArchived: boolean;
   createdAt: string;
   updatedAt: string;
@@ -166,10 +166,10 @@ export const chatApi = {
   getSession: (id: string) =>
     api<Session & { messages: Message[] }>(`/api/chat/sessions/${id}`),
 
-  createSession: (data?: { title?: string; mode?: 'assistant' | 'companion' | 'voice' }) =>
+  createSession: (data?: { title?: string; mode?: 'assistant' | 'companion' | 'voice' | 'dj_luna' }) =>
     api<Session>('/api/chat/sessions', { method: 'POST', body: data || {} }),
 
-  updateSession: (id: string, data: { title?: string; mode?: 'assistant' | 'companion' | 'voice'; isArchived?: boolean }) =>
+  updateSession: (id: string, data: { title?: string; mode?: 'assistant' | 'companion' | 'voice' | 'dj_luna'; isArchived?: boolean }) =>
     api<Session>(`/api/chat/sessions/${id}`, { method: 'PATCH', body: data }),
 
   deleteSession: (id: string) =>
