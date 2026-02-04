@@ -90,7 +90,7 @@ Most AI assistants are stateless query engines. Luna is a **stateful companion**
 ### Core Capabilities
 - **Router-First Architecture**: Intelligent compute arbitration that routes queries to Nano, Pro, or Pro+Tools models based on risk and cost.
 - **Multi-Model Support**: Routes between OpenAI, Anthropic, Groq, Google, xAI, OpenRouter, and local Ollama models.
-- **Three Chat Modes**: Assistant (task-focused), Companion (friendly), Voice (speech-optimized).
+- **Four Chat Modes**: Assistant (task-focused), Companion (friendly), Voice (speech-optimized), and DJ Luna (music generation).
 - **Agent System**: Specialized agents for research, coding, writing, analysis, and planning.
 - **Hybrid Long-term Memory**: Remembers facts, preferences, and conversation history using both vector embeddings (PostgreSQL) and a graph database (Neo4j).
 
@@ -156,7 +156,7 @@ Most AI assistants are stateless query engines. Luna is a **stateful companion**
 
 ## Chat Modes
 
-When starting a new chat, you'll see a mode selection screen with three options. Each mode tailors Luna's personality and response style.
+When starting a new chat, you'll see a mode selection screen with four options. Each mode tailors Luna's personality and response style.
 
 Luna adapts her communication style based on the conversation mode:
 
@@ -184,6 +184,13 @@ Optimized for text-to-speech and spoken conversation with ultra-low latency.
 - **Expressive Responses**: Short, conversational replies with emotion tags for natural speech
 - **Optimized Pipeline**: Bypasses heavy background processing for sub-2-second response times
 - **Telegram Integration**: Send voice notes to the Telegram bot for a "phone call" style experience
+
+### DJ Luna Mode
+Specialized lyric and style generator for Suno music generation.
+- **Music Expertise**: Specialized in song structure, genre analysis, and prompt engineering for Suno AI
+- **Strict Scope**: Limited to web search and web fetch tools for researching musical styles and artists
+- **Creative Partner**: Helps refine song ideas into professional-grade music generation prompts
+- **Optimized for Suno**: Outputs are structured for direct use with Suno's custom mode
 
 ---
 
