@@ -1,5 +1,14 @@
 # Luna Chat
 
+> [!CAUTION]
+> **SECURITY MANDATE: VPN REQUIRED**
+> Luna Chat is designed for **SINGLE USER USAGE ONLY**. It does not include multi-user isolation or robust public-facing security hardening.
+> **DO NOT** expose this application directly to the internet. **You will get compromised** if you communicate with Luna over an unsecured connection.
+> Accessing Luna via a VPN is **NOT A SUGGESTION**, it is a requirement. **Wireguard** is highly recommended for secure, low-latency access.
+
+> [!NOTE]
+> **Active Development**: This project is under active development. If you run into any issues during installation or usage, please [create an issue](https://github.com/bitwarelabs/luna-chat/issues).
+
 <div align="center">
 
 **A local-first, privacy-focused autonomous AI companion with a "Council" of sub-agents, long-term memory, and full system integration.**
