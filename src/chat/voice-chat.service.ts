@@ -873,20 +873,13 @@ export async function processMessage(input: VoiceChatInput): Promise<VoiceChatOu
           // Email tools
           case 'check_email': {
             const unreadOnly = args.unreadOnly === true;
-            let emails;
-            if (unreadOnly) {
-              emails = await emailService.getLunaUnreadEmails();
-            } else {
-              emails = await emailService.checkLunaInbox(5);
-            }
-            if (emails.length === 0) {
+            const { emails: gatedEmails, quarantinedCount } = unreadOnly
+              ? await emailService.getLunaUnreadEmailsGated()
+              : await emailService.checkLunaInboxGated(5);
+            if (gatedEmails.length === 0 && quarantinedCount === 0) {
               toolResult = unreadOnly ? 'No unread emails.' : 'Inbox is empty.';
             } else {
-              toolResult = emails.slice(0, 5).map((e, i) => {
-                const date = e.date ? new Date(e.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
-                const read = e.read === false ? ' [UNREAD]' : '';
-                return `${i + 1}. "${e.subject}" from ${e.from}${read} - ${date} (UID: ${e.uid})`;
-              }).join('\n');
+              toolResult = emailService.formatGatedInboxForPrompt(gatedEmails, quarantinedCount);
             }
             break;
           }
@@ -897,13 +890,11 @@ export async function processMessage(input: VoiceChatInput): Promise<VoiceChatOu
               toolResult = 'Error: email UID is required';
               break;
             }
-            const email = await emailService.fetchEmailByUid(uid);
-            if (email) {
-              const date = email.date ? new Date(email.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
-              const bodyPreview = email.body ? email.body.slice(0, 500) : 'No body content';
-              toolResult = `From: ${email.from}\nSubject: ${email.subject}\nDate: ${date}\n\n${bodyPreview}`;
+            const gatedEmail = await emailService.fetchEmailByUidGated(uid);
+            if (gatedEmail) {
+              toolResult = emailService.formatGatedEmailForPrompt(gatedEmail);
             } else {
-              toolResult = 'Email not found';
+              toolResult = 'Email was quarantined for security review or not found';
             }
             break;
           }

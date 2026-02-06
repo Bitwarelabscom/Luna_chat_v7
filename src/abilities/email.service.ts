@@ -4,6 +4,8 @@ import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
 import { encryptToken, isEncryptionAvailable } from '../utils/encryption.js';
 import * as localEmail from '../integrations/local-email.service.js';
+import * as gatekeeper from '../email/email-gatekeeper.service.js';
+import type { SanitizedEmail } from '../email/email-gatekeeper.service.js';
 
 export interface EmailConnection {
   id: string;
@@ -480,6 +482,110 @@ export async function replyToEmail(
   return localEmail.replyToEmail(originalUid, replyBody);
 }
 
+// ============================================
+// Gated Email Functions (Mail-Luna Gatekeeper)
+// ============================================
+
+/**
+ * Get unread emails, gated through the security gatekeeper.
+ * When gatekeeper is disabled, wraps emails with minimal untrusted framing.
+ */
+export async function getLunaUnreadEmailsGated(): Promise<{
+  emails: SanitizedEmail[];
+  quarantinedCount: number;
+}> {
+  const raw = await localEmail.fetchUnreadEmails();
+
+  if (!config.email.gatekeeper?.enabled) {
+    // Bypass: wrap minimally
+    return {
+      emails: raw.map(e => bypassSanitize(e)),
+      quarantinedCount: 0,
+    };
+  }
+
+  const { passed, quarantinedCount } = await gatekeeper.sanitizeEmailBatch(raw);
+  return { emails: passed, quarantinedCount };
+}
+
+/**
+ * Check inbox (recent emails), gated through the security gatekeeper.
+ */
+export async function checkLunaInboxGated(limit: number = 10): Promise<{
+  emails: SanitizedEmail[];
+  quarantinedCount: number;
+}> {
+  const raw = await localEmail.fetchRecentEmails(limit);
+
+  if (!config.email.gatekeeper?.enabled) {
+    return {
+      emails: raw.map(e => bypassSanitize(e)),
+      quarantinedCount: 0,
+    };
+  }
+
+  const { passed, quarantinedCount } = await gatekeeper.sanitizeEmailBatch(raw);
+  return { emails: passed, quarantinedCount };
+}
+
+/**
+ * Fetch single email by UID, gated through the security gatekeeper.
+ * Returns null if quarantined or not found.
+ */
+export async function fetchEmailByUidGated(uid: number): Promise<SanitizedEmail | null> {
+  const raw = await localEmail.fetchEmailByUid(uid);
+  if (!raw) return null;
+
+  if (!config.email.gatekeeper?.enabled) {
+    return bypassSanitize(raw);
+  }
+
+  return gatekeeper.sanitizeEmail(raw);
+}
+
+/**
+ * Format gated inbox for LLM prompt
+ */
+export function formatGatedInboxForPrompt(
+  emails: SanitizedEmail[],
+  quarantinedCount: number
+): string {
+  return gatekeeper.formatSanitizedInboxForPrompt(emails, quarantinedCount);
+}
+
+/**
+ * Format single gated email for LLM prompt
+ */
+export function formatGatedEmailForPrompt(email: SanitizedEmail): string {
+  return gatekeeper.formatSanitizedEmailForPrompt(email);
+}
+
+/**
+ * Bypass sanitization - minimal wrapping when gatekeeper is disabled
+ */
+function bypassSanitize(email: localEmail.EmailMessage): SanitizedEmail {
+  return {
+    uid: email.uid,
+    from: email.from,
+    subject: email.subject,
+    date: email.date,
+    read: email.read,
+    classification: {
+      category: 'unknown',
+      senderTrust: 'unknown',
+      containsActionRequest: false,
+      riskScore: 0,
+      safeToForward: true,
+      flags: [],
+      processingTimeMs: 0,
+    },
+    content: email.body || '',
+    attachmentSummary: email.attachments?.map(a => `${a.filename} (${a.contentType})`).join(', ') || '',
+  };
+}
+
+export { SanitizedEmail };
+
 export default {
   storeEmailConnection,
   getEmailConnections,
@@ -501,4 +607,10 @@ export default {
   deleteEmail,
   markEmailRead,
   replyToEmail,
+  // Gated functions
+  getLunaUnreadEmailsGated,
+  checkLunaInboxGated,
+  fetchEmailByUidGated,
+  formatGatedInboxForPrompt,
+  formatGatedEmailForPrompt,
 };

@@ -595,15 +595,15 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
         const args = JSON.parse(toolCall.function.arguments);
         const unreadOnly = args.unreadOnly !== false;
 
-        logger.info('Luna checking email', { unreadOnly });
-        const emails = unreadOnly
-          ? await emailService.getLunaUnreadEmails()
-          : await emailService.checkLunaInbox(10);
-        if (emails.length > 0) {
+        logger.info('Luna checking email (gated)', { unreadOnly });
+        const { emails, quarantinedCount } = unreadOnly
+          ? await emailService.getLunaUnreadEmailsGated()
+          : await emailService.checkLunaInboxGated(10);
+        if (emails.length > 0 || quarantinedCount > 0) {
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
-            content: `Found ${emails.length} email(s):\n${emailService.formatLunaInboxForPrompt(emails)}`,
+            content: `Found ${emails.length} email(s):\n${emailService.formatGatedInboxForPrompt(emails, quarantinedCount)}`,
           } as ChatMessage);
         } else {
           messages.push({
@@ -614,20 +614,20 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
         }
       } else if (toolCall.function.name === 'read_email') {
         const args = JSON.parse(toolCall.function.arguments);
-        logger.info('Luna reading email by UID', { uid: args.uid });
+        logger.info('Luna reading email by UID (gated)', { uid: args.uid });
         try {
-          const email = await emailService.fetchEmailByUid(args.uid);
+          const email = await emailService.fetchEmailByUidGated(args.uid);
           if (email) {
             messages.push({
               role: 'tool',
               tool_call_id: toolCall.id,
-              content: `Email from ${email.from}:\nSubject: ${email.subject}\nDate: ${email.date}\nRead: ${email.read ? 'Yes' : 'No'}\n\n${email.body}`,
+              content: emailService.formatGatedEmailForPrompt(email),
             } as ChatMessage);
           } else {
             messages.push({
               role: 'tool',
               tool_call_id: toolCall.id,
-              content: `Email with UID ${args.uid} not found.`,
+              content: `Email with UID ${args.uid} was quarantined for security review or not found.`,
             } as ChatMessage);
           }
         } catch (error) {
@@ -2964,15 +2964,15 @@ export async function* streamMessage(
         const args = JSON.parse(toolCall.function.arguments);
         const unreadOnly = args.unreadOnly !== false;
         yield { type: 'reasoning', content: '> Checking inbox...\n' };
-        logger.info('Luna checking email', { unreadOnly });
-        const emails = unreadOnly
-          ? await emailService.getLunaUnreadEmails()
-          : await emailService.checkLunaInbox(10);
-        if (emails.length > 0) {
+        logger.info('Luna checking email (gated)', { unreadOnly });
+        const { emails, quarantinedCount } = unreadOnly
+          ? await emailService.getLunaUnreadEmailsGated()
+          : await emailService.checkLunaInboxGated(10);
+        if (emails.length > 0 || quarantinedCount > 0) {
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
-            content: `Found ${emails.length} email(s):\n${emailService.formatLunaInboxForPrompt(emails)}`,
+            content: `Found ${emails.length} email(s):\n${emailService.formatGatedInboxForPrompt(emails, quarantinedCount)}`,
           } as ChatMessage);
         } else {
           messages.push({
@@ -3979,31 +3979,33 @@ export async function* streamMessage(
         } else if (toolCall.function.name === 'check_email') {
           const args = JSON.parse(toolCall.function.arguments);
           yield { type: 'status', status: 'Checking inbox...' };
-          const emails = args.unreadOnly !== false
-            ? await emailService.getLunaUnreadEmails()
-            : await emailService.checkLunaInbox(10);
+          const { emails, quarantinedCount } = args.unreadOnly !== false
+            ? await emailService.getLunaUnreadEmailsGated()
+            : await emailService.checkLunaInboxGated(10);
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
-            content: emails.length > 0 ? `Found ${emails.length} email(s):\n${emailService.formatLunaInboxForPrompt(emails)}` : 'No emails found.',
+            content: emails.length > 0 || quarantinedCount > 0
+              ? `Found ${emails.length} email(s):\n${emailService.formatGatedInboxForPrompt(emails, quarantinedCount)}`
+              : 'No emails found.',
           } as ChatMessage);
-        } else if (toolCall.function.name === 'read_email') {
+          } else if (toolCall.function.name === 'read_email') {
           const args = JSON.parse(toolCall.function.arguments);
           yield { type: 'status', status: 'Reading email...' };
-          logger.info('Luna reading email (follow-up)', { uid: args.uid });
+          logger.info('Luna reading email (follow-up, gated)', { uid: args.uid });
           try {
-            const email = await emailService.fetchEmailByUid(args.uid);
+            const email = await emailService.fetchEmailByUidGated(args.uid);
             if (email) {
               messages.push({
                 role: 'tool',
                 tool_call_id: toolCall.id,
-                content: `Email details:\nFrom: ${email.from}\nTo: ${email.to.join(', ')}\nSubject: ${email.subject}\nDate: ${email.date}\n\n${email.body}`,
+                content: emailService.formatGatedEmailForPrompt(email),
               } as ChatMessage);
             } else {
               messages.push({
                 role: 'tool',
                 tool_call_id: toolCall.id,
-                content: `Email with UID ${args.uid} not found.`,
+                content: `Email with UID ${args.uid} was quarantined for security review or not found.`,
               } as ChatMessage);
             }
           } catch (error) {
@@ -4013,7 +4015,7 @@ export async function* streamMessage(
               content: `Failed to read email: ${(error as Error).message}`,
             } as ChatMessage);
           }
-        } else if (toolCall.function.name === 'reply_email') {
+          } else if (toolCall.function.name === 'reply_email') {
           const args = JSON.parse(toolCall.function.arguments);
           yield { type: 'status', status: 'Sending reply...' };
           logger.info('Luna replying to email (follow-up)', { uid: args.uid });

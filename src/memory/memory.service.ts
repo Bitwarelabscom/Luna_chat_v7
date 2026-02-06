@@ -6,6 +6,7 @@ import * as neo4jService from '../graph/neo4j.service.js';
 import { queryOne } from '../db/postgres.js';
 import logger from '../utils/logger.js';
 import type { Session } from '../types/index.js';
+import { UNTRUSTED_EMAIL_FRAME } from '../email/email-gatekeeper.service.js';
 
 /**
  * Memory context split into stable (cacheable) and volatile (per-query) parts
@@ -358,8 +359,15 @@ export async function processMessageMemory(
   sessionId: string,
   messageId: string,
   content: string,
-  role: string
+  role: string,
+  options?: { skipMemoryStorage?: boolean }
 ): Promise<void> {
+  // Skip memory storage for email-sourced content (memory poisoning prevention)
+  if (options?.skipMemoryStorage || content.includes(UNTRUSTED_EMAIL_FRAME)) {
+    logger.debug('Skipping memory storage for untrusted email content', { messageId });
+    return;
+  }
+
   // Fetch session to get intent
   let intentId: string | null = null;
   try {
@@ -401,16 +409,21 @@ export async function processConversationMemory(
   messages: Array<{ id?: string; role: string; content: string }>
 ): Promise<void> {
   try {
+    // Filter out messages containing untrusted email content (memory poisoning prevention)
+    const filteredMessages = messages.filter(
+      msg => !msg.content.includes(UNTRUSTED_EMAIL_FRAME)
+    );
+
     // Fetch session to get intent
     const session = await queryOne<Session>(`SELECT primary_intent_id as "primaryIntentId" FROM sessions WHERE id = $1`, [sessionId]);
     const intentId = session?.primaryIntentId || null;
 
-    // Extract and store facts
-    await factsService.processConversationFacts(userId, sessionId, messages, intentId);
+    // Extract and store facts (using filtered messages)
+    await factsService.processConversationFacts(userId, sessionId, filteredMessages, intentId);
 
-    // Generate and store summary if enough messages
-    if (messages.length >= 4) {
-      const summaryData = await factsService.generateConversationSummary(messages);
+    // Generate and store summary if enough filtered messages
+    if (filteredMessages.length >= 4) {
+      const summaryData = await factsService.generateConversationSummary(filteredMessages);
       if (summaryData) {
         await embeddingService.storeConversationSummary(
           sessionId,
@@ -418,7 +431,7 @@ export async function processConversationMemory(
           summaryData.summary,
           summaryData.topics,
           summaryData.keyPoints,
-          messages.length,
+          filteredMessages.length,
           summaryData.sentiment,
           intentId
         );

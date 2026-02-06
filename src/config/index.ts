@@ -174,6 +174,13 @@ const configSchema = z.object({
     from: z.string().default('Luna <luna@example.com>'),
     approvedRecipients: z.array(z.string()).default([]),
     enabled: z.coerce.boolean().default(true),
+    gatekeeper: z.object({
+      enabled: z.coerce.boolean().default(true),
+      trustedSenders: z.array(z.string()).default([]),
+      riskThreshold: z.coerce.number().min(0).max(1).default(0.5),
+      model: z.string().default('qwen2.5:3b'),
+      classifierTimeoutMs: z.coerce.number().default(15000),
+    }).optional(),
   }),
 
   ollama: z.object({
@@ -354,6 +361,13 @@ const rawConfig = {
     from: process.env.EMAIL_FROM,
     approvedRecipients: process.env.EMAIL_APPROVED_RECIPIENTS?.split(',').map(e => e.trim()).filter(Boolean) || [],
     enabled: process.env.EMAIL_ENABLED,
+    gatekeeper: {
+      enabled: process.env.EMAIL_GATEKEEPER_ENABLED ?? 'true',
+      trustedSenders: process.env.EMAIL_TRUSTED_SENDERS?.split(',').map(e => e.trim()).filter(Boolean) || [],
+      riskThreshold: process.env.EMAIL_GATEKEEPER_RISK_THRESHOLD,
+      model: process.env.EMAIL_GATEKEEPER_MODEL,
+      classifierTimeoutMs: process.env.EMAIL_GATEKEEPER_CLASSIFIER_TIMEOUT_MS,
+    },
   },
 
   ollama: {
