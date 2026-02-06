@@ -37,6 +37,9 @@ coverage/
 # Docker volumes (local dev)
 data/
 
+# Docker Compose local overrides
+docker-compose.override.yml
+
 # Docker secrets
 secrets/
 
