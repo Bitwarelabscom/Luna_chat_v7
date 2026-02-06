@@ -154,6 +154,7 @@ Most AI assistants are stateless query engines. Luna is a **stateful companion**
 - **Rate Limiting**: Configurable per-endpoint limits
 - **SSRF Protection**: URL validation on external requests
 - **TLS Enforcement**: Production-grade TLS validation on email/IMAP
+- **Mail-Luna Gatekeeper**: Stateless email security firewall - envelope trust checks, prompt-injection heuristics (24 weighted patterns), and local Ollama nano-model classification. Quarantines risky emails and prevents LLM memory poisoning from email content
 
 ---
 
@@ -250,6 +251,7 @@ Luna has an extensive set of tools and abilities she can use during conversation
 | Search Email | Find emails by content |
 | Send Email | Compose and send emails |
 | Summarize | Get AI summaries of email threads |
+| **Mail-Luna Gatekeeper** | 3-step security pipeline filters all inbound email before it reaches LLM context |
 
 ### Check-ins
 | Ability | Description |
@@ -744,6 +746,8 @@ luna-chat/
 |   |   |-- intent.service.ts         # CRUD, lifecycle, caching
 |   |   |-- intent-detection.service.ts  # Pattern matching
 |   |   |-- intent-context.service.ts    # Prompt formatting
+|   |-- email/              # Email security
+|   |   |-- email-gatekeeper.service.ts  # Mail-Luna inbound email firewall
 |   |-- chat/               # Chat processing
 |   |   |-- chat.service.ts         # Message processing
 |   |   |-- session.service.ts      # Session management
@@ -1022,6 +1026,11 @@ npm start
 | `ELEVENLABS_API_KEY` | TTS API key | - |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token | - |
 | `TELEGRAM_WEBHOOK_URL` | Public URL for Telegram webhook | - |
+| `EMAIL_GATEKEEPER_ENABLED` | Enable email security gatekeeper | true |
+| `EMAIL_TRUSTED_SENDERS` | Comma-separated trusted senders (supports `*@domain.com`) | - |
+| `EMAIL_GATEKEEPER_RISK_THRESHOLD` | Risk score threshold for quarantine (0-1) | 0.5 |
+| `EMAIL_GATEKEEPER_MODEL` | Ollama model for email classification | qwen2.5:3b |
+| `EMAIL_GATEKEEPER_CLASSIFIER_TIMEOUT_MS` | Nano-model classification timeout | 15000 |
 
 ### Model Configuration
 
@@ -1058,6 +1067,8 @@ Luna includes comprehensive security measures:
 | **Command Injection** | spawn() not exec() |
 | **XSS Prevention** | Content Security Policy headers |
 | **TLS Enforcement** | Production-mode TLS certificate validation |
+| **Email Gatekeeper** | 3-step inbound email firewall (trust + heuristics + nano-model) |
+| **Memory Poisoning Guard** | Email content excluded from embeddings and fact extraction |
 | **Sandbox Isolation** | Docker-based code execution |
 
 ---
