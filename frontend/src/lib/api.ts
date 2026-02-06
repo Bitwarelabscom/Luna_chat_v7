@@ -843,6 +843,47 @@ export const documentsApi = {
   // Upload requires FormData, handle separately
 };
 
+// Text file detection helper
+export function isTextFile(mimeTypeOrFilename: string | null | undefined): boolean {
+  if (!mimeTypeOrFilename) return false;
+  const textMimeTypes = [
+    'text/',
+    'application/javascript',
+    'application/typescript',
+    'application/json',
+    'application/xml',
+    'application/x-yaml',
+    'application/sql',
+    'application/x-sh',
+    'application/x-python',
+  ];
+  if (textMimeTypes.some(type => mimeTypeOrFilename.startsWith(type))) {
+    return true;
+  }
+  const ext = mimeTypeOrFilename.split('.').pop()?.toLowerCase();
+  const textExts = ['txt', 'md', 'json', 'js', 'ts', 'jsx', 'tsx', 'css', 'html', 'xml', 'yaml', 'yml', 'csv', 'sql', 'sh', 'py', 'r', 'ipynb'];
+  return textExts.includes(ext || '');
+}
+
+// Editor bridge API
+export const editorBridgeApi = {
+  getWorkspaceMapping: (filename: string) =>
+    api<{ documentId: string; documentName: string; isNew: boolean; initialContent?: string }>(
+      `/api/editor/bridge/workspace/${encodeURIComponent(filename)}`
+    ),
+
+  getProjectMapping: (projectId: string, filename: string) =>
+    api<{ documentId: string; documentName: string; isNew: boolean; initialContent?: string }>(
+      `/api/editor/bridge/project/${projectId}/${encodeURIComponent(filename)}`
+    ),
+
+  syncToFile: (documentId: string) =>
+    api<{ success: boolean }>(
+      `/api/editor/bridge/sync/${encodeURIComponent(documentId)}`,
+      { method: 'POST' }
+    ),
+};
+
 // Calendar API
 export interface CalendarEvent {
   id: string;

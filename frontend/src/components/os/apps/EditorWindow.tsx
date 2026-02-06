@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Collaboration from '@tiptap/extension-collaboration';
@@ -22,7 +22,10 @@ import {
   Users,
   Save,
   Loader2,
+  ArrowUpFromLine,
 } from 'lucide-react';
+import { useWindowStore, type EditorFileContext } from '@/lib/window-store';
+import { editorBridgeApi } from '@/lib/api';
 
 interface EditorWindowProps {
   documentId?: string;
@@ -30,56 +33,111 @@ interface EditorWindowProps {
 }
 
 export function EditorWindow({
-  documentId = 'default-document',
-  documentName = 'Untitled Document',
+  documentId: propDocumentId = 'default-document',
+  documentName: propDocumentName = 'Untitled Document',
 }: EditorWindowProps) {
+  const consumePendingEditorContext = useWindowStore((state) => state.consumePendingEditorContext);
+  const pendingEditorContext = useWindowStore((state) => state.pendingEditorContext);
+
+  // Consume pending context once on mount or when it changes
+  const fileContext = useRef<EditorFileContext | null>(null);
+  if (fileContext.current === null && pendingEditorContext) {
+    fileContext.current = consumePendingEditorContext();
+  }
+
+  const documentId = fileContext.current?.documentId || propDocumentId;
+  const documentName = fileContext.current?.documentName || propDocumentName;
+
   const [isSynced, setIsSynced] = useState(false);
   const [users, setUsers] = useState<{ name: string; color: string }[]>([]);
   const [title, setTitle] = useState(documentName);
+  const [syncing, setSyncing] = useState(false);
+  const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Create Y.js document
   const ydoc = useMemo(() => new Y.Doc(), []);
 
-  // Create Hocuspocus provider
-  // Note: Auth is handled via HTTP-only cookies - Hocuspocus will read from cookie header
-  const provider = useMemo(() => {
-    const protocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = typeof window !== 'undefined' ? window.location.host : 'localhost:3005';
-    const wsUrl = `${protocol}//${host}/ws/editor`;
+  // Create Hocuspocus provider with proper auth token
+  const [provider, setProvider] = useState<HocuspocusProvider | null>(null);
 
-    return new HocuspocusProvider({
-      url: wsUrl,
-      name: documentId,
-      document: ydoc,
-      // Token will be extracted from cookies server-side
-      token: 'cookie-auth',
-      onSynced() {
-        setIsSynced(true);
-      },
-      onAwarenessUpdate({ states }) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const statesArray = Array.from(states.values()) as any[];
-        const otherUsers = statesArray
-          .filter((state) => state?.user?.name && state?.user?.color)
-          .map((state) => ({
-            name: state.user.name as string,
-            color: state.user.color as string,
-          }));
-        setUsers(otherUsers);
-      },
-    });
+  useEffect(() => {
+    let cancelled = false;
+
+    async function connectProvider() {
+      // Fetch a short-lived WS token
+      let wsToken = 'cookie-auth';
+      try {
+        const tokenRes = await fetch('/api/auth/ws-token', {
+          method: 'POST',
+          credentials: 'include',
+        });
+        if (tokenRes.ok) {
+          const data = await tokenRes.json();
+          wsToken = data.token;
+        }
+      } catch {
+        // Fall back to cookie-auth for same-origin connections
+      }
+
+      if (cancelled) return;
+
+      const protocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+      let wsUrl: string;
+      if (apiUrl) {
+        const apiWsUrl = apiUrl.replace(/^http/, 'ws');
+        wsUrl = `${apiWsUrl}/ws/editor`;
+      } else {
+        const host = typeof window !== 'undefined' ? window.location.host : 'localhost:3005';
+        wsUrl = `${protocol}//${host}/ws/editor`;
+      }
+
+      const newProvider = new HocuspocusProvider({
+        url: wsUrl,
+        name: documentId,
+        document: ydoc,
+        token: wsToken,
+        onSynced() {
+          setIsSynced(true);
+        },
+        onAwarenessUpdate({ states }) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const statesArray = Array.from(states.values()) as any[];
+          const otherUsers = statesArray
+            .filter((state) => state?.user?.name && state?.user?.color)
+            .map((state) => ({
+              name: state.user.name as string,
+              color: state.user.color as string,
+            }));
+          setUsers(otherUsers);
+        },
+      });
+
+      if (!cancelled) {
+        setProvider(newProvider);
+      } else {
+        newProvider.disconnect();
+      }
+    }
+
+    connectProvider();
+
+    return () => {
+      cancelled = true;
+    };
   }, [documentId, ydoc]);
 
-  // Cleanup provider on unmount
+  // Cleanup provider on unmount or change
   useEffect(() => {
     return () => {
-      provider.disconnect();
+      provider?.disconnect();
     };
   }, [provider]);
 
-  // Create TipTap editor
-  const editor = useEditor({
-    extensions: [
+  // Build extensions - CollaborationCursor needs provider
+  const extensions = useMemo(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const exts: any[] = [
       StarterKit.configure({
         history: false, // Disable history as Y.js handles undo/redo
       }),
@@ -89,20 +147,88 @@ export function EditorWindow({
       Collaboration.configure({
         document: ydoc,
       }),
-      CollaborationCursor.configure({
-        provider,
-        user: {
-          name: 'User',
-          color: '#00ff9f',
-        },
-      }),
-    ],
+    ];
+    if (provider) {
+      exts.push(
+        CollaborationCursor.configure({
+          provider,
+          user: {
+            name: 'User',
+            color: '#00ff9f',
+          },
+        })
+      );
+    }
+    return exts;
+  }, [ydoc, provider]);
+
+  // Create TipTap editor
+  const editor = useEditor({
+    extensions,
     editorProps: {
       attributes: {
         class: 'prose prose-invert max-w-none focus:outline-none min-h-full p-4',
       },
     },
-  });
+  }, [extensions]);
+
+  // Load initial file content into editor once synced (for new file-backed docs)
+  const initialContentLoaded = useRef(false);
+  useEffect(() => {
+    if (!fileContext.current?.initialContent || !editor || !isSynced || initialContentLoaded.current) return;
+    initialContentLoaded.current = true;
+    const content = fileContext.current.initialContent;
+    // Escape HTML so file content is treated as text, not markup
+    const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const paragraphs = content.split('\n').map(line => `<p>${escapeHtml(line) || '<br>'}</p>`).join('');
+    // Small delay to ensure Y.js collaboration is fully ready
+    setTimeout(() => {
+      editor.commands.setContent(paragraphs);
+    }, 200);
+  }, [editor, isSynced]);
+
+  // Auto-sync back to file when content changes (debounced)
+  useEffect(() => {
+    if (!fileContext.current || !editor) return;
+
+    const handleUpdate = () => {
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current);
+      }
+      syncTimeoutRef.current = setTimeout(async () => {
+        try {
+          setSyncing(true);
+          await editorBridgeApi.syncToFile(documentId);
+        } catch (error) {
+          console.error('Failed to sync editor to file:', error);
+        } finally {
+          setSyncing(false);
+        }
+      }, 2000);
+    };
+
+    editor.on('update', handleUpdate);
+
+    return () => {
+      editor.off('update', handleUpdate);
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current);
+      }
+    };
+  }, [editor, documentId]);
+
+  // Manual sync handler
+  const handleManualSync = async () => {
+    if (!fileContext.current) return;
+    try {
+      setSyncing(true);
+      await editorBridgeApi.syncToFile(documentId);
+    } catch (error) {
+      console.error('Failed to sync editor to file:', error);
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   // Toolbar button component
   const ToolbarButton = useCallback(
@@ -160,14 +286,30 @@ export function EditorWindow({
         {/* Document Title */}
         <div className="flex items-center gap-2 mr-4">
           <FileText className="w-4 h-4" style={{ color: 'var(--theme-text-secondary)' }} />
-          <input
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            className="bg-transparent text-sm font-medium focus:outline-none"
-            style={{ color: 'var(--theme-text-primary)' }}
-            placeholder="Document title..."
-          />
+          {fileContext.current ? (
+            <span className="text-sm font-medium" style={{ color: 'var(--theme-text-primary)' }}>
+              {fileContext.current.sourceId.includes(':')
+                ? fileContext.current.sourceId.split(':').pop()
+                : fileContext.current.sourceId}
+            </span>
+          ) : (
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              className="bg-transparent text-sm font-medium focus:outline-none"
+              style={{ color: 'var(--theme-text-primary)' }}
+              placeholder="Document title..."
+            />
+          )}
+          {fileContext.current && (
+            <span
+              className="text-xs px-1.5 py-0.5 rounded"
+              style={{ background: 'var(--theme-accent-primary)', color: '#000', opacity: 0.8 }}
+            >
+              {fileContext.current.sourceType}
+            </span>
+          )}
         </div>
 
         <div className="w-px h-5 bg-white/10 mx-1" />
@@ -281,6 +423,24 @@ export function EditorWindow({
               )}
             </div>
           </div>
+        )}
+
+        {/* File sync button for file-backed documents */}
+        {fileContext.current && (
+          <button
+            onClick={handleManualSync}
+            disabled={syncing}
+            title="Sync to file"
+            className="flex items-center gap-1 px-2 py-1 rounded text-xs transition hover:bg-white/10"
+            style={{ color: 'var(--theme-text-secondary)' }}
+          >
+            {syncing ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <ArrowUpFromLine className="w-3.5 h-3.5" />
+            )}
+            Save to File
+          </button>
         )}
 
         {/* Sync Status */}

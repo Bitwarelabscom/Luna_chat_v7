@@ -3,9 +3,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Folder, FolderOpen, Upload, File, FileText, Trash2, RefreshCw,
-  Eye, X, Plus, Code, FileCode, Edit3, Save, Download, FileBox
+  Eye, X, Plus, Code, FileCode, Edit3, Download, FileBox
 } from 'lucide-react';
-import { workspaceApi, documentsApi, uploadWorkspaceFile, WorkspaceFile, Document } from '@/lib/api';
+import { workspaceApi, documentsApi, uploadWorkspaceFile, editorBridgeApi, isTextFile, WorkspaceFile, Document } from '@/lib/api';
+import { useWindowStore } from '@/lib/window-store';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
 const API_PREFIX = '';
@@ -16,14 +17,13 @@ export default function FilesWindow() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [viewingFile, setViewingFile] = useState<{ name: string; content: string } | null>(null);
-  const [editingFile, setEditingFile] = useState<{ name: string; content: string } | null>(null);
-  const [editContent, setEditContent] = useState('');
-  const [saving, setSaving] = useState(false);
   const [activeSection, setActiveSection] = useState<'workspace' | 'documents'>('workspace');
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const docInputRef = useRef<HTMLInputElement>(null);
   const wsInputRef = useRef<HTMLInputElement>(null);
+  const openApp = useWindowStore((state) => state.openApp);
+  const setPendingEditorContext = useWindowStore((state) => state.setPendingEditorContext);
 
   const loadFiles = useCallback(async () => {
     try {
@@ -124,28 +124,23 @@ export default function FilesWindow() {
     if (file) await uploadFile(file);
   }, [activeSection]);
 
-  const handleEditFile = async (filename: string) => {
-    try {
-      const res = await workspaceApi.getFile(filename);
-      setEditingFile({ name: filename, content: res.content });
-      setEditContent(res.content);
-      setViewingFile(null);
-    } catch (error) {
-      console.error('Failed to load file for editing:', error);
+  const handleOpenInEditor = async (filename: string, mimeType?: string) => {
+    if (mimeType && !isTextFile(mimeType) && !isTextFile(filename)) {
+      alert('Only text files can be opened in the editor');
+      return;
     }
-  };
-
-  const handleSaveFile = async () => {
-    if (!editingFile) return;
     try {
-      setSaving(true);
-      await workspaceApi.updateFile(editingFile.name, editContent);
-      setEditingFile(null);
-      await loadFiles();
+      const result = await editorBridgeApi.getWorkspaceMapping(filename);
+      setPendingEditorContext({
+        sourceType: 'workspace',
+        sourceId: filename,
+        documentId: result.documentId,
+        documentName: result.documentName,
+        initialContent: result.initialContent,
+      });
+      openApp('editor');
     } catch (error) {
-      console.error('Failed to save file:', error);
-    } finally {
-      setSaving(false);
+      console.error('Failed to open file in editor:', error);
     }
   };
 
@@ -316,9 +311,10 @@ export default function FilesWindow() {
                         <Eye className="w-4 h-4" />
                       </button>
                       <button
-                        onClick={(e) => { e.stopPropagation(); handleEditFile(file.name); }}
+                        onClick={(e) => { e.stopPropagation(); handleOpenInEditor(file.name, file.mimeType); }}
                         className="p-1.5 rounded hover:bg-[var(--theme-bg-tertiary)]"
                         style={{ color: 'var(--theme-text-muted)' }}
+                        title="Open in Editor"
                       >
                         <Edit3 className="w-4 h-4" />
                       </button>
@@ -400,12 +396,12 @@ export default function FilesWindow() {
             </div>
             <div className="flex items-center gap-2">
               <button
-                onClick={() => handleEditFile(viewingFile.name)}
+                onClick={() => handleOpenInEditor(viewingFile.name)}
                 className="flex items-center gap-1 px-2 py-1 text-xs rounded"
                 style={{ color: 'var(--theme-accent-primary)' }}
               >
                 <Edit3 className="w-3.5 h-3.5" />
-                Edit
+                Open in Editor
               </button>
               <button
                 onClick={() => setViewingFile(null)}
@@ -425,56 +421,6 @@ export default function FilesWindow() {
         </div>
       )}
 
-      {/* File Editor Panel */}
-      {editingFile && (
-        <div
-          className="absolute inset-0 flex flex-col"
-          style={{ background: 'var(--theme-bg-primary)' }}
-        >
-          <div
-            className="flex items-center justify-between px-4 py-2 border-b"
-            style={{ borderColor: 'var(--theme-border-default)', background: 'var(--theme-bg-secondary)' }}
-          >
-            <div className="flex items-center gap-2">
-              <Edit3 className="w-4 h-4" style={{ color: 'var(--theme-accent-primary)' }} />
-              <span className="text-sm font-medium" style={{ color: 'var(--theme-text-primary)' }}>
-                Editing: {editingFile.name}
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleSaveFile}
-                disabled={saving}
-                className="flex items-center gap-1 px-3 py-1 text-xs rounded"
-                style={{ background: 'var(--theme-accent-primary)', color: 'white' }}
-              >
-                {saving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-                Save
-              </button>
-              <button
-                onClick={() => setEditingFile(null)}
-                disabled={saving}
-                className="p-1 rounded"
-                style={{ color: 'var(--theme-text-muted)' }}
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-          </div>
-          <textarea
-            value={editContent}
-            onChange={(e) => setEditContent(e.target.value)}
-            className="flex-1 p-4 text-sm font-mono resize-none focus:outline-none"
-            style={{
-              color: 'var(--theme-text-primary)',
-              background: 'var(--theme-bg-tertiary)',
-              border: 'none'
-            }}
-            spellCheck={false}
-            disabled={saving}
-          />
-        </div>
-      )}
     </div>
   );
 }

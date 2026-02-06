@@ -3,11 +3,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   FolderOpen, RefreshCw, Pause,
-  FileText, Image as ImageIcon, Code, Eye,
+  FileText, Image as ImageIcon, Code, Eye, Edit3,
   ChevronRight, Trash2, AlertCircle, CheckCircle2,
   Clock, Circle, XCircle
 } from 'lucide-react';
-import { projectsApi, Project, ProjectFile } from '@/lib/api';
+import { projectsApi, editorBridgeApi, isTextFile, Project, ProjectFile } from '@/lib/api';
+import { useWindowStore } from '@/lib/window-store';
 
 type StepStatus = 'pending' | 'active' | 'waiting_input' | 'complete' | 'completed' | 'error' | 'skipped';
 
@@ -68,6 +69,29 @@ export default function ProjectWindow() {
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const [files, setFiles] = useState<ProjectFile[]>([]);
+  const openApp = useWindowStore((state) => state.openApp);
+  const setPendingEditorContext = useWindowStore((state) => state.setPendingEditorContext);
+
+  const handleOpenInEditor = async (file: ProjectFile) => {
+    if (!selectedProject) return;
+    if (!isTextFile(file.fileType) && !isTextFile(file.filename)) {
+      alert('Only text files can be opened in the editor');
+      return;
+    }
+    try {
+      const result = await editorBridgeApi.getProjectMapping(selectedProject.id, file.filename);
+      setPendingEditorContext({
+        sourceType: 'project',
+        sourceId: `${selectedProject.id}:${file.filename}`,
+        documentId: result.documentId,
+        documentName: result.documentName,
+        initialContent: result.initialContent,
+      });
+      openApp('editor');
+    } catch (error) {
+      console.error('Failed to open file in editor:', error);
+    }
+  };
 
   const loadProjects = useCallback(async () => {
     try {
@@ -351,6 +375,16 @@ export default function ProjectWindow() {
                             {file.fileType} - {formatDate(file.createdAt)}
                           </p>
                         </div>
+                        {(isTextFile(file.fileType) || isTextFile(file.filename)) && (
+                          <button
+                            onClick={() => handleOpenInEditor(file)}
+                            className="p-1.5 rounded hover:bg-[var(--theme-bg-secondary)] transition"
+                            style={{ color: 'var(--theme-text-muted)' }}
+                            title="Open in Editor"
+                          >
+                            <Edit3 className="w-4 h-4" />
+                          </button>
+                        )}
                       </div>
                     ))}
                   </div>

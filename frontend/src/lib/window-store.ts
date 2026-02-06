@@ -3,6 +3,14 @@
 import { create } from 'zustand';
 import { type AppId, appConfig } from '@/components/os/app-registry';
 
+export interface EditorFileContext {
+  sourceType: 'workspace' | 'project';
+  sourceId: string;
+  documentId: string;
+  documentName: string;
+  initialContent?: string;
+}
+
 export interface WindowState {
   id: string;
   appId: AppId;
@@ -18,6 +26,8 @@ interface WindowStore {
   maxZIndex: number;
   // Pending URL for browser window to navigate to on open
   pendingBrowserUrl: string | null;
+  // Pending context for editor to open a file
+  pendingEditorContext: EditorFileContext | null;
 
   // Actions
   openApp: (appId: AppId) => void;
@@ -29,6 +39,9 @@ interface WindowStore {
   // Browser URL actions
   setPendingBrowserUrl: (url: string | null) => void;
   consumePendingBrowserUrl: () => string | null;
+  // Editor context actions
+  setPendingEditorContext: (context: EditorFileContext | null) => void;
+  consumePendingEditorContext: () => EditorFileContext | null;
 }
 
 let windowIdCounter = 0;
@@ -38,6 +51,7 @@ export const useWindowStore = create<WindowStore>((set, get) => ({
   focusedWindow: null,
   maxZIndex: 1,
   pendingBrowserUrl: null,
+  pendingEditorContext: null,
 
   openApp: (appId: AppId) => {
     const { windows, maxZIndex } = get();
@@ -165,6 +179,18 @@ export const useWindowStore = create<WindowStore>((set, get) => ({
       set({ pendingBrowserUrl: null });
     }
     return pendingBrowserUrl;
+  },
+
+  setPendingEditorContext: (context: EditorFileContext | null) => {
+    set({ pendingEditorContext: context });
+  },
+
+  consumePendingEditorContext: () => {
+    const { pendingEditorContext } = get();
+    if (pendingEditorContext) {
+      set({ pendingEditorContext: null });
+    }
+    return pendingEditorContext;
   },
 }));
 
