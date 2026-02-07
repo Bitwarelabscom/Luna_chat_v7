@@ -191,7 +191,7 @@ Example output:
         { role: 'user', content: sessionSummary },
       ],
       temperature: 0.3,
-      max_tokens: 2000,
+      max_tokens: 5000,
     });
 
     const responseText = completion.choices[0]?.message?.content?.trim() || '[]';

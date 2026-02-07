@@ -283,7 +283,7 @@ Output valid JSON only:
         },
       ],
       temperature: 0.2,
-      max_tokens: 1000,
+      max_tokens: 5000,
     });
 
     const responseText = completion.choices[0]?.message?.content?.trim() || '{}';

@@ -148,7 +148,7 @@ Focus on facts, data, and actionable insights.`;
     ],
     provider: 'groq',
     model: 'openai/gpt-oss-120b',
-    maxTokens: 1000,
+    maxTokens: 5000,
     loggingContext: {
       userId,
       source: 'webfetch',
