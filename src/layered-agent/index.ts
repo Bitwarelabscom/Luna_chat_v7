@@ -9,10 +9,8 @@ import { join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import type { GraphStateInput } from './schemas/graph-state.js';
 import { executeGraph } from './graph/executor.js';
-import type { ExecutionResult } from './graph/types.js';
 import * as identityStore from './stores/identity.store.js';
 import * as stateStore from './stores/state.store.js';
-import * as memoryStore from './stores/memory.store.js';
 import * as tokenTracker from './services/token-tracker.service.js';
 import logger from '../utils/logger.js';
 
@@ -103,7 +101,8 @@ export async function processLayeredAgent(
     const result = await executeGraph(graphInput, identity, agentView, userId);
 
     // 5. Store memory for this turn (async, don't block)
-    storeMemoryAsync(turnId, userId, sessionId, message, result);
+    // DISABLED: Handled in chat.service.ts to ensure correct message IDs and avoid FK violations
+    // storeMemoryAsync(turnId, userId, sessionId, message, result);
 
     const executionTimeMs = Date.now() - startTime;
 
@@ -188,51 +187,6 @@ export async function processLayeredAgent(
       attempts: 0,
       executionTimeMs,
     };
-  }
-}
-
-/**
- * Store memory asynchronously (non-blocking)
- */
-async function storeMemoryAsync(
-  turnId: string,
-  userId: string,
-  sessionId: string,
-  userMessage: string,
-  result: ExecutionResult
-): Promise<void> {
-  try {
-    // Store user message embedding (generate new UUID for embedding record)
-    await memoryStore.storeMemory(
-      uuidv4(),
-      userId,
-      sessionId,
-      userMessage,
-      'user',
-      {
-        topic: result.state.agent_view.current_topic || undefined,
-      }
-    );
-
-    // Store assistant message embedding if we have output
-    if (result.output) {
-      await memoryStore.storeMemory(
-        uuidv4(),
-        userId,
-        sessionId,
-        result.output,
-        'assistant',
-        {
-          topic: result.state.agent_view.current_topic || undefined,
-        }
-      );
-    }
-  } catch (error) {
-    logger.warn('Failed to store memory for turn', {
-      turnId,
-      error: (error as Error).message,
-    });
-    // Non-blocking - don't throw
   }
 }
 

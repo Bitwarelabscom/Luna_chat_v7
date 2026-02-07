@@ -36,7 +36,7 @@ import { activityHelpers } from '../../activity/activity.service.js';
 import logger from '../../utils/logger.js';
 
 const DEFAULT_MAX_ATTEMPTS = 3;
-const DEFAULT_TIMEOUT_MS = 60000; // 60 seconds
+const DEFAULT_TIMEOUT_MS = 120000; // 120 seconds
 
 /**
  * Execute the graph loop

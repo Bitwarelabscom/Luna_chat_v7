@@ -2392,13 +2392,16 @@ export async function* streamMessage(
     logger.info('Using layered agent for stream');
 
     // Save user message first
-    await sessionService.addMessage({
+    const userMessage = await sessionService.addMessage({
       sessionId,
       role: 'user',
       content: message,
       tokensUsed: 0,
       source,
     });
+
+    // Store user message memory
+    memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user');
 
     let assistantContent = '';
 
@@ -2427,6 +2430,9 @@ export async function* streamMessage(
           provider: 'layered-agent',
           source,
         });
+
+        // Store assistant message memory
+        memoryService.processMessageMemory(userId, sessionId, assistantMessage.id, assistantContent, 'assistant');
 
         const processingTimeMs = Date.now() - startTime;
         const tokensPerSecond = processingTimeMs > 0 && chunk.metrics?.completionTokens
