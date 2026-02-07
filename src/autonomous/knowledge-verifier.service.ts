@@ -39,9 +39,10 @@ export async function verifyFindings(
       };
     }
 
-    // Calculate average trust score
-    const avgTrustScore =
-      trustScores.reduce((sum, score) => sum + score, 0) / trustScores.length;
+    // Calculate average trust score (handle empty array to avoid NaN)
+    const avgTrustScore = trustScores.length > 0
+      ? trustScores.reduce((sum, score) => sum + score, 0) / trustScores.length
+      : 0.85; // Default trust if no scores but sources were found (optimistic)
 
     if (avgTrustScore < 0.8) {
       return {
@@ -74,13 +75,14 @@ async function verifyWithOllama(
   trustScores: number[]
 ): Promise<VerificationResult> {
   try {
-    const avgTrustScore =
-      trustScores.reduce((sum, score) => sum + score, 0) / trustScores.length;
+    const avgTrustScore = trustScores.length > 0
+      ? trustScores.reduce((sum, score) => sum + score, 0) / trustScores.length
+      : 0.85;
 
     const prompt = `Verify the following researched information for consistency and plausibility:
 
 Research Topic: ${topic}
-Source Trust Scores: ${trustScores.map((s) => s.toFixed(2)).join(', ')} (avg: ${avgTrustScore.toFixed(2)})
+Source Trust Scores: ${trustScores.length > 0 ? trustScores.map((s) => s.toFixed(2)).join(', ') : 'N/A'} (avg: ${avgTrustScore.toFixed(2)})
 Number of Sources: ${findings.sources.length}
 
 Key Findings:
@@ -119,7 +121,7 @@ Output valid JSON only:
         },
       },
       {
-        timeout: 60000, // 60 second timeout
+        timeout: 120000, // Increased to 120 second timeout
       }
     );
 
@@ -152,8 +154,9 @@ Output valid JSON only:
 
     // Fallback verification based on simple heuristics
     const sourceCount = findings.sources.length;
-    const avgTrustScore =
-      trustScores.reduce((sum, score) => sum + score, 0) / trustScores.length;
+    const avgTrustScore = trustScores.length > 0
+      ? trustScores.reduce((sum, score) => sum + score, 0) / trustScores.length
+      : 0.85;
 
     const passed = sourceCount >= 2 && avgTrustScore >= 0.8 && findings.confidence >= 0.6;
 
