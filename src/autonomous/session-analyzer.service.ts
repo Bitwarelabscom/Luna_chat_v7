@@ -15,6 +15,7 @@ export interface KnowledgeGap {
   priority: number; // 0-1
   suggestedQueries: string[];
   category: 'technical' | 'current_events' | 'personal_interest' | 'academic';
+  embedding?: number[];
 }
 
 export interface AnalysisResult {
@@ -247,24 +248,59 @@ export async function storeKnowledgeGaps(
   userId: string,
   gaps: KnowledgeGap[]
 ): Promise<void> {
+  const { generateEmbedding } = await import('../memory/embedding.service.js');
+
   for (const gap of gaps) {
-    await query(
-      `INSERT INTO knowledge_gaps (
-         user_id,
-         gap_description,
-         priority,
-         suggested_queries,
-         category,
-         status
-       ) VALUES ($1, $2, $3, $4, $5, 'pending')`,
-      [
-        userId,
-        gap.description,
-        gap.priority,
-        gap.suggestedQueries,
-        gap.category,
-      ]
-    );
+    try {
+      // 1. Generate embedding for semantic similarity check
+      const { embedding } = await generateEmbedding(gap.description);
+      const vectorString = `[${embedding.join(',')}]`;
+
+      // 2. Check for similar existing gaps (similarity > 0.9)
+      const similarGaps = await query<any>(
+        `SELECT id, gap_description, status, 1 - (embedding <=> $1::vector) as similarity
+         FROM knowledge_gaps
+         WHERE user_id = $2 
+           AND 1 - (embedding <=> $1::vector) > 0.9
+         ORDER BY similarity DESC
+         LIMIT 1`,
+        [vectorString, userId]
+      );
+
+      if (similarGaps.length > 0) {
+        logger.info('Skipping duplicate knowledge gap (semantic match)', {
+          userId,
+          newGap: gap.description,
+          existingGap: similarGaps[0].gap_description,
+          similarity: similarGaps[0].similarity,
+          status: similarGaps[0].status
+        });
+        continue;
+      }
+
+      // 3. Store new unique gap
+      await query(
+        `INSERT INTO knowledge_gaps (
+           user_id,
+           gap_description,
+           priority,
+           suggested_queries,
+           category,
+           status,
+           embedding
+         ) VALUES ($1, $2, $3, $4, $5, 'pending', $6::vector)`,
+        [
+          userId,
+          gap.description,
+          gap.priority,
+          gap.suggestedQueries,
+          gap.category,
+          vectorString
+        ]
+      );
+    } catch (err) {
+      logger.error('Failed to store knowledge gap', { error: (err as Error).message, gap: gap.description });
+    }
   }
 
   logger.info('Knowledge gaps stored', { userId, count: gaps.length });
@@ -278,7 +314,8 @@ export async function getPendingGaps(
   limit: number = 10
 ): Promise<any[]> {
   const rows = await query<any>(
-    `SELECT * FROM knowledge_gaps
+    `SELECT id, gap_description, priority, suggested_queries, category, identified_at, status, embedding::text
+     FROM knowledge_gaps
      WHERE user_id = $1 AND status = 'pending'
      ORDER BY priority DESC, identified_at DESC
      LIMIT $2`,
@@ -293,6 +330,7 @@ export async function getPendingGaps(
     category: row.category,
     identifiedAt: row.identified_at,
     status: row.status,
+    embedding: row.embedding ? row.embedding.substring(1, row.embedding.length - 1).split(',').map(Number) : undefined,
   }));
 }
 

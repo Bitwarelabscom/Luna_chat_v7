@@ -32,6 +32,7 @@ COPY package*.json ./
 RUN npm ci --only=production
 
 COPY --from=builder /app/dist ./dist
+COPY --chown=node:node src/db/migrations ./src/db/migrations
 
 # Copy config files (YAML, etc.) that aren't compiled
 COPY --from=builder --chown=node:node /app/src/config/*.yaml ./src/config/

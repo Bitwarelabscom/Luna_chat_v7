@@ -18,6 +18,7 @@ export interface OrchestrationResult {
   gapsVerified: number;
   knowledgeEmbedded: number;
   friendDiscussions: number;
+  manualApproval: number;
   errors: string[];
 }
 
@@ -35,6 +36,7 @@ export async function orchestrateAutonomousLearning(
     gapsVerified: 0,
     knowledgeEmbedded: 0,
     friendDiscussions: 0,
+    manualApproval: 0,
     errors: [],
   };
 
@@ -87,6 +89,34 @@ export async function orchestrateAutonomousLearning(
     // Step 3: Research each high-priority gap
     for (const gap of highPriorityGaps) {
       try {
+        // PREVENT REDUNDANCY: Check if a similar gap (semantic similarity > 0.85) was already embedded or verified
+        if (gap.embedding) {
+          const similarCompletedGaps = await query<any>(
+            `SELECT id, gap_description, status, 1 - (embedding <=> $1::vector) as similarity
+             FROM knowledge_gaps
+             WHERE user_id = $2 
+               AND status IN ('embedded', 'verified')
+               AND id != $3
+               AND 1 - (embedding <=> $1::vector) > 0.85
+             LIMIT 1`,
+            [gap.embedding, userId, gap.id]
+          );
+
+          if (similarCompletedGaps.length > 0) {
+            logger.info('Skipping research for knowledge gap (already learned similar topic)', {
+              userId,
+              gapId: gap.id,
+              newTopic: gap.gapDescription,
+              existingTopic: similarCompletedGaps[0].gap_description,
+              similarity: similarCompletedGaps[0].similarity
+            });
+            
+            // Mark as embedded (since we already have similar info)
+            await sessionAnalyzer.updateGapStatus(gap.id, 'embedded', 'Duplicate of ' + similarCompletedGaps[0].gap_description);
+            continue;
+          }
+        }
+
         // Update status to researching
         await sessionAnalyzer.updateGapStatus(gap.id, 'researching');
 
@@ -138,15 +168,27 @@ export async function orchestrateAutonomousLearning(
         );
 
         if (!verificationResult.passed) {
-          // Mark as rejected
+          // Mark as rejected and flag for manual approval if confidence is decent (>= 0.3)
+          const needsManualApproval = verificationResult.confidence >= 0.3;
           await sessionAnalyzer.updateGapStatus(
             gap.id,
             'rejected',
             verificationResult.reasoning
           );
+          
+          if (needsManualApproval) {
+            await query(
+              `UPDATE knowledge_gaps SET manual_approval_required = true WHERE id = $1`,
+              [gap.id]
+            );
+            result.manualApproval++;
+          }
+
           logger.info('Knowledge gap rejected after verification', {
             userId,
             gapId: gap.id,
+            confidence: verificationResult.confidence,
+            manualApprovalSet: needsManualApproval,
             reason: verificationResult.reasoning,
           });
           continue;

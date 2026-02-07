@@ -1,4 +1,5 @@
 import { pool } from '../db/index.js';
+import cron from 'node-cron';
 import * as preferencesService from '../memory/preferences.service.js';
 import * as taskPatterns from '../abilities/task-patterns.service.js';
 import * as oauthService from '../integrations/oauth.service.js';
@@ -1393,6 +1394,13 @@ export function startJobs(): void {
   for (const job of jobs) {
     if (!job.enabled) {
       logger.info(`Job ${job.name} is disabled, skipping`);
+      continue;
+    }
+
+    if (job.name === 'autonomousLearningOrchestrator') {
+      // Schedule at 00:08 every day
+      cron.schedule('8 0 * * *', () => runJob(job));
+      logger.info(`Scheduled job ${job.name} via cron`, { schedule: '00:08 daily' });
       continue;
     }
 
