@@ -92,7 +92,7 @@ Most AI assistants are stateless query engines. Luna is a **stateful companion**
 
 ### Core Capabilities
 - **Router-First Architecture**: Intelligent compute arbitration that routes queries to Nano, Pro, or Pro+Tools models based on risk and cost.
-- **Project Execution Graph**: Sophisticated DAG-based execution engine for complex projects with approval gates, risk classification, and real-time SSE updates.
+- **Projects (Execution Graph)**: Sophisticated DAG-based execution engine for complex projects with approval gates, risk classification, and real-time SSE updates.
 - **Autonomous Learning**: Continuous session analysis and knowledge consolidation system that identifies gaps and strengthens memory.
 - **Multi-Model Support**: Routes between OpenAI, Anthropic, Groq, Google, xAI, OpenRouter, and local Ollama models.
 - **Four Chat Modes**: Assistant (task-focused), Companion (friendly), Voice (speech-optimized), and DJ Luna (music generation).
@@ -279,7 +279,7 @@ Luna can delegate complex tasks to specialized agents:
 | **Coder** | Code generation, debugging | Programming tasks, code review |
 | **Writer** | Creative & professional writing | Content creation, editing |
 | **Analyst** | Data analysis, calculations | Number crunching, insights |
-| **Planner** | DAG execution, project tracking | Complex multi-step projects with dependencies |
+| **Planner** | DAG execution, project tracking | Projects with complex dependencies |
 
 ### Custom Tools
 Create your own integrations:
@@ -748,7 +748,7 @@ luna-chat/
 |   |   |-- rss.service.ts          # RSS monitoring
 |   |   |-- session-analyzer.service.ts # Activity analysis
 |   |   |-- source-trust.service.ts # Source credibility tracking
-|   |-- planner/            # Project Execution Graph
+|   |-- planner/            # Projects (Execution Graph)
 |   |   |-- planner-orchestrator.service.ts # DAG execution engine
 |   |   |-- approval-classifier.service.ts # Risk & approval logic
 |   |   |-- planner.routes.ts       # Planner API
@@ -817,7 +817,7 @@ luna-chat/
 |   |   |   |-- os/apps/
 |   |   |   |   |-- ActivityWindow.tsx    # Real-time activity viewer
 |   |   |   |   |-- ChatWindow.tsx        # Chat with mode selection
-|   |   |   |   |-- PlannerWindow.tsx     # Project execution graph
+|   |   |   |   |-- PlannerWindow.tsx     # Projects (Execution Graph)
 |   |   |   |   |-- AutonomousLearningWindow.tsx # Knowledge base manager
 |   |   |-- hooks/
 |   |   |   |-- useIsMobile.ts

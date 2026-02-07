@@ -88,6 +88,7 @@ import * as browser from '../abilities/browser.service.js';
 import * as imageGeneration from '../abilities/image-generation.service.js';
 import * as backgroundService from '../abilities/background.service.js';
 import * as projectService from '../abilities/project.service.js';
+import { query as dbQuery } from '../db/postgres.js';
 import * as memoryService from '../memory/memory.service.js';
 import * as memorycoreClient from '../memory/memorycore.client.js';
 // Note: formatStableMemory, formatVolatileMemory available for cache-optimized prompts
@@ -255,9 +256,20 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   // PROJECT HANDLING: Check if user has an active project and route accordingly
   // Respect explicit projectMode flag if provided (default to true if undefined for backward compatibility)
   const isProjectMode = projectMode !== undefined ? projectMode : true;
-  const activeProject = isProjectMode ? await projectService.getActiveProject(userId) : null;
+  let activeProject: any = null;
+  if (isProjectMode) {
+    const activeProjectResult = await dbQuery<any>(
+      `SELECT * FROM execution_projects
+       WHERE user_id = $1 AND status NOT IN ('completed', 'failed')
+       ORDER BY updated_at DESC LIMIT 1`,
+      [userId]
+    );
+    activeProject = activeProjectResult[0];
+  }
+
   if (activeProject && !isSmallTalk) {
     // Check if this is a steering message for the active project
+    // For the new planner, steering might be different, but we keep the logic for now
     if (projectService.isSteeringMessage(message)) {
       logger.info('Detected steering message for active project', {
         projectId: activeProject.id,
@@ -266,7 +278,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
       });
 
       // Handle steering based on project status
-      return await processMessage(input); // Recursive call or handle appropriately
+      // For now, let it fall through or handle specifically
     }
   }
 
@@ -1895,17 +1907,48 @@ Step types: generate_file, generate_image, execute, preview
   }
 
   // Save the plan to the project
-  await projectService.setProjectPlan(project.id, plan.steps.map(s => ({
-    stepNumber: s.stepNumber,
-    description: s.description,
-    stepType: s.type as projectService.StepType,
-    filename: s.filename,
-    requiresApproval: s.requiresApproval,
-    status: 'pending' as const,
-  })));
+  const stepIdMap = new Map<number, string>();
+  for (const step of plan.steps) {
+    const stepResult = await dbQuery<any>(
+      `INSERT INTO execution_steps
+        (project_id, step_number, goal, action, artifact, status, requires_approval)
+       VALUES ($1, $2, $3, $4, $5, 'ready', $6)
+       RETURNING id`,
+      [
+        project.id,
+        step.stepNumber,
+        step.description,
+        step.type === 'execute' ? 'run' : 'build',
+        step.filename || null,
+        step.requiresApproval,
+      ]
+    );
+    stepIdMap.set(step.stepNumber, stepResult[0].id);
+  }
+
+  // Create linear dependencies for simplicity
+  for (let i = 1; i < plan.steps.length; i++) {
+    const stepId = stepIdMap.get(plan.steps[i].stepNumber);
+    const prevStepId = stepIdMap.get(plan.steps[i-1].stepNumber);
+    if (stepId && prevStepId) {
+      await dbQuery(
+        `INSERT INTO step_dependencies (step_id, depends_on_step_id)
+         VALUES ($1, $2)`,
+        [stepId, prevStepId]
+      );
+      // Mark step as blocked if it has dependencies
+      await dbQuery(
+        `UPDATE execution_steps SET status = 'blocked' WHERE id = $1`,
+        [stepId]
+      );
+    }
+  }
 
   // Update project status
-  await projectService.updateProjectStatus(project.id, 'building');
+  await dbQuery(
+    `UPDATE execution_projects SET status = 'ready', total_steps = $1 WHERE id = $2`,
+    [plan.steps.length, project.id]
+  );
 
   // Show the plan to the user
   let planDisplay = `Great! Here's my plan for **${project.name}**:\n\n`;
@@ -1913,7 +1956,7 @@ Step types: generate_file, generate_image, execute, preview
     const icon = step.type === 'generate_image' ? '🎨' : step.type === 'generate_file' ? '📄' : step.type === 'execute' ? '▶️' : step.type === 'preview' ? '👁️' : '☐';
     planDisplay += `${icon} **Step ${step.stepNumber}:** ${step.description}\n`;
   }
-  planDisplay += `\nReady to start building? Say "continue" to begin, or let me know if you'd like to modify the plan.`;
+  planDisplay += `\nReady to start building? Open the **Projects** app to execute the plan and watch progress!`;
 
   yield { type: 'content', content: planDisplay };
 
@@ -2173,26 +2216,21 @@ Questions should cover: visual style, specific features, content requirements, a
     };
   }
 
-  // Create the project in the database
-  const project = await projectService.createProject(
-    userId,
-    sessionId,
-    analysis.projectName,
-    analysis.description,
-    analysis.type
+  // Create the project in the database (new system)
+  const projectResult = await dbQuery<any>(
+    `INSERT INTO execution_projects (user_id, session_id, name, description, project_type, status)
+     VALUES ($1, $2, $3, $4, $5, 'paused')
+     RETURNING *`,
+    [userId, sessionId, analysis.projectName, analysis.description, analysis.type]
   );
+  const project = projectResult[0];
 
-  // Save the questions
-  await projectService.setProjectQuestions(project.id, analysis.questions.map(q => ({
-    id: q.id.toString(),
-    question: q.question,
-    type: 'text' as const,
-    category: q.category,
-    required: q.required,
-  })));
-
-  // Update status to questioning
-  await projectService.updateProjectStatus(project.id, 'questioning');
+  // Save the questions (we still use the old questions table for now or handle in memory)
+  // For now, let's keep it simple and just update the status
+  await dbQuery(
+    `UPDATE execution_projects SET status = 'paused' WHERE id = $1`,
+    [project.id]
+  );
 
   // Format questions for display
   let responseContent = `I'd love to help you create **${analysis.projectName}**! Before I start, let me ask a few questions:\n\n`;

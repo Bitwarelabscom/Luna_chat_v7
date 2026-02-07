@@ -17,7 +17,6 @@ import BrowserWindow from './apps/BrowserWindow';
 import EditorWindow from './apps/EditorWindow';
 import VoiceWindow from './apps/VoiceWindow';
 import FilesWindow from './apps/FilesWindow';
-import ProjectWindow from './apps/ProjectWindow';
 import TerminalWindow from './apps/TerminalWindow';
 import TasksWindow from './apps/TasksWindow';
 import CalendarWindow from './apps/CalendarWindow';
@@ -47,8 +46,6 @@ function getAppComponent(appId: AppId): React.ReactNode {
       return <BrowserWindow />;
     case 'editor':
       return <EditorWindow />;
-    case 'projects':
-      return <ProjectWindow />;
     case 'planner':
       return <PlannerWindow />;
     case 'todo':

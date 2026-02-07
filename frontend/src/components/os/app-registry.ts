@@ -15,7 +15,6 @@ import {
   TrendingUp,
   Activity,
   FileText,
-  FolderCode,
   Brain,
   GitBranch,
   type LucideIcon,
@@ -28,7 +27,6 @@ export type AppId =
   | 'terminal'
   | 'browser'
   | 'editor'
-  | 'projects'
   | 'planner'
   | 'todo'
   | 'calendar'
@@ -102,17 +100,9 @@ export const appConfig: Record<AppId, AppConfig> = {
     defaultSize: { width: 900, height: 700 },
     showInDock: true,
   },
-  projects: {
-    id: 'projects',
-    title: 'Projects',
-    icon: FolderCode,
-    color: 'from-violet-400 to-purple-500',
-    defaultSize: { width: 800, height: 600 },
-    showInDock: true,
-  },
   planner: {
     id: 'planner',
-    title: 'Project Planner',
+    title: 'Projects',
     icon: GitBranch,
     color: 'from-indigo-400 to-violet-500',
     defaultSize: { width: 1200, height: 800 },
@@ -205,7 +195,6 @@ export const dockApps: AppId[] = [
   'chat',
   'voice',
   'files',
-  'projects',
   'planner',
   'terminal',
   'browser',
