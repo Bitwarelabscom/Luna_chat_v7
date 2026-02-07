@@ -1,6 +1,6 @@
 // LLM Provider Types
 
-export type ProviderId = 'openai' | 'groq' | 'anthropic' | 'xai' | 'openrouter' | 'ollama' | 'google' | 'sanhedrin' | 'moonshot';
+export type ProviderId = 'openai' | 'groq' | 'anthropic' | 'xai' | 'openrouter' | 'ollama' | 'ollama_secondary' | 'google' | 'sanhedrin' | 'moonshot';
 
 export interface LLMProvider {
   id: ProviderId;
@@ -642,6 +642,67 @@ export const PROVIDERS: LLMProvider[] = [
   {
     id: 'ollama',
     name: 'Ollama (Local)',
+    enabled: true,
+    models: [
+      {
+        id: 'qwen2.5:1.5b',
+        name: 'Qwen 2.5 1.5B',
+        contextWindow: 32768,
+        maxOutputTokens: 8192,
+        capabilities: ['chat', 'code', 'fast'],
+        costPer1kInput: 0,
+        costPer1kOutput: 0,
+      },
+      {
+        id: 'qwen2.5:3b',
+        name: 'Qwen 2.5 3B',
+        contextWindow: 32768,
+        maxOutputTokens: 8192,
+        capabilities: ['chat', 'code', 'fast'],
+        costPer1kInput: 0,
+        costPer1kOutput: 0,
+      },
+      {
+        id: 'qwen2.5:7b',
+        name: 'Qwen 2.5 7B',
+        contextWindow: 32768,
+        maxOutputTokens: 8192,
+        capabilities: ['chat', 'code', 'analysis'],
+        costPer1kInput: 0,
+        costPer1kOutput: 0,
+      },
+      {
+        id: 'llama3.2:3b',
+        name: 'Llama 3.2 3B',
+        contextWindow: 131072,
+        maxOutputTokens: 8192,
+        capabilities: ['chat', 'fast'],
+        costPer1kInput: 0,
+        costPer1kOutput: 0,
+      },
+      {
+        id: 'gemma2:2b',
+        name: 'Gemma 2 2B',
+        contextWindow: 8192,
+        maxOutputTokens: 4096,
+        capabilities: ['chat', 'fast'],
+        costPer1kInput: 0,
+        costPer1kOutput: 0,
+      },
+      {
+        id: 'phi3:mini',
+        name: 'Phi-3 Mini',
+        contextWindow: 128000,
+        maxOutputTokens: 4096,
+        capabilities: ['chat', 'code', 'fast'],
+        costPer1kInput: 0,
+        costPer1kOutput: 0,
+      },
+    ],
+  },
+  {
+    id: 'ollama_secondary',
+    name: 'Ollama (Remote 10.0.0.3)',
     enabled: true,
     models: [
       {

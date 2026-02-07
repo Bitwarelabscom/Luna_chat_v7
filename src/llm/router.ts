@@ -6,6 +6,7 @@ import type { CacheableSystemBlock } from './providers/anthropic.provider.js';
 import * as xaiProvider from './providers/xai.provider.js';
 import * as openrouterProvider from './providers/openrouter.provider.js';
 import * as ollamaProvider from './providers/ollama.provider.js';
+import * as ollamaSecondaryProvider from './providers/ollama-secondary.provider.js';
 import * as googleProvider from './providers/google.provider.js';
 import * as sanhedrinProvider from './providers/sanhedrin.provider.js';
 import * as moonshotProvider from './providers/moonshot.provider.js';
@@ -32,6 +33,7 @@ const providers: Record<ProviderId, ProviderModule> = {
   xai: xaiProvider,
   openrouter: openrouterProvider,
   ollama: ollamaProvider,
+  ollama_secondary: ollamaSecondaryProvider,
   google: googleProvider,
   sanhedrin: sanhedrinProvider,
   moonshot: moonshotProvider,

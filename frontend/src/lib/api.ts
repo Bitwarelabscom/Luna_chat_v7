@@ -465,7 +465,7 @@ export interface TtsSettings {
 }
 
 // Coder Settings Types
-export type ProviderId = 'openai' | 'groq' | 'anthropic' | 'xai' | 'openrouter' | 'ollama' | 'google' | 'sanhedrin' | 'moonshot';
+export type ProviderId = 'openai' | 'groq' | 'anthropic' | 'xai' | 'openrouter' | 'ollama' | 'ollama_secondary' | 'google' | 'sanhedrin' | 'moonshot';
 
 export interface TriggerWords {
   claude: string[];

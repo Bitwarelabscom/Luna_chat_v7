@@ -210,6 +210,7 @@ export default function ModelsTab() {
             groq: 'bg-orange-500',
             openrouter: 'bg-pink-500',
             ollama: 'bg-gray-500',
+            ollama_secondary: 'bg-gray-400',
             moonshot: 'bg-yellow-500',
           };
           return (

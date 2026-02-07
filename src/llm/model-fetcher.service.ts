@@ -415,10 +415,10 @@ async function fetchMoonshotModels(): Promise<ModelConfig[]> {
   }
 }
 
-// Fetch Ollama models (local)
-async function fetchOllamaModels(): Promise<ModelConfig[]> {
+// Fetch Ollama models (generic)
+async function fetchOllamaModelsGeneric(url: string, name: string): Promise<ModelConfig[]> {
   try {
-    const response = await fetch(`${config.ollama.url}/api/tags`);
+    const response = await fetch(`${url}/api/tags`);
 
     if (!response.ok) {
       return [];
@@ -428,7 +428,7 @@ async function fetchOllamaModels(): Promise<ModelConfig[]> {
 
     return data.models.map(m => ({
       id: m.name,
-      name: formatModelName(m.name, 'ollama'),
+      name: formatModelName(m.name, name),
       contextWindow: 32768, // Ollama default
       maxOutputTokens: 8192,
       capabilities: inferCapabilities(m.name),
@@ -438,6 +438,15 @@ async function fetchOllamaModels(): Promise<ModelConfig[]> {
   } catch {
     return [];
   }
+}
+
+async function fetchOllamaModels(): Promise<ModelConfig[]> {
+  return fetchOllamaModelsGeneric(config.ollama.url, 'ollama');
+}
+
+async function fetchOllamaSecondaryModels(): Promise<ModelConfig[]> {
+  if (!config.ollamaSecondary?.url) return [];
+  return fetchOllamaModelsGeneric(config.ollamaSecondary.url, 'ollama_secondary');
 }
 
 // Fetch OpenRouter models (with pricing!)
@@ -634,7 +643,7 @@ async function fetchSanhedrinModels(): Promise<ModelConfig[]> {
 export async function fetchAllModels(): Promise<LLMProvider[]> {
   logger.info('Fetching models from all providers...');
 
-  const [openai, anthropic, google, xai, groq, openrouter, sanhedrin, moonshot, ollama] = await Promise.all([
+  const [openai, anthropic, google, xai, groq, openrouter, sanhedrin, moonshot, ollama, ollamaSecondary] = await Promise.all([
     fetchOpenAIModels(),
     fetchAnthropicModels(),
     fetchGoogleModels(),
@@ -644,6 +653,7 @@ export async function fetchAllModels(): Promise<LLMProvider[]> {
     fetchSanhedrinModels(),
     fetchMoonshotModels(),
     fetchOllamaModels(),
+    fetchOllamaSecondaryModels(),
   ]);
 
   const providers: LLMProvider[] = [];
@@ -711,6 +721,15 @@ export async function fetchAllModels(): Promise<LLMProvider[]> {
     });
   }
 
+  if (ollamaSecondary.length > 0) {
+    providers.push({
+      id: 'ollama_secondary',
+      name: 'Ollama (Remote 10.0.0.3)',
+      enabled: true,
+      models: ollamaSecondary,
+    });
+  }
+
   if (openrouter.length > 0) {
     providers.push({
       id: 'openrouter',
@@ -740,6 +759,7 @@ export async function fetchAllModels(): Promise<LLMProvider[]> {
       sanhedrin: sanhedrin.length,
       moonshot: moonshot.length,
       ollama: ollama.length,
+      ollamaSecondary: ollamaSecondary.length,
     }
   });
 

@@ -195,6 +195,11 @@ const configSchema = z.object({
     chatModel: z.string().default('qwen2.5:3b'),
   }),
 
+  ollamaSecondary: z.object({
+    url: z.string().url().default('http://10.0.0.3:11434'),
+    enabled: z.coerce.boolean().default(true),
+  }).optional(),
+
   orchestration: z.object({
     maxConcurrency: z.coerce.number().min(1).max(10).default(3),
     maxRetries: z.coerce.number().min(0).max(10).default(3),
@@ -385,6 +390,11 @@ const rawConfig = {
     url: process.env.OLLAMA_URL,
     embeddingModel: process.env.OLLAMA_EMBEDDING_MODEL,
     chatModel: process.env.OLLAMA_CHAT_MODEL,
+  },
+
+  ollamaSecondary: {
+    url: process.env.OLLAMA_SECONDARY_URL,
+    enabled: process.env.OLLAMA_SECONDARY_ENABLED,
   },
 
   orchestration: process.env.ORCHESTRATION_MAX_CONCURRENCY ? {
