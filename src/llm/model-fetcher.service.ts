@@ -373,6 +373,7 @@ async function fetchGroqModels(): Promise<ModelConfig[]> {
 // Fetch Moonshot AI models
 async function fetchMoonshotModels(): Promise<ModelConfig[]> {
   if (!config.moonshot?.apiKey) {
+    logger.debug('Moonshot AI API key not configured, skipping fetch');
     return [];
   }
 
@@ -384,11 +385,13 @@ async function fetchMoonshotModels(): Promise<ModelConfig[]> {
     });
 
     if (!response.ok) {
-      logger.warn('Failed to fetch Moonshot models', { status: response.status });
+      const errorText = await response.text();
+      logger.warn('Failed to fetch Moonshot models', { status: response.status, error: errorText });
       return [];
     }
 
     const data = await response.json() as { data: any[] };
+    logger.debug('Fetched Moonshot models', { count: data.data.length });
 
     return data.data.map(m => {
       const pricing = findPricing(m.id);
@@ -408,6 +411,31 @@ async function fetchMoonshotModels(): Promise<ModelConfig[]> {
     });
   } catch (error) {
     logger.error('Error fetching Moonshot models', { error: (error as Error).message });
+    return [];
+  }
+}
+
+// Fetch Ollama models (local)
+async function fetchOllamaModels(): Promise<ModelConfig[]> {
+  try {
+    const response = await fetch(`${config.ollama.url}/api/tags`);
+
+    if (!response.ok) {
+      return [];
+    }
+
+    const data = await response.json() as { models: any[] };
+
+    return data.models.map(m => ({
+      id: m.name,
+      name: formatModelName(m.name, 'ollama'),
+      contextWindow: 32768, // Ollama default
+      maxOutputTokens: 8192,
+      capabilities: inferCapabilities(m.name),
+      costPer1kInput: 0,
+      costPer1kOutput: 0,
+    }));
+  } catch {
     return [];
   }
 }
@@ -606,7 +634,7 @@ async function fetchSanhedrinModels(): Promise<ModelConfig[]> {
 export async function fetchAllModels(): Promise<LLMProvider[]> {
   logger.info('Fetching models from all providers...');
 
-  const [openai, anthropic, google, xai, groq, openrouter, sanhedrin, moonshot] = await Promise.all([
+  const [openai, anthropic, google, xai, groq, openrouter, sanhedrin, moonshot, ollama] = await Promise.all([
     fetchOpenAIModels(),
     fetchAnthropicModels(),
     fetchGoogleModels(),
@@ -615,6 +643,7 @@ export async function fetchAllModels(): Promise<LLMProvider[]> {
     fetchOpenRouterModels(),
     fetchSanhedrinModels(),
     fetchMoonshotModels(),
+    fetchOllamaModels(),
   ]);
 
   const providers: LLMProvider[] = [];
@@ -673,6 +702,15 @@ export async function fetchAllModels(): Promise<LLMProvider[]> {
     });
   }
 
+  if (ollama.length > 0) {
+    providers.push({
+      id: 'ollama',
+      name: 'Ollama (Local)',
+      enabled: true,
+      models: ollama,
+    });
+  }
+
   if (openrouter.length > 0) {
     providers.push({
       id: 'openrouter',
@@ -701,6 +739,7 @@ export async function fetchAllModels(): Promise<LLMProvider[]> {
       openrouter: openrouter.length,
       sanhedrin: sanhedrin.length,
       moonshot: moonshot.length,
+      ollama: ollama.length,
     }
   });
 
