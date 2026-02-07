@@ -28,6 +28,8 @@ import TradingWindow from './apps/TradingWindow';
 import SettingsWindow from './apps/SettingsWindow';
 import ActivityWindow from './apps/ActivityWindow';
 import ConsciousnessWindow from './apps/ConsciousnessWindow';
+import AutonomousLearningWindow from './apps/AutonomousLearningWindow';
+import PlannerWindow from './apps/PlannerWindow';
 import PlaceholderWindow from './apps/PlaceholderWindow';
 
 // Map appId to component
@@ -47,6 +49,8 @@ function getAppComponent(appId: AppId): React.ReactNode {
       return <EditorWindow />;
     case 'projects':
       return <ProjectWindow />;
+    case 'planner':
+      return <PlannerWindow />;
     case 'todo':
       return <TasksWindow />;
     case 'calendar':
@@ -65,6 +69,8 @@ function getAppComponent(appId: AppId): React.ReactNode {
       return <ActivityWindow />;
     case 'consciousness':
       return <ConsciousnessWindow />;
+    case 'autonomous-learning':
+      return <AutonomousLearningWindow />;
     default:
       return <PlaceholderWindow title="Unknown" message="Unknown app" />;
   }

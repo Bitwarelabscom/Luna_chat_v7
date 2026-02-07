@@ -151,6 +151,14 @@ const jobs: Job[] = [
     running: false,
     handler: consolidateInactiveSessions,
   },
+  // Autonomous Learning (Knowledge Evolution)
+  {
+    name: 'autonomousLearningOrchestrator',
+    intervalMs: 24 * 60 * 60 * 1000, // Daily - analyze sessions and research knowledge gaps
+    enabled: true,
+    running: false,
+    handler: runAutonomousLearning,
+  },
   // Trading jobs
   {
     name: 'tradingOrderMonitor',
@@ -717,6 +725,30 @@ async function consolidateInactiveSessions(): Promise<void> {
     }
   } catch (error) {
     logger.error('MemoryCore session consolidation job failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+/**
+ * Autonomous Learning Orchestrator Job
+ * Runs daily to:
+ * 1. Analyze last 90 days of chat sessions for knowledge gaps
+ * 2. Research high-priority gaps using SearXNG + trusted sources
+ * 3. Verify findings with LLM fact-checking
+ * 4. Friends discuss findings for insights
+ * 5. Embed verified knowledge into MemoryCore
+ */
+async function runAutonomousLearning(): Promise<void> {
+  try {
+    const { runAutonomousLearningForAllUsers } = await import('../autonomous/autonomous-learning.orchestrator.js');
+
+    logger.info('Starting autonomous learning job');
+    const summary = await runAutonomousLearningForAllUsers();
+
+    logger.info('Autonomous learning job completed', summary);
+  } catch (error) {
+    logger.error('Autonomous learning job failed', {
       error: (error as Error).message,
     });
   }

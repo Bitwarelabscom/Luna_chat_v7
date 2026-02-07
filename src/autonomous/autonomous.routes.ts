@@ -1503,4 +1503,288 @@ router.post('/friends/discuss/stream', async (req: Request, res: Response): Prom
   }
 });
 
+// ============================================
+// Autonomous Learning (Knowledge Evolution)
+// ============================================
+
+/**
+ * GET /api/autonomous/learning/trust-scores
+ * List source trust scores
+ */
+router.get('/learning/trust-scores', async (req: Request, res: Response) => {
+  try {
+    const category = req.query.category as string | undefined;
+    const { getAllTrustScores } = await import('./source-trust.service.js');
+    const scores = await getAllTrustScores(category);
+
+    res.json({ scores });
+  } catch (error) {
+    logger.error('Error getting trust scores', { error });
+    res.status(500).json({ error: 'Failed to get trust scores' });
+  }
+});
+
+/**
+ * PUT /api/autonomous/learning/trust-scores/:domain
+ * Update trust score for a domain
+ */
+router.put('/learning/trust-scores/:domain', async (req: Request, res: Response) => {
+  try {
+    const domain = req.params.domain;
+    const { trustScore, category, updateReason } = req.body;
+
+    if (typeof trustScore !== 'number' || trustScore < 0 || trustScore > 1) {
+      return res.status(400).json({ error: 'trustScore must be a number between 0 and 1' });
+    }
+
+    if (!updateReason) {
+      return res.status(400).json({ error: 'updateReason is required' });
+    }
+
+    const { updateTrustScore } = await import('./source-trust.service.js');
+    await updateTrustScore(domain, trustScore, updateReason, category);
+
+    return res.json({ success: true });
+  } catch (error) {
+    logger.error('Error updating trust score', { error });
+    return res.status(500).json({ error: 'Failed to update trust score' });
+  }
+});
+
+/**
+ * GET /api/autonomous/learning/gaps
+ * Get knowledge gaps identified by session analysis
+ */
+router.get('/learning/gaps', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const status = req.query.status as string | undefined;
+    const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
+
+    const { query } = await import('../db/postgres.js');
+
+    let sql = 'SELECT * FROM knowledge_gaps WHERE user_id = $1';
+    const params: (string | number)[] = [userId];
+
+    if (status) {
+      sql += ' AND status = $2';
+      params.push(status);
+    }
+
+    sql += ' ORDER BY priority DESC, identified_at DESC LIMIT $' + (params.length + 1);
+    params.push(limit);
+
+    const rows = await query<any>(sql, params);
+
+    const gaps = rows.map((row) => ({
+      id: row.id,
+      gapDescription: row.gap_description,
+      priority: parseFloat(row.priority),
+      suggestedQueries: row.suggested_queries,
+      category: row.category,
+      identifiedAt: row.identified_at,
+      status: row.status,
+      researchSessionId: row.research_session_id,
+      failureReason: row.failure_reason,
+      completedAt: row.completed_at,
+    }));
+
+    res.json({ gaps });
+  } catch (error) {
+    logger.error('Error getting knowledge gaps', { error });
+    res.status(500).json({ error: 'Failed to get knowledge gaps' });
+  }
+});
+
+/**
+ * GET /api/autonomous/learning/research-sessions
+ * Get autonomous research sessions
+ */
+router.get('/learning/research-sessions', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
+
+    const { query } = await import('../db/postgres.js');
+
+    const rows = await query<any>(
+      `SELECT * FROM autonomous_research_sessions
+       WHERE user_id = $1
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [userId, limit]
+    );
+
+    const sessions = rows.map((row) => ({
+      id: row.id,
+      knowledgeGapId: row.knowledge_gap_id,
+      userId: row.user_id,
+      topic: row.topic,
+      searchQueries: row.search_queries,
+      sourcesFound: row.sources_found,
+      trustedSourcesCount: row.trusted_sources_count,
+      findings: row.findings,
+      verificationResult: row.verification_result,
+      friendDiscussionId: row.friend_discussion_id,
+      createdAt: row.created_at,
+      completedAt: row.completed_at,
+    }));
+
+    res.json({ sessions });
+  } catch (error) {
+    logger.error('Error getting research sessions', { error });
+    res.status(500).json({ error: 'Failed to get research sessions' });
+  }
+});
+
+/**
+ * GET /api/autonomous/learning/research-sessions/:id
+ * Get a specific research session with details
+ */
+router.get('/learning/research-sessions/:id', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const sessionId = req.params.id;
+
+    const { query } = await import('../db/postgres.js');
+
+    const rows = await query<any>(
+      `SELECT * FROM autonomous_research_sessions
+       WHERE id = $1 AND user_id = $2`,
+      [sessionId, userId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Research session not found' });
+    }
+
+    const row = rows[0];
+    const session = {
+      id: row.id,
+      knowledgeGapId: row.knowledge_gap_id,
+      userId: row.user_id,
+      topic: row.topic,
+      searchQueries: row.search_queries,
+      sourcesFound: row.sources_found,
+      trustedSourcesCount: row.trusted_sources_count,
+      findings: row.findings,
+      verificationResult: row.verification_result,
+      friendDiscussionId: row.friend_discussion_id,
+      createdAt: row.created_at,
+      completedAt: row.completed_at,
+    };
+
+    return res.json({ session });
+  } catch (error) {
+    logger.error('Error getting research session', { error });
+    return res.status(500).json({ error: 'Failed to get research session' });
+  }
+});
+
+/**
+ * GET /api/autonomous/learning/log
+ * Get autonomous learning activity log
+ */
+router.get('/learning/log', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const actionType = req.query.actionType as string | undefined;
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+
+    const { query } = await import('../db/postgres.js');
+
+    let sql = 'SELECT * FROM autonomous_learning_log WHERE user_id = $1';
+    const params: (string | number)[] = [userId];
+
+    if (actionType) {
+      sql += ' AND action_type = $2';
+      params.push(actionType);
+    }
+
+    sql += ' ORDER BY timestamp DESC LIMIT $' + (params.length + 1);
+    params.push(limit);
+
+    const rows = await query<any>(sql, params);
+
+    const logs = rows.map((row) => ({
+      id: row.id,
+      userId: row.user_id,
+      actionType: row.action_type,
+      details: row.details,
+      success: row.success,
+      errorMessage: row.error_message,
+      timestamp: row.timestamp,
+    }));
+
+    res.json({ logs });
+  } catch (error) {
+    logger.error('Error getting learning log', { error });
+    res.status(500).json({ error: 'Failed to get learning log' });
+  }
+});
+
+/**
+ * GET /api/autonomous/learning/stats
+ * Get autonomous learning statistics
+ */
+router.get('/learning/stats', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const { query } = await import('../db/postgres.js');
+
+    // Get gap counts by status
+    const gapStats = await query<any>(
+      `SELECT status, COUNT(*) as count
+       FROM knowledge_gaps
+       WHERE user_id = $1
+       GROUP BY status`,
+      [userId]
+    );
+
+    // Get total research sessions
+    const sessionCount = await query<any>(
+      `SELECT COUNT(*) as count
+       FROM autonomous_research_sessions
+       WHERE user_id = $1`,
+      [userId]
+    );
+
+    // Get embedded knowledge count
+    const embeddedCount = await query<any>(
+      `SELECT COUNT(*) as count
+       FROM knowledge_gaps
+       WHERE user_id = $1 AND status = 'embedded'`,
+      [userId]
+    );
+
+    // Get recent activity (last 7 days)
+    const recentActivity = await query<any>(
+      `SELECT DATE(timestamp) as date, COUNT(*) as count
+       FROM autonomous_learning_log
+       WHERE user_id = $1 AND timestamp >= NOW() - INTERVAL '7 days'
+       GROUP BY DATE(timestamp)
+       ORDER BY date DESC`,
+      [userId]
+    );
+
+    const stats = {
+      gapsByStatus: gapStats.reduce((acc: Record<string, number>, row) => {
+        acc[row.status] = parseInt(row.count, 10);
+        return acc;
+      }, {}),
+      totalResearchSessions: parseInt(sessionCount[0]?.count || '0', 10),
+      knowledgeEmbedded: parseInt(embeddedCount[0]?.count || '0', 10),
+      recentActivity: recentActivity.map((row) => ({
+        date: row.date,
+        count: parseInt(row.count, 10),
+      })),
+    };
+
+    res.json({ stats });
+  } catch (error) {
+    logger.error('Error getting learning stats', { error });
+    res.status(500).json({ error: 'Failed to get learning stats' });
+  }
+});
+
 export default router;

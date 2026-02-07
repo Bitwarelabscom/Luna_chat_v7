@@ -1,0 +1,365 @@
+/**
+ * Autonomous Learning Orchestrator
+ * Main orchestrator for the knowledge evolution system
+ */
+
+import { query } from '../db/postgres.js';
+import * as sessionAnalyzer from './session-analyzer.service.js';
+import * as researchCoordinator from './research-coordinator.service.js';
+import * as knowledgeVerifier from './knowledge-verifier.service.js';
+import * as knowledgeEmbedder from './knowledge-embedder.service.js';
+import * as friendService from './friend.service.js';
+import logger from '../utils/logger.js';
+
+export interface OrchestrationResult {
+  userId: string;
+  gapsIdentified: number;
+  gapsResearched: number;
+  gapsVerified: number;
+  knowledgeEmbedded: number;
+  friendDiscussions: number;
+  errors: string[];
+}
+
+/**
+ * Main orchestrator function - runs the entire autonomous learning pipeline
+ * This is called by the daily background job
+ */
+export async function orchestrateAutonomousLearning(
+  userId: string
+): Promise<OrchestrationResult> {
+  const result: OrchestrationResult = {
+    userId,
+    gapsIdentified: 0,
+    gapsResearched: 0,
+    gapsVerified: 0,
+    knowledgeEmbedded: 0,
+    friendDiscussions: 0,
+    errors: [],
+  };
+
+  try {
+    logger.info('Starting autonomous learning orchestration', { userId });
+
+    // Log analysis start
+    await logActivity(userId, 'analysis', { stage: 'start' }, true);
+
+    // Step 1: Analyze sessions for knowledge gaps (last 90 days)
+    const analysisResult = await sessionAnalyzer.analyzeSessionsForGaps(userId, 90);
+
+    if (analysisResult.gaps.length === 0) {
+      logger.info('No knowledge gaps identified', { userId });
+      await logActivity(
+        userId,
+        'analysis',
+        { stage: 'complete', gapsFound: 0 },
+        true
+      );
+      return result;
+    }
+
+    result.gapsIdentified = analysisResult.gaps.length;
+
+    // Store gaps in database
+    await sessionAnalyzer.storeKnowledgeGaps(userId, analysisResult.gaps);
+
+    await logActivity(
+      userId,
+      'analysis',
+      {
+        stage: 'complete',
+        gapsFound: result.gapsIdentified,
+        sessionsAnalyzed: analysisResult.sessionsAnalyzed,
+      },
+      true
+    );
+
+    // Step 2: Get high-priority pending gaps (priority >= 0.7)
+    const pendingGaps = await sessionAnalyzer.getPendingGaps(userId, 5); // Process top 5
+    const highPriorityGaps = pendingGaps.filter((gap) => gap.priority >= 0.7);
+
+    logger.info('Processing high-priority gaps', {
+      userId,
+      total: pendingGaps.length,
+      highPriority: highPriorityGaps.length,
+    });
+
+    // Step 3: Research each high-priority gap
+    for (const gap of highPriorityGaps) {
+      try {
+        // Update status to researching
+        await sessionAnalyzer.updateGapStatus(gap.id, 'researching');
+
+        // Conduct research
+        const { sessionId, findings } = await researchCoordinator.conductResearch(
+          userId,
+          gap.id,
+          gap.gapDescription,
+          gap.suggestedQueries
+        );
+
+        result.gapsResearched++;
+
+        await logActivity(
+          userId,
+          'research',
+          {
+            gapId: gap.id,
+            topic: gap.gapDescription,
+            sessionId,
+            sourcesFound: findings.sources.length,
+          },
+          true
+        );
+
+        // Step 4: Verify findings
+        const trustScores = findings.sources
+          .map((s) => s.trustScore)
+          .filter((s): s is number => s !== null);
+
+        const verificationResult = await knowledgeVerifier.verifyFindings(
+          gap.gapDescription,
+          findings,
+          trustScores
+        );
+
+        await knowledgeVerifier.storeVerificationResult(sessionId, verificationResult);
+
+        await logActivity(
+          userId,
+          'verification',
+          {
+            gapId: gap.id,
+            sessionId,
+            passed: verificationResult.passed,
+            confidence: verificationResult.confidence,
+          },
+          verificationResult.passed
+        );
+
+        if (!verificationResult.passed) {
+          // Mark as rejected
+          await sessionAnalyzer.updateGapStatus(
+            gap.id,
+            'rejected',
+            verificationResult.reasoning
+          );
+          logger.info('Knowledge gap rejected after verification', {
+            userId,
+            gapId: gap.id,
+            reason: verificationResult.reasoning,
+          });
+          continue;
+        }
+
+        result.gapsVerified++;
+        await sessionAnalyzer.updateGapStatus(gap.id, 'verified');
+
+        // Step 5: Friend discussion (optional - adds insights)
+        try {
+          const discussion = await friendService.startFriendDiscussion(
+            null, // No session required
+            userId,
+            gap.gapDescription,
+            `Research findings: ${findings.summary}`,
+            'random', // Random trigger type
+            3, // 3 rounds
+            undefined // Auto-select friend
+          );
+
+          result.friendDiscussions++;
+
+          // Link discussion to research session
+          await query(
+            `UPDATE autonomous_research_sessions
+             SET friend_discussion_id = $1
+             WHERE id = $2`,
+            [discussion.id, sessionId]
+          );
+
+          logger.info('Friend discussion completed', {
+            userId,
+            gapId: gap.id,
+            discussionId: discussion.id,
+          });
+        } catch (error) {
+          logger.warn('Friend discussion failed (non-critical)', {
+            error,
+            gapId: gap.id,
+          });
+        }
+
+        // Step 6: Embed verified knowledge into MemoryCore
+        const avgTrustScore =
+          trustScores.reduce((sum, s) => sum + s, 0) / trustScores.length;
+
+        const embeddingResult = await knowledgeEmbedder.embedKnowledge(
+          userId,
+          sessionId,
+          gap.gapDescription,
+          findings,
+          avgTrustScore
+        );
+
+        if (embeddingResult.success) {
+          result.knowledgeEmbedded++;
+          await sessionAnalyzer.updateGapStatus(gap.id, 'embedded');
+
+          // Create notification
+          await knowledgeEmbedder.createLearningNotification(
+            userId,
+            gap.gapDescription,
+            sessionId
+          );
+
+          logger.info('Knowledge successfully embedded', {
+            userId,
+            gapId: gap.id,
+            sessionId,
+            interactionId: embeddingResult.interactionId,
+          });
+        } else {
+          await sessionAnalyzer.updateGapStatus(
+            gap.id,
+            'failed',
+            embeddingResult.error
+          );
+          result.errors.push(
+            `Failed to embed gap ${gap.id}: ${embeddingResult.error}`
+          );
+        }
+      } catch (error) {
+        logger.error('Error processing knowledge gap', {
+          error,
+          userId,
+          gapId: gap.id,
+        });
+
+        await sessionAnalyzer.updateGapStatus(
+          gap.id,
+          'failed',
+          (error as Error).message
+        );
+
+        result.errors.push(
+          `Gap ${gap.id}: ${(error as Error).message}`
+        );
+      }
+    }
+
+    logger.info('Autonomous learning orchestration complete', result);
+
+    return result;
+  } catch (error) {
+    logger.error('Fatal error in autonomous learning orchestration', {
+      error,
+      userId,
+    });
+
+    await logActivity(
+      userId,
+      'analysis',
+      { error: (error as Error).message },
+      false,
+      (error as Error).message
+    );
+
+    result.errors.push((error as Error).message);
+    return result;
+  }
+}
+
+/**
+ * Log activity to autonomous_learning_log table
+ */
+async function logActivity(
+  userId: string,
+  actionType: string,
+  details: any,
+  success: boolean,
+  errorMessage?: string
+): Promise<void> {
+  try {
+    await query(
+      `INSERT INTO autonomous_learning_log (
+         user_id,
+         action_type,
+         details,
+         success,
+         error_message
+       ) VALUES ($1, $2, $3, $4, $5)`,
+      [userId, actionType, JSON.stringify(details), success, errorMessage || null]
+    );
+  } catch (error) {
+    logger.error('Failed to log activity', { error, userId, actionType });
+  }
+}
+
+/**
+ * Get all users eligible for autonomous learning
+ * (could be filtered by config/preferences in the future)
+ */
+export async function getEligibleUsers(): Promise<string[]> {
+  try {
+    // For now, get all active users
+    // In the future, could filter by autonomous learning preferences
+    const rows = await query<{id: string}>(
+      `SELECT id FROM users WHERE is_active = true`
+    );
+
+    return rows.map((row) => row.id);
+  } catch (error) {
+    logger.error('Error getting eligible users', { error });
+    return [];
+  }
+}
+
+/**
+ * Run autonomous learning for all eligible users
+ * This is the entry point for the daily background job
+ */
+export async function runAutonomousLearningForAllUsers(): Promise<{
+  usersProcessed: number;
+  totalGapsIdentified: number;
+  totalKnowledgeEmbedded: number;
+  errors: number;
+}> {
+  const summary = {
+    usersProcessed: 0,
+    totalGapsIdentified: 0,
+    totalKnowledgeEmbedded: 0,
+    errors: 0,
+  };
+
+  try {
+    const users = await getEligibleUsers();
+
+    logger.info('Running autonomous learning for all users', {
+      userCount: users.length,
+    });
+
+    for (const userId of users) {
+      try {
+        const result = await orchestrateAutonomousLearning(userId);
+
+        summary.usersProcessed++;
+        summary.totalGapsIdentified += result.gapsIdentified;
+        summary.totalKnowledgeEmbedded += result.knowledgeEmbedded;
+        summary.errors += result.errors.length;
+      } catch (error) {
+        logger.error('Error in autonomous learning for user', {
+          error,
+          userId,
+        });
+        summary.errors++;
+      }
+    }
+
+    logger.info('Autonomous learning complete for all users', summary);
+
+    return summary;
+  } catch (error) {
+    logger.error('Fatal error in autonomous learning job', { error });
+    throw error;
+  }
+}

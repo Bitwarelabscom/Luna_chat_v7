@@ -28,6 +28,7 @@ import activityRoutes from './activity/activity.routes.js';
 import backgroundRoutes from './abilities/background.routes.js';
 import consciousnessRoutes from './consciousness/consciousness.routes.js';
 import editorBridgeRoutes from './editor/editor-bridge.routes.js';
+import plannerRoutes from './planner/planner.routes.js';
 import { startJobs, stopJobs } from './jobs/job-runner.js';
 import { setBroadcastFunction } from './activity/activity.service.js';
 import { initializeCritiqueQueue, shutdownCritiqueQueue } from './layered-agent/services/critique-queue.service.js';
@@ -188,6 +189,7 @@ app.use('/api/activity', activityRoutes);
 app.use('/api/backgrounds', backgroundRoutes);
 app.use('/api/consciousness', consciousnessRoutes);
 app.use('/api/editor/bridge', editorBridgeRoutes);
+app.use('/api/planner', plannerRoutes);
 app.use('/api/consolidation', consciousnessRoutes);  // Consolidation logs share routes
 
 // Connect activity service to delivery service's SSE broadcast

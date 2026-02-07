@@ -17,6 +17,7 @@ import {
   FileText,
   FolderCode,
   Brain,
+  GitBranch,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -28,6 +29,7 @@ export type AppId =
   | 'browser'
   | 'editor'
   | 'projects'
+  | 'planner'
   | 'todo'
   | 'calendar'
   | 'email'
@@ -36,7 +38,8 @@ export type AppId =
   | 'trading'
   | 'settings'
   | 'activity'
-  | 'consciousness';
+  | 'consciousness'
+  | 'autonomous-learning';
 
 export interface AppConfig {
   id: AppId;
@@ -105,6 +108,14 @@ export const appConfig: Record<AppId, AppConfig> = {
     icon: FolderCode,
     color: 'from-violet-400 to-purple-500',
     defaultSize: { width: 800, height: 600 },
+    showInDock: true,
+  },
+  planner: {
+    id: 'planner',
+    title: 'Project Planner',
+    icon: GitBranch,
+    color: 'from-indigo-400 to-violet-500',
+    defaultSize: { width: 1200, height: 800 },
     showInDock: true,
   },
   todo: {
@@ -179,6 +190,14 @@ export const appConfig: Record<AppId, AppConfig> = {
     defaultSize: { width: 900, height: 700 },
     showInDock: true,
   },
+  'autonomous-learning': {
+    id: 'autonomous-learning',
+    title: 'Autonomous Learning',
+    icon: Brain,
+    color: 'from-purple-500 to-indigo-600',
+    defaultSize: { width: 1000, height: 750 },
+    showInDock: true,
+  },
 };
 
 // Apps to show in the dock (in order)
@@ -187,6 +206,7 @@ export const dockApps: AppId[] = [
   'voice',
   'files',
   'projects',
+  'planner',
   'terminal',
   'browser',
   'editor',
@@ -198,6 +218,7 @@ export const dockApps: AppId[] = [
   'trading',
   'activity',
   'consciousness',
+  'autonomous-learning',
 ];
 
 export default appConfig;
