@@ -146,6 +146,8 @@ Focus on facts, data, and actionable insights.`;
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
     ],
+    provider: 'groq',
+    model: 'openai/gpt-oss-120b',
     maxTokens: 1000,
     loggingContext: {
       userId,

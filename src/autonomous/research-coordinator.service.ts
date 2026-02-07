@@ -170,7 +170,7 @@ async function fetchAndSummarizeSources(
       // Fetch page content
       const page = await webfetchService.fetchPage(result.url, { forceRefresh: false });
 
-      // Summarize using Ollama (local, no cost)
+      // Summarize using Groq (GPT-OSS 120B)
       const summaryResult = await webfetchService.fetchAndSummarize(
         result.url,
         userId,
