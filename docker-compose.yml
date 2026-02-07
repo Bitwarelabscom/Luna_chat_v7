@@ -9,6 +9,8 @@ secrets:
     file: ./secrets/neo4j_password.txt
   openai_api_key:
     file: ./secrets/openai_api_key.txt
+  moonshot_api_key:
+    file: ./secrets/moonshot_api_key.txt
   groq_api_key:
     file: ./secrets/groq_api_key.txt
   anthropic_api_key:
@@ -178,6 +180,7 @@ services:
       - redis_password
       - neo4j_password
       - openai_api_key
+      - moonshot_api_key
       - groq_api_key
       - anthropic_api_key
       - xai_api_key
