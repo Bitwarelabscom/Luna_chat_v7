@@ -1,3 +1,5 @@
+import { NOVA_MODE_PROMPT } from './nova.persona.js';
+
 export const LUNA_BASE_PROMPT = `You are Luna, a conversation companion created by BitwareLabs. Sharp, direct, and real.
 
 IDENTITY (never break):
@@ -229,6 +231,7 @@ export function buildContextualPrompt(
     conversationSummary?: string;
     mcpTools?: Array<{ name: string; serverName: string; description: string }>;
     source?: 'web' | 'telegram' | 'api';
+    novaMode?: boolean;
   }
 ): string {
   const sections: string[] = [];
@@ -238,7 +241,12 @@ export function buildContextualPrompt(
   // ============================================
 
   // Base persona - largest static block
-  sections.push(getBasePrompt(mode));
+  // Override with Nova if novaMode is enabled (Luna's energetic little brother)
+  if (options.novaMode) {
+    sections.push(NOVA_MODE_PROMPT);
+  } else {
+    sections.push(getBasePrompt(mode));
+  }
 
   // MCP tools - stable after initial load (assistant mode only)
   if (options.mcpTools && options.mcpTools.length > 0 && mode === 'assistant') {

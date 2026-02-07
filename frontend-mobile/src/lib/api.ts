@@ -258,7 +258,9 @@ export const chatApi = {
 export async function* streamMessage(
   sessionId: string,
   message: string,
-  projectMode?: boolean
+  projectMode?: boolean,
+  thinkingMode?: boolean,
+  novaMode?: boolean
 ): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'reasoning' | 'background_refresh'; content?: string; status?: string; messageId?: string; metrics?: MessageMetrics; action?: string; url?: string }> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -271,7 +273,7 @@ export async function* streamMessage(
   const response = await fetch(`${API_URL}${API_PREFIX}/api/chat/sessions/${sessionId}/send`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ message, stream: true, projectMode }),
+    body: JSON.stringify({ message, stream: true, projectMode, thinkingMode, novaMode }),
   });
 
   if (!response.ok) {

@@ -26,7 +26,9 @@ export function ChatView() {
   } = useChatStore();
 
   const [input, setInput] = useState('');
-  const [projectMode, setProjectMode] = useState(true);
+  const [projectMode, setProjectMode] = useState(false);
+  const [thinkingMode, setThinkingMode] = useState(false);
+  const [novaMode, setNovaMode] = useState(false);
   const [showSessions, setShowSessions] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -62,7 +64,7 @@ export function ChatView() {
       let fullContent = '';
       let messageId = '';
 
-      for await (const chunk of streamMessage(sessionId, message, projectMode)) {
+      for await (const chunk of streamMessage(sessionId, message, projectMode, thinkingMode, novaMode)) {
         if (chunk.type === 'content' && chunk.content) {
           fullContent += chunk.content;
           appendStreamingContent(chunk.content);
@@ -203,7 +205,7 @@ export function ChatView() {
 
       {/* Input */}
       <div className="p-4 border-t border-[var(--terminal-border)]">
-        <div className="flex items-center gap-2 mb-2 px-1">
+        <div className="flex items-center gap-4 mb-2 px-1">
           <label className="flex items-center gap-2 text-xs text-[var(--terminal-text-muted)]">
             <input
               type="checkbox"
@@ -212,6 +214,34 @@ export function ChatView() {
               className="rounded border-[var(--terminal-border)] bg-[var(--terminal-surface)] accent-[var(--terminal-accent)]"
             />
             <span>Project Mode</span>
+          </label>
+          <label className="flex items-center gap-2 text-xs text-[var(--terminal-text-muted)]">
+            <input
+              type="checkbox"
+              checked={thinkingMode}
+              onChange={(e) => {
+                if (e.target.checked) {
+                  setNovaMode(false); // Disable Nova when enabling Thinking
+                }
+                setThinkingMode(e.target.checked);
+              }}
+              className="rounded border-[var(--terminal-border)] bg-[var(--terminal-surface)] accent-[var(--terminal-accent)]"
+            />
+            <span>Thinking</span>
+          </label>
+          <label className="flex items-center gap-2 text-xs text-[var(--terminal-text-muted)]">
+            <input
+              type="checkbox"
+              checked={novaMode}
+              onChange={(e) => {
+                if (e.target.checked) {
+                  setThinkingMode(false); // Disable Thinking when enabling Nova
+                }
+                setNovaMode(e.target.checked);
+              }}
+              className="rounded border-[var(--terminal-border)] bg-[var(--terminal-surface)] accent-[var(--terminal-accent)]"
+            />
+            <span>Nova</span>
           </label>
         </div>
         <div className="flex items-end gap-2">

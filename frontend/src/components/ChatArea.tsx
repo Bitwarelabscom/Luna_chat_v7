@@ -104,7 +104,9 @@ function StandardChatArea() {
   } | null>(null);
 
   const [input, setInput] = useState('');
-  const [projectMode, setProjectMode] = useState(true);
+  const [projectMode, setProjectMode] = useState(false);
+  const [thinkingMode, setThinkingMode] = useState(false);
+  const [novaMode, setNovaMode] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -215,7 +217,7 @@ function StandardChatArea() {
     try {
       // Stream the response - accumulate content locally to avoid stale closure
       let accumulatedContent = '';
-      for await (const chunk of streamMessage(sessionId, message, projectMode)) {
+      for await (const chunk of streamMessage(sessionId, message, projectMode, thinkingMode, novaMode)) {
         if (chunk.type === 'status' && chunk.status) {
           setStatusMessage(chunk.status);
         } else if (chunk.type === 'reasoning' && chunk.content) {
@@ -599,15 +601,45 @@ function StandardChatArea() {
               </div>
             </div>
             <div className="flex justify-between items-center mt-2 px-1">
-              <label className="flex items-center gap-2 text-xs text-theme-text-secondary cursor-pointer hover:text-theme-text-primary transition-colors select-none">
-                <input
-                  type="checkbox"
-                  checked={projectMode}
-                  onChange={(e) => setProjectMode(e.target.checked)}
-                  className="rounded border-theme-border bg-theme-bg-tertiary focus:ring-theme-accent-primary"
-                />
-                <span>Project Mode</span>
-              </label>
+              <div className="flex items-center gap-4">
+                <label className="flex items-center gap-2 text-xs text-theme-text-secondary cursor-pointer hover:text-theme-text-primary transition-colors select-none">
+                  <input
+                    type="checkbox"
+                    checked={projectMode}
+                    onChange={(e) => setProjectMode(e.target.checked)}
+                    className="rounded border-theme-border bg-theme-bg-tertiary focus:ring-theme-accent-primary"
+                  />
+                  <span>Project Mode</span>
+                </label>
+                <label className="flex items-center gap-2 text-xs text-theme-text-secondary cursor-pointer hover:text-theme-text-primary transition-colors select-none">
+                  <input
+                    type="checkbox"
+                    checked={thinkingMode}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setNovaMode(false); // Disable Nova when enabling Thinking
+                      }
+                      setThinkingMode(e.target.checked);
+                    }}
+                    className="rounded border-theme-border bg-theme-bg-tertiary focus:ring-theme-accent-primary"
+                  />
+                  <span>Thinking</span>
+                </label>
+                <label className="flex items-center gap-2 text-xs text-theme-text-secondary cursor-pointer hover:text-theme-text-primary transition-colors select-none">
+                  <input
+                    type="checkbox"
+                    checked={novaMode}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setThinkingMode(false); // Disable Thinking when enabling Nova
+                      }
+                      setNovaMode(e.target.checked);
+                    }}
+                    className="rounded border-theme-border bg-theme-bg-tertiary focus:ring-theme-accent-primary"
+                  />
+                  <span>Nova</span>
+                </label>
+              </div>
               <p className="text-xs text-theme-text-muted text-center">
                 Luna can make mistakes. Consider checking important information.
               </p>

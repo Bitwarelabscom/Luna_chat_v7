@@ -119,6 +119,8 @@ export interface ChatInput {
   mode: 'assistant' | 'companion' | 'voice' | 'dj_luna';
   source?: 'web' | 'telegram' | 'api';
   projectMode?: boolean;
+  thinkingMode?: boolean;
+  novaMode?: boolean;
 }
 
 export interface ChatOutput {
@@ -129,7 +131,7 @@ export interface ChatOutput {
 }
 
 export async function processMessage(input: ChatInput): Promise<ChatOutput> {
-  const { sessionId, userId, message, mode, source = 'web', projectMode } = input;
+  const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode, novaMode } = input;
 
   // Initialize MemoryCore session for consolidation tracking
   // This enables episodic memory recording and NeuralSleep LNN processing
@@ -169,6 +171,36 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     } catch (error) {
       logger.error('Router failed, continuing with default path', { error: (error as Error).message });
     }
+  }
+
+  // THINKING MODE: Override router decision to force 'pro' tier minimum
+  // NOVA MODE: Override router decision to force 'nano' tier (fast responses)
+  // Note: Thinking and Nova modes are mutually exclusive (enforced in frontend)
+  if (thinkingMode && !novaMode && routerDecision) {
+    // If router chose 'nano', upgrade to 'pro'
+    if (routerDecision.route === 'nano') {
+      logger.info('Thinking mode enabled - upgrading route from nano to pro', {
+        userId,
+        sessionId,
+        originalRoute: routerDecision.route,
+      });
+      routerDecision = {
+        ...routerDecision,
+        route: 'pro',
+      };
+    }
+    // If 'pro' or 'pro+tools', keep as-is (already sufficient for thinking mode)
+  } else if (novaMode && !thinkingMode && routerDecision) {
+    // Nova mode: force fast 'nano' route for quick, energetic responses
+    logger.info('Nova mode enabled - forcing nano route for fast responses', {
+      userId,
+      sessionId,
+      originalRoute: routerDecision.route,
+    });
+    routerDecision = {
+      ...routerDecision,
+      route: 'nano',
+    };
   }
 
   // Feature flag: Use layered agent architecture if enabled
@@ -351,6 +383,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
         conversationSummary: compressedCtx.systemPrefix,
         mcpTools: mcpToolsForPrompt,
         source,
+        novaMode,
       }),
     },
   ];
@@ -2228,7 +2261,7 @@ export interface StreamMetrics {
 export async function* streamMessage(
   input: ChatInput
 ): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'background_refresh' | 'reasoning'; content?: string; status?: string; messageId?: string; tokensUsed?: number; metrics?: StreamMetrics; action?: string; url?: string }> {
-  const { sessionId, userId, message, mode, source = 'web', projectMode } = input;
+  const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode, novaMode } = input;
 
   // Initialize MemoryCore session for consolidation tracking
   // This enables episodic memory recording and NeuralSleep LNN processing
@@ -2267,6 +2300,36 @@ export async function* streamMessage(
     } catch (error) {
       logger.error('Router failed, continuing with default path', { error: (error as Error).message });
     }
+  }
+
+  // THINKING MODE: Override router decision to force 'pro' tier minimum
+  // NOVA MODE: Override router decision to force 'nano' tier (fast responses)
+  // Note: Thinking and Nova modes are mutually exclusive (enforced in frontend)
+  if (thinkingMode && !novaMode && routerDecision) {
+    // If router chose 'nano', upgrade to 'pro'
+    if (routerDecision.route === 'nano') {
+      logger.info('Thinking mode enabled - upgrading route from nano to pro (streaming)', {
+        userId,
+        sessionId,
+        originalRoute: routerDecision.route,
+      });
+      routerDecision = {
+        ...routerDecision,
+        route: 'pro',
+      };
+    }
+    // If 'pro' or 'pro+tools', keep as-is (already sufficient for thinking mode)
+  } else if (novaMode && !thinkingMode && routerDecision) {
+    // Nova mode: force fast 'nano' route for quick, energetic responses
+    logger.info('Nova mode enabled - forcing nano route for fast responses (streaming)', {
+      userId,
+      sessionId,
+      originalRoute: routerDecision.route,
+    });
+    routerDecision = {
+      ...routerDecision,
+      route: 'nano',
+    };
   }
 
   // Feature flag: Use layered agent architecture if enabled
@@ -2695,6 +2758,7 @@ export async function* streamMessage(
         conversationSummary: compressedCtx.systemPrefix,
         mcpTools: mcpToolsForPrompt,
         source,
+        novaMode,
       }),
     },
   ];

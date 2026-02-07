@@ -43,6 +43,8 @@ const sendMessageSchema = z.object({
   message: z.string().min(1).max(32000),
   stream: z.boolean().optional(),
   projectMode: z.boolean().optional(),
+  thinkingMode: z.boolean().optional(),
+  novaMode: z.boolean().optional(),
 });
 
 const updateSessionSchema = z.object({
@@ -240,6 +242,8 @@ router.post('/sessions/:id/send', rateLimit, async (req: Request, res: Response)
         message: data.message,
         mode: session.mode,
         projectMode: data.projectMode,
+        thinkingMode: data.thinkingMode,
+        novaMode: data.novaMode,
       });
 
       for await (const chunk of stream) {
@@ -271,6 +275,8 @@ router.post('/sessions/:id/send', rateLimit, async (req: Request, res: Response)
         message: data.message,
         mode: session.mode,
         projectMode: data.projectMode,
+        thinkingMode: data.thinkingMode,
+        novaMode: data.novaMode,
       });
 
       res.json(result);
