@@ -101,8 +101,16 @@ export async function readQuery<T = Record<string, unknown>>(
   const session = getReadSession();
   if (!session) return [];
 
+  // Convert float parameters to integers (Neo4j LIMIT/OFFSET requires integers)
+  const processedParams = { ...params };
+  for (const key in processedParams) {
+    if (typeof processedParams[key] === 'number') {
+      processedParams[key] = Math.floor(processedParams[key] as number);
+    }
+  }
+
   try {
-    const result = await session.run(cypher, params);
+    const result = await session.run(cypher, processedParams);
     return result.records.map((record) => {
       const obj = record.toObject();
       // Convert any Neo4j integers in the result
@@ -132,8 +140,16 @@ export async function writeQuery<T = Record<string, unknown>>(
   const session = getWriteSession();
   if (!session) return [];
 
+  // Convert float parameters to integers
+  const processedParams = { ...params };
+  for (const key in processedParams) {
+    if (typeof processedParams[key] === 'number') {
+      processedParams[key] = Math.floor(processedParams[key] as number);
+    }
+  }
+
   try {
-    const result = await session.run(cypher, params);
+    const result = await session.run(cypher, processedParams);
     return result.records.map((record) => {
       const obj = record.toObject();
       for (const key in obj) {
@@ -162,8 +178,16 @@ export async function writeQueryVoid(
   const session = getWriteSession();
   if (!session) return false;
 
+  // Convert float parameters to integers
+  const processedParams = { ...params };
+  for (const key in processedParams) {
+    if (typeof processedParams[key] === 'number') {
+      processedParams[key] = Math.floor(processedParams[key] as number);
+    }
+  }
+
   try {
-    await session.run(cypher, params);
+    await session.run(cypher, processedParams);
     return true;
   } catch (error) {
     logger.error('Neo4j write query failed', {

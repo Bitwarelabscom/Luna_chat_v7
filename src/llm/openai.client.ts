@@ -39,6 +39,26 @@ function getClient(provider: ProviderId = 'openai'): OpenAI {
           },
         });
         break;
+      case 'moonshot':
+        if (!config.moonshot?.apiKey) throw new Error('Moonshot API key not configured');
+        clients.moonshot = new OpenAI({
+          apiKey: config.moonshot.apiKey,
+          baseURL: 'https://api.moonshot.ai/v1',
+        });
+        break;
+      case 'ollama':
+        clients.ollama = new OpenAI({
+          apiKey: 'ollama', // Not used but required by SDK
+          baseURL: `${config.ollama.url}/v1`,
+        });
+        break;
+      case 'ollama_secondary':
+        if (!config.ollamaSecondary?.url) throw new Error('Ollama Secondary URL not configured');
+        clients.ollama_secondary = new OpenAI({
+          apiKey: 'ollama',
+          baseURL: `${config.ollamaSecondary.url}/v1`,
+        });
+        break;
       case 'anthropic':
         // Anthropic tool calling is handled separately via native provider
         // This error only triggers if someone tries to use the OpenAI client directly
@@ -183,6 +203,68 @@ export async function createChatCompletion(
     return completionResult;
   }
 
+  // Route Moonshot to native provider (OpenAI SDK compatible but has its own stream handling)
+  if (provider === 'moonshot') {
+    const moonshotProvider = await import('./providers/moonshot.provider.js');
+    const result = await moonshotProvider.createCompletion(
+      modelToUse,
+      messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
+      { temperature, maxTokens }
+    );
+    const completionResult: ChatCompletionResult = {
+      content: result.content,
+      tokensUsed: result.tokensUsed,
+      promptTokens: result.inputTokens || 0,
+      completionTokens: result.outputTokens || 0,
+      toolCalls: undefined, // Moonshot tool calling is limited, use native for now
+      finishReason: 'stop',
+    };
+    logActivity(completionResult);
+    return completionResult;
+  }
+
+  // Route Ollama to native provider
+  if (provider === 'ollama' || provider === 'ollama_secondary') {
+    const ollamaProvider = provider === 'ollama' 
+      ? await import('./providers/ollama.provider.js')
+      : await import('./providers/ollama-secondary.provider.js');
+    const result = await ollamaProvider.createCompletion(
+      modelToUse,
+      messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
+      { temperature, maxTokens }
+    );
+    const completionResult: ChatCompletionResult = {
+      content: result.content,
+      tokensUsed: result.tokensUsed,
+      promptTokens: 0,
+      completionTokens: 0,
+      toolCalls: undefined,
+      finishReason: 'stop',
+    };
+    logActivity(completionResult);
+    return completionResult;
+  }
+
+  // Route Google AI to native provider (Gemini doesn't support tools via OpenAI SDK here yet)
+  if (provider === 'google') {
+    const googleProvider = await import('./providers/google.provider.js');
+    const result = await googleProvider.createCompletion(
+      modelToUse,
+      messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
+      { temperature, maxTokens }
+    );
+    const completionResult: ChatCompletionResult = {
+      content: result.content,
+      tokensUsed: result.tokensUsed,
+      promptTokens: 0,
+      completionTokens: 0,
+      toolCalls: undefined,
+      finishReason: 'stop',
+    };
+    logActivity(completionResult);
+    return completionResult;
+  }
+
   // Route Anthropic to native provider (required for tool calling, also works without tools)
   if (provider === 'anthropic') {
     if (tools && tools.length > 0) {
@@ -230,6 +312,7 @@ export async function createChatCompletion(
     // Use max_completion_tokens for OpenAI (newer models), max_tokens for others
     // Skip temperature for OpenAI gpt-5 and o4 models (only supports default)
     const skipTemperature = modelToUse.includes('gpt-5') || modelToUse.includes('o4-') || modelToUse.startsWith('o4');
+    
     const tokenParam = provider === 'openai'
       ? { max_completion_tokens: maxTokens }
       : { max_tokens: maxTokens };
@@ -300,7 +383,10 @@ export async function* streamChatCompletion(
   try {
     // Use max_completion_tokens for OpenAI (newer models), max_tokens for others
     // Skip temperature for OpenAI gpt-5 and o4 models (only supports default)
-    const skipTemperature = modelToUse.includes('gpt-5') || modelToUse.includes('o4-') || modelToUse.startsWith('o4');
+    // Moonshot reasoning models require temperature 1.0
+    const isMoonshotReasoning = provider === 'moonshot' && (modelToUse.includes('thinking') || modelToUse.includes('k2.5'));
+    const skipTemperature = modelToUse.includes('gpt-5') || modelToUse.includes('o4-') || modelToUse.startsWith('o4') || isMoonshotReasoning;
+    
     const tokenParam = provider === 'openai'
       ? { max_completion_tokens: maxTokens }
       : { max_tokens: maxTokens };
@@ -320,7 +406,7 @@ export async function* streamChatCompletion(
       model: modelToUse,
       messages: formattedMessages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
       tools,
-      ...(skipTemperature ? {} : { temperature }),
+      ...(skipTemperature ? (isMoonshotReasoning ? { temperature: 1 } : {}) : { temperature }),
       ...tokenParam,
       stream: true,
       stream_options: { include_usage: true },

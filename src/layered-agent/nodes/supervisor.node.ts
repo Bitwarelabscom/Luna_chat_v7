@@ -187,12 +187,12 @@ export async function supervisorNode(
   }
 
   try {
-    // Use xAI grok-4-1-fast for fast, cheap compliance checking
+    // Use groq llama-3.1-8b-instant for fast, cheap compliance checking
     const prompt = buildSupervisorPrompt(state);
 
     const response = await createCompletion(
-      'xai',
-      'grok-4-1-fast',
+      'groq',
+      'llama-3.1-8b-instant',
       [
         { role: 'system', content: SUPERVISOR_SYSTEM_PROMPT },
         { role: 'user', content: prompt },

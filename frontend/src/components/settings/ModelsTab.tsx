@@ -211,6 +211,7 @@ export default function ModelsTab() {
             openrouter: 'bg-pink-500',
             ollama: 'bg-gray-500',
             ollama_secondary: 'bg-gray-400',
+            sanhedrin: 'bg-indigo-500',
             moonshot: 'bg-yellow-500',
           };
           return (

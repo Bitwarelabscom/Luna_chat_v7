@@ -360,11 +360,13 @@ async function getRelatedSessionSummaries(
   intentId: string
 ): Promise<SessionSummary[]> {
   try {
-    // Get session IDs from intent_touches
+    // Get session IDs from intent_touches - use GROUP BY to avoid DISTINCT/ORDER BY conflict
     const touchesResult = await pool.query(
-      `SELECT DISTINCT session_id FROM intent_touches
+      `SELECT session_id, MAX(created_at) as last_touch 
+       FROM intent_touches
        WHERE intent_id = $1 AND session_id IS NOT NULL
-       ORDER BY created_at DESC
+       GROUP BY session_id
+       ORDER BY last_touch DESC
        LIMIT 5`,
       [intentId]
     );

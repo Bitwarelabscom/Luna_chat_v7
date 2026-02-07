@@ -2377,8 +2377,19 @@ export async function* streamMessage(
   const isSmallTalk = abilities.isSmallTalk(message);
   const isSimpleCompanion = mode === 'companion' && abilities.isSimpleCompanionMessage(message);
   const skipLayeredAgent = isSmallTalk || isSimpleCompanion;
+  
+  logger.info('Stream message processing started', { 
+    sessionId, 
+    mode, 
+    isSmallTalk, 
+    isSimpleCompanion, 
+    agentEngine: config.agentEngine,
+    routerRoute: routerDecision?.route 
+  });
+
   if (config.agentEngine === 'layered_v1' && !abilities.isBrowserIntent(message) && !skipLayeredAgent) {
     const startTime = Date.now();
+    logger.info('Using layered agent for stream');
 
     // Save user message first
     await sessionService.addMessage({
@@ -2714,6 +2725,13 @@ export async function* streamMessage(
       : intentContextService.getIntentContext(userId),
   ]);
 
+  logger.info('Stream context loaded', { 
+    provider: modelConfig.provider, 
+    model: modelConfig.model,
+    historyCount: rawHistory.length,
+    isSmallTalkMessage
+  });
+
   // Check if forced sync summarization is needed (context approaching limit)
   const modelInfo = (await import('../llm/types.js')).getModel(modelConfig.provider, modelConfig.model);
   const contextWindow = modelInfo?.contextWindow || 128000; // Default to 128k if unknown
@@ -2866,12 +2884,12 @@ export async function* streamMessage(
   const availableTools = isSmallTalkMessage ? [] : modeTools;
   let searchResults: SearchResult[] | undefined;
 
-  logger.debug('Tool availability', {
+  logger.info('Tool availability', {
     isSmallTalk: isSmallTalkMessage,
     toolsProvided: availableTools.length,
     routerRoute: routerDecision?.route || 'legacy',
-    routerClass: routerDecision?.class || null,
-    message: message.slice(0, 50),
+    provider: modelConfig.provider,
+    model: modelConfig.model
   });
 
   const initialCompletion = await createChatCompletion({

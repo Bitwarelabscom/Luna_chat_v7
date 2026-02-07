@@ -378,7 +378,7 @@ async function fetchMoonshotModels(): Promise<ModelConfig[]> {
   }
 
   try {
-    const response = await fetch('https://api.moonshot.cn/v1/models', {
+    const response = await fetch('https://api.moonshot.ai/v1/models', {
       headers: {
         'Authorization': `Bearer ${config.moonshot.apiKey}`,
       },

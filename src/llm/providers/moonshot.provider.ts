@@ -9,7 +9,7 @@ function getClient(): OpenAI {
   if (!client) {
     client = new OpenAI({
       apiKey: config.moonshot?.apiKey,
-      baseURL: 'https://api.moonshot.cn/v1',
+      baseURL: 'https://api.moonshot.ai/v1',
     });
   }
   return client;
@@ -21,12 +21,13 @@ export async function createCompletion(
   options: { temperature?: number; maxTokens?: number } = {}
 ): Promise<CompletionResult> {
   const moonshot = getClient();
+  const isReasoningModel = model.includes('thinking') || model.includes('k2.5');
 
   try {
     const response = await moonshot.chat.completions.create({
       model,
       messages: messages.map(m => ({ role: m.role, content: m.content })),
-      temperature: options.temperature ?? 0.7,
+      temperature: isReasoningModel ? 1 : (options.temperature ?? 0.7),
       max_completion_tokens: options.maxTokens,
     });
 
@@ -50,12 +51,13 @@ export async function* streamCompletion(
   options: { temperature?: number; maxTokens?: number } = {}
 ): AsyncGenerator<StreamChunk> {
   const moonshot = getClient();
+  const isReasoningModel = model.includes('thinking') || model.includes('k2.5');
 
   try {
     const stream = await moonshot.chat.completions.create({
       model,
       messages: messages.map(m => ({ role: m.role, content: m.content })),
-      temperature: options.temperature ?? 0.7,
+      temperature: isReasoningModel ? 1 : (options.temperature ?? 0.7),
       max_completion_tokens: options.maxTokens,
       stream: true,
       stream_options: { include_usage: true },
