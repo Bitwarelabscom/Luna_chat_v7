@@ -11,6 +11,7 @@ const secrets = {
   redisPassword: getOptionalSecret('redis_password', 'REDIS_PASSWORD'),
   neo4jPassword: getOptionalSecret('neo4j_password', 'NEO4J_PASSWORD'),
   openaiApiKey: getOptionalSecret('openai_api_key', 'OPENAI_API_KEY') || '',
+  moonshotApiKey: getOptionalSecret('moonshot_api_key', 'MOONSHOT_API_KEY'),
   groqApiKey: getOptionalSecret('groq_api_key', 'GROQ_API_KEY'),
   anthropicApiKey: getOptionalSecret('anthropic_api_key', 'ANTHROPIC_API_KEY'),
   xaiApiKey: getOptionalSecret('xai_api_key', 'XAI_API_KEY'),
@@ -72,6 +73,11 @@ const configSchema = z.object({
     apiKey: z.string(),
     model: z.string().default('gpt-5.1-chat-latest'),
   }),
+
+  moonshot: z.object({
+    apiKey: z.string().optional(),
+    enabled: z.coerce.boolean().default(true),
+  }).optional(),
 
   groq: z.object({
     apiKey: z.string().optional(),
@@ -258,6 +264,11 @@ const rawConfig = {
   openai: {
     apiKey: secrets.openaiApiKey,
     model: process.env.OPENAI_MODEL,
+  },
+
+  moonshot: {
+    apiKey: secrets.moonshotApiKey,
+    enabled: process.env.MOONSHOT_ENABLED,
   },
 
   groq: {

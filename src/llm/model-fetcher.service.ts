@@ -113,7 +113,8 @@ function inferCapabilities(modelId: string, modelName?: string): ModelConfig['ca
     capabilities.push('code');
   }
   if (name.includes('opus') || name.includes('pro') || name.includes('4o') ||
-      name.includes('grok-2') || name.includes('gemini-1.5-pro') || name.includes('gemini-2.5-pro')) {
+      name.includes('grok-2') || name.includes('gemini-1.5-pro') || name.includes('gemini-2.5-pro') ||
+      name.includes('kimi')) {
     capabilities.push('analysis', 'creative');
   }
   if (name.includes('mini') || name.includes('flash') || name.includes('instant') ||
@@ -369,6 +370,48 @@ async function fetchGroqModels(): Promise<ModelConfig[]> {
   }
 }
 
+// Fetch Moonshot AI models
+async function fetchMoonshotModels(): Promise<ModelConfig[]> {
+  if (!config.moonshot?.apiKey) {
+    return [];
+  }
+
+  try {
+    const response = await fetch('https://api.moonshot.cn/v1/models', {
+      headers: {
+        'Authorization': `Bearer ${config.moonshot.apiKey}`,
+      },
+    });
+
+    if (!response.ok) {
+      logger.warn('Failed to fetch Moonshot models', { status: response.status });
+      return [];
+    }
+
+    const data = await response.json() as { data: any[] };
+
+    return data.data.map(m => {
+      const pricing = findPricing(m.id);
+      return {
+        id: m.id,
+        name: formatModelName(m.id, 'moonshot'),
+        contextWindow: getContextWindow(m.id),
+        maxOutputTokens: getMaxOutputTokens(m.id),
+        capabilities: inferCapabilities(m.id),
+        costPer1kInput: pricing.input,
+        costPer1kOutput: pricing.output,
+      };
+    }).sort((a, b) => {
+      const aScore = getModelSortScore(a.id);
+      const bScore = getModelSortScore(b.id);
+      return bScore - aScore;
+    });
+  } catch (error) {
+    logger.error('Error fetching Moonshot models', { error: (error as Error).message });
+    return [];
+  }
+}
+
 // Fetch OpenRouter models (with pricing!)
 async function fetchOpenRouterModels(): Promise<ModelConfig[]> {
   if (!config.openrouter?.apiKey) {
@@ -563,7 +606,7 @@ async function fetchSanhedrinModels(): Promise<ModelConfig[]> {
 export async function fetchAllModels(): Promise<LLMProvider[]> {
   logger.info('Fetching models from all providers...');
 
-  const [openai, anthropic, google, xai, groq, openrouter, sanhedrin] = await Promise.all([
+  const [openai, anthropic, google, xai, groq, openrouter, sanhedrin, moonshot] = await Promise.all([
     fetchOpenAIModels(),
     fetchAnthropicModels(),
     fetchGoogleModels(),
@@ -571,6 +614,7 @@ export async function fetchAllModels(): Promise<LLMProvider[]> {
     fetchGroqModels(),
     fetchOpenRouterModels(),
     fetchSanhedrinModels(),
+    fetchMoonshotModels(),
   ]);
 
   const providers: LLMProvider[] = [];
@@ -620,6 +664,15 @@ export async function fetchAllModels(): Promise<LLMProvider[]> {
     });
   }
 
+  if (moonshot.length > 0) {
+    providers.push({
+      id: 'moonshot',
+      name: 'Moonshot AI (Kimi)',
+      enabled: true,
+      models: moonshot,
+    });
+  }
+
   if (openrouter.length > 0) {
     providers.push({
       id: 'openrouter',
@@ -647,6 +700,7 @@ export async function fetchAllModels(): Promise<LLMProvider[]> {
       groq: groq.length,
       openrouter: openrouter.length,
       sanhedrin: sanhedrin.length,
+      moonshot: moonshot.length,
     }
   });
 

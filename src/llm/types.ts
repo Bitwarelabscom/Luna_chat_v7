@@ -1,6 +1,6 @@
 // LLM Provider Types
 
-export type ProviderId = 'openai' | 'groq' | 'anthropic' | 'xai' | 'openrouter' | 'ollama' | 'google' | 'sanhedrin';
+export type ProviderId = 'openai' | 'groq' | 'anthropic' | 'xai' | 'openrouter' | 'ollama' | 'google' | 'sanhedrin' | 'moonshot';
 
 export interface LLMProvider {
   id: ProviderId;
@@ -804,6 +804,40 @@ export const PROVIDERS: LLMProvider[] = [
         capabilities: ['chat', 'code', 'fast'],
         costPer1kInput: 0,
         costPer1kOutput: 0,
+      },
+    ],
+  },
+  {
+    id: 'moonshot',
+    name: 'Moonshot AI (Kimi)',
+    enabled: true,
+    models: [
+      {
+        id: 'moonshot-v1-128k',
+        name: 'Moonshot V1 128K',
+        contextWindow: 128000,
+        maxOutputTokens: 4096,
+        capabilities: ['chat', 'code', 'analysis', 'creative'],
+        costPer1kInput: 0.0084, // Approximate in USD (60 RMB per 1M tokens)
+        costPer1kOutput: 0.0084,
+      },
+      {
+        id: 'moonshot-v1-32k',
+        name: 'Moonshot V1 32K',
+        contextWindow: 32000,
+        maxOutputTokens: 4096,
+        capabilities: ['chat', 'code', 'analysis', 'creative'],
+        costPer1kInput: 0.0034, // Approximate in USD (24 RMB per 1M tokens)
+        costPer1kOutput: 0.0034,
+      },
+      {
+        id: 'moonshot-v1-8k',
+        name: 'Moonshot V1 8K',
+        contextWindow: 8000,
+        maxOutputTokens: 4096,
+        capabilities: ['chat', 'code', 'fast'],
+        costPer1kInput: 0.0017, // Approximate in USD (12 RMB per 1M tokens)
+        costPer1kOutput: 0.0017,
       },
     ],
   },

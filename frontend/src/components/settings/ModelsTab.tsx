@@ -210,6 +210,7 @@ export default function ModelsTab() {
             groq: 'bg-orange-500',
             openrouter: 'bg-pink-500',
             ollama: 'bg-gray-500',
+            moonshot: 'bg-yellow-500',
           };
           return (
             <div key={provider.id} className="flex items-center gap-2">

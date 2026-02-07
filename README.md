@@ -667,12 +667,13 @@ When NeuralSleep services are running, Luna gains consciousness metrics:
 
 ## LLM Providers
 
-Luna supports 8 providers with 100+ models:
+Luna supports 9 providers with 100+ models:
 
 | Provider | Notable Models | Best For |
 |----------|---------------|----------|
 | **OpenAI** | GPT-5.1, GPT-5, GPT-4.1, o3/o4 | General purpose, coding |
 | **Anthropic** | Claude Opus 4.5, Sonnet 4, Haiku 4.5 | Complex reasoning, agents |
+| **Moonshot AI** | Moonshot V1 (8K/32K/128K) | Strong reasoning, long context |
 | **Groq** | Llama 3.3 70B, Mixtral 8x7B | Fast inference |
 | **Google** | Gemini 3 Pro, Gemini 2.5 Flash/Pro | Multimodal, reasoning |
 | **xAI** | Grok 4.1, Grok 4 Fast | Reasoning, coding |

@@ -8,6 +8,7 @@ import * as openrouterProvider from './providers/openrouter.provider.js';
 import * as ollamaProvider from './providers/ollama.provider.js';
 import * as googleProvider from './providers/google.provider.js';
 import * as sanhedrinProvider from './providers/sanhedrin.provider.js';
+import * as moonshotProvider from './providers/moonshot.provider.js';
 import logger from '../utils/logger.js';
 
 interface ProviderModule {
@@ -33,6 +34,7 @@ const providers: Record<ProviderId, ProviderModule> = {
   ollama: ollamaProvider,
   google: googleProvider,
   sanhedrin: sanhedrinProvider,
+  moonshot: moonshotProvider,
 };
 
 function getProvider(providerId: ProviderId): ProviderModule {
