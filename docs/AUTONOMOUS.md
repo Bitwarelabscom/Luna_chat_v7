@@ -170,6 +170,44 @@ When Luna needs clarification, she queues questions:
 - High-priority questions surface first
 - Unanswered questions expire after configurable time
 
+## Autonomous Learning System
+
+Luna continuously analyzes her own performance and the information she gathers to improve her knowledge base.
+
+### 1. Session Analysis
+At the end of each autonomous session, the `SessionAnalyzer` reviews:
+- Actions taken vs. desired outcomes
+- User feedback signals (explicit and implicit)
+- Knowledge gaps identified during research
+- Tool execution success rates
+
+### 2. Knowledge Consolidation
+The `AutonomousLearningOrchestrator` performs periodic "deep learning" cycles:
+- **Gap Detection**: Identifies topics where Luna lacked sufficient information to answer questions.
+- **Fact Verification**: Uses the `KnowledgeVerifier` to cross-reference new facts across multiple sources.
+- **Trust Scoring**: The `SourceTrustService` maintains credibility scores for websites and external APIs based on historical accuracy.
+
+### 3. Trust Score Management
+Luna tracks the reliability of information sources:
+- **Initial Trust**: Based on domain authority and historical performance.
+- **Decay**: Trust scores slowly normalize over time without reinforcement.
+- **Reinforcement**: Accurate facts increase source trust; verified errors decrease it significantly.
+
+## Project Execution Graph (Planner)
+
+For complex, multi-step projects, Luna uses a Directed Acyclic Graph (DAG) execution engine.
+
+### Execution Engine
+- **Topological Sorting**: Steps are executed in the correct order based on dependencies.
+- **Parallel Execution**: Independent branches of the graph can run simultaneously.
+- **Real-time Streaming**: Status updates are streamed via SSE to the `PlannerWindow`.
+
+### Approval Gates & Risk
+The `ApprovalClassifier` assigns risk levels to each step:
+- **Low/Medium**: Often auto-approved based on trust settings.
+- **High/Critical**: Requires manual user approval via the `ApprovalMessage` component.
+- **Irreversible Actions**: (e.g., deleting files, significant refactors) always require an approval gate.
+
 ## Database Schema
 
 ### autonomous_sessions

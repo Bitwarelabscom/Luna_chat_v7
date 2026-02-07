@@ -92,6 +92,8 @@ Most AI assistants are stateless query engines. Luna is a **stateful companion**
 
 ### Core Capabilities
 - **Router-First Architecture**: Intelligent compute arbitration that routes queries to Nano, Pro, or Pro+Tools models based on risk and cost.
+- **Project Execution Graph**: Sophisticated DAG-based execution engine for complex projects with approval gates, risk classification, and real-time SSE updates.
+- **Autonomous Learning**: Continuous session analysis and knowledge consolidation system that identifies gaps and strengthens memory.
 - **Multi-Model Support**: Routes between OpenAI, Anthropic, Groq, Google, xAI, OpenRouter, and local Ollama models.
 - **Four Chat Modes**: Assistant (task-focused), Companion (friendly), Voice (speech-optimized), and DJ Luna (music generation).
 - **Agent System**: Specialized agents for research, coding, writing, analysis, and planning.
@@ -277,7 +279,7 @@ Luna can delegate complex tasks to specialized agents:
 | **Coder** | Code generation, debugging | Programming tasks, code review |
 | **Writer** | Creative & professional writing | Content creation, editing |
 | **Analyst** | Data analysis, calculations | Number crunching, insights |
-| **Planner** | Task breakdown, project planning | Goal setting, organization |
+| **Planner** | DAG execution, project tracking | Complex multi-step projects with dependencies |
 
 ### Custom Tools
 Create your own integrations:
@@ -476,6 +478,8 @@ Luna can operate independently with self-directed capabilities.
 | Feature | Description |
 |---------|-------------|
 | **Goal Tracking** | Work toward user-defined goals with milestones |
+| **Autonomous Learning** | Continuous session analysis, gap detection, and knowledge consolidation |
+| **Risk Classification** | Intelligent approval gates for structural or irreversible actions |
 | **Research** | Proactively research topics of interest |
 | **RSS Feeds** | Monitor and summarize news feeds |
 | **Council Deliberation** | Deliberate on decisions autonomously |
@@ -735,12 +739,19 @@ luna-chat/
 |   |   |-- youtube.service.ts      # YouTube search and embed
 |   |-- autonomous/         # Autonomous mode
 |   |   |-- autonomous.service.ts   # Core logic
+|   |   |-- autonomous-learning.orchestrator.ts # Knowledge consolidation
 |   |   |-- council.service.ts      # Council deliberation
 |   |   |-- friend.service.ts       # Friend conversations
 |   |   |-- goals.service.ts        # Goal tracking
 |   |   |-- insights.service.ts     # Insight generation
 |   |   |-- research.service.ts     # Web research
 |   |   |-- rss.service.ts          # RSS monitoring
+|   |   |-- session-analyzer.service.ts # Activity analysis
+|   |   |-- source-trust.service.ts # Source credibility tracking
+|   |-- planner/            # Project Execution Graph
+|   |   |-- planner-orchestrator.service.ts # DAG execution engine
+|   |   |-- approval-classifier.service.ts # Risk & approval logic
+|   |   |-- planner.routes.ts       # Planner API
 |   |-- auth/               # Authentication
 |   |-- intents/            # Intent persistence
 |   |   |-- intent.service.ts         # CRUD, lifecycle, caching
@@ -797,6 +808,7 @@ luna-chat/
 |   |   |   |-- CommandCenter.tsx
 |   |   |   |-- MobileBottomNav.tsx
 |   |   |   |-- MobileSessionsOverlay.tsx
+|   |   |   |-- autonomous-learning/  # Learning UI
 |   |   |   |-- settings/
 |   |   |   |   |-- TriggersTab.tsx       # Trigger configuration UI
 |   |   |   |   |-- McpTab.tsx            # MCP servers configuration UI
@@ -805,10 +817,14 @@ luna-chat/
 |   |   |   |-- os/apps/
 |   |   |   |   |-- ActivityWindow.tsx    # Real-time activity viewer
 |   |   |   |   |-- ChatWindow.tsx        # Chat with mode selection
+|   |   |   |   |-- PlannerWindow.tsx     # Project execution graph
+|   |   |   |   |-- AutonomousLearningWindow.tsx # Knowledge base manager
 |   |   |-- hooks/
 |   |   |   |-- useIsMobile.ts
 |   |   |   |-- useActivityStream.ts      # Activity SSE hook
 |   |   |   |-- useTradingWebSocket.ts    # Real-time price updates
+|   |   |-- lib/
+|   |   |   |-- planner-api.ts           # Typed planner client
 |-- android/                # Native Android app
 |-- images/                 # Luna media (videos/images)
 |-- secrets/                # Docker secrets
@@ -948,6 +964,28 @@ npm start
 | GET/POST | `/api/autonomous/rss` | RSS feeds |
 | GET | `/api/autonomous/insights` | Generated insights |
 | GET | `/api/autonomous/friends` | Friend conversations |
+
+### Planner (Execution Graph) Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/planner/projects` | Create project with steps and dependencies |
+| GET | `/api/planner/projects` | List projects with pagination/filtering |
+| GET | `/api/planner/projects/:id` | Full project details and DAG structure |
+| POST | `/api/planner/projects/:id/execute` | Start SSE streaming execution |
+| POST | `/api/planner/projects/:id/pause` | Pause execution |
+| POST | `/api/planner/approvals/:id/approve` | Approve a pending step |
+| POST | `/api/planner/approvals/:id/reject` | Reject/cancel a pending step |
+
+### Autonomous Learning Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/autonomous/learning/activity` | Recent learning activity logs |
+| GET | `/api/autonomous/learning/gaps` | Identified knowledge gaps |
+| GET | `/api/autonomous/learning/sessions` | Research session history |
+| GET | `/api/autonomous/learning/stats` | Learning system statistics |
+| GET | `/api/autonomous/learning/trust` | Source trust score management |
 
 ### Triggers Endpoints
 

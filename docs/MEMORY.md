@@ -127,7 +127,18 @@ Insights Luna learns from autonomous sessions.
 | **success_factor** | What works well for this user |
 | **user_behavior** | User habits and tendencies |
 
-### 7. Fact Corrections
+### 7. Autonomous Learning
+
+Long-term intelligence gathered through self-analysis.
+
+| Category | Description |
+|----------|-------------|
+| **Session Analysis** | Post-session review of decision quality |
+| **Knowledge Gaps** | Specific topics requiring further research |
+| **Source Trust** | Credibility scores for information sources |
+| **Consolidated Facts** | Verified facts cross-referenced from multiple sessions |
+
+### 8. Fact Corrections
 
 Audit trail when users correct facts.
 
