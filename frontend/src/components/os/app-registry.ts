@@ -17,6 +17,7 @@ import {
   FileText,
   Brain,
   GitBranch,
+  Newspaper,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -37,7 +38,8 @@ export type AppId =
   | 'settings'
   | 'activity'
   | 'consciousness'
-  | 'autonomous-learning';
+  | 'autonomous-learning'
+  | 'news';
 
 export interface AppConfig {
   id: AppId;
@@ -188,6 +190,14 @@ export const appConfig: Record<AppId, AppConfig> = {
     defaultSize: { width: 1000, height: 750 },
     showInDock: true,
   },
+  news: {
+    id: 'news',
+    title: 'News',
+    icon: Newspaper,
+    color: 'from-blue-400 to-cyan-500',
+    defaultSize: { width: 900, height: 650 },
+    showInDock: true,
+  },
 };
 
 // Apps to show in the dock (in order)
@@ -196,6 +206,7 @@ export const dockApps: AppId[] = [
   'voice',
   'files',
   'planner',
+  'news',
   'terminal',
   'browser',
   'editor',

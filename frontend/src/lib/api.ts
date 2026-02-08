@@ -1100,6 +1100,8 @@ export interface RssArticle {
   lunaSummary: string | null;
   relevanceScore: number;
   relevanceReason: string | null;
+  tags: string[] | null;
+  confidence: number;
   isInteresting: boolean;
   sharedWithUser: boolean;
   publishedAt: string | null;

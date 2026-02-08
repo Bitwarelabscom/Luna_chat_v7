@@ -28,6 +28,7 @@ import SettingsWindow from './apps/SettingsWindow';
 import ActivityWindow from './apps/ActivityWindow';
 import ConsciousnessWindow from './apps/ConsciousnessWindow';
 import AutonomousLearningWindow from './apps/AutonomousLearningWindow';
+import NewsWindow from './apps/NewsWindow';
 import PlannerWindow from './apps/PlannerWindow';
 import PlaceholderWindow from './apps/PlaceholderWindow';
 
@@ -68,6 +69,8 @@ function getAppComponent(appId: AppId): React.ReactNode {
       return <ConsciousnessWindow />;
     case 'autonomous-learning':
       return <AutonomousLearningWindow />;
+    case 'news':
+      return <NewsWindow />;
     default:
       return <PlaceholderWindow title="Unknown" message="Unknown app" />;
   }

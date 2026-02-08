@@ -1,7 +1,7 @@
 import { pool } from '../db/index.js';
-import { createCompletion } from '../llm/router.js';
-import { getUserModelConfig } from '../llm/model-config.service.js';
 import * as factsService from '../memory/facts.service.js';
+import * as insightsService from './insights.service.js';
+import { filterArticle } from './news-filter.service.js';
 import logger from '../utils/logger.js';
 
 // ============================================
@@ -37,6 +37,8 @@ export interface RssArticle {
   lunaSummary: string | null;
   relevanceScore: number;
   relevanceReason: string | null;
+  tags: string[] | null;
+  confidence: number;
   sharedWithUser: boolean;
   fetchedAt: Date;
 }
@@ -299,13 +301,14 @@ function parseRssFeed(xml: string, feedId: string, userId: string): Partial<RssA
     const guid = extractTag(itemXml, 'guid') || link;
 
     if (title) {
+      const summaryText = description || content;
       articles.push({
         feedId,
         userId,
         externalId: guid ? hashString(guid) : null,
         title: decodeHtmlEntities(title),
         url: link || null,
-        summary: description ? decodeHtmlEntities(stripHtml(description)).slice(0, 1000) : null,
+        summary: summaryText ? decodeHtmlEntities(stripHtml(summaryText)).slice(0, 1000) : null,
         content: content ? decodeHtmlEntities(stripHtml(content)) : null,
         author: author ? decodeHtmlEntities(author) : null,
         publishedAt: pubDate ? new Date(pubDate) : null,
@@ -343,15 +346,16 @@ function parseRssFeed(xml: string, feedId: string, userId: string): Partial<RssA
 }
 
 function extractTag(xml: string, tagName: string): string | null {
-  // Handle CDATA
-  const cdataRegex = new RegExp(`<${tagName}[^>]*>\\s*<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>\\s*<\\/${tagName}>`, 'i');
+  // Handle CDATA with potentially complex tag (like <content:encoded>)
+  const escapedTagName = tagName.replace(':', '\\:');
+  const cdataRegex = new RegExp(`<${escapedTagName}[^>]*>\\s*<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>\\s*<\\/${escapedTagName}>`, 'i');
   const cdataMatch = cdataRegex.exec(xml);
   if (cdataMatch) {
     return cdataMatch[1].trim();
   }
 
   // Handle regular content
-  const regex = new RegExp(`<${tagName}[^>]*>([\\s\\S]*?)<\\/${tagName}>`, 'i');
+  const regex = new RegExp(`<${escapedTagName}[^>]*>([\\s\\S]*?)<\\/${escapedTagName}>`, 'i');
   const match = regex.exec(xml);
   return match ? match[1].trim() : null;
 }
@@ -421,57 +425,58 @@ export async function analyzeArticleRelevance(userId: string, articleId: string)
   const facts = await factsService.getUserFacts(userId, { limit: 20 });
   const interests = facts
     .filter(f => f.category === 'hobby' || f.category === 'preference')
-    .map(f => f.factValue)
-    .join(', ');
-
-  // Get user's model config
-  const { provider, model } = await getUserModelConfig(userId, 'main_chat');
-
-  // Analyze relevance
-  const messages = [
-    {
-      role: 'system' as const,
-      content: `You are analyzing article relevance for a user. Rate the relevance from 0 to 1 and explain why.
-User interests: ${interests || 'Unknown'}
-
-Respond in JSON format: {"score": 0.0-1.0, "reason": "brief explanation", "summary": "1-2 sentence summary of the article"}`,
-    },
-    {
-      role: 'user' as const,
-      content: `Article title: ${article.title}
-Summary: ${article.summary || 'No summary available'}`,
-    },
-  ];
+    .map(f => f.factValue);
 
   try {
-    const response = await createCompletion(provider, model, messages, {
-      temperature: 0.3,
-      maxTokens: 300,
-    });
+    // Use the new bullshit filter
+    const analysis = await filterArticle(
+      article.title,
+      article.summary,
+      interests
+    );
 
-    // Parse JSON response
-    const analysis = JSON.parse(response.content);
+    // Map signal to score
+    const signalScores = {
+      high: 0.9,
+      medium: 0.6,
+      low: 0.2
+    };
+    const score = signalScores[analysis.signal] || 0.2;
 
     // Update article
     await pool.query(
       `UPDATE rss_articles
-       SET relevance_score = $1, relevance_reason = $2, luna_summary = $3, is_interesting = $4
-       WHERE id = $5`,
+       SET relevance_score = $1, relevance_reason = $2, tags = $3, confidence = $4, is_interesting = $5
+       WHERE id = $6`,
       [
-        analysis.score,
+        score,
         analysis.reason,
-        analysis.summary,
-        analysis.score >= 0.6,
+        analysis.topics,
+        analysis.confidence,
+        score >= 0.6,
         articleId,
       ]
     );
 
+    // Create proactive insight if interesting
+    if (score >= 0.6) {
+      const priority = analysis.signal === 'high' ? 8 : 5;
+      await insightsService.createInsight(userId, {
+        sourceType: 'rss_article',
+        sourceId: articleId,
+        insightTitle: `Signal: ${article.title}`,
+        insightContent: `${analysis.reason}\n\nTopics: ${analysis.topics.join(', ')}`,
+        priority,
+      });
+    }
+
     return {
       ...article,
-      relevanceScore: analysis.score,
+      relevanceScore: score,
       relevanceReason: analysis.reason,
-      lunaSummary: analysis.summary,
-      isInteresting: analysis.score >= 0.6,
+      tags: analysis.topics,
+      confidence: analysis.confidence,
+      isInteresting: score >= 0.6,
     };
   } catch (error) {
     logger.error('Error analyzing article relevance', { articleId, error });
@@ -537,6 +542,8 @@ function mapArticleRow(row: Record<string, unknown>): RssArticle {
     lunaSummary: row.luna_summary as string | null,
     relevanceScore: row.relevance_score as number,
     relevanceReason: row.relevance_reason as string | null,
+    tags: row.tags as string[] | null,
+    confidence: row.confidence as number,
     sharedWithUser: row.shared_with_user as boolean,
     fetchedAt: new Date(row.fetched_at as string),
   };
