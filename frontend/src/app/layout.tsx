@@ -1,9 +1,6 @@
 import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
 import './globals.css';
 import ThemeProvider from '@/components/ThemeProvider';
-
-const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
   title: 'Luna Chat - AI Personal Assistant',
@@ -17,7 +14,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" data-theme="dark" suppressHydrationWarning>
-      <body className={`${inter.className} bg-theme-bg-primary text-theme-text-primary antialiased`}>
+      <body className="font-sans bg-theme-bg-primary text-theme-text-primary antialiased">
         <ThemeProvider>
           {children}
         </ThemeProvider>

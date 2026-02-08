@@ -91,15 +91,17 @@ export async function orchestrateAutonomousLearning(
       try {
         // PREVENT REDUNDANCY: Check if a similar gap (semantic similarity > 0.85) was already embedded or verified
         if (gap.embedding) {
+          const vectorString = JSON.stringify(gap.embedding);
           const similarCompletedGaps = await query<any>(
-            `SELECT id, gap_description, status, 1 - (embedding <=> $1::vector) as similarity
+            `SELECT id, gap_description, status, 1 - (embedding <=> $1) as similarity
              FROM knowledge_gaps
              WHERE user_id = $2 
                AND status IN ('embedded', 'verified')
                AND id != $3
-               AND 1 - (embedding <=> $1::vector) > 0.85
+               AND embedding IS NOT NULL
+               AND 1 - (embedding <=> $1) > 0.85
              LIMIT 1`,
-            [gap.embedding, userId, gap.id]
+            [vectorString, userId, gap.id]
           );
 
           if (similarCompletedGaps.length > 0) {

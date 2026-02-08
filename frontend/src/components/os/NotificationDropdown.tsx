@@ -205,7 +205,7 @@ export function NotificationDropdown({ onClose }: NotificationDropdownProps) {
 
   return (
     <div
-      className="absolute right-0 top-full mt-2 w-80 backdrop-blur-xl border rounded-xl shadow-2xl overflow-hidden z-50"
+      className="absolute right-0 top-full mt-2 w-80 backdrop-blur-xl border rounded-xl shadow-2xl overflow-hidden z-[9999]"
       style={{
         background: 'var(--theme-bg-secondary)',
         borderColor: 'var(--theme-border)',

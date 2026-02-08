@@ -5,6 +5,7 @@
 
 import { query } from '../db/postgres.js';
 import * as memorycoreClient from '../memory/memorycore.client.js';
+import * as deliveryService from '../triggers/delivery.service.js';
 import logger from '../utils/logger.js';
 import type { ResearchFindings } from './research-coordinator.service.js';
 
@@ -183,6 +184,15 @@ export async function createLearningNotification(
   sessionId: number
 ): Promise<void> {
   try {
+    // Send real-time notification to frontend
+    await deliveryService.sendAutonomousNotification(
+      userId,
+      'Luna Brain Update',
+      `Luna learned about: ${topic}`,
+      'autonomous.learning_complete',
+      6
+    );
+
     // Log notification activity
     await query(
       `INSERT INTO autonomous_learning_log (

@@ -186,7 +186,7 @@ Example output:
 ]`;
 
     const completion = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile', // Groq's free tier model
+      model: 'llama-3.1-8b-instant', // Faster model, higher rate limits
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: sessionSummary },
@@ -254,14 +254,16 @@ export async function storeKnowledgeGaps(
     try {
       // 1. Generate embedding for semantic similarity check
       const { embedding } = await generateEmbedding(gap.description);
-      const vectorString = `[${embedding.join(',')}]`;
+      // Format as string "[0.1, 0.2, ...]" for pgvector
+      const vectorString = JSON.stringify(embedding);
 
       // 2. Check for similar existing gaps (similarity > 0.9)
       const similarGaps = await query<any>(
-        `SELECT id, gap_description, status, 1 - (embedding <=> $1::vector) as similarity
+        `SELECT id, gap_description, status, 1 - (embedding <=> $1) as similarity
          FROM knowledge_gaps
          WHERE user_id = $2 
-           AND 1 - (embedding <=> $1::vector) > 0.9
+           AND embedding IS NOT NULL
+           AND 1 - (embedding <=> $1) > 0.9
          ORDER BY similarity DESC
          LIMIT 1`,
         [vectorString, userId]
@@ -288,7 +290,7 @@ export async function storeKnowledgeGaps(
            category,
            status,
            embedding
-         ) VALUES ($1, $2, $3, $4, $5, 'pending', $6::vector)`,
+         ) VALUES ($1, $2, $3, $4, $5, 'pending', $6)`,
         [
           userId,
           gap.description,
@@ -322,16 +324,25 @@ export async function getPendingGaps(
     [userId, limit]
   );
 
-  return rows.map((row) => ({
-    id: row.id,
-    gapDescription: row.gap_description,
-    priority: parseFloat(row.priority),
-    suggestedQueries: row.suggested_queries,
-    category: row.category,
-    identifiedAt: row.identified_at,
-    status: row.status,
-    embedding: row.embedding ? row.embedding.substring(1, row.embedding.length - 1).split(',').map(Number) : undefined,
-  }));
+  return rows.map((row) => {
+    // Robust parsing of pgvector string format "[0.1, 0.2, ...]" or "{0.1, 0.2, ...}"
+    let embedding: number[] | undefined;
+    if (row.embedding) {
+      const cleanString = row.embedding.replace(/[\[\]{}]/g, '');
+      embedding = cleanString.split(',').map((val: string) => parseFloat(val.trim()));
+    }
+
+    return {
+      id: row.id,
+      gapDescription: row.gap_description,
+      priority: parseFloat(row.priority),
+      suggestedQueries: row.suggested_queries,
+      category: row.category,
+      identifiedAt: row.identified_at,
+      status: row.status,
+      embedding,
+    };
+  });
 }
 
 /**

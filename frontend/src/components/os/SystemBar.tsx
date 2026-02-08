@@ -241,7 +241,7 @@ export function SystemBar({ onSpotlightOpen, onSettingsOpen, onAppOpen, onNewFil
 
   return (
     <header
-      className="h-7 backdrop-blur-xl border-b flex items-center justify-between px-4 text-[12px] z-50"
+      className="h-7 backdrop-blur-xl border-b flex items-center justify-between px-4 text-[12px] z-[9999]"
       style={{
         background: 'rgba(0, 0, 0, 0.4)',
         borderColor: 'rgba(255, 255, 255, 0.05)',
@@ -273,7 +273,7 @@ export function SystemBar({ onSpotlightOpen, onSettingsOpen, onAppOpen, onNewFil
               </button>
               {activeMenu === key && (
                 <div
-                  className="absolute left-0 top-full mt-1 min-w-[180px] backdrop-blur-xl border rounded-lg shadow-2xl overflow-hidden z-50"
+                  className="absolute left-0 top-full mt-1 min-w-[180px] backdrop-blur-xl border rounded-lg shadow-2xl overflow-hidden z-[9999]"
                   style={{
                     background: 'var(--theme-bg-secondary)',
                     borderColor: 'var(--theme-border)',
@@ -433,7 +433,7 @@ export function SystemBar({ onSpotlightOpen, onSettingsOpen, onAppOpen, onNewFil
 
           {showUserMenu && (
             <div
-              className="absolute right-0 top-full mt-2 w-48 backdrop-blur-xl border rounded-xl shadow-2xl overflow-hidden z-50"
+              className="absolute right-0 top-full mt-2 w-48 backdrop-blur-xl border rounded-xl shadow-2xl overflow-hidden z-[9999]"
               style={{
                 background: 'var(--theme-bg-secondary)',
                 borderColor: 'var(--theme-border)',
