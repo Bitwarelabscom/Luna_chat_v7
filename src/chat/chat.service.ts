@@ -254,8 +254,8 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   }
 
   // PROJECT HANDLING: Check if user has an active project and route accordingly
-  // Respect explicit projectMode flag if provided (default to true if undefined for backward compatibility)
-  const isProjectMode = projectMode !== undefined ? projectMode : true;
+  // Project mode is opt-in - only activate when explicitly enabled
+  const isProjectMode = projectMode === true;
   let activeProject: any = null;
   if (isProjectMode) {
     const activeProjectResult = await dbQuery<any>(
@@ -2481,8 +2481,8 @@ export async function* streamMessage(
   }
 
   // PROJECT HANDLING: Check if user has an active project and route accordingly
-  // Respect explicit projectMode flag if provided (default to true if undefined for backward compatibility)
-  const isProjectMode = projectMode !== undefined ? projectMode : true;
+  // Project mode is opt-in - only activate when explicitly enabled
+  const isProjectMode = projectMode === true;
   const activeProject = isProjectMode ? await projectService.getActiveProject(userId) : null;
   if (activeProject && !isSmallTalkMessage) {
     // Check if this is a steering message for the active project
@@ -2533,8 +2533,8 @@ export async function* streamMessage(
     }
   }
 
-  // PROJECT CREATION: Check if user wants to start a new project
-  if (!isSmallTalkMessage && projectService.isProjectCreationIntent(message)) {
+  // PROJECT CREATION: Check if user wants to start a new project (only when project mode is enabled)
+  if (isProjectMode && !isSmallTalkMessage && projectService.isProjectCreationIntent(message)) {
     logger.info('Detected project creation intent', { message: message.substring(0, 100) });
 
     // Save user message

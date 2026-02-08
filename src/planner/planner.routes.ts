@@ -39,7 +39,7 @@ router.post('/projects', authenticate, async (req, res) => {
       [userId, sessionId || null, name, description || null, projectType, steps.length]
     );
 
-    const project = projectResult.rows[0];
+    const project = projectResult[0];
 
     // Create steps
     const stepIdMap = new Map<number, string>();
@@ -63,7 +63,7 @@ router.post('/projects', authenticate, async (req, res) => {
         ]
       );
 
-      stepIdMap.set(step.stepNumber, stepResult.rows[0].id);
+      stepIdMap.set(step.stepNumber, stepResult[0].id);
     }
 
     // Create dependencies
@@ -128,7 +128,7 @@ router.get('/projects', authenticate, async (req, res) => {
     const result = await query(sql, params);
 
     res.json({
-      projects: result.rows.map((row: any) => ({
+      projects: result.map((row: any) => ({
         id: row.id,
         name: row.name,
         description: row.description,
@@ -167,7 +167,7 @@ router.get('/projects/:id', authenticate, async (req, res) => {
       [id, userId]
     );
 
-    if (projectResult.rows.length === 0) {
+    if (projectResult.length === 0) {
       res.status(404).json({ error: 'Project not found' });
       return;
     }
@@ -187,9 +187,9 @@ router.get('/projects/:id', authenticate, async (req, res) => {
     );
 
     res.json({
-      project: projectResult.rows[0],
-      steps: stepsResult.rows,
-      dependencies: depsResult.rows.map((row: any) => ({
+      project: projectResult[0],
+      steps: stepsResult,
+      dependencies: depsResult.map((row: any) => ({
         stepNumber: row.step_num,
         dependsOn: row.depends_on_step_num,
         dependencyType: row.dependency_type,
@@ -219,7 +219,7 @@ router.post('/projects/:id/execute', authenticate, async (req, res) => {
       [id, userId]
     );
 
-    if (projectResult.rows.length === 0) {
+    if (projectResult.length === 0) {
       res.status(404).json({ error: 'Project not found' });
       return;
     }
@@ -260,7 +260,7 @@ router.post('/projects/:id/pause', authenticate, async (req, res) => {
       [id, userId]
     );
 
-    if (projectResult.rows.length === 0) {
+    if (projectResult.length === 0) {
       res.status(404).json({ error: 'Project not found' });
       return;
     }
@@ -295,7 +295,7 @@ router.get('/projects/:id/steps', authenticate, async (req, res) => {
       [id, userId]
     );
 
-    if (projectResult.rows.length === 0) {
+    if (projectResult.length === 0) {
       res.status(404).json({ error: 'Project not found' });
       return;
     }
@@ -324,7 +324,7 @@ router.get('/projects/:id/steps', authenticate, async (req, res) => {
       status: string;
       dependencies: number[];
       dependents: number[];
-    }> = stepsResult.rows.map((row: any) => ({
+    }> = stepsResult.map((row: any) => ({
       id: row.id,
       stepNumber: row.step_number,
       goal: row.goal,
@@ -336,7 +336,7 @@ router.get('/projects/:id/steps', authenticate, async (req, res) => {
 
     const nodeMap = new Map(nodes.map((n) => [n.id, n]));
 
-    for (const dep of depsResult.rows) {
+    for (const dep of depsResult) {
       const node = nodeMap.get(dep.step_id);
       const depNode = nodeMap.get(dep.depends_on_step_id);
 
@@ -371,12 +371,12 @@ router.post('/approvals/:id/approve', authenticate, async (req, res) => {
       [id, userId]
     );
 
-    if (approvalResult.rows.length === 0) {
+    if (approvalResult.length === 0) {
       res.status(404).json({ error: 'Approval request not found' });
       return;
     }
 
-    const approval = approvalResult.rows[0];
+    const approval = approvalResult[0];
 
     await query(
       `UPDATE step_approval_requests
@@ -422,12 +422,12 @@ router.post('/approvals/:id/reject', authenticate, async (req, res) => {
       [id, userId]
     );
 
-    if (approvalResult.rows.length === 0) {
+    if (approvalResult.length === 0) {
       res.status(404).json({ error: 'Approval request not found' });
       return;
     }
 
-    const approval = approvalResult.rows[0];
+    const approval = approvalResult[0];
 
     await query(
       `UPDATE step_approval_requests
@@ -478,7 +478,7 @@ router.patch('/steps/:id', authenticate, async (req, res) => {
       [id, userId]
     );
 
-    if (stepResult.rows.length === 0) {
+    if (stepResult.length === 0) {
       res.status(404).json({ error: 'Step not found' });
       return;
     }
