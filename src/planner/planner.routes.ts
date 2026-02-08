@@ -516,4 +516,37 @@ router.patch('/steps/:id', authenticate, async (req, res) => {
   }
 });
 
+/**
+ * Delete project
+ */
+router.delete('/projects/:id', authenticate, async (req, res) => {
+  try {
+    const userId = (req as any).user?.userId;
+    if (!userId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { id } = req.params;
+
+    const projectResult = await query(
+      `SELECT * FROM execution_projects WHERE id = $1 AND user_id = $2`,
+      [id, userId]
+    );
+
+    if (projectResult.length === 0) {
+      res.status(404).json({ error: 'Project not found' });
+      return;
+    }
+
+    // Delete project (cascades to steps and dependencies)
+    await query(`DELETE FROM execution_projects WHERE id = $1`, [id]);
+
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Error deleting project:', error);
+    res.status(500).json({ error: 'Failed to delete project' });
+  }
+});
+
 export default router;

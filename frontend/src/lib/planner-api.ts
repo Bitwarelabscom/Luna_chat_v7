@@ -179,4 +179,10 @@ export const plannerApi = {
       body: updates,
     });
   },
+
+  async deleteProject(projectId: string): Promise<{ success: boolean }> {
+    return api<{ success: boolean }>(`/api/planner/projects/${projectId}`, {
+      method: 'DELETE',
+    });
+  },
 };

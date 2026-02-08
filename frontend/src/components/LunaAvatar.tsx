@@ -34,8 +34,7 @@ export default function LunaAvatar({
   
   const [isLoading, setIsLoading] = useState(true);
   const [hasLoopSupport, setHasLoopSupport] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  
+
   const videoRefA = useRef<HTMLVideoElement>(null);
   const videoRefB = useRef<HTMLVideoElement>(null);
   const lastMoodRef = useRef<string | undefined>(mood);

@@ -13,6 +13,7 @@ import {
   Filter,
   Grid3x3,
   List,
+  Trash2,
 } from 'lucide-react';
 import { plannerApi, type ExecutionProject, type ExecutionStep, type ExecutionEvent } from '@/lib/planner-api';
 
@@ -142,6 +143,21 @@ export default function PlannerWindow() {
     }
   };
 
+  const handleDelete = async () => {
+    if (!selectedProject) return;
+    if (!confirm(`Are you sure you want to delete "${selectedProject.name}"?`)) return;
+
+    try {
+      await plannerApi.deleteProject(selectedProject.id);
+      setProjects((prev) => prev.filter((p) => p.id !== selectedProject.id));
+      setSelectedProject(null);
+      setSteps([]);
+      setExecutionLog([]);
+    } catch (error) {
+      console.error('Failed to delete project:', error);
+    }
+  };
+
   const getStepStatusFromEvent = (eventType: string): string => {
     switch (eventType) {
       case 'step_started':
@@ -201,7 +217,7 @@ export default function PlannerWindow() {
           <h2 className="text-lg font-semibold mb-3">Projects</h2>
 
           {/* Filter */}
-          <div className="flex gap-1">
+          <div className="flex flex-wrap gap-1">
             {['all', 'ready', 'executing', 'completed', 'failed'].map((status) => (
               <button
                 key={status}
@@ -313,6 +329,14 @@ export default function PlannerWindow() {
                   className="p-2 bg-gray-700 hover:bg-gray-600 rounded"
                 >
                   <RefreshCw className="w-4 h-4" />
+                </button>
+
+                <button
+                  onClick={handleDelete}
+                  className="p-2 bg-red-600 hover:bg-red-700 rounded"
+                  title="Delete project"
+                >
+                  <Trash2 className="w-4 h-4" />
                 </button>
               </div>
             </div>

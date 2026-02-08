@@ -36,10 +36,9 @@ export default function VoiceChatArea() {
   const isProcessingQueueRef = useRef(false);
   const nextStartTimeRef = useRef<number>(0);
   const audioSourcesRef = useRef<AudioBufferSourceNode[]>([]);
-  
-  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+
   const responseBufferRef = useRef('');
-  
+
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Initialize voice session
@@ -298,7 +297,9 @@ export default function VoiceChatArea() {
   const stopAudio = () => {
       // Stop all currently scheduled/playing sources
       audioSourcesRef.current.forEach(source => {
-        try { source.stop(); } catch (e) {}
+        try { source.stop(); } catch {
+          // Ignore errors from stopping already-stopped sources
+        }
       });
       audioSourcesRef.current = [];
       audioQueueRef.current = [];
