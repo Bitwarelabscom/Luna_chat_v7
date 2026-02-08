@@ -3,16 +3,16 @@ import { verifyToken } from './jwt.js';
 import logger from '../utils/logger.js';
 
 // Auto-auth user for WireGuard network (10.0.0.x)
-const WIREGUARD_USER = {
+export const WIREGUARD_USER = {
   userId: '727e0045-3858-4e42-b81e-4d48d980a59d',
   email: 'henke@bitwarelabs.com',
   type: 'access' as const
 };
 
-function isWireGuardRequest(req: Request): boolean {
-  const ip = req.ip || req.socket.remoteAddress || '';
+export function isWireGuardRequest(req: any): boolean {
+  const ip = req.ip || req.socket?.remoteAddress || '';
   // Also check X-Forwarded-For for requests through proxies
-  const forwardedFor = req.headers['x-forwarded-for'];
+  const forwardedFor = req.headers ? req.headers['x-forwarded-for'] : undefined;
   const originalIp = typeof forwardedFor === 'string' ? forwardedFor.split(',')[0].trim() : '';
 
   // Trust WireGuard (10.0.0.x) and Docker internal network (172.x.x.x for frontend proxy)

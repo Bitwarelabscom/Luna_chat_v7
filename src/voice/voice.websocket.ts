@@ -24,12 +24,13 @@ interface VADState {
 }
 
 export function handleVoiceWsConnection(ws: WebSocket, req: IncomingMessage) {
-  const userId = (req as any).user?.userId; // Assuming auth middleware attaches user (need to check ws auth)
+  const userId = (req as any).user?.userId;
   
   if (!userId) {
-    // In a real app, we'd handle WS auth properly (ticket/token in query)
-    // For this CLI task, we'll assume the client sends an auth message first or we skip (but routes are protected)
-    // We'll trust the upgrade handler verified auth or will verify first message
+    logger.warn('Voice WebSocket connection rejected: Unauthorized');
+    ws.send(JSON.stringify({ type: 'error', error: 'Unauthorized - please log in' }));
+    ws.close();
+    return;
   }
 
   logger.info('Voice WebSocket connected', { userId });
@@ -57,6 +58,11 @@ export function handleVoiceWsConnection(ws: WebSocket, req: IncomingMessage) {
            if (msg.sampleRate) {
              currentSampleRate = msg.sampleRate;
              logger.info('Voice WS: Updated sample rate', { sampleRate: currentSampleRate });
+           }
+        } else if (msg.type === 'text') {
+           if (msg.text) {
+             logger.info('Voice WS: Received text message', { text: msg.text });
+             processTextCommand(ws, userId || 'anonymous', msg.text, sessionId);
            }
         }
       } catch (e) {
@@ -145,6 +151,76 @@ function calculateRMS(buffer: Buffer): number {
   return Math.sqrt(sum / numSamples);
 }
 
+async function processTextCommand(
+  ws: WebSocket,
+  userId: string,
+  text: string,
+  sessionId: string | null
+) {
+  if (!sessionId) {
+    sessionId = await voiceChat.getOrCreateVoiceSession(userId);
+  }
+
+  ws.send(JSON.stringify({ type: 'status', status: 'thinking' }));
+
+  // Save user message to history
+  await voiceChat.addMessage(sessionId, 'user', text);
+
+  // Get history
+  const history = await voiceChat.getSessionMessages(sessionId, 6);
+  const systemPrompt = getVoicePrompt({});
+  
+  const messages = [
+    { role: 'system' as const, content: systemPrompt },
+    ...history.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+    { role: 'user' as const, content: text }
+  ];
+
+  let fullResponse = '';
+  let sentenceBuffer = '';
+  const sentenceEndings = /[.!?。]/;
+
+  try {
+      const stream = streamChatCompletion({
+          messages,
+          model: 'gpt-4o', // Force fast model for voice
+          provider: 'openai',
+          maxTokens: 300
+      });
+
+      ws.send(JSON.stringify({ type: 'status', status: 'speaking' }));
+
+      for await (const chunk of stream) {
+          if (chunk.content) {
+              const content = chunk.content;
+              fullResponse += content;
+              sentenceBuffer += content;
+
+              // Check for sentence completion
+              if (sentenceEndings.test(content) || sentenceBuffer.length > 100) {
+                 const sentenceToSpeak = sentenceBuffer.trim();
+                 sentenceBuffer = '';
+                 if (sentenceToSpeak) {
+                    await streamTTS(ws, sentenceToSpeak);
+                 }
+              }
+              
+              ws.send(JSON.stringify({ type: 'text_delta', delta: content }));
+          }
+      }
+
+      if (sentenceBuffer.trim()) {
+          streamTTS(ws, sentenceBuffer.trim());
+      }
+      
+      ws.send(JSON.stringify({ type: 'text_done' }));
+      await voiceChat.addMessage(sessionId, 'assistant', fullResponse);
+  } catch (error) {
+     logger.error('Text command processing failed', { error: (error as Error).message });
+     ws.send(JSON.stringify({ type: 'error', error: 'Thinking failed' }));
+  }
+}
+
 async function processUtterance(
   ws: WebSocket, 
   userId: string, 
@@ -229,7 +305,7 @@ async function processUtterance(
                  sentenceBuffer = '';
                  
                  if (sentenceToSpeak) {
-                    streamTTS(ws, sentenceToSpeak);
+                    await streamTTS(ws, sentenceToSpeak);
                  }
               }
               
@@ -240,7 +316,7 @@ async function processUtterance(
 
       // Flush remaining buffer
       if (sentenceBuffer.trim()) {
-          streamTTS(ws, sentenceBuffer.trim());
+          await streamTTS(ws, sentenceBuffer.trim());
       }
       
       ws.send(JSON.stringify({ type: 'text_done' }));

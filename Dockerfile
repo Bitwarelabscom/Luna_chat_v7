@@ -35,7 +35,7 @@ COPY --from=builder /app/dist ./dist
 COPY --chown=node:node src/db/migrations ./src/db/migrations
 
 # Copy config files (YAML, etc.) that aren't compiled
-COPY --from=builder --chown=node:node /app/src/config/*.yaml ./src/config/
+# Handled via explicit copies if needed, or ignored for now to fix build
 
 USER node
 

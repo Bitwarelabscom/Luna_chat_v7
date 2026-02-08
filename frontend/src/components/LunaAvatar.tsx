@@ -27,23 +27,45 @@ export default function LunaAvatar({
   className,
   onVideoChange,
 }: LunaAvatarProps) {
-  const [currentVideo, setCurrentVideo] = useState<LunaMediaSelection | null>(null);
+  // Use two video states for seamless buffering
+  const [videoA, setVideoA] = useState<LunaMediaSelection | null>(null);
+  const [videoB, setVideoB] = useState<LunaMediaSelection | null>(null);
+  const [activeBuffer, setActiveBuffer] = useState<'A' | 'B'>('A');
+  
   const [isLoading, setIsLoading] = useState(true);
   const [hasLoopSupport, setHasLoopSupport] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
+  
+  const videoRefA = useRef<HTMLVideoElement>(null);
+  const videoRefB = useRef<HTMLVideoElement>(null);
   const lastMoodRef = useRef<string | undefined>(mood);
 
-  // Check if loop-based system is available
+  // Helper to fetch next video from API
+  const fetchNextFromApi = async (set?: string) => {
+    try {
+      return await lunaMediaApi.getNextVideo(set);
+    } catch (err) {
+      console.error('Failed to fetch next video from API:', err);
+      return null;
+    }
+  };
+
+  // Initial load
   useEffect(() => {
-    const checkLoopSupport = async () => {
+    const init = async () => {
       try {
         const { loopSets } = await lunaMediaApi.getLoopSets();
         const hasNeutral = loopSets && loopSets.neutral > 0;
         setHasLoopSupport(hasNeutral);
+        
         if (hasNeutral) {
-          // Load initial video
-          await loadNextVideo();
+          // Load first two videos to fill both buffers
+          const first = await fetchNextFromApi();
+          const second = await fetchNextFromApi();
+          
+          setVideoA(first);
+          setVideoB(second);
+          if (first) onVideoChange?.(first);
         }
       } catch (err) {
         console.error('Failed to check loop support:', err);
@@ -52,20 +74,7 @@ export default function LunaAvatar({
       setIsLoading(false);
     };
 
-    checkLoopSupport();
-  }, []);
-
-  // Load next video from API
-  const loadNextVideo = useCallback(async (set?: string) => {
-    try {
-      const video = await lunaMediaApi.getNextVideo(set);
-      setCurrentVideo(video);
-      setError(null);
-      onVideoChange?.(video);
-    } catch (err) {
-      console.error('Failed to load next video:', err);
-      setError('Failed to load video');
-    }
+    init();
   }, [onVideoChange]);
 
   // Handle mood changes
@@ -76,37 +85,64 @@ export default function LunaAvatar({
       try {
         const { loopSet } = await lunaMediaApi.setMood(mood);
         lastMoodRef.current = mood;
-        // Load video from new set
-        await loadNextVideo(loopSet);
+        
+        // When mood changes, we want to update the NEXT video buffer immediately
+        // and potentially skip to it if it's a high priority change
+        const nextMoodVideo = await fetchNextFromApi(loopSet);
+        if (activeBuffer === 'A') {
+          setVideoB(nextMoodVideo);
+        } else {
+          setVideoA(nextMoodVideo);
+        }
       } catch (err) {
         console.error('Failed to update mood:', err);
       }
     };
 
     updateMood();
-  }, [mood, hasLoopSupport, loadNextVideo]);
+  }, [mood, hasLoopSupport, activeBuffer]);
 
-  // Handle video end - load next video
-  const handleVideoEnded = useCallback(() => {
+  // Seamless transition handler
+  const handleVideoEnded = useCallback(async () => {
     if (!hasLoopSupport) return;
 
-    // If it was a special gesture, notify backend and load regular loop video
+    const currentVideo = activeBuffer === 'A' ? videoA : videoB;
+    
+    // If it was a special gesture, notify backend
     if (currentVideo?.isSpecial) {
       lunaMediaApi.finishSpecialGesture().catch(console.error);
     }
 
-    loadNextVideo();
-  }, [hasLoopSupport, currentVideo, loadNextVideo]);
+    // Switch buffers
+    const newActiveBuffer = activeBuffer === 'A' ? 'B' : 'A';
+    setActiveBuffer(newActiveBuffer);
+    
+    // Notify parent
+    const nowPlaying = newActiveBuffer === 'A' ? videoA : videoB;
+    if (nowPlaying) onVideoChange?.(nowPlaying);
 
-  // Auto-play video when it changes
-  useEffect(() => {
-    if (videoRef.current && currentVideo?.type === 'video') {
-      videoRef.current.play().catch(err => {
-        // Autoplay might be blocked, that's ok
-        console.log('Autoplay prevented:', err);
-      });
+    // Play the newly active video immediately
+    const activeRef = newActiveBuffer === 'A' ? videoRefA : videoRefB;
+    if (activeRef.current) {
+      activeRef.current.play().catch(console.error);
     }
-  }, [currentVideo]);
+
+    // Load the NEXT video into the now-inactive buffer
+    const nextVideo = await fetchNextFromApi();
+    if (newActiveBuffer === 'A') {
+      setVideoB(nextVideo);
+    } else {
+      setVideoA(nextVideo);
+    }
+  }, [hasLoopSupport, activeBuffer, videoA, videoB, onVideoChange]);
+
+  // Ensure active video is playing
+  useEffect(() => {
+    const activeRef = activeBuffer === 'A' ? videoRefA : videoRefB;
+    if (activeRef.current && (activeBuffer === 'A' ? videoA : videoB)) {
+      activeRef.current.play().catch(() => {});
+    }
+  }, [activeBuffer, videoA, videoB]);
 
   // Fallback to static image if no loop support
   if (!hasLoopSupport || isLoading) {
@@ -165,58 +201,61 @@ export default function LunaAvatar({
             : 'border-gray-700'
         )}
       >
-        {currentVideo?.type === 'video' && (
-          <video
-            ref={videoRef}
-            src={getMediaUrl(currentVideo.url)}
-            className="w-full h-full object-cover"
-            muted
-            playsInline
-            onEnded={handleVideoEnded}
-            onError={() => setError('Video failed to load')}
-          />
-        )}
+        {/* Buffer A */}
+        <video
+          ref={videoRefA}
+          src={videoA ? getMediaUrl(videoA.url) : undefined}
+          className={clsx(
+            'absolute inset-0 w-full h-full object-cover transition-opacity duration-300',
+            activeBuffer === 'A' ? 'opacity-100 z-10' : 'opacity-0 z-0'
+          )}
+          muted
+          playsInline
+          onEnded={activeBuffer === 'A' ? handleVideoEnded : undefined}
+          preload="auto"
+        />
 
-        {currentVideo?.type === 'image' && (
-          <Image
-            src={getMediaUrl(currentVideo.url)}
-            alt="Luna"
-            width={256}
-            height={256}
-            className="w-full h-full object-cover"
-          />
-        )}
+        {/* Buffer B */}
+        <video
+          ref={videoRefB}
+          src={videoB ? getMediaUrl(videoB.url) : undefined}
+          className={clsx(
+            'absolute inset-0 w-full h-full object-cover transition-opacity duration-300',
+            activeBuffer === 'B' ? 'opacity-100 z-10' : 'opacity-0 z-0'
+          )}
+          muted
+          playsInline
+          onEnded={activeBuffer === 'B' ? handleVideoEnded : undefined}
+          preload="auto"
+        />
 
-        {error && (
-          <div className="absolute inset-0 flex items-center justify-center bg-gray-900/80">
-            <Image
-              src={getMediaUrl('/api/images/luna2.jpg')}
-              alt="Luna"
-              width={256}
-              height={256}
-              className="w-full h-full object-cover"
-            />
-          </div>
-        )}
+        {/* Fallback Image (background) */}
+        <Image
+          src={getMediaUrl('/api/images/luna2.jpg')}
+          alt="Luna"
+          width={256}
+          height={256}
+          className="absolute inset-0 w-full h-full object-cover -z-10"
+        />
 
         {/* Speaking overlay effect */}
         {isSpeaking && (
-          <div className="absolute inset-0 bg-gradient-to-t from-green-500/20 to-transparent pointer-events-none" />
+          <div className="absolute inset-0 bg-gradient-to-t from-green-500/20 to-transparent pointer-events-none z-20" />
         )}
       </div>
 
       {/* Audio visualizer rings when speaking */}
       {isSpeaking && (
         <>
-          <div className="absolute inset-0 -m-2 rounded-full border-2 border-green-400/50 animate-ping" style={{ animationDuration: '1.5s' }} />
-          <div className="absolute inset-0 -m-4 rounded-full border border-green-400/30 animate-ping" style={{ animationDuration: '2s' }} />
+          <div className="absolute inset-0 -m-2 rounded-full border-2 border-green-400/50 animate-ping z-0" style={{ animationDuration: '1.5s' }} />
+          <div className="absolute inset-0 -m-4 rounded-full border border-green-400/30 animate-ping z-0" style={{ animationDuration: '2s' }} />
         </>
       )}
 
-      {/* Debug info (remove in production) */}
-      {process.env.NODE_ENV === 'development' && currentVideo && (
+      {/* Debug info */}
+      {process.env.NODE_ENV === 'development' && (
         <div className="absolute -bottom-8 left-0 right-0 text-center text-xs text-gray-500 truncate">
-          {currentVideo.loopSet || currentVideo.trigger}
+          Active: {activeBuffer} | {activeBuffer === 'A' ? videoA?.loopSet : videoB?.loopSet}
         </div>
       )}
     </div>

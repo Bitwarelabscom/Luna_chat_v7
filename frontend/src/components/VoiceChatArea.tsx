@@ -31,8 +31,12 @@ export default function VoiceChatArea() {
   const audioContextRef = useRef<AudioContext | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  
   const audioQueueRef = useRef<Blob[]>([]);
-  const isPlayingRef = useRef(false);
+  const isProcessingQueueRef = useRef(false);
+  const nextStartTimeRef = useRef<number>(0);
+  const audioSourcesRef = useRef<AudioBufferSourceNode[]>([]);
+  
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const responseBufferRef = useRef('');
   
@@ -42,30 +46,37 @@ export default function VoiceChatArea() {
   useEffect(() => {
     const initSession = async () => {
       try {
+        console.log('VoiceChatArea: Creating session...');
         const { sessionId } = await voiceApi.createSession();
+        console.log('VoiceChatArea: Session created:', sessionId);
         setVoiceSessionId(sessionId);
+        // Connect WebSocket with the newly created sessionId
+        connectWebSocket(sessionId);
       } catch (error) {
-        console.error('Failed to initialize voice session:', error);
+        console.error('VoiceChatArea: Failed to initialize voice session:', error);
+        setStatusMessage('Session initialization failed');
       }
     };
     initSession();
     
-    // Connect WebSocket
-    connectWebSocket();
-    
     return () => {
       stopRecording();
+      stopAudio();
       if (wsRef.current) wsRef.current.close();
-      if (currentAudioRef.current) {
-        currentAudioRef.current.pause();
-        currentAudioRef.current = null;
+      if (audioContextRef.current) {
+        audioContextRef.current.close().catch(console.error);
       }
     };
   }, []);
 
-  const connectWebSocket = useCallback(() => {
+  const connectWebSocket = useCallback((sessionId?: string) => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws/voice`;
+    // Use port 3005 for API if we're on the default 3004 frontend port
+    const apiHost = window.location.port === '3004' 
+      ? `${window.location.hostname}:3005`
+      : window.location.host;
+      
+    const wsUrl = `${protocol}//${apiHost}/ws/voice`;
     
     console.log('Connecting to Voice WebSocket:', wsUrl);
     const ws = new WebSocket(wsUrl);
@@ -73,15 +84,20 @@ export default function VoiceChatArea() {
 
     ws.onopen = () => {
       console.log('Voice WebSocket connected');
-      if (voiceSessionId) {
-        ws.send(JSON.stringify({ type: 'session', sessionId: voiceSessionId }));
+      const sid = sessionId || voiceSessionId;
+      if (sid) {
+        ws.send(JSON.stringify({ type: 'session', sessionId: sid }));
       }
     };
 
     ws.onmessage = async (event) => {
       if (typeof event.data === 'string') {
-        const msg = JSON.parse(event.data);
-        handleWsMessage(msg);
+        try {
+          const msg = JSON.parse(event.data);
+          handleWsMessage(msg);
+        } catch (e) {
+          // Ignore parse errors for non-json strings if any
+        }
       } else if (event.data instanceof Blob) {
         // Audio chunk received
         audioQueueRef.current.push(event.data);
@@ -114,7 +130,6 @@ export default function VoiceChatArea() {
         break;
       case 'transcript':
         setInput(msg.text);
-        // Optimistically add user message
         addUserMessage(msg.text);
         break;
       case 'text_delta':
@@ -141,53 +156,82 @@ export default function VoiceChatArea() {
   };
 
   const processAudioQueue = async () => {
-    if (isPlayingRef.current || audioQueueRef.current.length === 0 || !autoPlayEnabled) return;
+    if (isProcessingQueueRef.current || audioQueueRef.current.length === 0 || !autoPlayEnabled) return;
     
-    isPlayingRef.current = true;
+    isProcessingQueueRef.current = true;
     setIsSpeaking(true);
     
-    const blob = audioQueueRef.current.shift();
-    if (!blob) {
-        isPlayingRef.current = false;
-        setIsSpeaking(false);
-        return;
-    }
-
     try {
-        const url = URL.createObjectURL(blob);
-        const audio = new Audio(url);
-        currentAudioRef.current = audio;
-        
-        await new Promise<void>((resolve, reject) => {
-            audio.onended = () => resolve();
-            audio.onerror = (e) => reject(e);
-            audio.play().catch(reject);
-        });
-        
-        URL.revokeObjectURL(url);
-    } catch (e) {
-        console.error('Audio playback error', e);
-    } finally {
-        isPlayingRef.current = false;
-        // Check if more audio is available immediately
-        if (audioQueueRef.current.length > 0) {
-            processAudioQueue();
-        } else {
-             // Small delay to prevent flickering if next chunk arrives soon
-             setTimeout(() => {
-                 if (audioQueueRef.current.length === 0 && !isPlayingRef.current) {
-                     setIsSpeaking(false);
-                 }
-             }, 200);
+      if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
+        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      }
+      const ctx = audioContextRef.current;
+      if (ctx.state === 'suspended') {
+        await ctx.resume();
+      }
+
+      while (audioQueueRef.current.length > 0 && autoPlayEnabled) {
+        const blob = audioQueueRef.current.shift();
+        if (!blob) break;
+
+        try {
+          const arrayBuffer = await blob.arrayBuffer();
+          const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+          
+          const now = ctx.currentTime;
+          if (nextStartTimeRef.current < now) {
+            nextStartTimeRef.current = now + 0.05; // 50ms initial buffer
+          }
+          
+          const source = ctx.createBufferSource();
+          source.buffer = audioBuffer;
+          source.connect(ctx.destination);
+          
+          const startTime = nextStartTimeRef.current;
+          source.start(startTime);
+          audioSourcesRef.current.push(source);
+          
+          nextStartTimeRef.current += audioBuffer.duration;
+          
+          // Cleanup finished sources occasionally
+          source.onended = () => {
+            audioSourcesRef.current = audioSourcesRef.current.filter(s => s !== source);
+          };
+        } catch (e) {
+          console.error('Audio chunk decoding/playback failed:', e);
         }
+      }
+    } finally {
+      isProcessingQueueRef.current = false;
+      
+      // Monitor when audio actually stops to toggle isSpeaking UI state
+      const monitorPlayback = () => {
+        const ctx = audioContextRef.current;
+        if (!ctx) return;
+        
+        if (ctx.currentTime < nextStartTimeRef.current - 0.1) {
+          setTimeout(monitorPlayback, 100);
+        } else {
+          // Queue is empty and scheduled audio has finished
+          if (!isProcessingQueueRef.current && audioQueueRef.current.length === 0) {
+            setIsSpeaking(false);
+          }
+        }
+      };
+      monitorPlayback();
     }
   };
 
   const startRecording = async () => {
     try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setStatusMessage('Microphone access requires HTTPS or localhost');
+        console.error('navigator.mediaDevices is undefined. This usually happens in non-secure (HTTP) contexts.');
+        return;
+      }
+
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
           connectWebSocket();
-          // Wait a bit?
       }
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -196,22 +240,19 @@ export default function VoiceChatArea() {
       const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       audioContextRef.current = audioContext;
       
-      // Send config
       wsRef.current?.send(JSON.stringify({ 
           type: 'config', 
           sampleRate: audioContext.sampleRate 
       }));
 
       const source = audioContext.createMediaStreamSource(stream);
-      // Buffer size 4096 is good balance for latency/performance
       const processor = audioContext.createScriptProcessor(4096, 1, 1);
       scriptProcessorRef.current = processor;
 
       processor.onaudioprocess = (e) => {
-        if (!isListening) return; // Guard
+        if (!isListening) return;
         
         const inputData = e.inputBuffer.getChannelData(0);
-        // Convert Float32 to Int16
         const pcmData = new Int16Array(inputData.length);
         for (let i = 0; i < inputData.length; i++) {
           const s = Math.max(-1, Math.min(1, inputData[i]));
@@ -244,10 +285,6 @@ export default function VoiceChatArea() {
       mediaStreamRef.current.getTracks().forEach(track => track.stop());
       mediaStreamRef.current = null;
     }
-    if (audioContextRef.current) {
-      audioContextRef.current.close();
-      audioContextRef.current = null;
-    }
   };
 
   const toggleMicrophone = () => {
@@ -258,26 +295,39 @@ export default function VoiceChatArea() {
     }
   };
   
-  // Clean up state when stopping speaking manually
   const stopAudio = () => {
-      if (currentAudioRef.current) {
-          currentAudioRef.current.pause();
-          currentAudioRef.current = null;
-      }
+      // Stop all currently scheduled/playing sources
+      audioSourcesRef.current.forEach(source => {
+        try { source.stop(); } catch (e) {}
+      });
+      audioSourcesRef.current = [];
       audioQueueRef.current = [];
-      isPlayingRef.current = false;
+      nextStartTimeRef.current = 0;
       setIsSpeaking(false);
   };
 
   const handleSend = async () => {
-      // Manual text send fallback
-      // TODO: Implement manual text sending via WebSocket or existing API
-      // For now, focusing on voice flow
       const message = input.trim();
       if (!message || isSending) return;
       
-      // ... existing send logic if needed, or send via WS text frame ...
-      // wsRef.current?.send(JSON.stringify({ type: 'text', text: message }));
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+          setStatusMessage('Not connected to voice server');
+          connectWebSocket();
+          return;
+      }
+
+      // Add user message to UI
+      addUserMessage(message);
+      setInput('');
+      setIsSending(true);
+      setStreamingContent('');
+      responseBufferRef.current = '';
+      
+      // Send via WS
+      wsRef.current.send(JSON.stringify({ 
+          type: 'text', 
+          text: message 
+      }));
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -296,9 +346,6 @@ export default function VoiceChatArea() {
     if (streamingContent) {
       return stripEmotionTags(streamingContent);
     }
-    // Access store messages directly if possible or pass as prop
-    // Here we rely on store's lastAssistantMessage if available
-    // But store doesn't expose it in current destructuring
     return null;
   };
 

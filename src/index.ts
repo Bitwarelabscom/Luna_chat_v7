@@ -44,6 +44,8 @@ import { handleBrowserWsConnection } from './abilities/browser.websocket.js';
 import { handleVoiceWsConnection } from './voice/voice.websocket.js';
 import { handleEditorWsUpgrade } from './editor/editor.websocket.js';
 import { shutdownHocuspocusServer } from './editor/hocuspocus.server.js';
+import { verifyToken } from './auth/jwt.js';
+import { isWireGuardRequest, WIREGUARD_USER } from './auth/auth.middleware.js';
 
 const app = express();
 
@@ -240,6 +242,28 @@ const voiceWss = new WebSocketServer({ noServer: true });
 // Handle WebSocket upgrade requests
 server.on('upgrade', (request, socket, head) => {
   const pathname = new URL(request.url || '', `http://${request.headers.host}`).pathname;
+
+  // 1. Auto-authenticate trusted requests (WireGuard/Docker)
+  if (isWireGuardRequest(request)) {
+    (request as any).user = WIREGUARD_USER;
+  } else {
+    // 2. Extract auth from cookie for other requests
+    const cookieHeader = request.headers.cookie || '';
+    const token = cookieHeader
+      .split(';')
+      .map(c => c.trim())
+      .find(c => c.startsWith('accessToken='))
+      ?.split('=')[1] || null;
+
+    if (token) {
+      try {
+        const payload = verifyToken(token);
+        (request as any).user = payload;
+      } catch (e) {
+        logger.debug('WS upgrade token verification failed', { error: (e as Error).message });
+      }
+    }
+  }
 
   if (pathname === '/ws/trading') {
     wss.handleUpgrade(request, socket, head, (ws) => {

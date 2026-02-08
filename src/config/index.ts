@@ -339,7 +339,7 @@ const rawConfig = {
   },
 
   cors: {
-    origin: process.env.CORS_ORIGIN,
+    origin: process.env.CORS_ORIGIN || 'http://10.0.0.2:3004',
   },
 
   encryptionKey: secrets.encryptionKey,
