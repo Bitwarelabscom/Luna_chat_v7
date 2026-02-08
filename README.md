@@ -42,6 +42,32 @@
 
 ---
 
+## Gallery
+
+<div align="center">
+
+![Luna System Info](images/info1.png)
+*Detailed system overview and diagnostic dashboard*
+
+![AI Friends Panel](images/friends.png)
+*Interface for interacting with Luna's council of AI friends*
+
+![Luna Evolution 3.0](images/luna_3.png)
+*Luna UI Evolution - Version 3.0*
+
+![Luna Evolution 3.3](images/luna_3_3.png)
+*Luna UI Evolution - Version 3.3*
+
+![Luna Evolution 3.3.3](images/luna_3_3_3.png)
+*Luna UI Evolution - Version 3.3.3*
+
+![Luna Evolution 3.3.3.2](images/luna_3_3_3_2.png)
+*Luna UI Evolution - Version 3.3.3.2*
+
+</div>
+
+---
+
 Luna Chat v7 is a comprehensive AI Operating System designed for privacy and autonomy. Unlike standard chatbots, Luna features a **Council Architecture** where multiple sub-agents (Polaris, Aurora, Vega, Sol) deliberate in the background to provide thoughtful, well-rounded responses.
 
 Built with a **Local-First** ethos, Luna integrates deeply with your digital life via a native Android app, code execution sandbox, CalDAV, and SMTP - all while keeping your data private. She doesn't just chat; she has a job.
