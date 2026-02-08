@@ -22,6 +22,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-18+-green.svg)](https://nodejs.org/)
 [![Docker](https://img.shields.io/badge/Docker-Compose-blue.svg)](https://docs.docker.com/compose/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/)
+[![Reddit](https://img.shields.io/badge/Reddit-Community-orange.svg)](https://www.reddit.com/r/Luna_Chat_v7/)
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-yellow.svg)](https://buymeacoffee.com/bitwarelabs)
 
 </div>
@@ -1266,6 +1267,11 @@ Want to contribute or suggest features? [Open an issue](https://github.com/bitwa
 ## License
 
 AGPL-3.0 License - see [LICENSE](LICENSE)
+
+## Community
+
+Join our community to discuss features, share prompts, and get help:
+- **Reddit**: [r/Luna_Chat_v7](https://www.reddit.com/r/Luna_Chat_v7/)
 
 ## Author
 
