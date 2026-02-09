@@ -122,6 +122,7 @@ export interface ChatInput {
   projectMode?: boolean;
   thinkingMode?: boolean;
   novaMode?: boolean;
+  documentIds?: string[];
 }
 
 export interface ChatOutput {
@@ -132,7 +133,7 @@ export interface ChatOutput {
 }
 
 export async function processMessage(input: ChatInput): Promise<ChatOutput> {
-  const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode, novaMode } = input;
+  const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode, novaMode, documentIds } = input;
 
   // Initialize MemoryCore session for consolidation tracking
   // This enables episodic memory recording and NeuralSleep LNN processing
@@ -419,13 +420,13 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   // Add current message (full, not compressed)
   messages.push({ role: 'user', content: message });
 
-  // Save user message
+  // Save user message with optional attachments
   const userMessage = await sessionService.addMessage({
     sessionId,
     role: 'user',
     content: message,
     source,
-  });
+  }, documentIds);
 
   // Store user message embedding (async)
   memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user');
@@ -2299,7 +2300,7 @@ export interface StreamMetrics {
 export async function* streamMessage(
   input: ChatInput
 ): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'background_refresh' | 'reasoning'; content?: string; status?: string; messageId?: string; tokensUsed?: number; metrics?: StreamMetrics; action?: string; url?: string }> {
-  const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode, novaMode } = input;
+  const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode, novaMode, documentIds } = input;
 
   // Initialize MemoryCore session for consolidation tracking
   // This enables episodic memory recording and NeuralSleep LNN processing
@@ -2844,13 +2845,13 @@ export async function* streamMessage(
   // Add current message (full, not compressed)
   messages.push({ role: 'user', content: message });
 
-  // Save user message
+  // Save user message with optional attachments
   const userMessage = await sessionService.addMessage({
     sessionId,
     role: 'user',
     content: message,
     source,
-  });
+  }, documentIds);
 
   // Store user message embedding (async)
   memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user');

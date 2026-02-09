@@ -75,6 +75,18 @@ export const messageMetricsSchema = z.object({
 
 export type MessageMetrics = z.infer<typeof messageMetricsSchema>;
 
+// Attachment types
+export interface MessageAttachment {
+  id: string;
+  documentId: string;
+  filename: string;
+  originalName: string;
+  mimeType: string;
+  fileSize: number;
+  status: 'processing' | 'ready' | 'error';
+  analysisPreview?: string;
+}
+
 export const messageSchema = z.object({
   id: z.string().uuid(),
   sessionId: z.string().uuid(),
@@ -86,6 +98,8 @@ export const messageSchema = z.object({
   memoryContext: z.unknown().nullable(),
   createdAt: z.date(),
   metrics: messageMetricsSchema,
+  attachments: z.array(z.custom<MessageAttachment>()).optional(),
+  attachmentMetadata: z.unknown().nullable().optional(),
 });
 
 export type Message = z.infer<typeof messageSchema>;

@@ -138,6 +138,17 @@ export interface MessageMetrics {
   routeInfo?: RouteInfo;
 }
 
+export interface MessageAttachment {
+  id: string;
+  documentId: string;
+  filename: string;
+  originalName: string;
+  mimeType: string;
+  fileSize: number;
+  status: 'processing' | 'ready' | 'error';
+  analysisPreview?: string;
+}
+
 export interface Message {
   id: string;
   sessionId: string;
@@ -146,6 +157,7 @@ export interface Message {
   tokensUsed: number;
   createdAt: string;
   metrics?: MessageMetrics;
+  attachments?: MessageAttachment[];
 }
 
 export interface StartupResponse {
@@ -210,6 +222,67 @@ export async function* streamMessage(
     },
     credentials: 'include',
     body: JSON.stringify({ message, stream: true, projectMode, thinkingMode, novaMode }),
+  });
+
+  if (!response.ok) {
+    throw new ApiError(response.status, 'Failed to send message');
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('No response body');
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const data = line.slice(6);
+        if (data === '[DONE]') return;
+
+        try {
+          const parsed = JSON.parse(data);
+          yield parsed;
+        } catch {
+          // Ignore parse errors
+        }
+      }
+    }
+  }
+}
+
+// Streaming helper with file uploads
+export async function* streamMessageWithFiles(
+  sessionId: string,
+  message: string,
+  files: File[],
+  projectMode?: boolean,
+  thinkingMode?: boolean,
+  novaMode?: boolean
+): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'reasoning' | 'background_refresh'; content?: string; status?: string; messageId?: string; metrics?: MessageMetrics; action?: string; url?: string }> {
+  const formData = new FormData();
+  formData.append('message', message);
+  formData.append('stream', 'true');
+  if (projectMode) formData.append('projectMode', 'true');
+  if (thinkingMode) formData.append('thinkingMode', 'true');
+  if (novaMode) formData.append('novaMode', 'true');
+
+  // Add files to FormData
+  for (const file of files) {
+    formData.append('files', file);
+  }
+
+  const response = await fetch(`${API_URL}${API_PREFIX}/api/chat/sessions/${sessionId}/send`, {
+    method: 'POST',
+    credentials: 'include',
+    body: formData,
   });
 
   if (!response.ok) {

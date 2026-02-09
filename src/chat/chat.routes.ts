@@ -1,11 +1,13 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
+import multer from 'multer';
 import { authenticate } from '../auth/auth.middleware.js';
 import * as sessionService from './session.service.js';
 import * as chatService from './chat.service.js';
 import * as startupService from './startup.service.js';
 import * as sessionActivityService from './session-activity.service.js';
 import * as ttsService from '../llm/tts.service.js';
+import * as documentsService from '../abilities/documents.service.js';
 import { incrementRateLimit, incrementRateLimitCustom } from '../db/redis.js';
 import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
@@ -14,6 +16,15 @@ const router = Router();
 
 // Apply authentication to all chat routes
 router.use(authenticate);
+
+// Multer configuration for file uploads
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB per file
+    files: 5, // Max 5 files per request
+  },
+});
 
 // Rate limiting middleware
 async function rateLimit(req: Request, res: Response, next: () => void) {
@@ -218,10 +229,45 @@ router.post('/sessions/:id/startup', async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/chat/sessions/:id/send - Send message
-router.post('/sessions/:id/send', rateLimit, async (req: Request, res: Response) => {
+// POST /api/chat/sessions/:id/send - Send message (supports file attachments)
+router.post('/sessions/:id/send', rateLimit, upload.array('files', 5), async (req: Request, res: Response) => {
   try {
-    const data = sendMessageSchema.parse(req.body);
+    // Parse request - support both JSON and FormData
+    let data: any;
+    let documentIds: string[] = [];
+
+    if (req.is('multipart/form-data')) {
+      // FormData request with potential file uploads
+      data = {
+        message: req.body.message,
+        stream: req.body.stream === 'true' || req.body.stream === true,
+        projectMode: req.body.projectMode === 'true' || req.body.projectMode === true,
+        thinkingMode: req.body.thinkingMode === 'true' || req.body.thinkingMode === true,
+        novaMode: req.body.novaMode === 'true' || req.body.novaMode === true,
+      };
+
+      // Process uploaded files
+      const files = req.files as Express.Multer.File[];
+      if (files && files.length > 0) {
+        logger.info('Processing file uploads', { count: files.length, sessionId: req.params.id });
+
+        for (const file of files) {
+          try {
+            const document = await documentsService.uploadDocument(req.user!.userId, file);
+            documentIds.push(document.id);
+          } catch (uploadError) {
+            logger.error('File upload failed', {
+              error: (uploadError as Error).message,
+              filename: file.originalname
+            });
+            // Continue with other files
+          }
+        }
+      }
+    } else {
+      // Standard JSON request
+      data = sendMessageSchema.parse(req.body);
+    }
 
     // Verify session ownership
     const session = await sessionService.getSession(req.params.id, req.user!.userId);
@@ -244,6 +290,7 @@ router.post('/sessions/:id/send', rateLimit, async (req: Request, res: Response)
         projectMode: data.projectMode,
         thinkingMode: data.thinkingMode,
         novaMode: data.novaMode,
+        documentIds: documentIds.length > 0 ? documentIds : undefined,
       });
 
       for await (const chunk of stream) {
@@ -277,6 +324,7 @@ router.post('/sessions/:id/send', rateLimit, async (req: Request, res: Response)
         projectMode: data.projectMode,
         thinkingMode: data.thinkingMode,
         novaMode: data.novaMode,
+        documentIds: documentIds.length > 0 ? documentIds : undefined,
       });
 
       res.json(result);

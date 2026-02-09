@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, ChangeEvent } from 'react';
 import { useChatStore } from '@/lib/store';
 import { useActivityStore } from '@/lib/activity-store';
-import { streamMessage, regenerateMessage, chatApi } from '@/lib/api';
-import { Send, Moon, Loader2, MessageSquare, Bot, Mic, Sparkles, Music } from 'lucide-react';
+import { streamMessage, streamMessageWithFiles, regenerateMessage, chatApi } from '@/lib/api';
+import { Send, Moon, Loader2, MessageSquare, Bot, Mic, Sparkles, Music, Paperclip } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import clsx from 'clsx';
 import MessageActions from './MessageActions';
@@ -12,6 +12,8 @@ import MessageMetrics from './MessageMetrics';
 import { useAudioPlayer } from './useAudioPlayer';
 import YouTubeEmbed, { parseMediaBlocks } from './YouTubeEmbed';
 import ImageEmbed from './ImageEmbed';
+import { AttachmentCard } from './AttachmentCard';
+import { FileChip } from './FileChip';
 import dynamic from 'next/dynamic';
 
 const VoiceChatArea = dynamic(() => import('./VoiceChatArea'), {
@@ -107,8 +109,10 @@ function StandardChatArea() {
   const [projectMode, setProjectMode] = useState(false);
   const [thinkingMode, setThinkingMode] = useState(false);
   const [novaMode, setNovaMode] = useState(false);
+  const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -193,10 +197,12 @@ function StandardChatArea() {
   };
 
   const handleSend = async () => {
-    if (!input.trim() || isSending) return;
+    if ((!input.trim() && attachedFiles.length === 0) || isSending) return;
 
-    const message = input.trim();
+    const message = input.trim() || ''; // Allow empty message if files attached
+    const files = [...attachedFiles];
     setInput('');
+    setAttachedFiles([]);
 
     let sessionId = currentSession?.id;
 
@@ -208,7 +214,7 @@ function StandardChatArea() {
     }
 
     // Add user message to UI
-    addUserMessage(message);
+    addUserMessage(message || '[Uploaded files]');
     setIsSending(true);
     setStreamingContent('');
     setReasoningContent('');  // Clear previous reasoning
@@ -217,7 +223,11 @@ function StandardChatArea() {
     try {
       // Stream the response - accumulate content locally to avoid stale closure
       let accumulatedContent = '';
-      for await (const chunk of streamMessage(sessionId, message, projectMode, thinkingMode, novaMode)) {
+      const streamFunction = files.length > 0
+        ? streamMessageWithFiles(sessionId, message, files, projectMode, thinkingMode, novaMode)
+        : streamMessage(sessionId, message, projectMode, thinkingMode, novaMode);
+
+      for await (const chunk of streamFunction) {
         if (chunk.type === 'status' && chunk.status) {
           setStatusMessage(chunk.status);
         } else if (chunk.type === 'reasoning' && chunk.content) {
@@ -316,6 +326,39 @@ function StandardChatArea() {
       e.preventDefault();
       handleSend();
     }
+  };
+
+  const handleFileSelect = (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    const maxSize = 10 * 1024 * 1024; // 10MB
+    const maxFiles = 5;
+
+    // Filter out oversized files
+    const validFiles = files.filter(file => {
+      if (file.size > maxSize) {
+        alert(`File "${file.name}" is too large. Maximum size is 10MB.`);
+        return false;
+      }
+      return true;
+    });
+
+    // Check total file count
+    const newTotal = attachedFiles.length + validFiles.length;
+    if (newTotal > maxFiles) {
+      alert(`Maximum ${maxFiles} files allowed. You can only add ${maxFiles - attachedFiles.length} more.`);
+      setAttachedFiles([...attachedFiles, ...validFiles.slice(0, maxFiles - attachedFiles.length)]);
+    } else {
+      setAttachedFiles([...attachedFiles, ...validFiles]);
+    }
+
+    // Reset input so same file can be selected again
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const removeFile = (index: number) => {
+    setAttachedFiles(files => files.filter((_, i) => i !== index));
   };
 
   const messages = currentSession?.messages || [];
@@ -461,7 +504,17 @@ function StandardChatArea() {
                         ))}
                       </div>
                     ) : (
-                      <p className="whitespace-pre-wrap">{msg.content}</p>
+                      <>
+                        <p className="whitespace-pre-wrap">{msg.content}</p>
+                        {/* Display attachments for user messages */}
+                        {msg.attachments && msg.attachments.length > 0 && (
+                          <div className="flex flex-col gap-2 mt-3">
+                            {msg.attachments.map((attachment) => (
+                              <AttachmentCard key={attachment.id} attachment={attachment} />
+                            ))}
+                          </div>
+                        )}
+                      </>
                     )}
                   </div>
                   {/* Actions and metrics */}
@@ -565,18 +618,47 @@ function StandardChatArea() {
       {currentSession && (
         <div className="border-t border-theme-border p-4">
           <div className="max-w-3xl mx-auto">
+            {/* File chips preview */}
+            {attachedFiles.length > 0 && (
+              <div className="flex flex-wrap gap-2 mb-3">
+                {attachedFiles.map((file, index) => (
+                  <FileChip
+                    key={`${file.name}-${index}`}
+                    file={file}
+                    onRemove={() => removeFile(index)}
+                  />
+                ))}
+              </div>
+            )}
+
             <div className="relative flex items-end gap-2 bg-theme-bg-secondary rounded-xl border border-theme-border focus-within:border-theme-border-focus transition">
               <textarea
                 ref={textareaRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Message Luna..."
+                placeholder={attachedFiles.length > 0 ? "Add a message (optional)..." : "Message Luna..."}
                 rows={1}
                 className="flex-1 bg-transparent px-4 py-3 outline-none resize-none max-h-[50vh] text-theme-text-primary placeholder-theme-text-muted"
                 disabled={isSending}
               />
               <div className="flex items-center gap-1 p-1">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  accept="image/*,.pdf,.txt,.json,.js,.jsx,.ts,.tsx,.py,.java,.c,.cpp,.cs,.php,.rb,.go,.rs,.swift,.kt,.md,.html,.css,.xml,.yaml,.yml"
+                  onChange={handleFileSelect}
+                  className="hidden"
+                />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="p-2 text-theme-text-muted hover:text-theme-accent-primary transition-colors rounded-lg"
+                  title="Attach files"
+                  disabled={isSending}
+                >
+                  <Paperclip className="w-5 h-5" />
+                </button>
                 <button
                   onClick={async () => {
                     const session = await createSession('voice');
@@ -589,7 +671,7 @@ function StandardChatArea() {
                 </button>
                 <button
                   onClick={handleSend}
-                  disabled={!input.trim() || isSending}
+                  disabled={(!input.trim() && attachedFiles.length === 0) || isSending}
                   className="p-2 bg-theme-accent-primary hover:bg-theme-accent-hover disabled:bg-theme-bg-tertiary disabled:cursor-not-allowed rounded-lg transition text-theme-text-primary"
                 >
                   {isSending ? (

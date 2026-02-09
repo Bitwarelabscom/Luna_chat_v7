@@ -30,6 +30,8 @@ interface DbMessage {
   search_results: unknown;
   memory_context: unknown;
   created_at: Date;
+  attachment_metadata: unknown;
+  attachments?: unknown;
 }
 
 function mapDbSession(row: DbSession): Session {
@@ -69,6 +71,8 @@ function mapDbMessage(row: DbMessage): Message {
     memoryContext: row.memory_context,
     createdAt: row.created_at,
     metrics,
+    attachments: row.attachments ? (Array.isArray(row.attachments) ? row.attachments : [row.attachments]) : undefined,
+    attachmentMetadata: row.attachment_metadata,
   };
 }
 
@@ -171,23 +175,44 @@ export async function getSessionMessages(
 ): Promise<Message[]> {
   const { limit = 100, before } = options || {};
 
-  let sql = 'SELECT * FROM messages WHERE session_id = $1';
+  let sql = `
+    SELECT m.*,
+           COALESCE(
+             json_agg(
+               json_build_object(
+                 'id', ma.id,
+                 'documentId', d.id,
+                 'filename', d.filename,
+                 'originalName', d.original_name,
+                 'mimeType', d.mime_type,
+                 'fileSize', d.file_size,
+                 'status', d.processing_status,
+                 'analysisPreview', LEFT(d.extracted_text, 500)
+               ) ORDER BY ma.attachment_order
+             ) FILTER (WHERE ma.id IS NOT NULL),
+             '[]'
+           ) as attachments
+    FROM messages m
+    LEFT JOIN message_attachments ma ON ma.message_id = m.id
+    LEFT JOIN documents d ON d.id = ma.document_id
+    WHERE m.session_id = $1
+  `;
   const params: unknown[] = [sessionId];
 
   if (before) {
-    sql += ' AND created_at < $2';
+    sql += ' AND m.created_at < $2';
     params.push(before);
   }
 
-  // Get most recent messages (DESC), then reverse to chronological order for LLM
-  sql += ' ORDER BY created_at DESC LIMIT $' + (params.length + 1);
+  sql += ' GROUP BY m.id';
+  sql += ' ORDER BY m.created_at DESC LIMIT $' + (params.length + 1);
   params.push(limit);
 
   const messages = await query<DbMessage>(sql, params);
   return messages.map(mapDbMessage).reverse();
 }
 
-export async function addMessage(data: MessageCreate): Promise<Message> {
+export async function addMessage(data: MessageCreate, documentIds?: string[]): Promise<Message> {
   const message = await queryOne<DbMessage>(
     `INSERT INTO messages (session_id, role, content, tokens_used, input_tokens, output_tokens, cache_tokens, model, provider, search_results, memory_context, source, route_decision)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
@@ -211,6 +236,27 @@ export async function addMessage(data: MessageCreate): Promise<Message> {
 
   if (!message) {
     throw new Error('Failed to add message');
+  }
+
+  // Link documents to message via junction table
+  if (documentIds && documentIds.length > 0) {
+    for (let i = 0; i < documentIds.length; i++) {
+      await query(
+        `INSERT INTO message_attachments (message_id, document_id, attachment_order)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (message_id, document_id) DO NOTHING`,
+        [message.id, documentIds[i], i]
+      );
+    }
+
+    // Fetch document analysis and store in attachment_metadata
+    const analysisResults = await fetchAttachmentAnalysis(documentIds);
+    if (analysisResults.length > 0) {
+      await query(
+        'UPDATE messages SET attachment_metadata = $1 WHERE id = $2',
+        [JSON.stringify(analysisResults), message.id]
+      );
+    }
   }
 
   // Update session's updated_at
@@ -251,6 +297,32 @@ export async function deleteMessage(messageId: string, sessionId: string): Promi
   await query('UPDATE sessions SET updated_at = NOW() WHERE id = $1', [sessionId]);
 
   return true;
+}
+
+/**
+ * Fetch document analysis for attachments to include in AI context
+ */
+async function fetchAttachmentAnalysis(documentIds: string[]): Promise<any[]> {
+  if (!documentIds || documentIds.length === 0) return [];
+
+  const results = await query<any>(
+    `SELECT d.id, d.filename, d.original_name, d.mime_type, d.extracted_text,
+            d.processing_status, d.analysis_result
+     FROM documents d
+     WHERE d.id = ANY($1)
+     ORDER BY array_position($1, d.id)`,
+    [documentIds]
+  );
+
+  return results.map(doc => ({
+    documentId: doc.id,
+    filename: doc.filename,
+    originalName: doc.original_name,
+    mimeType: doc.mime_type,
+    status: doc.processing_status || 'ready',
+    preview: doc.extracted_text ? doc.extracted_text.substring(0, 500) :
+             doc.analysis_result ? JSON.stringify(doc.analysis_result).substring(0, 500) : '',
+  }));
 }
 
 export async function generateSessionTitle(messages: Message[]): Promise<string> {
