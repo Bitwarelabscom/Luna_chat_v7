@@ -186,7 +186,7 @@ export async function getSessionMessages(
                  'originalName', d.original_name,
                  'mimeType', d.mime_type,
                  'fileSize', d.file_size,
-                 'status', d.processing_status,
+                 'status', d.status,
                  'analysisPreview', LEFT(d.extracted_text, 500)
                ) ORDER BY ma.attachment_order
              ) FILTER (WHERE ma.id IS NOT NULL),
@@ -307,7 +307,7 @@ async function fetchAttachmentAnalysis(documentIds: string[]): Promise<any[]> {
 
   const results = await query<any>(
     `SELECT d.id, d.filename, d.original_name, d.mime_type, d.extracted_text,
-            d.processing_status, d.analysis_result
+            d.status, d.analysis_result
      FROM documents d
      WHERE d.id = ANY($1)
      ORDER BY array_position($1, d.id)`,
@@ -319,7 +319,7 @@ async function fetchAttachmentAnalysis(documentIds: string[]): Promise<any[]> {
     filename: doc.filename,
     originalName: doc.original_name,
     mimeType: doc.mime_type,
-    status: doc.processing_status || 'ready',
+    status: doc.status || 'ready',
     preview: doc.extracted_text ? doc.extracted_text.substring(0, 500) :
              doc.analysis_result ? JSON.stringify(doc.analysis_result).substring(0, 500) : '',
   }));
