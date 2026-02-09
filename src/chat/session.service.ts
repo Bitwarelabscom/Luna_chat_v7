@@ -187,7 +187,7 @@ export async function getSessionMessages(
                  'mimeType', d.mime_type,
                  'fileSize', d.file_size,
                  'status', d.status,
-                 'analysisPreview', LEFT(d.extracted_text, 500)
+                 'analysisPreview', COALESCE(LEFT(dc.content, 500), '')
                ) ORDER BY ma.attachment_order
              ) FILTER (WHERE ma.id IS NOT NULL),
              '[]'
@@ -195,6 +195,12 @@ export async function getSessionMessages(
     FROM messages m
     LEFT JOIN message_attachments ma ON ma.message_id = m.id
     LEFT JOIN documents d ON d.id = ma.document_id
+    LEFT JOIN LATERAL (
+      SELECT content FROM document_chunks
+      WHERE document_id = d.id
+      ORDER BY chunk_index
+      LIMIT 1
+    ) dc ON true
     WHERE m.session_id = $1
   `;
   const params: unknown[] = [sessionId];
@@ -306,9 +312,15 @@ async function fetchAttachmentAnalysis(documentIds: string[]): Promise<any[]> {
   if (!documentIds || documentIds.length === 0) return [];
 
   const results = await query<any>(
-    `SELECT d.id, d.filename, d.original_name, d.mime_type, d.extracted_text,
-            d.status, d.analysis_result
+    `SELECT d.id, d.filename, d.original_name, d.mime_type, d.status,
+            COALESCE(dc.content, '') as content
      FROM documents d
+     LEFT JOIN LATERAL (
+       SELECT content FROM document_chunks
+       WHERE document_id = d.id
+       ORDER BY chunk_index
+       LIMIT 1
+     ) dc ON true
      WHERE d.id = ANY($1)
      ORDER BY array_position($1, d.id)`,
     [documentIds]
@@ -320,8 +332,7 @@ async function fetchAttachmentAnalysis(documentIds: string[]): Promise<any[]> {
     originalName: doc.original_name,
     mimeType: doc.mime_type,
     status: doc.status || 'ready',
-    preview: doc.extracted_text ? doc.extracted_text.substring(0, 500) :
-             doc.analysis_result ? JSON.stringify(doc.analysis_result).substring(0, 500) : '',
+    preview: doc.content ? doc.content.substring(0, 500) : '',
   }));
 }
 
