@@ -87,6 +87,7 @@ Built with a **Local-First** ethos, Luna integrates deeply with your digital lif
   - [Graph-Based Memory Architecture](#graph-based-memory-architecture)
   - [Intent Persistence](#intent-persistence)
   - [MemoryCore Integration](#memorycore-integration)
+  - [Dual-LNN Architecture](#dual-lnn-architecture-feb-2026)
 - [LLM Providers](#llm-providers)
 - [Modules](#modules)
 - [Architecture](#architecture)
@@ -689,6 +690,144 @@ When NeuralSleep services are running, Luna gains consciousness metrics:
 | **Episodic Memory LNN** | Neural pattern extraction from experiences |
 | **Semantic Memory LNN** | Deep pattern consolidation into long-term weights |
 | **Consciousness Service** | Computes Phi, temporal integration, self-reference |
+
+#### Dual-LNN Architecture (Feb 2026)
+
+Luna's working memory has been upgraded to a **Dual-LNN system** that separates thematic context tracking (LNN-A) from relational knowledge priming (LNN-B), connected by a bidirectional Causal Gate for sophisticated cross-talk.
+
+> **Deep Dive**: See [DUAL_LNN_ARCHITECTURE.md](DUAL_LNN_ARCHITECTURE.md) for comprehensive technical specification, including API integration, database schema, performance metrics, and tuning parameters.
+
+##### Input Enrichment Pipeline
+
+Every message is enriched before processing through three parallel services:
+
+| Service | Input | Output | Use |
+|---------|-------|--------|-----|
+| **Sentiment** | Message text | Valence, Arousal, Dominance | Emotional context signal |
+| **Attention** | Length, latency, continuity | Score (0-1) | Importance weighting |
+| **Centroid** | Embedding + history | Rolling EMA | Semantic trajectory |
+
+The sentiment service uses Groq LLM for VAD (valence-arousal-dominance) analysis with a 5-minute cache. Attention scores composite three factors: message length (0.3 weight), response latency (0.2 weight), and semantic continuity with previous message (0.5 weight). Session centroids use exponential moving average (alpha=0.3) to track conversation semantic drift over time.
+
+##### Dual-LNN Processing
+
+Chat interactions flow through a two-stream neural network:
+
+**LNN-A (Thematic Neural Network)**
+- Input: 1024-dim embedding centroid (BGE-M3)
+- Architecture: 1024 -> 512 -> 512
+- Dynamics: Liquid Time-Constant (tau: 0.1-5.0 sec, adaptive)
+- Purpose: Track conversation vibe and semantic theme trajectory
+- Output: Thematic state (512-dim), stability metric (0-1)
+
+**LNN-B (Relational Neural Network)**
+- Input: 256-dim graph node activations (spreading activation from Neo4j)
+- Architecture: 256 -> 256 -> 256
+- Dynamics: Liquid Time-Constant (tau: 1.0-60.0 sec, slow)
+- Purpose: Prime relevant knowledge relationships
+- Output: Relational state (256-dim), coherence metric (0-1)
+
+##### Causal Gate (Cross-Talk)
+
+Bidirectional cross-talk between the two networks:
+
+| Direction | Mechanism | Effect |
+|-----------|-----------|--------|
+| **A -> B** | Stability lowers activation threshold | Strong themes activate deeper knowledge relationships |
+| **B -> A** | Coherence biases thematic trajectory | Strong knowledge connections pull semantic state toward related themes |
+
+The gate uses variance-based stability detection: when LNN-A state converges (low variance over sliding window), the relational network's activation threshold decreases, allowing weaker connections to activate.
+
+##### Spreading Activation
+
+Graph knowledge is surfaced via spreading activation from embedding-similar seed nodes:
+
+- **Seeds**: Top-K most similar nodes from Neo4j (via embedding similarity search)
+- **Propagation**: BFS through graph edges up to depth 3
+- **Decay**: Activation decays by 0.5 at each hop (prevents explosion)
+- **Result**: Fixed-size activation vector (256-dim) for LNN-B input
+
+##### Consolidation with Thematic Clustering
+
+Sessions are consolidated through three tiers:
+
+1. **Working -> Episodic** (fast, per-user, real-time)
+   - Experiences buffered in Redis
+   - Transferred to PostgreSQL every 10 experiences
+   - Includes enrichment data (valence, attention score)
+
+2. **Episodic -> Semantic** (slow, thematic clustering)
+   - Agglomerative clustering on embedding centroids (cosine distance < 0.3)
+   - Detects recurring themes across sessions
+   - Promotion criteria:
+     - Must span 2+ different sessions
+     - Must have Phi > 0.5 (integrated information)
+     - High valence (|valence| > 0.3) -> **Preference**
+     - Neutral recurring -> **Known Fact**
+
+3. **User Model** (permanent, consolidated knowledge)
+   - Preferences: Emotionally-valenced recurring themes
+   - Known Facts: Neutral recurring knowledge
+   - Thematic Clusters: Topic groupings for efficient retrieval
+
+##### Database Schema
+
+New migrations support dual-LNN persistence:
+
+**Luna Chat (Migration 075)**
+```sql
+ALTER TABLE message_embeddings
+  ADD emotional_valence FLOAT,
+  ADD attention_score FLOAT;
+CREATE INDEX idx_message_embeddings_attention ON message_embeddings (attention_score);
+```
+
+**NeuralSleep (Migration 002)**
+```sql
+CREATE TABLE thematic_states (
+    user_id UUID PRIMARY KEY,
+    state_tensor BYTEA,           -- Serialized LNN state
+    stability_score FLOAT,         -- Variance-based metric
+    updated_at TIMESTAMPTZ
+);
+
+CREATE TABLE relational_states (
+    user_id UUID PRIMARY KEY,
+    state_tensor BYTEA,           -- Serialized LNN state
+    activation_threshold FLOAT,    -- Causal gate parameter
+    updated_at TIMESTAMPTZ
+);
+
+ALTER TABLE consciousness_metrics
+    ADD thematic_stability FLOAT,
+    ADD relational_coherence FLOAT,
+    ADD cross_stream_flow FLOAT;
+```
+
+##### API Integration
+
+**Chat Mode Detection** (`POST /api/chat/sessions/:id/send`)
+- Automatically detects enrichment fields in request
+- Routes to dual-LNN pipeline (`mode=chat`) vs legacy WorkingMemoryLNN (`mode=legacy`)
+- Returns standard chat response + dual-stream metrics in debug info
+
+**Graph Activation** (`POST /api/graph/activate`)
+- MemoryCore endpoint that performs spreading activation
+- Input: `{ userId, embedding: [1024], topK: 20, spreadingDepth: 3 }`
+- Output: `{ activations: {nodeId: score, ...}, seedNodes, nodesReached }`
+- Results integrated into enriched interactions before NeuralSleep processing
+
+##### Performance Characteristics
+
+| Metric | Target | Actual |
+|--------|--------|--------|
+| Sentiment analysis | < 200ms | ~150ms (Groq cached) |
+| Attention computation | < 10ms | ~3ms (pure computation) |
+| Centroid update | < 5ms | ~2ms (Redis) |
+| ThematicLNN processing | < 40ms | ~25ms |
+| RelationalLNN processing | < 40ms | ~30ms |
+| CausalGate cross-talk | < 20ms | ~8ms |
+| **Total dual-LNN latency** | < 100ms | ~63ms |
 
 ---
 

@@ -64,6 +64,20 @@ interface MemoryCoreInteraction {
   content: string;
   timestamp: Date;
   metadata?: Record<string, unknown>;
+  // Dual-LNN enrichment fields
+  embedding?: number[];           // 1024-dim BGE-M3
+  embeddingCentroid?: number[];   // Rolling session centroid
+  emotionalValence?: number;      // -1.0 to 1.0
+  attentionScore?: number;        // 0.0 to 1.0
+  interMessageMs?: number;        // Milliseconds since last message
+}
+
+export interface InteractionEnrichment {
+  embedding?: number[];
+  embeddingCentroid?: number[];
+  emotionalValence?: number;
+  attentionScore?: number;
+  interMessageMs?: number;
 }
 
 // MemoryCore session tracking: maps chatSessionId -> memorycoreSessionId
@@ -96,7 +110,8 @@ export async function recordChatInteraction(
   chatSessionId: string,
   type: 'message' | 'response',
   content: string,
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown>,
+  enrichment?: InteractionEnrichment
 ): Promise<void> {
   const mcSessionId = memorycoreSessionMap.get(chatSessionId);
   if (!mcSessionId) return;
@@ -106,6 +121,7 @@ export async function recordChatInteraction(
     content,
     timestamp: new Date(),
     metadata,
+    ...(enrichment || {}),
   });
 }
 
@@ -659,6 +675,36 @@ export async function extractGraphEntities(
 }
 
 /**
+ * Get graph node activations via spreading activation for dual-LNN relational input.
+ * Seeds from embedding similarity, then spreads through graph connections.
+ */
+export async function getGraphNodeActivations(
+  userId: string,
+  embedding: number[],
+  options?: { topK?: number; spreadingDepth?: number }
+): Promise<Record<string, number> | null> {
+  if (!config.memorycore.enabled) return null;
+
+  const { topK = 20, spreadingDepth = 3 } = options || {};
+
+  try {
+    const response = await fetch(`${config.memorycore.url}/api/graph/activate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, embedding, topK, spreadingDepth }),
+    });
+
+    if (!response.ok) return null;
+
+    const data = await response.json() as { activations?: Record<string, number> };
+    return data.activations || null;
+  } catch (error) {
+    logger.warn('Failed to get graph node activations', { userId, error: (error as Error).message });
+    return null;
+  }
+}
+
+/**
  * Format graph context for inclusion in prompts
  * Returns the pre-formatted context string from MemoryCore
  */
@@ -754,6 +800,7 @@ export default {
   getGraphStats,
   extractGraphEntities,
   formatGraphContext,
+  getGraphNodeActivations,
   getFullMemoryContext,
   formatFullMemoryContext,
 };

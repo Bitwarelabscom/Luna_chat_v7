@@ -181,6 +181,10 @@ export interface ConsciousnessMetrics {
   dynamicalComplexity?: number;   // System complexity measure
   consciousnessLevel?: string;    // Human-readable level
   isConscious?: boolean;          // Φ > threshold
+  // Dual-LNN metrics
+  thematicStability?: number;     // LNN-A convergence on theme (0-1)
+  relationalCoherence?: number;   // LNN-B connection strength (0-1)
+  crossStreamFlow?: number;       // Mutual information between A and B
 }
 
 // Consolidated user model from NeuralSleep LNN
@@ -199,6 +203,27 @@ export interface ConsolidatedUserModel {
     occurrences: number;
   }>;
   consciousness: ConsciousnessMetrics;
+  // Dual-LNN promoted knowledge
+  preferences?: Array<{
+    theme: string;
+    centroid: number[];
+    valence: number;
+    confidence: number;
+    sessionCount: number;
+  }>;
+  knownFacts?: Array<{
+    theme: string;
+    centroid: number[];
+    confidence: number;
+    sessionCount: number;
+  }>;
+  thematicClusters?: Array<{
+    centroid: number[];
+    size: number;
+    spanSessions: number;
+    avgValence: number;
+    lastSeen: Date;
+  }>;
 }
 
 // Express extension

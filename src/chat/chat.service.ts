@@ -112,6 +112,59 @@ import * as mcpService from '../mcp/mcp.service.js';
 import * as router from '../router/index.js';
 import type { RouterDecision } from '../router/router.types.js';
 import type { Message, SearchResult } from '../types/index.js';
+import * as embeddingService from '../memory/embedding.service.js';
+import * as sentimentService from '../memory/sentiment.service.js';
+import * as attentionService from '../memory/attention.service.js';
+import * as centroidService from '../memory/centroid.service.js';
+import type { InteractionEnrichment } from '../memory/memorycore.client.js';
+
+// Per-session tracking for enrichment pipeline
+const sessionLastEmbedding = new Map<string, number[]>();
+const sessionLastMessageTime = new Map<string, number>();
+
+/**
+ * Compute enrichment data for a message before recording to MemoryCore.
+ * Non-blocking - returns defaults on any failure.
+ */
+async function computeEnrichment(
+  sessionId: string,
+  message: string,
+): Promise<{ enrichment: InteractionEnrichment; embedding: number[] }> {
+  const now = Date.now();
+  const lastTime = sessionLastMessageTime.get(sessionId) || now;
+  const interMessageMs = now - lastTime;
+  sessionLastMessageTime.set(sessionId, now);
+
+  try {
+    const { embedding } = await embeddingService.generateEmbedding(message);
+    const prevEmbedding = sessionLastEmbedding.get(sessionId) || null;
+    sessionLastEmbedding.set(sessionId, embedding);
+
+    // Run sentiment, centroid, and attention in parallel
+    const [sentiment, centroid, attention] = await Promise.all([
+      sentimentService.analyze(message),
+      centroidService.update(sessionId, embedding),
+      Promise.resolve(attentionService.compute(message, embedding, prevEmbedding, interMessageMs)),
+    ]);
+
+    return {
+      embedding,
+      enrichment: {
+        embedding,
+        embeddingCentroid: centroid,
+        emotionalValence: sentiment.valence,
+        attentionScore: attention.score,
+        interMessageMs,
+      },
+    };
+  } catch (error) {
+    logger.debug('Enrichment computation failed, using defaults', { error: (error as Error).message });
+    return {
+      embedding: [],
+      enrichment: { interMessageMs },
+    };
+  }
+}
 
 export interface ChatInput {
   sessionId: string;
@@ -139,8 +192,13 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   // This enables episodic memory recording and NeuralSleep LNN processing
   await memorycoreClient.ensureSession(sessionId, userId);
 
-  // Record user message to MemoryCore (async, non-blocking)
-  memorycoreClient.recordChatInteraction(sessionId, 'message', message, { mode, source }).catch(() => {});
+  // Compute enrichment (embedding, sentiment, attention, centroid) before recording
+  const { enrichment: pmEnrichment } = await computeEnrichment(sessionId, message).catch(() => ({
+    enrichment: {} as InteractionEnrichment, embedding: [] as number[],
+  }));
+
+  // Record enriched user message to MemoryCore (async, non-blocking)
+  memorycoreClient.recordChatInteraction(sessionId, 'message', message, { mode, source }, pmEnrichment).catch(() => {});
 
   // Track session activity for automatic consolidation after inactivity
   sessionActivityService.recordActivity(sessionId, userId).catch(() => {});
@@ -1602,11 +1660,13 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   // Store assistant message embedding (async)
   memoryService.processMessageMemory(userId, sessionId, assistantMessage.id, completion.content, 'assistant');
 
-  // Record response to MemoryCore for consolidation (async, non-blocking)
-  memorycoreClient.recordChatInteraction(sessionId, 'response', completion.content, {
-    model: modelConfig.model,
-    provider: modelConfig.provider,
-    tokensUsed: completion.tokensUsed,
+  // Record enriched response to MemoryCore for consolidation (async, non-blocking)
+  computeEnrichment(sessionId, completion.content).then(({ enrichment }) => {
+    memorycoreClient.recordChatInteraction(sessionId, 'response', completion.content, {
+      model: modelConfig.model,
+      provider: modelConfig.provider,
+      tokensUsed: completion.tokensUsed,
+    }, enrichment);
   }).catch(() => {});
 
   // Process facts from conversation (async, every few messages)
@@ -1801,8 +1861,10 @@ file content here
 
   memoryService.processMessageMemory(userId, sessionId, assistantMessage.id, responseContent, 'assistant');
 
-  // Record response to MemoryCore for consolidation (async, non-blocking)
-  memorycoreClient.recordChatInteraction(sessionId, 'response', responseContent).catch(() => {});
+  // Record enriched response to MemoryCore for consolidation (async, non-blocking)
+  computeEnrichment(sessionId, responseContent).then(({ enrichment }) =>
+    memorycoreClient.recordChatInteraction(sessionId, 'response', responseContent, undefined, enrichment)
+  ).catch(() => {});
 
   yield {
     type: 'done',
@@ -1969,8 +2031,10 @@ Step types: generate_file, generate_image, execute, preview
 
   memoryService.processMessageMemory(userId, sessionId, assistantMessage.id, planDisplay, 'assistant');
 
-  // Record response to MemoryCore for consolidation (async, non-blocking)
-  memorycoreClient.recordChatInteraction(sessionId, 'response', planDisplay).catch(() => {});
+  // Record enriched response to MemoryCore for consolidation (async, non-blocking)
+  computeEnrichment(sessionId, planDisplay).then(({ enrichment }) =>
+    memorycoreClient.recordChatInteraction(sessionId, 'response', planDisplay, undefined, enrichment)
+  ).catch(() => {});
 
   yield {
     type: 'done',
@@ -2128,8 +2192,10 @@ content here
 
   memoryService.processMessageMemory(userId, sessionId, assistantMessage.id, responseContent, 'assistant');
 
-  // Record response to MemoryCore for consolidation (async, non-blocking)
-  memorycoreClient.recordChatInteraction(sessionId, 'response', responseContent).catch(() => {});
+  // Record enriched response to MemoryCore for consolidation (async, non-blocking)
+  computeEnrichment(sessionId, responseContent).then(({ enrichment }) =>
+    memorycoreClient.recordChatInteraction(sessionId, 'response', responseContent, undefined, enrichment)
+  ).catch(() => {});
 
   yield {
     type: 'done',
@@ -2250,8 +2316,10 @@ Questions should cover: visual style, specific features, content requirements, a
 
   memoryService.processMessageMemory(userId, sessionId, assistantMessage.id, responseContent, 'assistant');
 
-  // Record response to MemoryCore for consolidation (async, non-blocking)
-  memorycoreClient.recordChatInteraction(sessionId, 'response', responseContent).catch(() => {});
+  // Record enriched response to MemoryCore for consolidation (async, non-blocking)
+  computeEnrichment(sessionId, responseContent).then(({ enrichment }) =>
+    memorycoreClient.recordChatInteraction(sessionId, 'response', responseContent, undefined, enrichment)
+  ).catch(() => {});
 
   yield {
     type: 'done',
@@ -2306,8 +2374,13 @@ export async function* streamMessage(
   // This enables episodic memory recording and NeuralSleep LNN processing
   await memorycoreClient.ensureSession(sessionId, userId);
 
-  // Record user message to MemoryCore (async, non-blocking)
-  memorycoreClient.recordChatInteraction(sessionId, 'message', message, { mode, source }).catch(() => {});
+  // Compute enrichment (embedding, sentiment, attention, centroid) before recording
+  const { enrichment: smEnrichment } = await computeEnrichment(sessionId, message).catch(() => ({
+    enrichment: {} as InteractionEnrichment, embedding: [] as number[],
+  }));
+
+  // Record enriched user message to MemoryCore (async, non-blocking)
+  memorycoreClient.recordChatInteraction(sessionId, 'message', message, { mode, source }, smEnrichment).catch(() => {});
 
   // Track session activity for automatic consolidation after inactivity
   sessionActivityService.recordActivity(sessionId, userId).catch(() => {});
@@ -2673,8 +2746,10 @@ export async function* streamMessage(
     // Store assistant message embedding (async)
     memoryService.processMessageMemory(userId, sessionId, assistantMessage.id, responseContent, 'assistant');
 
-    // Record response to MemoryCore for consolidation (async, non-blocking)
-    memorycoreClient.recordChatInteraction(sessionId, 'response', responseContent).catch(() => {});
+    // Record enriched response to MemoryCore for consolidation (async, non-blocking)
+    computeEnrichment(sessionId, responseContent).then(({ enrichment }) =>
+      memorycoreClient.recordChatInteraction(sessionId, 'response', responseContent, undefined, enrichment)
+    ).catch(() => {});
 
     // Update session title if first message
     const history = await sessionService.getSessionMessages(sessionId, { limit: 1 });
@@ -4324,12 +4399,14 @@ export async function* streamMessage(
   // Store assistant message embedding (async)
   memoryService.processMessageMemory(userId, sessionId, assistantMessage.id, fullContent, 'assistant');
 
-  // Record response to MemoryCore for consolidation (async, non-blocking)
-  memorycoreClient.recordChatInteraction(sessionId, 'response', fullContent, {
-    model: modelConfig.model,
-    provider: modelConfig.provider,
-    tokensUsed,
-  }).catch(() => {});
+  // Record enriched response to MemoryCore for consolidation (async, non-blocking)
+  computeEnrichment(sessionId, fullContent).then(({ enrichment }) =>
+    memorycoreClient.recordChatInteraction(sessionId, 'response', fullContent, {
+      model: modelConfig.model,
+      provider: modelConfig.provider,
+      tokensUsed,
+    }, enrichment)
+  ).catch(() => {});
 
   // Process facts from conversation (async, every few messages)
   const totalMessages = rawHistory.length + 2;
