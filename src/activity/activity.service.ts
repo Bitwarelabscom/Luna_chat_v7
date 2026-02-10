@@ -360,12 +360,12 @@ export const activityHelpers = {
     reasoning?: string,
     fullDetails?: Omit<LLMCallDetails, 'nodeName' | 'model' | 'provider' | 'tokens' | 'durationMs' | 'cost' | 'reasoning'>
   ): Promise<ActivityLog> => {
-    // Truncate message content for storage efficiency while preserving structure
+    // Store full message content without truncation
     const truncateMessages = (msgs?: LLMCallDetails['messages']) => {
       if (!msgs) return undefined;
       return msgs.map(m => ({
         role: m.role,
-        content: m.content.length > 2000 ? m.content.substring(0, 2000) + '...[truncated]' : m.content,
+        content: m.content,
         tool_calls: m.tool_calls,
         tool_call_id: m.tool_call_id,
       }));
@@ -374,7 +374,7 @@ export const activityHelpers = {
     const truncateResponse = (resp?: LLMCallDetails['response']) => {
       if (!resp) return undefined;
       return {
-        content: resp.content.length > 2000 ? resp.content.substring(0, 2000) + '...[truncated]' : resp.content,
+        content: resp.content,
         finishReason: resp.finishReason,
         toolCalls: resp.toolCalls,
       };
@@ -398,7 +398,7 @@ export const activityHelpers = {
         cacheTokens: tokens.cache || 0,
         totalTokens: tokens.input + tokens.output,
         cost,
-        reasoning: reasoning ? reasoning.substring(0, 500) : undefined,
+        reasoning: reasoning,
         // Full request/response details for debugging
         messages: truncateMessages(fullDetails?.messages),
         tools: fullDetails?.tools,

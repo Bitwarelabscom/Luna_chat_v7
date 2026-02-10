@@ -11,6 +11,18 @@ import * as googleProvider from './providers/google.provider.js';
 import * as sanhedrinProvider from './providers/sanhedrin.provider.js';
 import * as moonshotProvider from './providers/moonshot.provider.js';
 import logger from '../utils/logger.js';
+import { activityHelpers } from '../activity/activity.service.js';
+
+/**
+ * Optional logging context for activity tracking
+ */
+export interface LLMLoggingContext {
+  userId: string;
+  sessionId?: string;
+  turnId?: string;
+  source: string;
+  nodeName: string;
+}
 
 interface ProviderModule {
   createCompletion: (
@@ -53,20 +65,55 @@ function getProvider(providerId: ProviderId): ProviderModule {
 /**
  * Create a chat completion using the specified provider and model
  * For Anthropic, systemBlocks can be passed for prompt caching
+ * Optional loggingContext for activity tracking
  */
 export async function createCompletion(
   providerId: ProviderId,
   model: string,
   messages: ChatMessage[],
-  options: { temperature?: number; maxTokens?: number; systemBlocks?: CacheableSystemBlock[] } = {}
+  options: { temperature?: number; maxTokens?: number; systemBlocks?: CacheableSystemBlock[]; loggingContext?: LLMLoggingContext } = {}
 ): Promise<CompletionResult> {
   const provider = getProvider(providerId);
+  const startTime = Date.now();
 
   logger.debug('LLM request', { provider: providerId, model, messageCount: messages.length });
 
   const result = await provider.createCompletion(model, messages, options);
 
   logger.debug('LLM response', { provider: providerId, model, tokensUsed: result.tokensUsed });
+
+  // Log to activity if context provided
+  if (options.loggingContext) {
+    const durationMs = Date.now() - startTime;
+    activityHelpers.logLLMCall(
+      options.loggingContext.userId,
+      options.loggingContext.sessionId,
+      options.loggingContext.turnId,
+      options.loggingContext.nodeName,
+      model,
+      providerId,
+      {
+        input: result.inputTokens || 0,
+        output: result.outputTokens || 0,
+        cache: result.cacheReadTokens,
+      },
+      durationMs,
+      result.cost,
+      undefined, // reasoning
+      {
+        messages: messages.map(m => ({
+          role: m.role,
+          content: m.content,
+        })),
+        temperature: options.temperature,
+        maxTokens: options.maxTokens,
+        response: {
+          content: result.content,
+          finishReason: 'stop',
+        },
+      }
+    ).catch(() => {}); // Non-blocking
+  }
 
   return result;
 }

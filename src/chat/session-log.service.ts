@@ -446,7 +446,16 @@ export async function generateDetailedSessionSummary(
       'ollama',
       config.ollama.chatModel,
       [{ role: 'user', content: DETAILED_ANALYSIS_PROMPT + formatted }],
-      { temperature: 0.3, maxTokens: 5000 }
+      {
+        temperature: 0.3,
+        maxTokens: 5000,
+        loggingContext: {
+          userId,
+          sessionId,
+          source: 'session-log',
+          nodeName: 'detailed_summary'
+        }
+      }
     );
 
     const content = response.content || '';

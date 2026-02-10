@@ -451,7 +451,9 @@ export function detectIntentSignal(
  */
 async function detectIntentWithLLM(
   message: string,
-  activeIntents: IntentSummary[]
+  activeIntents: IntentSummary[],
+  userId?: string,
+  sessionId?: string
 ): Promise<IntentSignal | null> {
   const prompt = `
 Analyze the user's intent in this message.
@@ -482,6 +484,12 @@ Return JSON only:
       temperature: 0.1,
       maxTokens: 1000,
       response_format: { type: 'json_object' },
+      loggingContext: userId ? {
+        userId,
+        sessionId,
+        source: 'intent-detection',
+        nodeName: 'detect_intent_llm'
+      } : undefined,
     });
 
     const content = response.content.replace(/```json|```/g, '').trim();
@@ -546,7 +554,7 @@ export async function processMessageForIntents(
         });
       } else if (userMessage.length > 15) {
         // Fallback to LLM detection for complex intents
-        signal = await detectIntentWithLLM(userMessage, context.activeIntents);
+        signal = await detectIntentWithLLM(userMessage, context.activeIntents, userId, sessionId);
       }
     }
 
