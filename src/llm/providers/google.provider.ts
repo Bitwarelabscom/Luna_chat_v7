@@ -10,12 +10,23 @@ interface GeminiContent {
 }
 
 interface GeminiResponse {
-  candidates: Array<{
+  candidates?: Array<{
     content: {
       parts: Array<{ text: string }>;
     };
     finishReason: string;
+    safetyRatings?: Array<{
+      category: string;
+      probability: string;
+    }>;
   }>;
+  promptFeedback?: {
+    blockReason?: string;
+    safetyRatings?: Array<{
+      category: string;
+      probability: string;
+    }>;
+  };
   usageMetadata?: {
     promptTokenCount: number;
     candidatesTokenCount: number;
@@ -76,9 +87,65 @@ export async function createCompletion(
 
     const data = await response.json() as GeminiResponse;
 
+    // Check for prompt-level blocks
+    if (data.promptFeedback?.blockReason) {
+      const reason = data.promptFeedback.blockReason;
+      const ratings = data.promptFeedback.safetyRatings || [];
+      logger.warn('Gemini prompt blocked', {
+        model,
+        blockReason: reason,
+        safetyRatings: ratings,
+      });
+      throw new Error(`Gemini blocked the prompt: ${reason}`);
+    }
+
+    // Check for missing candidates
+    if (!data.candidates || data.candidates.length === 0) {
+      logger.warn('Gemini returned no candidates', {
+        model,
+        promptFeedback: data.promptFeedback,
+        usageMetadata: data.usageMetadata,
+      });
+      throw new Error('Gemini returned no response candidates');
+    }
+
+    const candidate = data.candidates[0];
+    const finishReason = candidate.finishReason;
+
+    // Check for non-STOP finish reasons
+    if (finishReason !== 'STOP' && finishReason !== 'stop') {
+      logger.warn('Gemini finished with non-STOP reason', {
+        model,
+        finishReason,
+        safetyRatings: candidate.safetyRatings,
+        content: candidate.content?.parts?.[0]?.text?.substring(0, 100) || '(empty)',
+      });
+
+      if (finishReason === 'SAFETY') {
+        throw new Error(`Gemini blocked response due to safety filters`);
+      } else if (finishReason === 'RECITATION') {
+        throw new Error(`Gemini blocked response due to recitation concerns`);
+      } else {
+        throw new Error(`Gemini stopped generation: ${finishReason}`);
+      }
+    }
+
+    const content = candidate.content?.parts?.[0]?.text || '';
+
+    // Log warning if we got empty content despite STOP finish reason
+    if (!content) {
+      logger.warn('Gemini returned empty content despite STOP finish reason', {
+        model,
+        inputTokens: data.usageMetadata?.promptTokenCount || 0,
+        finishReason,
+      });
+    }
+
     return {
-      content: data.candidates[0]?.content?.parts[0]?.text || '',
+      content,
       tokensUsed: data.usageMetadata?.totalTokenCount || 0,
+      inputTokens: data.usageMetadata?.promptTokenCount,
+      outputTokens: data.usageMetadata?.candidatesTokenCount,
       model,
       provider: 'google',
     };
@@ -142,15 +209,47 @@ export async function* streamCompletion(
           if (jsonStr) {
             try {
               const data = JSON.parse(jsonStr) as GeminiResponse;
-              const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-              if (text) {
-                yield { type: 'content', content: text };
+
+              // Check for prompt-level blocks
+              if (data.promptFeedback?.blockReason) {
+                const reason = data.promptFeedback.blockReason;
+                logger.warn('Gemini prompt blocked (streaming)', {
+                  model,
+                  blockReason: reason,
+                });
+                throw new Error(`Gemini blocked the prompt: ${reason}`);
               }
+
+              const candidate = data.candidates?.[0];
+              if (candidate) {
+                const finishReason = candidate.finishReason;
+
+                // Check for problematic finish reasons
+                if (finishReason && finishReason !== 'STOP' && finishReason !== 'stop') {
+                  logger.warn('Gemini stream finished with non-STOP reason', {
+                    model,
+                    finishReason,
+                  });
+
+                  if (finishReason === 'SAFETY' || finishReason === 'RECITATION') {
+                    throw new Error(`Gemini blocked response: ${finishReason}`);
+                  }
+                }
+
+                const text = candidate.content?.parts?.[0]?.text;
+                if (text) {
+                  yield { type: 'content', content: text };
+                }
+              }
+
               if (data.usageMetadata?.totalTokenCount) {
                 tokensUsed = data.usageMetadata.totalTokenCount;
               }
-            } catch {
-              // Skip malformed JSON
+            } catch (error) {
+              // Re-throw our custom errors, skip malformed JSON
+              if (error instanceof Error && error.message.includes('Gemini')) {
+                throw error;
+              }
             }
           }
         }
