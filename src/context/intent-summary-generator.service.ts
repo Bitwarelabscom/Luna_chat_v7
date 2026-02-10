@@ -92,7 +92,7 @@ export async function generateIntentSummary(
       'ollama',
       config.ollama.chatModel,
       [{ role: 'user', content: prompt }],
-      { temperature: 0.3, maxTokens: 600 }
+      { temperature: 0.3, maxTokens: 5000 }
     );
 
     const content = response.content || '';

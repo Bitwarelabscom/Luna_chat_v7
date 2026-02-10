@@ -273,7 +273,7 @@ export async function updateRollingSummary(
       [
         { role: 'user', content: SUMMARY_PROMPT + conversationText }
       ],
-      { temperature: 0.3, maxTokens: 1000 }
+      { temperature: 0.3, maxTokens: 5000 }
     );
 
     const newSummary = (response.content || '').trim();
@@ -296,7 +296,7 @@ export async function updateRollingSummary(
         [
           { role: 'user', content: `Compress this conversation summary into 2-3 sentences, preserving the most important points:\n\n${combinedSummary}` }
         ],
-        { temperature: 0.3, maxTokens: 1000 }
+        { temperature: 0.3, maxTokens: 5000 }
       );
       finalSummary = (recompressResponse.content || combinedSummary).trim();
     }

@@ -352,7 +352,7 @@ export async function analyzeSession(
       'ollama',
       config.ollama.chatModel,
       [{ role: 'user', content: ANALYSIS_PROMPT + formatted }],
-      { temperature: 0.3, maxTokens: 200 }
+      { temperature: 0.3, maxTokens: 5000 }
     );
 
     const content = response.content || '';
@@ -446,7 +446,7 @@ export async function generateDetailedSessionSummary(
       'ollama',
       config.ollama.chatModel,
       [{ role: 'user', content: DETAILED_ANALYSIS_PROMPT + formatted }],
-      { temperature: 0.3, maxTokens: 800 }
+      { temperature: 0.3, maxTokens: 5000 }
     );
 
     const content = response.content || '';
