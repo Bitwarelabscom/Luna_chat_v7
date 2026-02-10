@@ -480,7 +480,7 @@ Return JSON only:
       messages: [{ role: 'system', content: prompt }],
       model: 'gpt-5-mini',
       temperature: 0.1,
-      maxTokens: 200,
+      maxTokens: 1000,
       response_format: { type: 'json_object' },
     });
 
