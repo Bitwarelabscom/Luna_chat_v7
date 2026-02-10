@@ -95,10 +95,10 @@ export async function createCompletion(
       {
         input: result.inputTokens || 0,
         output: result.outputTokens || 0,
-        cache: result.cacheReadTokens,
+        cache: result.cacheTokens,
       },
       durationMs,
-      result.cost,
+      undefined, // cost not available in CompletionResult
       undefined, // reasoning
       {
         messages: messages.map(m => ({
