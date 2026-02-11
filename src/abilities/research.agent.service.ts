@@ -151,6 +151,7 @@ async function executeGeminiCLI(
 
     // Execute Gemini CLI with yolo mode (auto-approve tools) for research
     const geminiArgs = [
+      '-m', 'gemini-3-pro-preview',  // Use Gemini 3 Pro model
       '-p', prompt,  // Non-interactive mode
       '--approval-mode', 'yolo',  // Auto-approve all tools
       '--include-directories', userWorkspace,  // Add user workspace

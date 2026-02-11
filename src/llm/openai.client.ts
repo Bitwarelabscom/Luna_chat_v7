@@ -1417,7 +1417,7 @@ export const researchTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: 'function',
   function: {
     name: 'research',
-    description: `Conduct in-depth research using Gemini 2.0 Flash Thinking. Use this for complex questions that require thorough investigation, web research, code analysis, document processing, or data analysis. The research agent can search the web, analyze information, and provide detailed findings. Results can optionally be saved to the user's workspace. Use "quick" depth for simple lookups (1-2 min) or "thorough" for comprehensive analysis (5-10 min).`,
+    description: `Conduct in-depth research using Gemini 3 Pro. Use this for complex questions that require thorough investigation, web research, code analysis, document processing, or data analysis. The research agent can search the web, analyze information, and provide detailed findings. Results can optionally be saved to the user's workspace. Use "quick" depth for simple lookups (1-2 min) or "thorough" for comprehensive analysis (5-10 min).`,
     parameters: {
       type: 'object',
       properties: {

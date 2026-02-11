@@ -18,11 +18,11 @@ export interface BuiltinTool {
 }
 
 /**
- * Research tool - Uses Gemini CLI (2.0 Flash Thinking) for in-depth research
+ * Research tool - Uses Gemini CLI (3 Pro) for in-depth research
  */
 export const RESEARCH_TOOL: BuiltinTool = {
   name: 'research',
-  description: 'Conduct in-depth research using Gemini 2.0 Flash Thinking. Can search the web, analyze code, process documents, and perform data analysis. Use this for complex questions that require thorough investigation. Results can optionally be saved to the workspace.',
+  description: 'Conduct in-depth research using Gemini 3 Pro. Can search the web, analyze code, process documents, and perform data analysis. Use this for complex questions that require thorough investigation. Results can optionally be saved to the workspace.',
   parameters: {
     type: 'object',
     properties: {
