@@ -89,6 +89,7 @@ import * as imageGeneration from '../abilities/image-generation.service.js';
 import * as backgroundService from '../abilities/background.service.js';
 import * as projectService from '../abilities/project.service.js';
 import { query as dbQuery } from '../db/postgres.js';
+import { pool } from '../db/index.js';
 import * as memoryService from '../memory/memory.service.js';
 import * as memorycoreClient from '../memory/memorycore.client.js';
 // Note: formatStableMemory, formatVolatileMemory available for cache-optimized prompts
@@ -121,6 +122,38 @@ import type { InteractionEnrichment } from '../memory/memorycore.client.js';
 // Per-session tracking for enrichment pipeline
 const sessionLastEmbedding = new Map<string, number[]>();
 const sessionLastMessageTime = new Map<string, number>();
+
+/**
+ * Convert local time to UTC Date considering user's timezone
+ * Takes a Date with time components set in local time and returns UTC equivalent
+ */
+function convertLocalTimeToUTC(localDate: Date, timezone: string): Date {
+  try {
+    // Extract time components that were set as "local" time
+    const year = localDate.getFullYear();
+    const month = localDate.getMonth() + 1;
+    const day = localDate.getDate();
+    const hours = localDate.getHours();
+    const minutes = localDate.getMinutes();
+
+    // Create ISO string representing the time in user's timezone
+    const isoString = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00`;
+
+    // Parse this string as UTC, then get what time that would be in user's timezone
+    const utcDate = new Date(isoString + 'Z');
+    const localizedString = utcDate.toLocaleString('en-US', { timeZone: timezone, hour12: false });
+    const parsedBack = new Date(localizedString);
+
+    // Calculate the offset between what we wanted and what we got
+    const offset = parsedBack.getTime() - utcDate.getTime();
+
+    // Adjust the UTC date by the opposite offset to get the correct UTC time
+    return new Date(utcDate.getTime() - offset);
+  } catch (error) {
+    logger.warn('Failed to convert timezone, using local time as UTC', { error: (error as Error).message, timezone });
+    return localDate;
+  }
+}
 
 /**
  * Compute enrichment data for a message before recording to MemoryCore.
@@ -1130,12 +1163,33 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
         const args = JSON.parse(toolCall.function.arguments);
         logger.info('Luna creating calendar event', { title: args.title, startTime: args.startTime });
         try {
+          // Get user's timezone for proper time conversion
+          let userTimezone = 'UTC';
+          try {
+            const userResult = await pool.query('SELECT settings FROM users WHERE id = $1', [userId]);
+            if (userResult.rows.length > 0) {
+              const settings = userResult.rows[0].settings as { timezone?: string };
+              userTimezone = settings.timezone || 'UTC';
+            }
+          } catch (error) {
+            logger.warn('Failed to fetch user timezone for calendar event, using UTC', { error: (error as Error).message });
+          }
+
           const parsed = tasksService.parseTaskFromText(args.startTime || '');
-          const startAt = parsed.dueAt || new Date();
+          let startAt = parsed.dueAt || new Date();
+
+          // Convert from user's local time to UTC
+          if (userTimezone !== 'UTC') {
+            startAt = convertLocalTimeToUTC(startAt, userTimezone);
+          }
+
           let endAt: Date;
           if (args.endTime) {
             const endParsed = tasksService.parseTaskFromText(args.endTime);
             endAt = endParsed.dueAt || new Date(startAt.getTime() + 60 * 60 * 1000);
+            if (userTimezone !== 'UTC') {
+              endAt = convertLocalTimeToUTC(endAt, userTimezone);
+            }
           } else {
             endAt = new Date(startAt.getTime() + 60 * 60 * 1000); // 1 hour default
           }
@@ -3536,12 +3590,33 @@ export async function* streamMessage(
         const args = JSON.parse(toolCall.function.arguments);
         logger.info('Luna creating calendar event', { title: args.title, startTime: args.startTime });
         try {
+          // Get user's timezone for proper time conversion
+          let userTimezone = 'UTC';
+          try {
+            const userResult = await pool.query('SELECT settings FROM users WHERE id = $1', [userId]);
+            if (userResult.rows.length > 0) {
+              const settings = userResult.rows[0].settings as { timezone?: string };
+              userTimezone = settings.timezone || 'UTC';
+            }
+          } catch (error) {
+            logger.warn('Failed to fetch user timezone for calendar event, using UTC', { error: (error as Error).message });
+          }
+
           const parsed = tasksService.parseTaskFromText(args.startTime || '');
-          const startAt = parsed.dueAt || new Date();
+          let startAt = parsed.dueAt || new Date();
+
+          // Convert from user's local time to UTC
+          if (userTimezone !== 'UTC') {
+            startAt = convertLocalTimeToUTC(startAt, userTimezone);
+          }
+
           let endAt: Date;
           if (args.endTime) {
             const endParsed = tasksService.parseTaskFromText(args.endTime);
             endAt = endParsed.dueAt || new Date(startAt.getTime() + 60 * 60 * 1000);
+            if (userTimezone !== 'UTC') {
+              endAt = convertLocalTimeToUTC(endAt, userTimezone);
+            }
           } else {
             endAt = new Date(startAt.getTime() + 60 * 60 * 1000); // 1 hour default
           }
