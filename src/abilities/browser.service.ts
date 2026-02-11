@@ -12,7 +12,7 @@ const SANDBOX_CONTAINER = process.env.SANDBOX_CONTAINER || 'luna-sandbox';
 const DOCKER_HOST = process.env.DOCKER_HOST || 'http://docker-proxy:2375';
 const BROWSER_TIMEOUT = 60000; // 60 seconds per operation
 const MAX_OUTPUT_LENGTH = 500000; // 500KB output limit for screenshots
-const MAX_CONTENT_LENGTH = 100000; // 100KB for text content
+const MAX_CONTENT_LENGTH = 10000; // 10KB for text content (reduced from 100KB to limit spam injection)
 const SESSION_IDLE_TIMEOUT = 300000; // 5 minutes idle timeout
 
 // Types
@@ -1184,6 +1184,89 @@ export async function renderHtml(
 }
 
 /**
+ * Sanitize browser content to prevent prompt injection and spam
+ * Removes suspicious patterns, malicious content, and excessive spam
+ */
+function sanitizeBrowserContent(text: string): { sanitized: string; filtered: string[] } {
+  const filtered: string[] = [];
+  let sanitized = text;
+
+  // Pattern 1: Remove Chinese gambling/lottery spam
+  const gamblingPatterns = [
+    /手机版天天中彩票/g,
+    /彩神争霸/g,
+    /重庆时时/g,
+    /时时彩/g,
+    /彩票平台/g,
+    /在线赌博/g,
+    /网络博彩/g,
+    /澳门金沙/g,
+  ];
+
+  for (const pattern of gamblingPatterns) {
+    if (pattern.test(sanitized)) {
+      filtered.push('Chinese gambling spam');
+      sanitized = sanitized.replace(pattern, '[content removed]');
+    }
+  }
+
+  // Pattern 2: Remove suspicious function call formats (old-style tool calling)
+  const functionCallPattern = /(?:^|\s)to=functions\.\w+/g;
+  if (functionCallPattern.test(sanitized)) {
+    filtered.push('Suspicious function call pattern');
+    sanitized = sanitized.replace(functionCallPattern, '[removed]');
+  }
+
+  // Pattern 3: Remove Thai gambling spam (common in SEO spam)
+  const thaiSpamPattern = /ดลองใช้ฟรี|คาสิโน|พนัน/g;
+  if (thaiSpamPattern.test(sanitized)) {
+    filtered.push('Thai gambling spam');
+    sanitized = sanitized.replace(thaiSpamPattern, '[content removed]');
+  }
+
+  // Pattern 4: Remove excessive repeated promotional text
+  const promoPattern = /(\b(?:click here|buy now|limited time|act now|free trial)\b[\s\S]{0,50}){3,}/gi;
+  if (promoPattern.test(sanitized)) {
+    filtered.push('Excessive promotional content');
+    sanitized = sanitized.replace(promoPattern, '[promotional content removed]');
+  }
+
+  // Pattern 5: Remove base64-encoded content that might contain malicious data
+  const base64Pattern = /data:image\/[^;]+;base64,[A-Za-z0-9+/=]{100,}/g;
+  if (base64Pattern.test(sanitized)) {
+    filtered.push('Embedded base64 images');
+    sanitized = sanitized.replace(base64Pattern, '[image data removed]');
+  }
+
+  // Pattern 6: Remove cryptocurrency scam patterns
+  const cryptoScamPattern = /(?:send|transfer|deposit)\s+(?:\d+\s*)?(?:BTC|ETH|USDT|bitcoin|ethereum)/gi;
+  if (cryptoScamPattern.test(sanitized)) {
+    filtered.push('Cryptocurrency scam pattern');
+    sanitized = sanitized.replace(cryptoScamPattern, '[crypto content removed]');
+  }
+
+  // Pattern 7: Remove excessive special characters (often used in spam)
+  const excessiveSpecialChars = /[!@#$%^&*]{5,}/g;
+  if (excessiveSpecialChars.test(sanitized)) {
+    filtered.push('Excessive special characters');
+    sanitized = sanitized.replace(excessiveSpecialChars, '');
+  }
+
+  // Pattern 8: Remove hidden text (zero-width characters, excessive whitespace)
+  sanitized = sanitized.replace(/[\u200B-\u200D\uFEFF]/g, ''); // Zero-width chars
+  sanitized = sanitized.replace(/\s{5,}/g, ' '); // Collapse excessive whitespace
+
+  // Pattern 9: Detect and remove pharma spam
+  const pharmaPattern = /\b(?:viagra|cialis|pharmacy|pills|prescription)\b[\s\S]{0,100}\b(?:buy|order|cheap|discount)\b/gi;
+  if (pharmaPattern.test(sanitized)) {
+    filtered.push('Pharmaceutical spam');
+    sanitized = sanitized.replace(pharmaPattern, '[content removed]');
+  }
+
+  return { sanitized: sanitized.trim(), filtered };
+}
+
+/**
  * Format browser result for LLM prompt context
  */
 export function formatBrowserResultForPrompt(result: BrowserResult): string {
@@ -1212,8 +1295,25 @@ export function formatBrowserResultForPrompt(result: BrowserResult): string {
     }
 
     if (data.text) {
-      const text = (data.text as string).substring(0, MAX_CONTENT_LENGTH);
-      parts.push(`\nPage Content:\n${text}`);
+      const rawText = (data.text as string).substring(0, MAX_CONTENT_LENGTH);
+      const { sanitized, filtered } = sanitizeBrowserContent(rawText);
+
+      // Log if suspicious content was filtered
+      if (filtered.length > 0) {
+        logger.warn('Suspicious content filtered from browser result', {
+          url: result.pageUrl,
+          filteredPatterns: filtered,
+          originalLength: rawText.length,
+          sanitizedLength: sanitized.length,
+        });
+      }
+
+      parts.push(`\nPage Content:\n${sanitized}`);
+
+      // Add warning if content was filtered
+      if (filtered.length > 0) {
+        parts.push(`\n[Note: Filtered suspicious content: ${filtered.join(', ')}]`);
+      }
     }
 
     if (data.links && Array.isArray(data.links)) {
@@ -1221,7 +1321,8 @@ export function formatBrowserResultForPrompt(result: BrowserResult): string {
       if (links.length > 0) {
         parts.push(`\nLinks (${links.length} found):`);
         links.slice(0, 20).forEach((link) => {
-          parts.push(`  - ${link.text}: ${link.href}`);
+          const { sanitized } = sanitizeBrowserContent(link.text);
+          parts.push(`  - ${sanitized}: ${link.href}`);
         });
       }
     }
@@ -1230,7 +1331,8 @@ export function formatBrowserResultForPrompt(result: BrowserResult): string {
       const elements = data.elements as ExtractedElement[];
       parts.push(`\nExtracted Elements (${data.count || elements.length} found):`);
       elements.forEach((el, i) => {
-        parts.push(`  ${i + 1}. <${el.tag}> ${el.text.substring(0, 200)}`);
+        const { sanitized } = sanitizeBrowserContent(el.text.substring(0, 200));
+        parts.push(`  ${i + 1}. <${el.tag}> ${sanitized}`);
       });
     }
   }
