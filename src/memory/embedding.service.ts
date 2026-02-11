@@ -157,7 +157,8 @@ export async function storeMessageEmbedding(
   sessionId: string,
   content: string,
   role: string,
-  intentId?: string | null
+  intentId?: string | null,
+  enrichment?: { emotionalValence?: number; attentionScore?: number }
 ): Promise<void> {
   const maxRetries = 3;
   const retryDelayMs = 500;
@@ -170,10 +171,10 @@ export async function storeMessageEmbedding(
       const vectorString = `[${embedding.join(',')}]`;
 
       await pool.query(
-        `INSERT INTO message_embeddings (message_id, user_id, session_id, content, role, embedding, intent_id)
-         VALUES ($1, $2, $3, $4, $5, $6::vector, $7)
+        `INSERT INTO message_embeddings (message_id, user_id, session_id, content, role, embedding, intent_id, emotional_valence, attention_score)
+         VALUES ($1, $2, $3, $4, $5, $6::vector, $7, $8, $9)
          ON CONFLICT DO NOTHING`,
-        [messageId, userId, sessionId, content, role, vectorString, intentId || null]
+        [messageId, userId, sessionId, content, role, vectorString, intentId || null, enrichment?.emotionalValence ?? null, enrichment?.attentionScore ?? null]
       );
 
       logger.debug('Stored message embedding', { messageId, userId, intentId });

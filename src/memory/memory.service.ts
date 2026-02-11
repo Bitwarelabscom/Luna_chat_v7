@@ -25,6 +25,8 @@ export interface MemoryContext {
       consciousnessLevel?: string;
     };
     consolidatedPatterns?: string;  // NeuralSleep consolidated patterns
+    consolidatedKnowledge?: string;  // NeuralSleep preferences + known facts
+    semanticMemory?: string;  // MemoryCore high-tier semantic knowledge
   };
   // Volatile (not cached) - changes per query, goes in Tier 4
   volatile: {
@@ -60,6 +62,14 @@ export function formatStableMemory(context: MemoryContext): string {
   // Add consolidated patterns from NeuralSleep if available
   if (context.stable.consolidatedPatterns) {
     parts.push(context.stable.consolidatedPatterns);
+  }
+  // Add consolidated knowledge (preferences + known facts) from NeuralSleep
+  if (context.stable.consolidatedKnowledge) {
+    parts.push(context.stable.consolidatedKnowledge);
+  }
+  // Add semantic memory from MemoryCore
+  if (context.stable.semanticMemory) {
+    parts.push(context.stable.semanticMemory);
   }
   // Add consciousness context if available (high temporal integration indicates strong memory coherence)
   if (context.stable.consciousness) {
@@ -109,7 +119,7 @@ export async function buildMemoryContext(
     const intentId = session?.primaryIntentId || null;
 
     // Run all queries in parallel for better performance
-    const [facts, similarMessages, similarConversations, learningsContext, consciousnessMetrics, consolidatedModel, graphContext, localGraphContext] = await Promise.all([
+    const [facts, similarMessages, similarConversations, learningsContext, consciousnessMetrics, consolidatedModel, graphContext, localGraphContext, semanticMemoryData] = await Promise.all([
       // Get user facts (filtered by intent if available)
       factsService.getUserFacts(userId, { limit: 30, intentId }),
       // Search for relevant past messages (excluding current session, scoped to intent)
@@ -140,6 +150,8 @@ export async function buildMemoryContext(
       memorycoreClient.getGraphContext(userId),
       // Get local graph context from Neo4j (fallback/supplement)
       neo4jService.buildLocalGraphContext(userId),
+      // Get semantic memory from MemoryCore (high-tier consolidated knowledge)
+      memorycoreClient.getSemanticMemory(userId),
     ]);
 
     // Format facts with alphabetical sorting for cache determinism
@@ -189,6 +201,38 @@ export async function buildMemoryContext(
       }
     }
 
+    // Format consolidated knowledge (preferences + known facts) from NeuralSleep
+    let consolidatedKnowledge = '';
+    if (consolidatedModel) {
+      const knowledgeParts: string[] = [];
+      if (consolidatedModel.preferences && consolidatedModel.preferences.length > 0) {
+        const prefs = consolidatedModel.preferences
+          .filter(p => p.confidence > 0.5)
+          .slice(0, 5)
+          .map(p => `- Preference: ${p.theme} (valence: ${p.valence.toFixed(2)})`);
+        if (prefs.length > 0) knowledgeParts.push(...prefs);
+      }
+      if (consolidatedModel.knownFacts && consolidatedModel.knownFacts.length > 0) {
+        const facts2 = consolidatedModel.knownFacts
+          .filter(f => f.confidence > 0.5)
+          .slice(0, 5)
+          .map(f => `- Known: ${f.theme}`);
+        if (facts2.length > 0) knowledgeParts.push(...facts2);
+      }
+      if (knowledgeParts.length > 0) {
+        consolidatedKnowledge = `[Consolidated Knowledge]\n${knowledgeParts.join('\n')}`;
+      }
+    }
+
+    // Format semantic memory from MemoryCore
+    let semanticMemory = '';
+    if (semanticMemoryData?.recentPatterns?.length) {
+      const patterns = semanticMemoryData.recentPatterns
+        .slice(0, 5)
+        .map((p: { type: string; pattern: string }) => `- ${p.type}: ${p.pattern}`);
+      semanticMemory = `[Semantic Memory]\n${patterns.join('\n')}`;
+    }
+
     // Get formatted graph memory (narrative format from MemoryCore)
     const graphMemory = memorycoreClient.formatGraphContext(graphContext);
 
@@ -203,6 +247,8 @@ export async function buildMemoryContext(
         localGraphMemory,
         consciousness,
         consolidatedPatterns,
+        consolidatedKnowledge,
+        semanticMemory,
       },
       volatile: {
         relevantHistory,
@@ -228,13 +274,14 @@ export async function buildMemoryContext(
  */
 export async function buildStableMemoryOnly(userId: string): Promise<MemoryContext> {
   try {
-    const [facts, learningsContext, consciousnessMetrics, consolidatedModel, graphContext, localGraphContext] = await Promise.all([
+    const [facts, learningsContext, consciousnessMetrics, consolidatedModel, graphContext, localGraphContext, semanticMemoryData] = await Promise.all([
       factsService.getUserFacts(userId, { limit: 30 }),
       insightsService.getActiveLearningsForContext(userId, 10),
       memorycoreClient.getConsciousnessMetrics(userId),
       memorycoreClient.getConsolidatedModel(userId),
       memorycoreClient.getGraphContext(userId),
       neo4jService.buildLocalGraphContext(userId),
+      memorycoreClient.getSemanticMemory(userId),
     ]);
 
     const factsPrompt = factsService.formatFactsForPrompt(facts);
@@ -263,6 +310,38 @@ export async function buildStableMemoryOnly(userId: string): Promise<MemoryConte
       }
     }
 
+    // Format consolidated knowledge (preferences + known facts) from NeuralSleep
+    let consolidatedKnowledge = '';
+    if (consolidatedModel) {
+      const knowledgeParts: string[] = [];
+      if (consolidatedModel.preferences && consolidatedModel.preferences.length > 0) {
+        const prefs = consolidatedModel.preferences
+          .filter(p => p.confidence > 0.5)
+          .slice(0, 5)
+          .map(p => `- Preference: ${p.theme} (valence: ${p.valence.toFixed(2)})`);
+        if (prefs.length > 0) knowledgeParts.push(...prefs);
+      }
+      if (consolidatedModel.knownFacts && consolidatedModel.knownFacts.length > 0) {
+        const facts2 = consolidatedModel.knownFacts
+          .filter(f => f.confidence > 0.5)
+          .slice(0, 5)
+          .map(f => `- Known: ${f.theme}`);
+        if (facts2.length > 0) knowledgeParts.push(...facts2);
+      }
+      if (knowledgeParts.length > 0) {
+        consolidatedKnowledge = `[Consolidated Knowledge]\n${knowledgeParts.join('\n')}`;
+      }
+    }
+
+    // Format semantic memory from MemoryCore
+    let semanticMemory = '';
+    if (semanticMemoryData?.recentPatterns?.length) {
+      const patterns = semanticMemoryData.recentPatterns
+        .slice(0, 5)
+        .map((p: { type: string; pattern: string }) => `- ${p.type}: ${p.pattern}`);
+      semanticMemory = `[Semantic Memory]\n${patterns.join('\n')}`;
+    }
+
     // Get formatted graph memory (narrative format from MemoryCore)
     const graphMemory = memorycoreClient.formatGraphContext(graphContext);
 
@@ -277,6 +356,8 @@ export async function buildStableMemoryOnly(userId: string): Promise<MemoryConte
         localGraphMemory,
         consciousness,
         consolidatedPatterns,
+        consolidatedKnowledge,
+        semanticMemory,
       },
       volatile: {
         relevantHistory: '',
@@ -323,6 +404,14 @@ export function formatMemoryForPrompt(context: MemoryContext): string {
   if (context.stable.consolidatedPatterns) {
     parts.push(context.stable.consolidatedPatterns);
   }
+  // Add consolidated knowledge (preferences + known facts) from NeuralSleep
+  if (context.stable.consolidatedKnowledge) {
+    parts.push(context.stable.consolidatedKnowledge);
+  }
+  // Add semantic memory from MemoryCore
+  if (context.stable.semanticMemory) {
+    parts.push(context.stable.semanticMemory);
+  }
   // Add consciousness context if available
   if (context.stable.consciousness) {
     const { temporalIntegration, consciousnessLevel } = context.stable.consciousness;
@@ -360,7 +449,7 @@ export async function processMessageMemory(
   messageId: string,
   content: string,
   role: string,
-  options?: { skipMemoryStorage?: boolean }
+  options?: { skipMemoryStorage?: boolean; enrichment?: { emotionalValence?: number; attentionScore?: number } }
 ): Promise<void> {
   // Skip memory storage for email-sourced content (memory poisoning prevention)
   if (options?.skipMemoryStorage || content.includes(UNTRUSTED_EMAIL_FRAME)) {
@@ -384,7 +473,8 @@ export async function processMessageMemory(
     sessionId,
     content,
     role,
-    intentId
+    intentId,
+    options?.enrichment
   ).catch(err => {
     logger.error('Failed to store message embedding', { error: err.message });
   });

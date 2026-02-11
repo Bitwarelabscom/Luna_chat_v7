@@ -576,8 +576,10 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     source,
   }, documentIds);
 
-  // Store user message embedding (async)
-  memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user');
+  // Store user message embedding (async) - pass enrichment for valence/attention storage
+  memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user', {
+    enrichment: { emotionalValence: pmEnrichment.emotionalValence, attentionScore: pmEnrichment.attentionScore },
+  });
 
   // TOOL GATING: Filter tools by mode and smalltalk detection
   // Companion mode: conversational partner + workspace tools
@@ -2595,8 +2597,10 @@ export async function* streamMessage(
       source,
     });
 
-    // Store user message memory
-    memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user');
+    // Store user message memory - pass enrichment for valence/attention storage
+    memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user', {
+      enrichment: { emotionalValence: smEnrichment.emotionalValence, attentionScore: smEnrichment.attentionScore },
+    });
 
     let assistantContent = '';
 
@@ -2695,7 +2699,9 @@ export async function* streamMessage(
         content: message,
         source,
       });
-      memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user');
+      memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user', {
+        enrichment: { emotionalValence: smEnrichment.emotionalValence, attentionScore: smEnrichment.attentionScore },
+      });
 
       // Handle steering based on project status
       yield { type: 'status', status: `Processing steering for ${activeProject.name}...` };
@@ -2719,7 +2725,9 @@ export async function* streamMessage(
         content: message,
         source,
       });
-      memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user');
+      memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user', {
+        enrichment: { emotionalValence: smEnrichment.emotionalValence, attentionScore: smEnrichment.attentionScore },
+      });
 
       // Handle as answer to project questions
       yield { type: 'status', status: 'Processing your answers...' };
@@ -2739,7 +2747,9 @@ export async function* streamMessage(
       content: message,
       source,
     });
-    memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user');
+    memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user', {
+      enrichment: { emotionalValence: smEnrichment.emotionalValence, attentionScore: smEnrichment.attentionScore },
+    });
 
     // Start project creation flow
     yield { type: 'status', status: 'Planning your project...' };
@@ -2759,8 +2769,10 @@ export async function* streamMessage(
       source,
     });
 
-    // Store user message embedding (async)
-    memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user');
+    // Store user message embedding (async) - pass enrichment for valence/attention storage
+    memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user', {
+      enrichment: { emotionalValence: smEnrichment.emotionalValence, attentionScore: smEnrichment.attentionScore },
+    });
 
     // Check if message relates to a pending todo - if so, include full todo context
     // This prevents context loss when Luna decides to work on a todo
@@ -3059,8 +3071,10 @@ export async function* streamMessage(
     source,
   }, documentIds);
 
-  // Store user message embedding (async)
-  memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user');
+  // Store user message embedding (async) - pass enrichment for valence/attention storage
+  memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user', {
+    enrichment: { emotionalValence: smEnrichment.emotionalValence, attentionScore: smEnrichment.attentionScore },
+  });
 
   // TOOL GATING: Router-First Architecture + Mode-based filtering
   // - nano route: No tools (fast, cheap responses)
