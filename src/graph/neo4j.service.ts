@@ -7,6 +7,7 @@ import * as neo4jClient from './neo4j.client.js';
 import * as intentGraphService from './intent-graph.service.js';
 import * as knowledgeGraphService from './knowledge-graph.service.js';
 import * as entityGraphService from './entity-graph.service.js';
+import { isNoiseToken } from './entity-graph.service.js';
 import logger from '../utils/logger.js';
 
 // ============================================
@@ -143,20 +144,34 @@ export function formatLocalGraphContext(context: GraphContext | null): string {
     parts.push(`<intent_dependencies>\n${chains}\n</intent_dependencies>`);
   }
 
-  // Strong co-occurrences
+  // Strong co-occurrences (filtered for noise)
   if (context.entities.strongCoOccurrences.length > 0) {
     const coocs = context.entities.strongCoOccurrences
+      .filter(c =>
+        !isNoiseToken(c.entity1) &&
+        !isNoiseToken(c.entity2) &&
+        c.entity1.toLowerCase() !== c.entity2.toLowerCase()
+      )
       .map(c => `- ${c.entity1} <-> ${c.entity2} (${c.count} times)`)
       .join('\n');
-    parts.push(`<topic_associations>\n${coocs}\n</topic_associations>`);
+    if (coocs) {
+      parts.push(`<topic_associations>\n${coocs}\n</topic_associations>`);
+    }
   }
 
-  // Fact associations
+  // Fact associations (filtered for noise)
   if (context.knowledge.recentAssociations.length > 0) {
     const assocs = context.knowledge.recentAssociations
+      .filter(a =>
+        !isNoiseToken(a.fact1) &&
+        !isNoiseToken(a.fact2) &&
+        a.fact1.toLowerCase() !== a.fact2.toLowerCase()
+      )
       .map(a => `- ${a.fact1} relates to ${a.fact2}`)
       .join('\n');
-    parts.push(`<knowledge_links>\n${assocs}\n</knowledge_links>`);
+    if (assocs) {
+      parts.push(`<knowledge_links>\n${assocs}\n</knowledge_links>`);
+    }
   }
 
   if (parts.length === 0) return '';

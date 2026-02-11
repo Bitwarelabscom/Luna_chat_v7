@@ -6,6 +6,58 @@
 import * as neo4jClient from './neo4j.client.js';
 
 // ============================================
+// Stopword & Noise Filtering
+// ============================================
+
+const ENGLISH_STOPWORDS = new Set([
+  'a', 'an', 'the', 'and', 'or', 'but', 'if', 'in', 'on', 'at', 'to', 'for',
+  'of', 'with', 'by', 'from', 'is', 'it', 'be', 'as', 'do', 'no', 'not', 'so',
+  'up', 'he', 'she', 'we', 'my', 'me', 'us', 'am', 'are', 'was', 'has', 'had',
+  'did', 'may', 'can', 'its', 'his', 'her', 'our', 'who', 'how', 'all', 'any',
+  'few', 'get', 'got', 'let', 'say', 'too', 'use', 'way', 'new', 'now', 'old',
+  'see', 'out', 'own', 'put', 'run', 'set', 'try', 'why', 'big', 'end', 'far',
+  'yes', 'yet', 'also', 'back', 'been', 'both', 'come', 'each', 'even', 'find',
+  'give', 'good', 'have', 'here', 'high', 'into', 'just', 'keep', 'know', 'last',
+  'like', 'long', 'look', 'made', 'make', 'many', 'more', 'most', 'much', 'must',
+  'need', 'next', 'only', 'over', 'part', 'same', 'seem', 'show', 'side', 'some',
+  'such', 'sure', 'take', 'tell', 'than', 'that', 'them', 'then', 'they', 'this',
+  'time', 'turn', 'used', 'very', 'want', 'well', 'went', 'were', 'what', 'when',
+  'will', 'with', 'work', 'year', 'yeah', 'okay', 'thing', 'think', 'going',
+  'right', 'about', 'could', 'would', 'should', 'there', 'their', 'these',
+  'those', 'which', 'while', 'after', 'again', 'being', 'other', 'where',
+  'still', 'really', 'maybe', 'actually', 'basically', 'literally',
+]);
+
+const SWEDISH_STOPWORDS = new Set([
+  'och', 'det', 'att', 'som', 'en', 'av', 'den', 'har', 'jag', 'hon', 'han',
+  'med', 'var', 'sig', 'men', 'ett', 'kan', 'ska', 'vid', 'nog', 'nej', 'sin',
+  'alla', 'inte', 'hade', 'vad', 'vet', 'dom', 'dem', 'vara', 'hur', 'mer',
+  'man', 'oss', 'min', 'dig', 'mig', 'din', 'typ', 'ser', 'ger', 'tar', 'far',
+  'gar', 'nar', 'sen', 'iaf', 'vill', 'bara', 'lite', 'aven', 'helt', 'alla',
+  'hade', 'hans', 'hela', 'inget', 'eller', 'efter', 'sedan', 'inte', 'fick',
+  'mitt', 'ditt', 'denna', 'detta', 'dessa', 'vilka', 'vilken', 'vilket',
+  'redan', 'ganska', 'liksom', 'faktiskt', 'egentligen',
+]);
+
+const MIN_ENTITY_LENGTH = 3;
+
+/**
+ * Check if a label/name is a stopword or noise
+ */
+export function isNoiseToken(text: string): boolean {
+  if (!text || text.length < MIN_ENTITY_LENGTH) return true;
+  const lower = text.toLowerCase().trim();
+  if (lower.length < MIN_ENTITY_LENGTH) return true;
+  if (ENGLISH_STOPWORDS.has(lower)) return true;
+  if (SWEDISH_STOPWORDS.has(lower)) return true;
+  // Reject purely numeric tokens
+  if (/^\d+$/.test(lower)) return true;
+  // Reject single repeated characters like "aaa"
+  if (/^(.)\1+$/.test(lower)) return true;
+  return false;
+}
+
+// ============================================
 // Types
 // ============================================
 
@@ -43,6 +95,7 @@ export interface CoOccurrence {
  */
 export async function syncEntityToGraph(entity: EntityNode): Promise<boolean> {
   if (!neo4jClient.isNeo4jEnabled()) return false;
+  if (isNoiseToken(entity.label)) return false;
 
   const cypher = `
     MERGE (e:Entity {userId: $userId, label: $label})
@@ -69,6 +122,7 @@ export async function syncEntityToGraph(entity: EntityNode): Promise<boolean> {
  */
 export async function syncTopicToGraph(topic: TopicNode): Promise<boolean> {
   if (!neo4jClient.isNeo4jEnabled()) return false;
+  if (isNoiseToken(topic.name)) return false;
 
   const cypher = `
     MERGE (t:Topic {userId: $userId, name: $name})
@@ -93,6 +147,8 @@ export async function recordCoOccurrence(
   entity2: string
 ): Promise<boolean> {
   if (!neo4jClient.isNeo4jEnabled()) return false;
+  if (isNoiseToken(entity1) || isNoiseToken(entity2)) return false;
+  if (entity1.toLowerCase() === entity2.toLowerCase()) return false;
 
   // Ensure both entities exist
   const ensureCypher = `
@@ -128,6 +184,8 @@ export async function recordTopicCoOccurrence(
   topic2: string
 ): Promise<boolean> {
   if (!neo4jClient.isNeo4jEnabled()) return false;
+  if (isNoiseToken(topic1) || isNoiseToken(topic2)) return false;
+  if (topic1.toLowerCase() === topic2.toLowerCase()) return false;
 
   // Ensure both topics exist
   const ensureCypher = `
@@ -169,6 +227,7 @@ export async function getTopicCoOccurrences(
 
   const cypher = `
     MATCH (t1:Topic {userId: $userId, name: $topic})-[r:CO_OCCURS_WITH]-(t2:Topic)
+    WHERE size(t2.name) >= 3 AND t1.name <> t2.name
     RETURN t1.name as entity1, t2.name as entity2, r.count as count
     ORDER BY r.count DESC
     LIMIT 20
@@ -180,11 +239,13 @@ export async function getTopicCoOccurrences(
     count: { low: number } | number;
   }>(cypher, { userId, topic });
 
-  return result.map(r => ({
-    entity1: r.entity1,
-    entity2: r.entity2,
-    count: typeof r.count === 'object' ? r.count.low : Number(r.count),
-  }));
+  return result
+    .map(r => ({
+      entity1: r.entity1,
+      entity2: r.entity2,
+      count: typeof r.count === 'object' ? r.count.low : Number(r.count),
+    }))
+    .filter(r => !isNoiseToken(r.entity1) && !isNoiseToken(r.entity2));
 }
 
 /**
@@ -198,6 +259,7 @@ export async function getEntityCoOccurrences(
 
   const cypher = `
     MATCH (e1:Entity {userId: $userId, label: $entity})-[r:CO_OCCURS_WITH]-(e2:Entity)
+    WHERE size(e2.label) >= 3 AND e1.label <> e2.label
     RETURN e1.label as entity1, e2.label as entity2, r.count as count
     ORDER BY r.count DESC
     LIMIT 20
@@ -209,11 +271,13 @@ export async function getEntityCoOccurrences(
     count: { low: number } | number;
   }>(cypher, { userId, entity });
 
-  return result.map(r => ({
-    entity1: r.entity1,
-    entity2: r.entity2,
-    count: typeof r.count === 'object' ? r.count.low : Number(r.count),
-  }));
+  return result
+    .map(r => ({
+      entity1: r.entity1,
+      entity2: r.entity2,
+      count: typeof r.count === 'object' ? r.count.low : Number(r.count),
+    }))
+    .filter(r => !isNoiseToken(r.entity1) && !isNoiseToken(r.entity2));
 }
 
 /**
@@ -228,7 +292,11 @@ export async function getStrongCoOccurrences(
 
   const cypher = `
     MATCH (e1:Entity {userId: $userId})-[r:CO_OCCURS_WITH]-(e2:Entity)
-    WHERE r.count >= $minCount AND e1.label < e2.label
+    WHERE r.count >= $minCount
+      AND e1.label < e2.label
+      AND e1.label <> e2.label
+      AND size(e1.label) >= 3
+      AND size(e2.label) >= 3
     RETURN e1.label as entity1, e2.label as entity2, r.count as count
     ORDER BY r.count DESC
     LIMIT $limit
@@ -240,11 +308,13 @@ export async function getStrongCoOccurrences(
     count: { low: number } | number;
   }>(cypher, { userId, limit, minCount });
 
-  return result.map(r => ({
-    entity1: r.entity1,
-    entity2: r.entity2,
-    count: typeof r.count === 'object' ? r.count.low : Number(r.count),
-  }));
+  return result
+    .map(r => ({
+      entity1: r.entity1,
+      entity2: r.entity2,
+      count: typeof r.count === 'object' ? r.count.low : Number(r.count),
+    }))
+    .filter(r => !isNoiseToken(r.entity1) && !isNoiseToken(r.entity2));
 }
 
 /**
@@ -290,6 +360,7 @@ export async function getTopEntities(
 
   const cypher = `
     MATCH (e:Entity {userId: $userId})
+    WHERE size(e.label) >= 3
     RETURN e.userId as userId, e.label as label, e.type as type,
            e.origin as origin, e.confidence as confidence,
            e.mentionCount as mentionCount, e.lastMentioned as lastMentioned
@@ -307,15 +378,17 @@ export async function getTopEntities(
     lastMentioned: string;
   }>(cypher, { userId, limit });
 
-  return result.map(r => ({
-    userId: r.userId,
-    label: r.label,
-    type: r.type,
-    origin: r.origin,
-    confidence: r.confidence,
-    mentionCount: typeof r.mentionCount === 'object' ? r.mentionCount.low : Number(r.mentionCount),
-    lastMentioned: new Date(r.lastMentioned),
-  }));
+  return result
+    .map(r => ({
+      userId: r.userId,
+      label: r.label,
+      type: r.type,
+      origin: r.origin,
+      confidence: r.confidence,
+      mentionCount: typeof r.mentionCount === 'object' ? r.mentionCount.low : Number(r.mentionCount),
+      lastMentioned: new Date(r.lastMentioned),
+    }))
+    .filter(r => !isNoiseToken(r.label));
 }
 
 /**
@@ -329,6 +402,7 @@ export async function getTopTopics(
 
   const cypher = `
     MATCH (t:Topic {userId: $userId})
+    WHERE size(t.name) >= 3
     RETURN t.userId as userId, t.name as name,
            t.mentionCount as mentionCount, t.lastMentioned as lastMentioned
     ORDER BY t.mentionCount DESC
@@ -342,15 +416,77 @@ export async function getTopTopics(
     lastMentioned: string;
   }>(cypher, { userId, limit });
 
-  return result.map(r => ({
-    userId: r.userId,
-    name: r.name,
-    mentionCount: typeof r.mentionCount === 'object' ? r.mentionCount.low : Number(r.mentionCount),
-    lastMentioned: new Date(r.lastMentioned),
-  }));
+  return result
+    .map(r => ({
+      userId: r.userId,
+      name: r.name,
+      mentionCount: typeof r.mentionCount === 'object' ? r.mentionCount.low : Number(r.mentionCount),
+      lastMentioned: new Date(r.lastMentioned),
+    }))
+    .filter(r => !isNoiseToken(r.name));
+}
+
+/**
+ * Purge existing noise nodes from Neo4j.
+ * Deletes Topic/Entity nodes with short names and detaches their relationships.
+ * Call once to clean up historical garbage, then the ingestion guards prevent new noise.
+ */
+export async function purgeNoiseNodes(): Promise<{ deletedTopics: number; deletedEntities: number }> {
+  if (!neo4jClient.isNeo4jEnabled()) return { deletedTopics: 0, deletedEntities: 0 };
+
+  // Build Cypher-compatible stopword list (lowercased)
+  const allStopwords = [...ENGLISH_STOPWORDS, ...SWEDISH_STOPWORDS];
+
+  const deleteTopicsCypher = `
+    MATCH (t:Topic)
+    WHERE size(t.name) < 3 OR toLower(t.name) IN $stopwords
+    DETACH DELETE t
+    RETURN count(*) as deleted
+  `;
+
+  const deleteEntitiesCypher = `
+    MATCH (e:Entity)
+    WHERE size(e.label) < 3 OR toLower(e.label) IN $stopwords
+    DETACH DELETE e
+    RETURN count(*) as deleted
+  `;
+
+  const topicResult = await neo4jClient.writeQuery<{ deleted: { low: number } | number }>(
+    deleteTopicsCypher, { stopwords: allStopwords }
+  );
+  const entityResult = await neo4jClient.writeQuery<{ deleted: { low: number } | number }>(
+    deleteEntitiesCypher, { stopwords: allStopwords }
+  );
+
+  const deletedTopics = topicResult[0]?.deleted;
+  const deletedEntities = entityResult[0]?.deleted;
+
+  return {
+    deletedTopics: typeof deletedTopics === 'object' ? deletedTopics.low : Number(deletedTopics) || 0,
+    deletedEntities: typeof deletedEntities === 'object' ? deletedEntities.low : Number(deletedEntities) || 0,
+  };
+}
+
+/**
+ * Purge self-referencing co-occurrence relationships (X -> X)
+ */
+export async function purgeSelfReferences(): Promise<number> {
+  if (!neo4jClient.isNeo4jEnabled()) return 0;
+
+  const cypher = `
+    MATCH (e1)-[r:CO_OCCURS_WITH]-(e2)
+    WHERE e1 = e2
+    DELETE r
+    RETURN count(*) as deleted
+  `;
+
+  const result = await neo4jClient.writeQuery<{ deleted: { low: number } | number }>(cypher, {});
+  const deleted = result[0]?.deleted;
+  return typeof deleted === 'object' ? deleted.low : Number(deleted) || 0;
 }
 
 export default {
+  isNoiseToken,
   syncEntityToGraph,
   syncTopicToGraph,
   recordCoOccurrence,
@@ -362,4 +498,6 @@ export default {
   getEntityCount,
   getTopEntities,
   getTopTopics,
+  purgeNoiseNodes,
+  purgeSelfReferences,
 };
