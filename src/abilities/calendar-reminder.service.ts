@@ -34,7 +34,7 @@ export async function getPendingCalendarReminders(): Promise<PendingCalendarRemi
       FROM calendar_events_cache ce
       JOIN calendar_connections cc ON cc.id = ce.connection_id
       WHERE ce.reminder_minutes IS NOT NULL
-        AND ce.reminder_minutes > 0
+        AND ce.reminder_minutes >= 0
         AND ce.start_at > NOW()
         AND ce.start_at - (ce.reminder_minutes * INTERVAL '1 minute') <= NOW() + INTERVAL '2 minutes'
         AND ce.start_at - (ce.reminder_minutes * INTERVAL '1 minute') > NOW() - INTERVAL '1 minute'

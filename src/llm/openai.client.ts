@@ -972,7 +972,7 @@ export const createCalendarEventTool: OpenAI.Chat.Completions.ChatCompletionTool
         },
         reminderMinutes: {
           type: 'number',
-          description: 'How many minutes before the event to send a reminder. E.g., 15 for 15 minutes, 60 for 1 hour.',
+          description: 'How many minutes before the event to send a reminder. Defaults to 15 if not specified. Examples: 15 for 15 minutes before, 60 for 1 hour before, 0 for reminder at event time. Omit or set to null for no reminder.',
         },
       },
       required: ['title', 'startTime'],

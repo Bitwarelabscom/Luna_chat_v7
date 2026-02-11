@@ -1146,10 +1146,10 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
             endAt,
             location: args.location,
             isAllDay: args.isAllDay || false,
-            reminderMinutes: args.reminderMinutes,
+            reminderMinutes: args.reminderMinutes ?? 15, // Default to 15 minutes if not specified
           });
           const dateStr = new Date(event.startAt).toLocaleString('sv-SE', { dateStyle: 'short', timeStyle: 'short' });
-          const reminderStr = args.reminderMinutes ? ` (reminder ${args.reminderMinutes} min before)` : '';
+          const reminderStr = event.reminderMinutes ? ` (reminder ${event.reminderMinutes} min before)` : '';
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
@@ -3552,10 +3552,10 @@ export async function* streamMessage(
             endAt,
             location: args.location,
             isAllDay: args.isAllDay || false,
-            reminderMinutes: args.reminderMinutes,
+            reminderMinutes: args.reminderMinutes ?? 15, // Default to 15 minutes if not specified
           });
           const dateStr = new Date(event.startAt).toLocaleString('sv-SE', { dateStyle: 'short', timeStyle: 'short' });
-          const reminderStr = args.reminderMinutes ? ` (reminder ${args.reminderMinutes} min before)` : '';
+          const reminderStr = event.reminderMinutes ? ` (reminder ${event.reminderMinutes} min before)` : '';
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
