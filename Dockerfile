@@ -33,9 +33,7 @@ RUN npm ci --only=production
 
 COPY --from=builder /app/dist ./dist
 COPY --chown=node:node src/db/migrations ./src/db/migrations
-
-# Copy config files (YAML, etc.) that aren't compiled
-# Handled via explicit copies if needed, or ignored for now to fix build
+COPY --chown=node:node src/config ./src/config
 
 USER node
 

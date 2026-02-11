@@ -3189,6 +3189,8 @@ export interface KnowledgeGap {
   researchSessionId?: number;
   failureReason?: string;
   completedAt?: string;
+  manualApprovalRequired?: boolean;
+  description?: string; // Alias for gapDescription
 }
 
 export interface ResearchSession {
@@ -3263,6 +3265,12 @@ export const autonomousLearningApi = {
     if (status) params.set('status', status);
     return api<{ gaps: KnowledgeGap[] }>(`/api/autonomous/learning/gaps?${params}`);
   },
+
+  approveKnowledgeGap: (gapId: number) =>
+    api<{ success: boolean; gap: { id: number; status: string; manuallyApproved: boolean } }>(
+      `/api/autonomous/learning/gaps/${gapId}/approve`,
+      { method: 'POST' }
+    ),
 
   // Research Sessions
   getResearchSessions: (limit = 20) =>

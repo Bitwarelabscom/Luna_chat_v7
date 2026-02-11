@@ -1597,6 +1597,102 @@ router.get('/learning/gaps', async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/autonomous/learning/gaps/:id/approve
+ * Manually approve a rejected knowledge gap
+ */
+router.post('/learning/gaps/:id/approve', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const gapId = parseInt(req.params.id);
+
+    if (isNaN(gapId)) {
+      return res.status(400).json({ error: 'Invalid gap ID' });
+    }
+
+    const { query } = await import('../db/postgres.js');
+    const { embedApprovedGap } = await import('./autonomous-learning.orchestrator.js');
+
+    // Fetch gap with verification details
+    const gapRows = await query<any>(
+      `SELECT kg.*, ars.verification_result
+       FROM knowledge_gaps kg
+       LEFT JOIN autonomous_research_sessions ars ON kg.id = ars.knowledge_gap_id
+       WHERE kg.id = $1 AND kg.user_id = $2`,
+      [gapId, userId]
+    );
+
+    if (gapRows.length === 0) {
+      return res.status(404).json({ error: 'Knowledge gap not found' });
+    }
+
+    const gap = gapRows[0];
+
+    // Validate gap is in rejected status and requires manual approval
+    if (gap.status !== 'rejected') {
+      return res.status(400).json({
+        error: 'Gap must be in rejected status to approve',
+        currentStatus: gap.status
+      });
+    }
+
+    if (!gap.manual_approval_required) {
+      return res.status(400).json({
+        error: 'This gap does not require manual approval'
+      });
+    }
+
+    // Update gap status to verified
+    await query(
+      `UPDATE knowledge_gaps
+       SET status = 'verified', updated_at = NOW()
+       WHERE id = $1`,
+      [gapId]
+    );
+
+    // Update verification result with manual approval flag
+    const verificationResult = gap.verification_result || {};
+    verificationResult.manually_approved = true;
+    verificationResult.manual_approval_timestamp = new Date().toISOString();
+    verificationResult.manual_approval_user_id = userId;
+
+    await query(
+      `UPDATE autonomous_research_sessions
+       SET verification_result = $1
+       WHERE knowledge_gap_id = $2`,
+      [JSON.stringify(verificationResult), gapId]
+    );
+
+    // Log the manual approval action
+    await query(
+      `INSERT INTO autonomous_learning_log (user_id, action_type, action_data, timestamp)
+       VALUES ($1, $2, $3, NOW())`,
+      [userId, 'manual_approval', JSON.stringify({
+        gapId,
+        previousStatus: 'rejected',
+        newStatus: 'verified'
+      })]
+    );
+
+    // Trigger embedding asynchronously (don't await)
+    embedApprovedGap(gapId, userId).catch((error) => {
+      logger.error('Error embedding approved gap', { gapId, userId, error });
+    });
+
+    return res.json({
+      success: true,
+      gap: {
+        id: gapId,
+        status: 'verified',
+        manuallyApproved: true
+      }
+    });
+  } catch (error) {
+    logger.error('Error approving knowledge gap', { error });
+    return res.status(500).json({ error: 'Failed to approve knowledge gap' });
+  }
+});
+
+/**
  * GET /api/autonomous/learning/research-sessions
  * Get autonomous research sessions
  */

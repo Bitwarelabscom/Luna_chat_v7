@@ -584,7 +584,54 @@ function bypassSanitize(email: localEmail.EmailMessage): SanitizedEmail {
   };
 }
 
+/**
+ * Get quarantined emails for review
+ */
+export async function getQuarantinedEmails(limit: number = 20): Promise<gatekeeper.QuarantinedEmail[]> {
+  return gatekeeper.getQuarantinedEmails(limit);
+}
+
+/**
+ * Approve a quarantined email
+ */
+export async function approveQuarantinedEmail(quarantineId: string): Promise<boolean> {
+  return gatekeeper.approveQuarantinedEmail(quarantineId);
+}
+
+/**
+ * Reject a quarantined email
+ */
+export async function rejectQuarantinedEmail(quarantineId: string): Promise<boolean> {
+  return gatekeeper.rejectQuarantinedEmail(quarantineId);
+}
+
+/**
+ * Format quarantined emails for prompt
+ */
+export function formatQuarantinedEmailsForPrompt(emails: gatekeeper.QuarantinedEmail[]): string {
+  if (emails.length === 0) return '';
+
+  const formatted = emails.map(email => {
+    const date = new Date(email.quarantinedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const category = email.verdict.category;
+    const riskScore = (email.verdict.riskScore * 100).toFixed(0);
+
+    let entry = `- ${email.subject}`;
+    entry += `\n  From: ${email.fromAddress}`;
+    entry += `\n  Quarantined: ${date}`;
+    entry += `\n  Reason: ${category} (risk: ${riskScore}%)`;
+    entry += `\n  Quarantine ID: ${email.id}`;
+    if (email.verdict.flags.length > 0) {
+      entry += `\n  Flags: ${email.verdict.flags.join(', ')}`;
+    }
+    return entry;
+  }).join('\n\n');
+
+  return `[Quarantined Emails - ${emails.length} pending review]\n${formatted}`;
+}
+
 export { SanitizedEmail };
+export type { QuarantinedEmail } from '../email/email-gatekeeper.service.js';
 
 export default {
   storeEmailConnection,
@@ -613,4 +660,9 @@ export default {
   fetchEmailByUidGated,
   formatGatedInboxForPrompt,
   formatGatedEmailForPrompt,
+  // Quarantine functions
+  getQuarantinedEmails,
+  approveQuarantinedEmail,
+  rejectQuarantinedEmail,
+  formatQuarantinedEmailsForPrompt,
 };

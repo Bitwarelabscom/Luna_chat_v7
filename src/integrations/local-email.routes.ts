@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import * as emailService from './local-email.service.js';
+import * as gatekeeper from '../email/email-gatekeeper.service.js';
 import { authenticate } from '../auth/auth.middleware.js';
 import logger from '../utils/logger.js';
 
@@ -265,6 +266,74 @@ router.post('/:uid/reply', async (req: Request, res: Response) => {
     logger.error('Failed to send reply', {
       error: (error as Error).message,
       uid: req.params.uid,
+    });
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+/**
+ * GET /api/email/quarantine
+ * Get list of quarantined emails
+ */
+router.get('/quarantine', async (req: Request, res: Response) => {
+  try {
+    const limit = parseInt(req.query.limit as string) || 20;
+    const emails = await gatekeeper.getQuarantinedEmails(limit);
+    const count = await gatekeeper.getQuarantineSummary();
+
+    res.json({
+      count,
+      emails,
+    });
+  } catch (error) {
+    logger.error('Failed to get quarantined emails', {
+      error: (error as Error).message,
+    });
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+/**
+ * POST /api/email/quarantine/:id/approve
+ * Approve a quarantined email
+ */
+router.post('/quarantine/:id/approve', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const success = await gatekeeper.approveQuarantinedEmail(id);
+
+    if (success) {
+      res.json({ message: 'Email approved', id });
+    } else {
+      res.status(500).json({ error: 'Failed to approve email' });
+    }
+  } catch (error) {
+    logger.error('Failed to approve quarantined email', {
+      error: (error as Error).message,
+      id: req.params.id,
+    });
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+/**
+ * POST /api/email/quarantine/:id/reject
+ * Reject a quarantined email
+ */
+router.post('/quarantine/:id/reject', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const success = await gatekeeper.rejectQuarantinedEmail(id);
+
+    if (success) {
+      res.json({ message: 'Email rejected', id });
+    } else {
+      res.status(500).json({ error: 'Failed to reject email' });
+    }
+  } catch (error) {
+    logger.error('Failed to reject quarantined email', {
+      error: (error as Error).message,
+      id: req.params.id,
     });
     res.status(500).json({ error: (error as Error).message });
   }

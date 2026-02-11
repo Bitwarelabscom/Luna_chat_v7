@@ -1,13 +1,15 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Brain, Search, Filter, ExternalLink } from 'lucide-react';
+import { Brain, Search, Filter, ExternalLink, CheckCircle } from 'lucide-react';
 import { autonomousLearningApi, type KnowledgeGap } from '@/lib/api';
+import ApproveGapModal from './ApproveGapModal';
 
 export default function KnowledgeGapsList() {
   const [gaps, setGaps] = useState<KnowledgeGap[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<string>('');
+  const [approvalGap, setApprovalGap] = useState<KnowledgeGap | null>(null);
 
   useEffect(() => {
     loadGaps();
@@ -23,6 +25,11 @@ export default function KnowledgeGapsList() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleApprove = async (gapId: number) => {
+    await autonomousLearningApi.approveKnowledgeGap(gapId);
+    await loadGaps(); // Refresh the list
   };
 
   const statuses = ['', 'pending', 'researching', 'verified', 'embedded', 'rejected', 'failed'];
@@ -145,6 +152,19 @@ export default function KnowledgeGapsList() {
                       </div>
                     )}
 
+                    {/* Approve Button for Rejected Research */}
+                    {gap.status === 'rejected' && gap.manualApprovalRequired && (
+                      <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
+                        <button
+                          onClick={() => setApprovalGap(gap)}
+                          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-gradient-to-r from-green-500 to-emerald-600 rounded-lg hover:from-green-600 hover:to-emerald-700 transition-all"
+                        >
+                          <CheckCircle className="w-4 h-4" />
+                          Approve Research
+                        </button>
+                      </div>
+                    )}
+
                     {/* Failure Reason */}
                     {gap.failureReason && (
                       <div className="mt-3 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
@@ -160,6 +180,15 @@ export default function KnowledgeGapsList() {
           </div>
         )}
       </div>
+
+      {/* Approval Modal */}
+      {approvalGap && (
+        <ApproveGapModal
+          gap={approvalGap}
+          onClose={() => setApprovalGap(null)}
+          onApprove={handleApprove}
+        />
+      )}
     </div>
   );
 }

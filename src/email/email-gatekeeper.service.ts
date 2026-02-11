@@ -406,6 +406,82 @@ export async function getQuarantineSummary(): Promise<number> {
   }
 }
 
+export interface QuarantinedEmail {
+  id: string;
+  emailUid: number;
+  fromAddress: string;
+  subject: string;
+  quarantinedAt: Date;
+  verdict: GatekeeperVerdict;
+  reviewAction?: 'approved' | 'rejected';
+  reviewedAt?: Date;
+}
+
+export async function getQuarantinedEmails(limit: number = 20): Promise<QuarantinedEmail[]> {
+  try {
+    const result = await pool.query(
+      `SELECT id, email_uid, from_address, subject, quarantined_at, verdict, review_action, reviewed_at
+       FROM email_quarantine
+       WHERE review_action IS NULL
+       ORDER BY quarantined_at DESC
+       LIMIT $1`,
+      [limit]
+    );
+
+    return result.rows.map((row: Record<string, unknown>) => ({
+      id: row.id as string,
+      emailUid: row.email_uid as number,
+      fromAddress: row.from_address as string,
+      subject: row.subject as string,
+      quarantinedAt: row.quarantined_at as Date,
+      verdict: JSON.parse(row.verdict as string) as GatekeeperVerdict,
+      reviewAction: row.review_action as 'approved' | 'rejected' | undefined,
+      reviewedAt: row.reviewed_at as Date | undefined,
+    }));
+  } catch (error) {
+    logger.error('Failed to get quarantined emails', { error: (error as Error).message });
+    return [];
+  }
+}
+
+export async function approveQuarantinedEmail(quarantineId: string): Promise<boolean> {
+  try {
+    await pool.query(
+      `UPDATE email_quarantine
+       SET review_action = 'approved', reviewed_at = NOW()
+       WHERE id = $1`,
+      [quarantineId]
+    );
+    logger.info('Quarantined email approved', { quarantineId });
+    return true;
+  } catch (error) {
+    logger.error('Failed to approve quarantined email', {
+      error: (error as Error).message,
+      quarantineId,
+    });
+    return false;
+  }
+}
+
+export async function rejectQuarantinedEmail(quarantineId: string): Promise<boolean> {
+  try {
+    await pool.query(
+      `UPDATE email_quarantine
+       SET review_action = 'rejected', reviewed_at = NOW()
+       WHERE id = $1`,
+      [quarantineId]
+    );
+    logger.info('Quarantined email rejected', { quarantineId });
+    return true;
+  } catch (error) {
+    logger.error('Failed to reject quarantined email', {
+      error: (error as Error).message,
+      quarantineId,
+    });
+    return false;
+  }
+}
+
 // ============================================
 // Sanitization
 // ============================================
@@ -579,6 +655,9 @@ export default {
   sanitizeEmail,
   sanitizeEmailBatch,
   getQuarantineSummary,
+  getQuarantinedEmails,
+  approveQuarantinedEmail,
+  rejectQuarantinedEmail,
   formatSanitizedEmailForPrompt,
   formatSanitizedInboxForPrompt,
   UNTRUSTED_EMAIL_FRAME,

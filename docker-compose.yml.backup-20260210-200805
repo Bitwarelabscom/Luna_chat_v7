@@ -377,19 +377,6 @@ services:
     image: ollama/ollama:latest
     container_name: luna-ollama
     restart: unless-stopped
-    # PERFORMANCE: Optimize for 6-core CPU system (95% utilization)
-    cpus: "5.7"  # Allow up to 5.7 of 6 cores (95%)
-    environment:
-      # CPU optimization - use all cores for inference
-      - OLLAMA_NUM_THREADS=6
-      # Allow 2 concurrent inference requests for better throughput
-      - OLLAMA_NUM_PARALLEL=2
-      # Limit loaded models to prevent memory thrashing
-      - OLLAMA_MAX_LOADED_MODELS=2
-      # Reduce queue size for faster failure on overload
-      - OLLAMA_MAX_QUEUE=256
-      # Enable flash attention optimization if models support it
-      - OLLAMA_FLASH_ATTENTION=1
     volumes:
       - luna-ollama-data:/root/.ollama
     networks:

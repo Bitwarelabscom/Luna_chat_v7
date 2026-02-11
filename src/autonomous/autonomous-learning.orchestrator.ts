@@ -407,3 +407,79 @@ export async function runAutonomousLearningForAllUsers(): Promise<{
     throw error;
   }
 }
+
+/**
+ * Embed a manually approved knowledge gap
+ * Called after user manually approves a rejected gap
+ */
+export async function embedApprovedGap(gapId: number, userId: string): Promise<void> {
+  try {
+    logger.info('Embedding manually approved gap', { gapId, userId });
+
+    // Fetch gap with research session and findings
+    const gapRows = await query<any>(
+      `SELECT kg.*, ars.id as session_id, ars.research_findings
+       FROM knowledge_gaps kg
+       LEFT JOIN autonomous_research_sessions ars ON kg.id = ars.knowledge_gap_id
+       WHERE kg.id = $1 AND kg.user_id = $2 AND kg.status = 'verified'`,
+      [gapId, userId]
+    );
+
+    if (gapRows.length === 0) {
+      throw new Error(`Gap ${gapId} not found or not in verified status`);
+    }
+
+    const gap = gapRows[0];
+
+    if (!gap.session_id || !gap.research_findings) {
+      throw new Error(`Gap ${gapId} missing research session or findings`);
+    }
+
+    const findings = gap.research_findings;
+
+    // Calculate average trust score from sources
+    let trustScore = 0.5; // Default
+    if (findings.sources && findings.sources.length > 0) {
+      const totalScore = findings.sources.reduce(
+        (sum: number, source: any) => sum + (source.trust_score || 0.5),
+        0
+      );
+      trustScore = totalScore / findings.sources.length;
+    }
+
+    // Embed knowledge
+    await knowledgeEmbedder.embedKnowledge(
+      userId,
+      gap.session_id,
+      gap.description,
+      findings,
+      trustScore
+    );
+
+    // Update gap status to embedded
+    await query(
+      `UPDATE knowledge_gaps
+       SET status = 'embedded', updated_at = NOW()
+       WHERE id = $1`,
+      [gapId]
+    );
+
+    // Create learning notification
+    await query(
+      `INSERT INTO notifications (user_id, type, title, message, data, created_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())`,
+      [
+        userId,
+        'autonomous_learning',
+        'Research Approved and Embedded',
+        `Your manually approved research on "${gap.description}" has been embedded into my memory.`,
+        JSON.stringify({ gapId, topic: gap.description })
+      ]
+    );
+
+    logger.info('Successfully embedded manually approved gap', { gapId, userId });
+  } catch (error) {
+    logger.error('Error embedding approved gap', { gapId, userId, error });
+    throw error;
+  }
+}
