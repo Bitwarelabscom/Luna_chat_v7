@@ -101,11 +101,12 @@ export async function readQuery<T = Record<string, unknown>>(
   const session = getReadSession();
   if (!session) return [];
 
-  // Convert float parameters to integers (Neo4j LIMIT/OFFSET requires integers)
+  // Convert number parameters to Neo4j integers (required for LIMIT/OFFSET/etc)
   const processedParams = { ...params };
   for (const key in processedParams) {
     if (typeof processedParams[key] === 'number') {
-      processedParams[key] = Math.floor(processedParams[key] as number);
+      // Use neo4j.int() to ensure integers are properly typed for Neo4j
+      processedParams[key] = neo4j.int(Math.floor(processedParams[key] as number));
     }
   }
 
@@ -140,11 +141,12 @@ export async function writeQuery<T = Record<string, unknown>>(
   const session = getWriteSession();
   if (!session) return [];
 
-  // Convert float parameters to integers
+  // Convert number parameters to Neo4j integers
   const processedParams = { ...params };
   for (const key in processedParams) {
     if (typeof processedParams[key] === 'number') {
-      processedParams[key] = Math.floor(processedParams[key] as number);
+      // Use neo4j.int() to ensure integers are properly typed for Neo4j
+      processedParams[key] = neo4j.int(Math.floor(processedParams[key] as number));
     }
   }
 

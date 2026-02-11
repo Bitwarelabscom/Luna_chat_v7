@@ -388,11 +388,19 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   }
 
   // Build compressed context from history
+  // Use less aggressive compression for Telegram to preserve conversation flow
+  const compressionConfig = source === 'telegram' ? {
+    verbatimMessageCount: 12,        // Keep last 12 messages (6 exchanges) for Telegram
+    semanticRetrievalCount: 8,       // Retrieve more relevant older messages
+    summarizationThreshold: 15,      // Start summarizing later for Telegram
+  } : undefined;
+
   const compressedCtx = await contextCompression.buildCompressedContext(
     sessionId,
     userId,
     message,
-    historyForContext
+    historyForContext,
+    compressionConfig
   );
 
   const userName = user?.displayName || undefined;
@@ -2827,11 +2835,19 @@ export async function* streamMessage(
   }
 
   // Build compressed context from history
+  // Use less aggressive compression for Telegram to preserve conversation flow
+  const compressionConfig = source === 'telegram' ? {
+    verbatimMessageCount: 12,        // Keep last 12 messages (6 exchanges) for Telegram
+    semanticRetrievalCount: 8,       // Retrieve more relevant older messages
+    summarizationThreshold: 15,      // Start summarizing later for Telegram
+  } : undefined;
+
   const compressedCtx = await contextCompression.buildCompressedContext(
     sessionId,
     userId,
     message,
-    historyForContext
+    historyForContext,
+    compressionConfig
   );
 
   if (!isSmallTalkMessage) {

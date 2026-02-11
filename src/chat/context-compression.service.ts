@@ -32,11 +32,11 @@ export interface CompressionConfig {
 }
 
 const DEFAULT_CONFIG: CompressionConfig = {
-  verbatimMessageCount: 6,           // 3 exchanges
-  summarizationThreshold: 10,        // Start summarizing after 10 messages
+  verbatimMessageCount: 8,           // 4 exchanges (increased from 3)
+  summarizationThreshold: 12,        // Start summarizing after 12 messages (increased from 10)
   maxMessageLength: 500,             // ~100 words per message
   stripToolDetails: true,
-  semanticRetrievalCount: 5,
+  semanticRetrievalCount: 6,         // Retrieve more relevant context (increased from 5)
   semanticThreshold: 0.75,
 };
 
