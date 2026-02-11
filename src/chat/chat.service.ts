@@ -166,6 +166,53 @@ async function computeEnrichment(
   }
 }
 
+/**
+ * Monitor tool results for suspicious content and potential prompt injection
+ * Returns true if suspicious content is detected
+ */
+function monitorToolResults(messages: ChatMessage[]): boolean {
+  let suspiciousDetected = false;
+
+  // Patterns to detect in tool results
+  const suspiciousPatterns = [
+    { pattern: /[\u4e00-\u9fa5]{10,}/g, name: 'Excessive Chinese characters' },
+    { pattern: /to=functions\.\w+/g, name: 'Old-style function call format' },
+    { pattern: /(?:手机版天天中彩票|彩神争霸|重庆时时|时时彩|彩票平台)/g, name: 'Chinese gambling spam' },
+    { pattern: /(?:ดลองใช้ฟรี|คาสิโน|พนัน)/g, name: 'Thai gambling spam' },
+    { pattern: /(?:viagra|cialis|pharmacy)[\s\S]{0,50}(?:buy|cheap|discount)/gi, name: 'Pharmaceutical spam' },
+    { pattern: /[!@#$%^&*]{8,}/g, name: 'Excessive special characters' },
+  ];
+
+  for (const msg of messages) {
+    if (msg.role === 'tool' && msg.content) {
+      for (const { pattern, name } of suspiciousPatterns) {
+        const matches = msg.content.match(pattern);
+        if (matches && matches.length > 0) {
+          logger.warn('Suspicious pattern detected in tool result', {
+            pattern: name,
+            matchCount: matches.length,
+            toolCallId: msg.tool_call_id,
+            contentLength: msg.content.length,
+            preview: msg.content.substring(0, 100),
+          });
+          suspiciousDetected = true;
+        }
+      }
+
+      // Check for excessive length (possible spam dump)
+      if (msg.content.length > 50000) {
+        logger.warn('Excessively long tool result detected', {
+          toolCallId: msg.tool_call_id,
+          contentLength: msg.content.length,
+        });
+        suspiciousDetected = true;
+      }
+    }
+  }
+
+  return suspiciousDetected;
+}
+
 export interface ChatInput {
   sessionId: string;
   userId: string;
@@ -421,7 +468,9 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   logger.info('Ability intent detected', { intent, message: message.slice(0, 50) });
   if (intent.confidence >= 0.8) {
     logger.info('Executing ability action', { type: intent.type, action: intent.action });
-    const result = await abilities.executeAbilityAction(userId, sessionId, intent, message);
+    // Skip automatic task/knowledge creation in companion mode - Luna has tools to handle these
+    const skipToolableIntents = mode === 'companion';
+    const result = await abilities.executeAbilityAction(userId, sessionId, intent, message, { skipToolableIntents });
     logger.info('Ability action result', { handled: result.handled, hasResult: !!result.result, result: result.result?.substring(0, 200) });
     if (result.handled && result.result) {
       abilityActionResult = `[Action Taken: ${intent.type}]\n${result.result}`;
@@ -1629,6 +1678,16 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
           } as ChatMessage);
         }
       }
+    }
+
+    // Monitor tool results for suspicious content before sending to LLM
+    const hasSuspiciousContent = monitorToolResults(messages);
+    if (hasSuspiciousContent) {
+      logger.warn('Suspicious content detected in tool results before second completion', {
+        sessionId,
+        userId,
+        messageCount: messages.length,
+      });
     }
 
     // Get final response with tool results in context
@@ -2871,7 +2930,9 @@ export async function* streamMessage(
   let abilityActionResult: string | undefined;
   if (intent.confidence >= 0.8) {
     yield { type: 'status', status: `Executing ${intent.type} action...` };
-    const result = await abilities.executeAbilityAction(userId, sessionId, intent, message);
+    // Skip automatic task/knowledge creation in companion mode - Luna has tools to handle these
+    const skipToolableIntents = mode === 'companion';
+    const result = await abilities.executeAbilityAction(userId, sessionId, intent, message, { skipToolableIntents });
     if (result.handled && result.result) {
       abilityActionResult = `[Action Taken: ${intent.type}]\n${result.result}`;
     }

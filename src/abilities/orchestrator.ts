@@ -1074,13 +1074,26 @@ export async function executeAbilityAction(
   userId: string,
   sessionId: string,
   intent: AbilityIntent,
-  message: string
+  message: string,
+  options: { skipToolableIntents?: boolean } = {}
 ): Promise<{
   handled: boolean;
   result?: string;
   data?: unknown;
 }> {
   try {
+    // Skip task/knowledge creation if Luna has tools to handle these herself
+    // This prevents duplicate task creation when Luna uses create_todo tool
+    if (options.skipToolableIntents && (intent.type === 'task' || intent.type === 'knowledge')) {
+      if (intent.action === 'create') {
+        logger.debug('Skipping automatic task/knowledge creation - letting Luna handle via tools', {
+          type: intent.type,
+          action: intent.action,
+        });
+        return { handled: false };
+      }
+    }
+
     switch (intent.type) {
       case 'task': {
         if (intent.action === 'create') {
