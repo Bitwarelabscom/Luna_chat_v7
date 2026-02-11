@@ -14,6 +14,7 @@ import { createCompletion } from '../llm/router.js';
 import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
 import { intentCache } from './intent-cache.service.js';
+import { pool } from '../db/index.js';
 
 export interface AbilityContext {
   knowledge: string;
@@ -268,7 +269,7 @@ interface ParsedCalendarEvent {
 /**
  * Parse calendar event details from natural language text
  */
-function parseCalendarEventFromText(text: string): ParsedCalendarEvent {
+function parseCalendarEventFromText(text: string, userTimezone?: string): ParsedCalendarEvent {
   const result: ParsedCalendarEvent = {};
   const now = new Date();
 
@@ -313,7 +314,7 @@ function parseCalendarEventFromText(text: string): ParsedCalendarEvent {
   }
 
   // Parse date/time
-  const dateTime = parseDateTimeFromText(text, now);
+  const dateTime = parseDateTimeFromText(text, now, userTimezone);
   if (dateTime.startAt) {
     result.startAt = dateTime.startAt;
     result.endAt = dateTime.endAt || new Date(dateTime.startAt.getTime() + 60 * 60 * 1000); // 1 hour default
@@ -324,9 +325,41 @@ function parseCalendarEventFromText(text: string): ParsedCalendarEvent {
 }
 
 /**
+ * Convert local time to UTC Date considering user's timezone
+ * Takes a Date with time components set in local time and returns UTC equivalent
+ */
+function convertLocalTimeToUTC(localDate: Date, timezone: string): Date {
+  try {
+    // Extract time components that were set as "local" time
+    const year = localDate.getFullYear();
+    const month = localDate.getMonth() + 1;
+    const day = localDate.getDate();
+    const hours = localDate.getHours();
+    const minutes = localDate.getMinutes();
+
+    // Create ISO string representing the time in user's timezone
+    const isoString = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00`;
+
+    // Parse this string as UTC, then get what time that would be in user's timezone
+    const utcDate = new Date(isoString + 'Z');
+    const localizedString = utcDate.toLocaleString('en-US', { timeZone: timezone, hour12: false });
+    const parsedBack = new Date(localizedString);
+
+    // Calculate the offset between what we wanted and what we got
+    const offset = parsedBack.getTime() - utcDate.getTime();
+
+    // Adjust the UTC date by the opposite offset to get the correct UTC time
+    return new Date(utcDate.getTime() - offset);
+  } catch (error) {
+    logger.warn('Failed to convert timezone, using local time as UTC', { error: (error as Error).message, timezone });
+    return localDate;
+  }
+}
+
+/**
  * Parse date and time from natural language
  */
-function parseDateTimeFromText(text: string, now: Date): { startAt?: Date; endAt?: Date; isAllDay?: boolean } {
+function parseDateTimeFromText(text: string, now: Date, userTimezone?: string): { startAt?: Date; endAt?: Date; isAllDay?: boolean } {
   const lower = text.toLowerCase();
   let targetDate = new Date(now);
   let hasTime = false;
@@ -472,6 +505,12 @@ function parseDateTimeFromText(text: string, now: Date): { startAt?: Date; endAt
   } else {
     // Default 1 hour duration
     endDate = new Date(targetDate.getTime() + 60 * 60 * 1000);
+  }
+
+  // Convert from user's timezone to UTC if timezone is provided
+  if (userTimezone && hasTime) {
+    targetDate = convertLocalTimeToUTC(targetDate, userTimezone);
+    endDate = convertLocalTimeToUTC(endDate, userTimezone);
   }
 
   return {
@@ -1185,7 +1224,19 @@ export async function executeAbilityAction(
       case 'calendar': {
         // Create calendar event
         if (intent.action === 'create') {
-          const parsed = parseCalendarEventFromText(message);
+          // Get user's timezone from settings
+          let userTimezone = 'UTC';
+          try {
+            const userResult = await pool.query('SELECT settings FROM users WHERE id = $1', [userId]);
+            if (userResult.rows.length > 0) {
+              const settings = userResult.rows[0].settings as { timezone?: string };
+              userTimezone = settings.timezone || 'UTC';
+            }
+          } catch (error) {
+            logger.warn('Failed to fetch user timezone, using UTC', { error: (error as Error).message, userId });
+          }
+
+          const parsed = parseCalendarEventFromText(message, userTimezone);
           if (parsed.title) {
             try {
               const event = await calendar.createEvent(userId, {
@@ -1196,9 +1247,11 @@ export async function executeAbilityAction(
                 location: parsed.location,
                 isAllDay: parsed.isAllDay,
               });
+
+              // Format the event time in user's timezone for display
               const eventDate = new Date(event.startAt);
-              const dateStr = eventDate.toLocaleDateString('sv-SE', { weekday: 'long', day: 'numeric', month: 'short' });
-              const timeStr = eventDate.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+              const dateStr = eventDate.toLocaleDateString('en-US', { timeZone: userTimezone, weekday: 'long', day: 'numeric', month: 'short' });
+              const timeStr = eventDate.toLocaleTimeString('en-US', { timeZone: userTimezone, hour: '2-digit', minute: '2-digit', hour12: false });
               return {
                 handled: true,
                 result: `Created calendar event: "${event.title}" on ${dateStr} at ${timeStr}${event.location ? ` @ ${event.location}` : ''}`,
