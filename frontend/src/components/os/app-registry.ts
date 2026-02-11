@@ -11,6 +11,7 @@ import {
   Mail,
   Users,
   Music,
+  Video,
   Settings,
   TrendingUp,
   Activity,
@@ -34,6 +35,7 @@ export type AppId =
   | 'email'
   | 'friends'
   | 'music'
+  | 'videos'
   | 'trading'
   | 'settings'
   | 'activity'
@@ -150,6 +152,14 @@ export const appConfig: Record<AppId, AppConfig> = {
     defaultSize: { width: 400, height: 500 },
     showInDock: true,
   },
+  videos: {
+    id: 'videos',
+    title: 'Videos',
+    icon: Video,
+    color: 'from-red-500 to-rose-600',
+    defaultSize: { width: 1000, height: 650 },
+    showInDock: true,
+  },
   trading: {
     id: 'trading',
     title: 'Trading',
@@ -215,6 +225,7 @@ export const dockApps: AppId[] = [
   'email',
   'friends',
   'music',
+  'videos',
   'trading',
   'activity',
   'consciousness',

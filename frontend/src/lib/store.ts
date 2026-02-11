@@ -56,6 +56,12 @@ interface BrowserAction {
   url?: string;
 }
 
+interface VideoAction {
+  type: 'open';
+  videos: Array<{ id: string; title: string; channelTitle: string; thumbnail: string; duration: string; isLive: boolean }>;
+  query: string;
+}
+
 interface ChatState {
   sessions: Session[];
   archivedSessions: Session[];
@@ -71,6 +77,8 @@ interface ChatState {
   isLoadingStartup: boolean;
   // Browser action for visual browsing
   browserAction: BrowserAction | null;
+  // Video action for YouTube search results
+  videoAction: VideoAction | null;
 
   loadSessions: () => Promise<void>;
   loadArchivedSessions: () => Promise<void>;
@@ -97,6 +105,8 @@ interface ChatState {
   setIsLoadingStartup: (loading: boolean) => void;
   // Browser action
   setBrowserAction: (action: BrowserAction | null) => void;
+  // Video action
+  setVideoAction: (action: VideoAction | null) => void;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -112,6 +122,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   startupSuggestions: [],
   isLoadingStartup: false,
   browserAction: null,
+  videoAction: null,
 
   loadSessions: async () => {
     set({ isLoadingSessions: true });
@@ -269,4 +280,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setIsLoadingStartup: (loading) => set({ isLoadingStartup: loading }),
   // Browser action
   setBrowserAction: (action) => set({ browserAction: action }),
+  // Video action
+  setVideoAction: (action) => set({ videoAction: action }),
 }));

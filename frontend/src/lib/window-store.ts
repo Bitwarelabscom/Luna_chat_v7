@@ -3,6 +3,20 @@
 import { create } from 'zustand';
 import { type AppId, appConfig } from '@/components/os/app-registry';
 
+export interface VideoResult {
+  id: string;
+  title: string;
+  channelTitle: string;
+  thumbnail: string;
+  duration: string;
+  isLive: boolean;
+}
+
+export interface PendingVideoData {
+  videos: VideoResult[];
+  query: string;
+}
+
 export interface EditorFileContext {
   sourceType: 'workspace' | 'project';
   sourceId: string;
@@ -28,6 +42,8 @@ interface WindowStore {
   pendingBrowserUrl: string | null;
   // Pending context for editor to open a file
   pendingEditorContext: EditorFileContext | null;
+  // Pending video results for videos window
+  pendingVideoResults: PendingVideoData | null;
 
   // Actions
   openApp: (appId: AppId) => void;
@@ -42,6 +58,9 @@ interface WindowStore {
   // Editor context actions
   setPendingEditorContext: (context: EditorFileContext | null) => void;
   consumePendingEditorContext: () => EditorFileContext | null;
+  // Video results actions
+  setPendingVideoResults: (data: PendingVideoData | null) => void;
+  consumePendingVideoResults: () => PendingVideoData | null;
 }
 
 let windowIdCounter = 0;
@@ -52,6 +71,7 @@ export const useWindowStore = create<WindowStore>((set, get) => ({
   maxZIndex: 1,
   pendingBrowserUrl: null,
   pendingEditorContext: null,
+  pendingVideoResults: null,
 
   openApp: (appId: AppId) => {
     const { windows, maxZIndex } = get();
@@ -191,6 +211,18 @@ export const useWindowStore = create<WindowStore>((set, get) => ({
       set({ pendingEditorContext: null });
     }
     return pendingEditorContext;
+  },
+
+  setPendingVideoResults: (data: PendingVideoData | null) => {
+    set({ pendingVideoResults: data });
+  },
+
+  consumePendingVideoResults: () => {
+    const { pendingVideoResults } = get();
+    if (pendingVideoResults) {
+      set({ pendingVideoResults: null });
+    }
+    return pendingVideoResults;
   },
 }));
 

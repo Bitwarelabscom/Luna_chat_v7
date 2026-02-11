@@ -214,7 +214,7 @@ export async function* streamMessage(
   projectMode?: boolean,
   thinkingMode?: boolean,
   novaMode?: boolean
-): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'reasoning' | 'background_refresh'; content?: string; status?: string; messageId?: string; metrics?: MessageMetrics; action?: string; url?: string }> {
+): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'reasoning' | 'background_refresh' | 'video_action'; content?: string; status?: string; messageId?: string; metrics?: MessageMetrics; action?: string; url?: string; videos?: any[]; query?: string }> {
   const response = await fetch(`${API_URL}${API_PREFIX}/api/chat/sessions/${sessionId}/send`, {
     method: 'POST',
     headers: {
@@ -266,7 +266,7 @@ export async function* streamMessageWithFiles(
   projectMode?: boolean,
   thinkingMode?: boolean,
   novaMode?: boolean
-): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'reasoning' | 'background_refresh'; content?: string; status?: string; messageId?: string; metrics?: MessageMetrics; action?: string; url?: string }> {
+): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'reasoning' | 'background_refresh' | 'video_action'; content?: string; status?: string; messageId?: string; metrics?: MessageMetrics; action?: string; url?: string; videos?: any[]; query?: string }> {
   const formData = new FormData();
   formData.append('message', message);
   formData.append('stream', 'true');

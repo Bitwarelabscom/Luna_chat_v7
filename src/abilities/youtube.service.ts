@@ -119,31 +119,8 @@ export function formatYouTubeForPrompt(results: YouTubeSearchResult): string {
     lines.push('');
   });
 
-  lines.push('\nTo embed a video in your response, use this format:');
-  lines.push(':::youtube[VIDEO_ID]');
-  lines.push('**Video Title**');
-  lines.push('Channel: X | Duration: X');
-  lines.push(':::');
+  lines.push('\nThe videos are now playing in the user\'s Videos window. The first video is auto-playing.');
+  lines.push('Reference videos by their number or title in your response. Do NOT use :::youtube embed syntax.');
 
   return lines.join('\n');
-}
-
-/**
- * Generate the custom markdown syntax for embedding a YouTube video
- */
-export function generateEmbedMarkdown(
-  videoId: string,
-  title: string,
-  channelTitle: string,
-  duration?: string
-): string {
-  const metadata = [channelTitle];
-  if (duration) {
-    metadata.push(`Duration: ${duration}`);
-  }
-
-  return `:::youtube[${videoId}]
-**${title}**
-${metadata.join(' | ')}
-:::`;
 }

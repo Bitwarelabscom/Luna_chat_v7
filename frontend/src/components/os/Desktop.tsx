@@ -23,6 +23,7 @@ import CalendarWindow from './apps/CalendarWindow';
 import EmailWindow from './apps/EmailWindow';
 import FriendsWindow from './apps/FriendsWindow';
 import MusicWindow from './apps/MusicWindow';
+import VideosWindow from './apps/VideosWindow';
 import TradingWindow from './apps/TradingWindow';
 import SettingsWindow from './apps/SettingsWindow';
 import ActivityWindow from './apps/ActivityWindow';
@@ -59,6 +60,8 @@ function getAppComponent(appId: AppId): React.ReactNode {
       return <FriendsWindow />;
     case 'music':
       return <MusicWindow />;
+    case 'videos':
+      return <VideosWindow />;
     case 'trading':
       return <TradingWindow />;
     case 'settings':
@@ -89,6 +92,9 @@ export function Desktop() {
 
   const browserAction = useChatStore((state) => state.browserAction);
   const setBrowserAction = useChatStore((state) => state.setBrowserAction);
+  const videoAction = useChatStore((state) => state.videoAction);
+  const setVideoAction = useChatStore((state) => state.setVideoAction);
+  const setPendingVideoResults = useWindowStore((state) => state.setPendingVideoResults);
 
   const { activeBackground, setActiveBackground } = useBackgroundStore();
 
@@ -141,6 +147,15 @@ export function Desktop() {
       setBrowserAction(null);
     }
   }, [browserAction, openApp, setBrowserAction, setPendingBrowserUrl]);
+
+  // Auto-open videos window when videoAction is triggered (YouTube search)
+  useEffect(() => {
+    if (videoAction?.type === 'open') {
+      setPendingVideoResults({ videos: videoAction.videos, query: videoAction.query });
+      openApp('videos');
+      setVideoAction(null);
+    }
+  }, [videoAction, openApp, setVideoAction, setPendingVideoResults]);
 
   // Keyboard shortcuts
   useEffect(() => {

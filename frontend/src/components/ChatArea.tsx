@@ -10,7 +10,7 @@ import clsx from 'clsx';
 import MessageActions from './MessageActions';
 import MessageMetrics from './MessageMetrics';
 import { useAudioPlayer } from './useAudioPlayer';
-import YouTubeEmbed, { parseMediaBlocks } from './YouTubeEmbed';
+import { parseMediaBlocks } from './YouTubeEmbed';
 import ImageEmbed from './ImageEmbed';
 import { AttachmentCard } from './AttachmentCard';
 import { FileChip } from './FileChip';
@@ -56,6 +56,7 @@ function StandardChatArea() {
     setStatusMessage,
     setIsLoadingStartup,
     setBrowserAction,
+    setVideoAction,
   } = useChatStore();
 
   // Track background reflection status
@@ -240,6 +241,9 @@ function StandardChatArea() {
         } else if (chunk.type === 'browser_action' && chunk.action === 'open') {
           // Signal to open browser window for visual browsing
           setBrowserAction({ type: 'open', url: chunk.url });
+        } else if (chunk.type === 'video_action' && chunk.videos && chunk.query) {
+          // Signal to open videos window with YouTube search results
+          setVideoAction({ type: 'open', videos: chunk.videos, query: chunk.query });
         } else if (chunk.type === 'background_refresh') {
           // Signal to refresh desktop background (after Luna generates/changes it)
           window.dispatchEvent(new CustomEvent('luna:background-refresh'));
@@ -482,25 +486,17 @@ function StandardChatArea() {
                     )}
                   >
                     {msg.role === 'assistant' ? (
-                      <div className="message-content prose prose-invert prose-sm max-w-none" data-youtube-test="enabled">
+                      <div className="message-content prose prose-invert prose-sm max-w-none">
                         {parseMediaBlocks(msg.content).map((block, idx) => (
-                          block.type === 'youtube' ? (
-                            <YouTubeEmbed
-                              key={`yt-${idx}`}
-                              videoId={block.videoId}
-                              title={block.title}
-                              channel={block.channel}
-                              duration={block.duration}
-                            />
-                          ) : block.type === 'image' ? (
+                          block.type === 'image' ? (
                             <ImageEmbed
                               key={`img-${idx}`}
                               url={block.url}
                               caption={block.caption}
                             />
-                          ) : (
+                          ) : block.type === 'text' ? (
                             <ReactMarkdown key={`md-${idx}`}>{block.content}</ReactMarkdown>
-                          )
+                          ) : null
                         ))}
                       </div>
                     ) : (
@@ -559,23 +555,15 @@ function StandardChatArea() {
                 <div className="inline-block max-w-[85%] px-4 py-3 rounded-2xl bg-theme-message-assistant text-theme-message-assistant-text rounded-bl-md border border-theme-border">
                   <div className="message-content prose prose-invert prose-sm max-w-none">
                     {parseMediaBlocks(streamingContent).map((block, idx) => (
-                      block.type === 'youtube' ? (
-                        <YouTubeEmbed
-                          key={`yt-stream-${idx}`}
-                          videoId={block.videoId}
-                          title={block.title}
-                          channel={block.channel}
-                          duration={block.duration}
-                        />
-                      ) : block.type === 'image' ? (
+                      block.type === 'image' ? (
                         <ImageEmbed
                           key={`img-stream-${idx}`}
                           url={block.url}
                           caption={block.caption}
                         />
-                      ) : (
+                      ) : block.type === 'text' ? (
                         <ReactMarkdown key={`md-stream-${idx}`}>{block.content}</ReactMarkdown>
-                      )
+                      ) : null
                     ))}
                     <span className="typing-cursor" />
                   </div>

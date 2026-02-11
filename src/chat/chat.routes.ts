@@ -302,6 +302,8 @@ router.post('/sessions/:id/send', rateLimit, upload.array('files', 5), async (re
           res.write(`data: ${JSON.stringify({ type: 'content', content: chunk.content })}\n\n`);
         } else if (chunk.type === 'browser_action') {
           res.write(`data: ${JSON.stringify({ type: 'browser_action', action: chunk.action, url: chunk.url })}\n\n`);
+        } else if (chunk.type === 'video_action') {
+          res.write(`data: ${JSON.stringify({ type: 'video_action', videos: chunk.videos, query: chunk.query })}\n\n`);
         } else if (chunk.type === 'done') {
           res.write(`data: ${JSON.stringify({
             type: 'done',
@@ -538,6 +540,8 @@ router.post('/sessions/:sessionId/messages/:messageId/regenerate', rateLimit, as
         res.write(`data: ${JSON.stringify({ type: 'content', content: chunk.content })}\n\n`);
       } else if (chunk.type === 'browser_action') {
         res.write(`data: ${JSON.stringify({ type: 'browser_action', action: chunk.action, url: chunk.url })}\n\n`);
+      } else if (chunk.type === 'video_action') {
+        res.write(`data: ${JSON.stringify({ type: 'video_action', videos: chunk.videos, query: chunk.query })}\n\n`);
       } else if (chunk.type === 'done') {
         res.write(`data: ${JSON.stringify({
           type: 'done',

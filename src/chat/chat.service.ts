@@ -2490,7 +2490,7 @@ export interface StreamMetrics {
 
 export async function* streamMessage(
   input: ChatInput
-): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'background_refresh' | 'reasoning'; content?: string; status?: string; messageId?: string; tokensUsed?: number; metrics?: StreamMetrics; action?: string; url?: string }> {
+): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'background_refresh' | 'reasoning' | 'video_action'; content?: string; status?: string; messageId?: string; tokensUsed?: number; metrics?: StreamMetrics; action?: string; url?: string; videos?: any[]; query?: string }> {
   const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode, novaMode, documentIds } = input;
 
   // Initialize MemoryCore session for consolidation tracking
@@ -3174,6 +3174,10 @@ export async function* streamMessage(
         logger.info('YouTube search executing (stream)', { query: args.query, limit: args.limit });
 
         const results = await youtube.searchYouTube(args.query, args.limit || 3);
+
+        if (results.videos.length > 0) {
+          yield { type: 'video_action', videos: results.videos, query: results.query };
+        }
 
         messages.push({
           role: 'tool',

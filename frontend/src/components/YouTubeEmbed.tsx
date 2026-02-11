@@ -174,13 +174,9 @@ export function parseMediaBlocks(content: string): ContentBlock[] {
     const blockContent = match[3];
 
     if (blockType === 'youtube') {
-      // Parse video metadata from the block content
+      // Convert youtube embeds to text (videos now open in Videos window)
       const metadata = parseVideoMetadata(blockContent);
-      parts.push({
-        type: 'youtube',
-        videoId: blockId,
-        ...metadata,
-      });
+      parts.push({ type: 'text', content: `[Video: ${metadata.title}]` });
     } else if (blockType === 'image') {
       // Parse image caption from the block content
       const caption = blockContent.trim() || undefined;
