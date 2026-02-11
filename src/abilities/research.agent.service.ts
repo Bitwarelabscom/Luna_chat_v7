@@ -2,11 +2,9 @@ import logger from '../utils/logger.js';
 import { spawn } from 'child_process';
 import * as path from 'path';
 
-const SANDBOX_CONTAINER = process.env.SANDBOX_CONTAINER || 'luna-sandbox';
-const DOCKER_HOST = process.env.DOCKER_HOST || 'http://docker-proxy:2375';
 const RESEARCH_TIMEOUT = 600000; // 10 minutes for thorough research
 const MAX_OUTPUT_LENGTH = 100000; // 100KB output limit
-const SANDBOX_WORKSPACE_ROOT = '/workspace';
+const WORKSPACE_ROOT = '/app/workspace';
 
 export interface ResearchOptions {
   saveToFile?: string;
@@ -24,7 +22,7 @@ export interface ResearchResult {
 }
 
 /**
- * Execute research using Claude CLI in luna-sandbox container
+ * Execute research using Gemini CLI
  */
 export async function executeResearch(
   query: string,
@@ -35,7 +33,7 @@ export async function executeResearch(
   const { saveToFile, depth = 'thorough' } = options;
 
   // Ensure research directory exists in user workspace
-  const userResearchDir = path.join(SANDBOX_WORKSPACE_ROOT, userId, 'research');
+  const userResearchDir = path.join(WORKSPACE_ROOT, userId, 'research');
 
   try {
     // Build research prompt
@@ -48,8 +46,8 @@ export async function executeResearch(
       saveToFile,
     });
 
-    // Execute Claude CLI in sandbox container
-    const result = await executeClaudeInSandbox(
+    // Execute Gemini CLI
+    const result = await executeGeminiCLI(
       researchPrompt,
       userResearchDir,
       userId
@@ -141,38 +139,35 @@ Be factual and objective in your analysis.`;
 }
 
 /**
- * Execute Claude CLI in the sandbox container
+ * Execute Gemini CLI for research
  */
-async function executeClaudeInSandbox(
+async function executeGeminiCLI(
   prompt: string,
   workDir: string,
   userId: string
 ): Promise<{ success: boolean; output: string; error?: string }> {
   return new Promise((resolve) => {
-    const userWorkspace = path.join(SANDBOX_WORKSPACE_ROOT, userId);
+    const userWorkspace = path.join(WORKSPACE_ROOT, userId);
 
-    // Run as 'sandbox' user (non-root) - Claude CLI requires this for bypassPermissions
-    const dockerArgs = [
-      'exec',
-      '-i',
-      '-u', 'sandbox',
-      '-w', workDir,
-      '-e', 'HOME=/home/sandbox',
-      SANDBOX_CONTAINER,
-      'claude',
-      '--permission-mode', 'bypassPermissions',
-      '--add-dir', userWorkspace,
-      '-p',
-      prompt,
+    // Execute Gemini CLI with yolo mode (auto-approve tools) for research
+    const geminiArgs = [
+      '-p', prompt,  // Non-interactive mode
+      '--approval-mode', 'yolo',  // Auto-approve all tools
+      '--include-directories', userWorkspace,  // Add user workspace
+      '--output-format', 'text',  // Plain text output
     ];
 
-    logger.debug('Executing Claude CLI in sandbox', {
-      container: SANDBOX_CONTAINER,
+    logger.debug('Executing Gemini CLI for research', {
       workDir,
+      userId,
     });
 
-    const proc = spawn('docker', dockerArgs, {
-      env: { ...process.env, DOCKER_HOST },
+    const proc = spawn('gemini', geminiArgs, {
+      cwd: workDir,
+      env: {
+        ...process.env,
+        HOME: '/home/node',
+      },
     });
 
     let stdout = '';
@@ -274,8 +269,9 @@ async function saveResearchToFile(
 
   const relPath = path.join('research', finalFilename);
 
-  // Use docker exec to write file in sandbox
-  const fullPath = path.join(SANDBOX_WORKSPACE_ROOT, userId, relPath);
+  // Write file directly to workspace using Node.js fs
+  const fs = await import('fs/promises');
+  const fullPath = path.join(WORKSPACE_ROOT, userId, relPath);
   const dirPath = path.dirname(fullPath);
 
   const fileContent = `# Research: ${query}
@@ -287,48 +283,11 @@ async function saveResearchToFile(
 ${content}
 `;
 
-  // Create directory and write file via docker exec
-  await new Promise<void>((resolve, reject) => {
-    const mkdirArgs = [
-      'exec', '-i',
-      SANDBOX_CONTAINER,
-      'mkdir', '-p', dirPath,
-    ];
+  // Create directory if it doesn't exist
+  await fs.mkdir(dirPath, { recursive: true });
 
-    const proc = spawn('docker', mkdirArgs, {
-      env: { ...process.env, DOCKER_HOST },
-    });
-
-    proc.on('close', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`Failed to create directory: ${code}`));
-    });
-
-    proc.on('error', reject);
-  });
-
-  // Write file via docker exec with stdin
-  await new Promise<void>((resolve, reject) => {
-    const writeArgs = [
-      'exec', '-i',
-      SANDBOX_CONTAINER,
-      'sh', '-c', `cat > "${fullPath}"`,
-    ];
-
-    const proc = spawn('docker', writeArgs, {
-      env: { ...process.env, DOCKER_HOST },
-    });
-
-    proc.stdin.write(fileContent);
-    proc.stdin.end();
-
-    proc.on('close', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`Failed to write file: ${code}`));
-    });
-
-    proc.on('error', reject);
-  });
+  // Write file
+  await fs.writeFile(fullPath, fileContent, 'utf-8');
 
   logger.info('Saved research to file', { userId, path: relPath });
 
