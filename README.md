@@ -33,7 +33,7 @@
 
 <div align="center">
 
-![Luna Desktop - Chat Mode Selection](images/screenshot-desktop.png)
+![Luna Desktop - Chat Mode Selection](images/desktop_latest.png)
 *OS-style desktop with Spotlight launcher, notifications, and chat mode selection*
 
 ![Luna Apps - Tasks, Files, Editor, Friends](images/screenshot-apps.png)
@@ -49,6 +49,9 @@
 
 ![Luna System Info](images/info1.png)
 *Detailed system overview and diagnostic dashboard*
+
+![Luna Media Player](images/youtube.png)
+*Integrated YouTube and local media player with download capabilities*
 
 ![AI Friends Panel](images/friends.png)
 *Interface for interacting with Luna's council of AI friends*
