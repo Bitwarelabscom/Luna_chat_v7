@@ -17,6 +17,32 @@ export interface PendingVideoData {
   query: string;
 }
 
+export interface MediaItem {
+  id: string;
+  name: string;
+  type: 'youtube' | 'jellyfin-audio' | 'jellyfin-video';
+  // YouTube fields
+  youtubeId?: string;
+  thumbnail?: string;
+  channelTitle?: string;
+  duration?: string;
+  isLive?: boolean;
+  // Jellyfin fields
+  artist?: string;
+  album?: string;
+  streamUrl?: string;
+  imageUrl?: string;
+  year?: number;
+  durationTicks?: number;
+}
+
+export interface PendingMediaData {
+  items: MediaItem[];
+  query: string;
+  source: 'youtube' | 'jellyfin' | 'mixed';
+  autoPlay?: boolean;
+}
+
 export interface EditorFileContext {
   sourceType: 'workspace' | 'project';
   sourceId: string;
@@ -42,8 +68,10 @@ interface WindowStore {
   pendingBrowserUrl: string | null;
   // Pending context for editor to open a file
   pendingEditorContext: EditorFileContext | null;
-  // Pending video results for videos window
+  // Pending video results for videos window (legacy YouTube)
   pendingVideoResults: PendingVideoData | null;
+  // Pending media results for unified media player
+  pendingMediaResults: PendingMediaData | null;
 
   // Actions
   openApp: (appId: AppId) => void;
@@ -58,9 +86,12 @@ interface WindowStore {
   // Editor context actions
   setPendingEditorContext: (context: EditorFileContext | null) => void;
   consumePendingEditorContext: () => EditorFileContext | null;
-  // Video results actions
+  // Video results actions (legacy)
   setPendingVideoResults: (data: PendingVideoData | null) => void;
   consumePendingVideoResults: () => PendingVideoData | null;
+  // Media results actions (unified)
+  setPendingMediaResults: (data: PendingMediaData | null) => void;
+  consumePendingMediaResults: () => PendingMediaData | null;
 }
 
 let windowIdCounter = 0;
@@ -72,6 +103,7 @@ export const useWindowStore = create<WindowStore>((set, get) => ({
   pendingBrowserUrl: null,
   pendingEditorContext: null,
   pendingVideoResults: null,
+  pendingMediaResults: null,
 
   openApp: (appId: AppId) => {
     const { windows, maxZIndex } = get();
@@ -223,6 +255,18 @@ export const useWindowStore = create<WindowStore>((set, get) => ({
       set({ pendingVideoResults: null });
     }
     return pendingVideoResults;
+  },
+
+  setPendingMediaResults: (data: PendingMediaData | null) => {
+    set({ pendingMediaResults: data });
+  },
+
+  consumePendingMediaResults: () => {
+    const { pendingMediaResults } = get();
+    if (pendingMediaResults) {
+      set({ pendingMediaResults: null });
+    }
+    return pendingMediaResults;
   },
 }));
 

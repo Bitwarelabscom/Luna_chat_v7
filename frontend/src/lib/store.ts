@@ -62,6 +62,13 @@ interface VideoAction {
   query: string;
 }
 
+interface MediaAction {
+  type: 'search' | 'play';
+  items: Array<any>;
+  query: string;
+  source: 'youtube' | 'jellyfin';
+}
+
 interface ChatState {
   sessions: Session[];
   archivedSessions: Session[];
@@ -79,6 +86,8 @@ interface ChatState {
   browserAction: BrowserAction | null;
   // Video action for YouTube search results
   videoAction: VideoAction | null;
+  // Media action for Jellyfin/unified media
+  mediaAction: MediaAction | null;
 
   loadSessions: () => Promise<void>;
   loadArchivedSessions: () => Promise<void>;
@@ -107,6 +116,8 @@ interface ChatState {
   setBrowserAction: (action: BrowserAction | null) => void;
   // Video action
   setVideoAction: (action: VideoAction | null) => void;
+  // Media action
+  setMediaAction: (action: MediaAction | null) => void;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -123,6 +134,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   isLoadingStartup: false,
   browserAction: null,
   videoAction: null,
+  mediaAction: null,
 
   loadSessions: async () => {
     set({ isLoadingSessions: true });
@@ -282,4 +294,5 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setBrowserAction: (action) => set({ browserAction: action }),
   // Video action
   setVideoAction: (action) => set({ videoAction: action }),
+  setMediaAction: (action) => set({ mediaAction: action }),
 }));

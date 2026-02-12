@@ -4,6 +4,9 @@ import {
   createChatCompletion,
   searchTool,
   youtubeSearchTool,
+  jellyfinSearchTool,
+  jellyfinPlayTool,
+  mediaDownloadTool,
   browserVisualSearchTool,
   delegateToAgentTool,
   workspaceWriteTool,
@@ -81,6 +84,8 @@ import * as emailService from '../abilities/email.service.js';
 import * as telegramService from '../triggers/telegram.service.js';
 import * as documents from '../abilities/documents.service.js';
 import * as youtube from '../abilities/youtube.service.js';
+import * as jellyfin from '../abilities/jellyfin.service.js';
+import * as ytdlp from '../abilities/ytdlp.service.js';
 import * as tasksService from '../abilities/tasks.service.js';
 import * as calendarService from '../abilities/calendar.service.js';
 import * as reminderService from '../abilities/reminder.service.js';
@@ -588,7 +593,8 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
 
   // Companion tools - conversational (includes workspace tools)
   const companionTools = [
-    searchTool, youtubeSearchTool, browserVisualSearchTool, fetchUrlTool,
+    searchTool, youtubeSearchTool, jellyfinSearchTool, jellyfinPlayTool, mediaDownloadTool,
+    browserVisualSearchTool, fetchUrlTool,
     sendEmailTool, checkEmailTool, readEmailTool, deleteEmailTool, replyEmailTool, markEmailReadTool,
     sendTelegramTool, sendFileToTelegramTool, searchDocumentsTool, suggestGoalTool,
     listTodosTool, createTodoTool, completeTodoTool, updateTodoTool,
@@ -611,7 +617,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   // Select tools based on mode
   let modeTools = mode === 'companion' ? companionTools : assistantTools;
   if (mode === 'dj_luna') {
-    modeTools = [searchTool, fetchUrlTool];
+    modeTools = [searchTool, fetchUrlTool, jellyfinSearchTool, jellyfinPlayTool, youtubeSearchTool, mediaDownloadTool];
   }
   const availableTools = isSmallTalkMessageLegacy ? [] : modeTools;
   let searchResults: SearchResult[] | undefined;
@@ -669,6 +675,52 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
           tool_call_id: toolCall.id,
           content: youtube.formatYouTubeForPrompt(results),
         } as ChatMessage);
+      } else if (toolCall.function.name === 'jellyfin_search') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Jellyfin search executing', { query: args.query, mediaType: args.mediaType });
+
+        const items = await jellyfin.searchMedia(args.query, args.mediaType || 'all', args.limit || 5);
+
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: jellyfin.formatForPrompt(items, args.query),
+        } as ChatMessage);
+      } else if (toolCall.function.name === 'jellyfin_play') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Jellyfin play executing', { itemId: args.itemId, itemName: args.itemName });
+
+        const result = await jellyfin.getStreamUrl(args.itemId);
+        const content = result
+          ? `Now playing "${result.item.name}" from local library.`
+          : `Could not find item "${args.itemName}" in library.`;
+
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content,
+        } as ChatMessage);
+      } else if (toolCall.function.name === 'media_download') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Media download executing', { videoId: args.videoId, title: args.title, format: args.format });
+
+        try {
+          const job = args.format === 'audio'
+            ? await ytdlp.downloadAudio(args.videoId, args.title)
+            : await ytdlp.downloadVideo(args.videoId, args.title);
+
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Download started (ID: ${job.id}). "${args.title}" is being downloaded as ${args.format}. It will appear in the local media library once complete.`,
+          } as ChatMessage);
+        } catch (dlError) {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Download failed: ${(dlError as Error).message}`,
+          } as ChatMessage);
+        }
       } else if (toolCall.function.name === 'browser_visual_search') {
         const args = JSON.parse(toolCall.function.arguments);
         const searchEngine = args.searchEngine || 'google_news';
@@ -2490,7 +2542,7 @@ export interface StreamMetrics {
 
 export async function* streamMessage(
   input: ChatInput
-): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'background_refresh' | 'reasoning' | 'video_action'; content?: string; status?: string; messageId?: string; tokensUsed?: number; metrics?: StreamMetrics; action?: string; url?: string; videos?: any[]; query?: string }> {
+): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'background_refresh' | 'reasoning' | 'video_action' | 'media_action'; content?: string; status?: string; messageId?: string; tokensUsed?: number; metrics?: StreamMetrics; action?: string; url?: string; videos?: any[]; query?: string; items?: any[]; source?: string }> {
   const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode, novaMode, documentIds } = input;
 
   // Initialize MemoryCore session for consolidation tracking
@@ -3086,7 +3138,8 @@ export async function* streamMessage(
 
   // Companion tools - conversational (includes workspace tools)
   const companionTools = [
-    searchTool, youtubeSearchTool, browserVisualSearchTool, fetchUrlTool,
+    searchTool, youtubeSearchTool, jellyfinSearchTool, jellyfinPlayTool, mediaDownloadTool,
+    browserVisualSearchTool, fetchUrlTool,
     sendEmailTool, checkEmailTool, readEmailTool, deleteEmailTool, replyEmailTool, markEmailReadTool,
     sendTelegramTool, sendFileToTelegramTool, searchDocumentsTool, suggestGoalTool,
     listTodosTool, createTodoTool, completeTodoTool, updateTodoTool,
@@ -3184,6 +3237,63 @@ export async function* streamMessage(
           tool_call_id: toolCall.id,
           content: youtube.formatYouTubeForPrompt(results),
         } as ChatMessage);
+      } else if (toolCall.function.name === 'jellyfin_search') {
+        const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'reasoning', content: `> Searching local library: "${args.query}"\n` };
+        logger.info('Jellyfin search executing (stream)', { query: args.query, mediaType: args.mediaType });
+
+        const items = await jellyfin.searchMedia(args.query, args.mediaType || 'all', args.limit || 5);
+
+        if (items.length > 0) {
+          yield { type: 'media_action', action: 'search', items, query: args.query, source: 'jellyfin' };
+        }
+
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: jellyfin.formatForPrompt(items, args.query),
+        } as ChatMessage);
+      } else if (toolCall.function.name === 'jellyfin_play') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Jellyfin play executing (stream)', { itemId: args.itemId, itemName: args.itemName });
+
+        const result = await jellyfin.getStreamUrl(args.itemId);
+
+        if (result) {
+          yield { type: 'media_action', action: 'play', items: [result.item], query: result.item.name, source: 'jellyfin' };
+        }
+
+        const content = result
+          ? `Now playing "${result.item.name}" from local library.`
+          : `Could not find item "${args.itemName}" in library.`;
+
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content,
+        } as ChatMessage);
+      } else if (toolCall.function.name === 'media_download') {
+        const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'reasoning', content: `> Downloading ${args.format}: "${args.title}"\n` };
+        logger.info('Media download executing (stream)', { videoId: args.videoId, title: args.title, format: args.format });
+
+        try {
+          const job = args.format === 'audio'
+            ? await ytdlp.downloadAudio(args.videoId, args.title)
+            : await ytdlp.downloadVideo(args.videoId, args.title);
+
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Download started (ID: ${job.id}). "${args.title}" is being downloaded as ${args.format}. It will appear in the local media library once complete.`,
+          } as ChatMessage);
+        } catch (dlError) {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Download failed: ${(dlError as Error).message}`,
+          } as ChatMessage);
+        }
       } else if (toolCall.function.name === 'browser_visual_search') {
         const args = JSON.parse(toolCall.function.arguments);
         const searchEngine = args.searchEngine || 'google_news';

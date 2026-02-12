@@ -507,6 +507,82 @@ export const youtubeSearchTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   },
 };
 
+export const jellyfinSearchTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'jellyfin_search',
+    description: 'Search the local media library (Jellyfin) for music, movies, and videos. Use this FIRST when user asks to play music or videos - check local library before YouTube.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'The search query for media',
+        },
+        mediaType: {
+          type: 'string',
+          enum: ['audio', 'video', 'all'],
+          description: 'Type of media to search for (default: all)',
+        },
+        limit: {
+          type: 'number',
+          description: 'Number of results to return (default: 5, max: 10)',
+        },
+      },
+      required: ['query'],
+    },
+  },
+};
+
+export const jellyfinPlayTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'jellyfin_play',
+    description: 'Play a specific item from the local Jellyfin media library by its ID.',
+    parameters: {
+      type: 'object',
+      properties: {
+        itemId: {
+          type: 'string',
+          description: 'The Jellyfin item ID to play',
+        },
+        itemName: {
+          type: 'string',
+          description: 'The name of the item (for display)',
+        },
+      },
+      required: ['itemId', 'itemName'],
+    },
+  },
+};
+
+export const mediaDownloadTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'media_download',
+    description: 'Download a YouTube video or its audio to the local media library. Use when user wants to save/download a video or add music to their library.',
+    parameters: {
+      type: 'object',
+      properties: {
+        videoId: {
+          type: 'string',
+          description: 'The YouTube video ID',
+        },
+        title: {
+          type: 'string',
+          description: 'The video title (used for filename)',
+        },
+        format: {
+          type: 'string',
+          enum: ['video', 'audio'],
+          description: 'Download as video (mp4) or audio only (mp3)',
+        },
+      },
+      required: ['videoId', 'title', 'format'],
+    },
+  },
+};
+
 export const delegateToAgentTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: 'function',
   function: {

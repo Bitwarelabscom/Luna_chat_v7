@@ -33,6 +33,8 @@ secrets:
     file: ./secrets/spotify_client_id.txt
   spotify_client_secret:
     file: ./secrets/spotify_client_secret.txt
+  jellyfin_password:
+    file: ./secrets/jellyfin_password.txt
 
 services:
   luna-frontend:
@@ -177,6 +179,14 @@ services:
       - NEO4J_URI=bolt://luna-neo4j:7687
       - NEO4J_USER=neo4j
       - NEO4J_ENABLED=${NEO4J_ENABLED:-true}
+      # Jellyfin media server
+      - JELLYFIN_URL=http://host.docker.internal:8096
+      - JELLYFIN_USERNAME=${JELLYFIN_USERNAME:-luna}
+      - JELLYFIN_ENABLED=${JELLYFIN_ENABLED:-true}
+      - MEDIA_VIDEO_PATH=/mnt/data/media/Videos
+      - MEDIA_MUSIC_PATH=/mnt/data/media/Music
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     secrets:
       - postgres_password
       - jwt_secret
@@ -195,10 +205,12 @@ services:
       - allowed_ips
       - spotify_client_id
       - spotify_client_secret
+      - jellyfin_password
     volumes:
       - luna-documents:/app/documents
       - luna-workspace:/app/workspace  # Shared workspace for scripts and data
       - ./images:/app/images  # Luna media (videos and generated images)
+      - /mnt/data/media:/mnt/data/media  # Media library shared with Jellyfin
       # Claude CLI credentials
       - ./secrets/claude_credentials.json:/claude-credentials.json:ro
       - ./secrets/claude_credentials.json:/home/node/.claude/.credentials.json:ro

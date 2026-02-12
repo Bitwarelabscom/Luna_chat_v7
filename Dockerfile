@@ -17,7 +17,9 @@ WORKDIR /app
 
 # Add docker-cli for sandbox proxy access (via docker-socket-proxy)
 # Add git for Claude CLI (required dependency)
-RUN apk add --no-cache wget docker-cli git
+# Add yt-dlp and ffmpeg for media downloads
+RUN apk add --no-cache wget docker-cli git ffmpeg python3 py3-pip && \
+    pip3 install --break-system-packages yt-dlp
 
 # Install Claude CLI and Gemini CLI globally for coding agents
 RUN npm install -g @anthropic-ai/claude-code @google/gemini-cli
@@ -25,8 +27,8 @@ RUN npm install -g @anthropic-ai/claude-code @google/gemini-cli
 # Create credential directories for CLI tools (will be mounted)
 RUN mkdir -p /home/node/.claude /home/node/.gemini && chown node:node /home/node/.claude /home/node/.gemini
 
-# Create workspace, documents, and images directories with proper ownership
-RUN mkdir -p /app/workspace /app/documents /app/images/backgrounds/generated /app/images/backgrounds/uploaded && chown -R node:node /app/workspace /app/documents /app/images
+# Create workspace, documents, images, and media directories with proper ownership
+RUN mkdir -p /app/workspace /app/documents /app/images/backgrounds/generated /app/images/backgrounds/uploaded /mnt/data/media/Videos /mnt/data/media/Music && chown -R node:node /app/workspace /app/documents /app/images /mnt/data/media
 
 COPY package*.json ./
 RUN npm ci --only=production

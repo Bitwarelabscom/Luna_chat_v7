@@ -26,6 +26,7 @@ const secrets = {
   elevenlabsApiKey: getOptionalSecret('elevenlabs_api_key', 'ELEVENLABS_API_KEY'),
   spotifyClientId: getOptionalSecret('spotify_client_id', 'SPOTIFY_CLIENT_ID'),
   spotifyClientSecret: getOptionalSecret('spotify_client_secret', 'SPOTIFY_CLIENT_SECRET'),
+  jellyfinPassword: getOptionalSecret('jellyfin_password', 'JELLYFIN_PASSWORD'),
 };
 
 const configSchema = z.object({
@@ -216,6 +217,19 @@ const configSchema = z.object({
     clientId: z.string().optional(),
     clientSecret: z.string().optional(),
     enabled: z.coerce.boolean().default(true),
+  }).optional(),
+
+  jellyfin: z.object({
+    url: z.string().url().default('http://host.docker.internal:8096'),
+    username: z.string().default('luna'),
+    password: z.string().default(''),
+    enabled: z.coerce.boolean().default(true),
+    mediaVideoPath: z.string().default('/mnt/data/media/Videos'),
+    mediaMusicPath: z.string().default('/mnt/data/media/Music'),
+  }).optional(),
+
+  ytdlp: z.object({
+    cookiesPath: z.string().default('/app/secrets/youtube_cookies.txt'),
   }).optional(),
 
   stt: z.object({
@@ -413,6 +427,19 @@ const rawConfig = {
     clientId: secrets.spotifyClientId,
     clientSecret: secrets.spotifyClientSecret,
     enabled: process.env.SPOTIFY_ENABLED,
+  },
+
+  jellyfin: {
+    url: process.env.JELLYFIN_URL,
+    username: process.env.JELLYFIN_USERNAME,
+    password: secrets.jellyfinPassword,
+    enabled: process.env.JELLYFIN_ENABLED,
+    mediaVideoPath: process.env.MEDIA_VIDEO_PATH,
+    mediaMusicPath: process.env.MEDIA_MUSIC_PATH,
+  },
+
+  ytdlp: {
+    cookiesPath: process.env.YTDLP_COOKIES_PATH,
   },
 
   stt: {

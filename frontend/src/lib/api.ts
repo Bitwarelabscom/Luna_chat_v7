@@ -214,7 +214,7 @@ export async function* streamMessage(
   projectMode?: boolean,
   thinkingMode?: boolean,
   novaMode?: boolean
-): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'reasoning' | 'background_refresh' | 'video_action'; content?: string; status?: string; messageId?: string; metrics?: MessageMetrics; action?: string; url?: string; videos?: any[]; query?: string }> {
+): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'reasoning' | 'background_refresh' | 'video_action' | 'media_action'; content?: string; status?: string; messageId?: string; metrics?: MessageMetrics; action?: string; url?: string; videos?: any[]; query?: string; items?: any[]; source?: string }> {
   const response = await fetch(`${API_URL}${API_PREFIX}/api/chat/sessions/${sessionId}/send`, {
     method: 'POST',
     headers: {
@@ -266,7 +266,7 @@ export async function* streamMessageWithFiles(
   projectMode?: boolean,
   thinkingMode?: boolean,
   novaMode?: boolean
-): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'reasoning' | 'background_refresh' | 'video_action'; content?: string; status?: string; messageId?: string; metrics?: MessageMetrics; action?: string; url?: string; videos?: any[]; query?: string }> {
+): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'reasoning' | 'background_refresh' | 'video_action' | 'media_action'; content?: string; status?: string; messageId?: string; metrics?: MessageMetrics; action?: string; url?: string; videos?: any[]; query?: string; items?: any[]; source?: string }> {
   const formData = new FormData();
   formData.append('message', message);
   formData.append('stream', 'true');
@@ -3289,4 +3289,23 @@ export const autonomousLearningApi = {
   // Statistics
   getStats: () =>
     api<{ stats: LearningStats }>('/api/autonomous/learning/stats'),
+};
+
+// Media Download API
+export const mediaApi = {
+  downloadMedia: (videoId: string, title: string, format: 'video' | 'audio') =>
+    api<{ downloadId: string; status: string }>('/api/media/download', {
+      method: 'POST',
+      body: { videoId, title, format },
+    }),
+
+  getDownloadStatus: (downloadId: string) =>
+    api<{ id: string; status: string; progress?: string; filePath?: string; error?: string; duration: number }>(
+      `/api/media/download/${downloadId}/status`
+    ),
+
+  getDownloads: () =>
+    api<{ downloads: Array<{ id: string; videoId: string; title: string; format: string; status: string }> }>(
+      '/api/media/downloads'
+    ),
 };

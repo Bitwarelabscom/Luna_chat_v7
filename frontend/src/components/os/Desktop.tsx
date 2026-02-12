@@ -95,6 +95,9 @@ export function Desktop() {
   const videoAction = useChatStore((state) => state.videoAction);
   const setVideoAction = useChatStore((state) => state.setVideoAction);
   const setPendingVideoResults = useWindowStore((state) => state.setPendingVideoResults);
+  const mediaAction = useChatStore((state) => state.mediaAction);
+  const setMediaAction = useChatStore((state) => state.setMediaAction);
+  const setPendingMediaResults = useWindowStore((state) => state.setPendingMediaResults);
 
   const { activeBackground, setActiveBackground } = useBackgroundStore();
 
@@ -156,6 +159,31 @@ export function Desktop() {
       setVideoAction(null);
     }
   }, [videoAction, openApp, setVideoAction, setPendingVideoResults]);
+
+  // Auto-open videos window when mediaAction is triggered (Jellyfin)
+  useEffect(() => {
+    if (mediaAction) {
+      const mediaItems = mediaAction.items.map((item: any) => ({
+        id: item.id,
+        name: item.name,
+        type: item.type === 'Audio' || item.type === 'MusicAlbum' ? 'jellyfin-audio' as const : 'jellyfin-video' as const,
+        artist: item.artist,
+        album: item.album,
+        streamUrl: item.streamUrl,
+        imageUrl: item.imageUrl,
+        year: item.year,
+        durationTicks: item.durationTicks,
+      }));
+      setPendingMediaResults({
+        items: mediaItems,
+        query: mediaAction.query,
+        source: mediaAction.source,
+        autoPlay: mediaAction.type === 'play',
+      });
+      openApp('videos');
+      setMediaAction(null);
+    }
+  }, [mediaAction, openApp, setMediaAction, setPendingMediaResults]);
 
   // Keyboard shortcuts
   useEffect(() => {
