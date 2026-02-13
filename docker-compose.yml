@@ -35,6 +35,8 @@ secrets:
     file: ./secrets/spotify_client_secret.txt
   jellyfin_password:
     file: ./secrets/jellyfin_password.txt
+  youtube_cookies:
+    file: ./secrets/youtube_cookies.txt
 
 services:
   luna-frontend:
@@ -185,6 +187,7 @@ services:
       - JELLYFIN_ENABLED=${JELLYFIN_ENABLED:-true}
       - MEDIA_VIDEO_PATH=/mnt/data/media/Videos
       - MEDIA_MUSIC_PATH=/mnt/data/media/Music
+      - YTDLP_COOKIES_PATH=/app/secrets/youtube_cookies.txt
     extra_hosts:
       - "host.docker.internal:host-gateway"
     secrets:
@@ -206,6 +209,7 @@ services:
       - spotify_client_id
       - spotify_client_secret
       - jellyfin_password
+      - youtube_cookies
     volumes:
       - luna-documents:/app/documents
       - luna-workspace:/app/workspace  # Shared workspace for scripts and data
@@ -217,6 +221,8 @@ services:
       # Gemini CLI credentials (rw needed for token refresh)
       - ./secrets/gemini:/home/node/.gemini
       - ./secrets/mcp-servers:/mcp-servers:ro  # MCP servers
+      # YouTube cookies for yt-dlp
+      - ./secrets/youtube_cookies.txt:/app/secrets/youtube_cookies.txt:ro
     depends_on:
       luna-postgres:
         condition: service_healthy
