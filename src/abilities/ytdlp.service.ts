@@ -59,14 +59,25 @@ function getCommonArgs(): string[] {
   const args: string[] = [
     '--no-playlist',
     '--no-overwrites',
-    '--extractor-args', 'youtube:player_client=android,web',
+    '--extractor-args', 'youtube:player_client=web',
     '--js-runtimes', 'node',
+    '--remote-components', 'ejs:github',
   ];
 
   const cookiesPath = config.ytdlp?.cookiesPath;
+  const writableCookiesPath = '/tmp/yt-dlp-cookies.txt';
+
   if (cookiesPath && existsSync(cookiesPath)) {
-    args.push('--cookies', cookiesPath);
-    logger.info('Using cookies for yt-dlp', { cookiesPath });
+    try {
+      // Copy cookies to writable location so yt-dlp can update them
+      const fs = require('fs');
+      const content = fs.readFileSync(cookiesPath, 'utf-8');
+      fs.writeFileSync(writableCookiesPath, content);
+      args.push('--cookies', writableCookiesPath);
+      logger.info('Using cookies for yt-dlp', { cookiesPath, writableCookiesPath });
+    } catch (error) {
+      logger.warn('Could not setup cookies, proceeding without', { error: (error as Error).message });
+    }
   }
 
   return args;
