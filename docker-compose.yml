@@ -182,7 +182,7 @@ services:
       - NEO4J_USER=neo4j
       - NEO4J_ENABLED=${NEO4J_ENABLED:-true}
       # Jellyfin media server
-      - JELLYFIN_URL=http://host.docker.internal:8096
+      - JELLYFIN_URL=http://10.0.0.2:8096
       - JELLYFIN_USERNAME=${JELLYFIN_USERNAME:-luna}
       - JELLYFIN_ENABLED=${JELLYFIN_ENABLED:-true}
       - MEDIA_VIDEO_PATH=/mnt/data/media/Videos

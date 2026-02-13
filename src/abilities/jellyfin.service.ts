@@ -177,13 +177,18 @@ export async function searchMedia(
     }
 
     const params = new URLSearchParams({
-      SearchTerm: query,
       IncludeItemTypes: includeTypes.join(','),
       Recursive: 'true',
       Limit: String(Math.min(limit, 10)),
       UserId: auth.userId,
       Fields: 'Overview,Path',
     });
+
+    // Only add SearchTerm for real queries - Jellyfin treats '*' as literal, not wildcard
+    const trimmed = query.trim();
+    if (trimmed && trimmed !== '*') {
+      params.set('SearchTerm', trimmed);
+    }
 
     const data = await jellyfinFetch(`/Items?${params}`);
     const items = (data.Items || []).map(mapItem);
