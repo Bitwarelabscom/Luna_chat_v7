@@ -155,16 +155,24 @@ Most AI assistants are stateless query engines. Luna is a **stateful companion**
 - **Form Interaction**: Click buttons, fill forms, extract content
 - **Research Assistant**: Luna can browse the web to answer questions
 
+### Local Media
+- **Integrated Streaming**: Direct HTTP streaming of local media files
+- **Universal Player**: Unified video and audio player in the web UI
+- **Broad Search**: Intelligent search that matches filenames and parent directories
+- **Download Support**: Download YouTube videos/audio directly to your local library
+
 ### Integrations
 - **Calendar**: CalDAV integration (Google, Outlook, self-hosted Radicale)
 - **Email**: SMTP/IMAP support for sending and receiving
 - **Telegram**: Two-way messaging and notifications via Telegram bot
+- **IRC**: Integrated IRC client for real-time chat in channels
 - **MCP Servers**: Model Context Protocol for external tool integration
 - **Code Sandbox**: Execute Python, JavaScript, and Shell scripts safely
-- **Document Processing**: Upload and search PDFs, text files, and more
+- **Document Processing**: Support for PDF, TXT, MD, DOCX, XLSX, and more
 - **Web Search**: SearXNG integration for web research
 - **Text-to-Speech**: ElevenLabs integration for voice responses
 - **Spotify**: Music playback control and recommendations
+- **Local Media Player**: Stream local movies, shows, and music from your server
 - **Quick Reminders**: Set reminders via natural language (validated: 1 min to 30 days)
 
 ### Voice Intelligence
@@ -263,7 +271,7 @@ Luna has an extensive set of tools and abilities she can use during conversation
 ### Document Management
 | Ability | Description |
 |---------|-------------|
-| Upload Documents | PDF, TXT, MD, JSON, CSV (up to 10MB) |
+| Upload Documents | PDF, TXT, MD, JSON, CSV, DOCX, XLSX, PPTX (up to 10MB) |
 | Semantic Search | Find documents by meaning, not just keywords |
 | Auto-Chunking | Intelligent document splitting for search |
 | Vision | Analyze images with multimodal models |
@@ -895,7 +903,9 @@ luna-chat/
 |   |   |-- documents.service.ts    # Document management
 |   |   |-- email.service.ts        # Email orchestration
 |   |   |-- image-generation.service.ts  # DALL-E image generation
+|   |   |-- irc.service.ts           # IRC integration
 |   |   |-- knowledge.service.ts    # Knowledge base
+|   |   |-- local-media.service.ts  # Local media streaming
 |   |   |-- luna-media.service.ts   # Mood videos/images
 |   |   |-- mood.service.ts         # Mood tracking
 |   |   |-- orchestrator.ts         # Ability detection
@@ -1116,6 +1126,7 @@ npm start
 | GET | `/api/abilities/calendar/events` | Calendar events |
 | GET | `/api/abilities/email/inbox` | Email inbox |
 | GET/PUT/DELETE | `/api/abilities/facts` | Fact management |
+| GET/POST | `/api/abilities/irc` | IRC client management |
 
 ### Autonomous Endpoints
 
@@ -1239,6 +1250,10 @@ npm start
 | `EMAIL_GATEKEEPER_RISK_THRESHOLD` | Risk score threshold for quarantine (0-1) | 0.5 |
 | `EMAIL_GATEKEEPER_MODEL` | Ollama model for email classification | qwen2.5:3b |
 | `EMAIL_GATEKEEPER_CLASSIFIER_TIMEOUT_MS` | Nano-model classification timeout | 15000 |
+| `IRC_SERVER` | IRC server address | luna.bitwarelabs.com |
+| `IRC_PORT` | IRC server port | 12500 |
+| `IRC_NICK` | Luna's IRC nickname | Luna |
+| `IRC_ENABLED` | Enable IRC integration | true |
 
 ### Model Configuration
 
@@ -1337,6 +1352,8 @@ Native Android app built with modern stack:
 
 - **Jetpack Compose** - Declarative UI
 - **Material 3** - Google's design system
+- **Chat Modes** - Full support for Assistant, Companion, Voice, and DJ Luna modes
+- **Voice Intelligence** - Real-time voice chat with low latency
 - **Hilt** - Dependency injection
 - **Kotlin Coroutines** - Async operations
 - **Encrypted SharedPreferences** - Secure storage
