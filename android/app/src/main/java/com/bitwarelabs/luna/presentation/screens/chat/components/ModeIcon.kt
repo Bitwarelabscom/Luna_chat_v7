@@ -4,6 +4,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -32,6 +34,18 @@ fun ModeIcon(
             imageVector = Icons.Default.Favorite,
             contentDescription = "Companion mode",
             tint = CompanionPink,
+            modifier = modifier.size(size)
+        )
+        ChatMode.VOICE -> Icon(
+            imageVector = Icons.Default.Mic,
+            contentDescription = "Voice mode",
+            tint = LunaTheme.colors.accentSecondary,
+            modifier = modifier.size(size)
+        )
+        ChatMode.DJ_LUNA -> Icon(
+            imageVector = Icons.Default.MusicNote,
+            contentDescription = "DJ Luna mode",
+            tint = Color(0xFFFF6B6B),
             modifier = modifier.size(size)
         )
     }

@@ -13,6 +13,7 @@ export * as youtube from './youtube.service.js';
 export * as browser from './browser.service.js';
 export * as imageGeneration from './image-generation.service.js';
 export * as spotify from './spotify.service.js';
+export * as irc from './irc.service.js';
 
 // Re-export orchestrator
 export { buildAbilityContext, detectAbilityIntent, executeAbilityAction } from './orchestrator.js';

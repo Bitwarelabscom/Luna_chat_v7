@@ -19,7 +19,8 @@ export type ActivityCategory =
   | 'state_event'   // State changes (topic, mood, etc.)
   | 'error'         // Errors and exceptions
   | 'background'    // Background jobs, scheduled tasks
-  | 'system';       // System events
+  | 'system'        // System events
+  | 'irc';          // IRC messages
 
 export type ActivityLevel = 'info' | 'success' | 'warn' | 'error';
 

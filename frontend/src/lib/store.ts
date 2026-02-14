@@ -66,7 +66,7 @@ interface MediaAction {
   type: 'search' | 'play';
   items: Array<any>;
   query: string;
-  source: 'youtube' | 'jellyfin';
+  source: 'youtube' | 'jellyfin' | 'local';
 }
 
 interface ChatState {

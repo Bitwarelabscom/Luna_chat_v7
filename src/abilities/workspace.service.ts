@@ -10,7 +10,7 @@ const MAX_FILES_PER_USER = 100;
 
 // Allowed file extensions for workspace
 const ALLOWED_EXTENSIONS = new Set([
-  '.py', '.js', '.ts', '.json', '.txt', '.md', '.csv', '.xml', '.yaml', '.yml',
+  '.py', '.js', '.ts', '.json', '.txt', '.md', '.markdown', '.mdown', '.mkdn', '.csv', '.xml', '.yaml', '.yml',
   '.html', '.css', '.sql', '.sh', '.r', '.ipynb',
   '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.pptx'
 ]);
@@ -309,6 +309,9 @@ function getMimeType(filename: string): string {
     '.json': 'application/json',
     '.txt': 'text/plain',
     '.md': 'text/markdown',
+    '.markdown': 'text/markdown',
+    '.mdown': 'text/markdown',
+    '.mkdn': 'text/markdown',
     '.csv': 'text/csv',
     '.xml': 'application/xml',
     '.yaml': 'application/x-yaml',

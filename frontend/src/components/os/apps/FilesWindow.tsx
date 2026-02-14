@@ -101,15 +101,21 @@ export default function FilesWindow() {
       } else {
         const formData = new FormData();
         formData.append('file', file);
-        await fetch(`${API_URL}${API_PREFIX}/api/abilities/documents`, {
+        const response = await fetch(`${API_URL}${API_PREFIX}/api/abilities/documents`, {
           method: 'POST',
           credentials: 'include',
           body: formData,
         });
+        
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ error: 'Upload failed' }));
+          throw new Error(errorData.error || 'Upload failed');
+        }
       }
       await loadFiles();
     } catch (error) {
       console.error('Failed to upload file:', error);
+      alert((error as Error).message);
     } finally {
       setUploading(false);
       if (wsInputRef.current) wsInputRef.current.value = '';
@@ -178,8 +184,8 @@ export default function FilesWindow() {
     const ext = filename.split('.').pop()?.toLowerCase();
     if (mimeType?.includes('python') || ext === 'py') return <FileCode className="w-5 h-5 text-yellow-400" />;
     if (['js', 'ts', 'sh'].includes(ext || '')) return <Code className="w-5 h-5 text-blue-400" />;
-    if (['txt', 'md', 'json', 'csv'].includes(ext || '')) return <FileText className="w-5 h-5 text-green-400" />;
-    if (['pdf'].includes(ext || '')) return <FileBox className="w-5 h-5 text-red-400" />;
+    if (['txt', 'md', 'markdown', 'mdown', 'mkdn', 'json', 'csv'].includes(ext || '')) return <FileText className="w-5 h-5 text-green-400" />;
+    if (['pdf', 'doc', 'docx', 'xls', 'xlsx', 'pptx'].includes(ext || '')) return <FileBox className="w-5 h-5 text-red-400" />;
     return <File className="w-5 h-5" style={{ color: 'var(--theme-text-muted)' }} />;
   };
 
@@ -252,14 +258,14 @@ export default function FilesWindow() {
             ref={wsInputRef}
             type="file"
             onChange={handleUploadWorkspaceFile}
-            accept=".py,.js,.ts,.json,.txt,.md,.csv,.xml,.yaml,.yml,.html,.css,.sql,.sh,.r,.ipynb"
+            accept=".py,.js,.ts,.json,.txt,.md,.markdown,.mdown,.mkdn,.csv,.xml,.yaml,.yml,.html,.css,.sql,.sh,.r,.ipynb,.pdf,.doc,.docx,.xls,.xlsx,.pptx"
             className="hidden"
           />
           <input
             ref={docInputRef}
             type="file"
             onChange={(e) => e.target.files?.[0] && uploadFile(e.target.files[0])}
-            accept=".pdf,.txt,.md,.doc,.docx"
+            accept=".pdf,.txt,.md,.markdown,.mdown,.mkdn,.doc,.docx,.xls,.xlsx,.pptx"
             className="hidden"
           />
         </div>

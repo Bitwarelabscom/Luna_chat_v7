@@ -17,8 +17,8 @@ WORKDIR /app
 
 # Add docker-cli for sandbox proxy access (via docker-socket-proxy)
 # Add git for Claude CLI (required dependency)
-# Add yt-dlp and ffmpeg for media downloads
-RUN apk add --no-cache wget docker-cli git ffmpeg python3 py3-pip && \
+# Add yt-dlp, ffmpeg, and vlc for media management and streaming
+RUN apk add --no-cache wget docker-cli git ffmpeg vlc python3 py3-pip && \
     pip3 install --break-system-packages yt-dlp
 
 # Install Claude CLI and Gemini CLI globally for coding agents

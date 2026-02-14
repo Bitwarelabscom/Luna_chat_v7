@@ -27,6 +27,7 @@ import {
   FileText,
   Copy,
   Check,
+  Hash,
 } from 'lucide-react';
 import { useActivityStream } from '@/hooks/useActivityStream';
 import {
@@ -47,6 +48,7 @@ const categoryIcons: Record<ActivityCategory, typeof Brain> = {
   error: AlertCircle,
   background: Activity,
   system: Settings,
+  irc: Hash,
 };
 
 // Icon mapping for levels

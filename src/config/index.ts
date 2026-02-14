@@ -26,7 +26,6 @@ const secrets = {
   elevenlabsApiKey: getOptionalSecret('elevenlabs_api_key', 'ELEVENLABS_API_KEY'),
   spotifyClientId: getOptionalSecret('spotify_client_id', 'SPOTIFY_CLIENT_ID'),
   spotifyClientSecret: getOptionalSecret('spotify_client_secret', 'SPOTIFY_CLIENT_SECRET'),
-  jellyfinPassword: getOptionalSecret('jellyfin_password', 'JELLYFIN_PASSWORD'),
 };
 
 const configSchema = z.object({
@@ -219,15 +218,6 @@ const configSchema = z.object({
     enabled: z.coerce.boolean().default(true),
   }).optional(),
 
-  jellyfin: z.object({
-    url: z.string().url().default('http://host.docker.internal:8096'),
-    username: z.string().default('luna'),
-    password: z.string().default(''),
-    enabled: z.coerce.boolean().default(true),
-    mediaVideoPath: z.string().default('/mnt/data/media/Videos'),
-    mediaMusicPath: z.string().default('/mnt/data/media/Music'),
-  }).optional(),
-
   ytdlp: z.object({
     cookiesPath: z.string().default('/app/secrets/youtube_cookies.txt'),
   }).optional(),
@@ -239,6 +229,14 @@ const configSchema = z.object({
     silenceDetection: z.coerce.boolean().default(true),
     silenceThreshold: z.coerce.number().default(-50), // dB
     silenceDuration: z.coerce.number().default(700), // ms
+  }),
+
+  irc: z.object({
+    server: z.string().default('luna.bitwarelabs.com'),
+    port: z.coerce.number().default(12500),
+    nick: z.string().default('Luna'),
+    channels: z.array(z.string()).default(['#luna']),
+    enabled: z.coerce.boolean().default(true),
   }),
 });
 
@@ -429,15 +427,6 @@ const rawConfig = {
     enabled: process.env.SPOTIFY_ENABLED,
   },
 
-  jellyfin: {
-    url: process.env.JELLYFIN_URL,
-    username: process.env.JELLYFIN_USERNAME,
-    password: secrets.jellyfinPassword,
-    enabled: process.env.JELLYFIN_ENABLED,
-    mediaVideoPath: process.env.MEDIA_VIDEO_PATH,
-    mediaMusicPath: process.env.MEDIA_MUSIC_PATH,
-  },
-
   ytdlp: {
     cookiesPath: process.env.YTDLP_COOKIES_PATH,
   },
@@ -449,6 +438,14 @@ const rawConfig = {
     silenceDetection: process.env.STT_SILENCE_DETECTION,
     silenceThreshold: process.env.STT_SILENCE_THRESHOLD,
     silenceDuration: process.env.STT_SILENCE_DURATION,
+  },
+
+  irc: {
+    server: process.env.IRC_SERVER,
+    port: process.env.IRC_PORT,
+    nick: process.env.IRC_NICK,
+    channels: process.env.IRC_CHANNELS?.split(',').map(c => c.trim()).filter(Boolean),
+    enabled: process.env.IRC_ENABLED,
   },
 };
 

@@ -148,7 +148,8 @@ export default function WorkspaceTab() {
       });
 
       if (!response.ok) {
-        throw new Error('Upload failed');
+        const errorData = await response.json().catch(() => ({ error: 'Upload failed' }));
+        throw new Error(errorData.error || 'Upload failed');
       }
 
       await loadFiles();
@@ -182,7 +183,8 @@ export default function WorkspaceTab() {
     const ext = filename.split('.').pop()?.toLowerCase();
     if (mimeType?.includes('python') || ext === 'py') return <FileCode className="w-5 h-5 text-yellow-400" />;
     if (['js', 'ts', 'sh'].includes(ext || '')) return <Code className="w-5 h-5 text-blue-400" />;
-    if (['txt', 'md', 'json', 'csv'].includes(ext || '')) return <FileText className="w-5 h-5 text-green-400" />;
+    if (['txt', 'md', 'markdown', 'mdown', 'mkdn', 'json', 'csv'].includes(ext || '')) return <FileText className="w-5 h-5 text-green-400" />;
+    if (['pdf', 'doc', 'docx', 'xls', 'xlsx', 'pptx'].includes(ext || '')) return <File className="w-5 h-5 text-theme-accent-primary" />;
     return <File className="w-5 h-5 text-theme-text-muted" />;
   };
 
@@ -253,7 +255,7 @@ export default function WorkspaceTab() {
                 ref={wsInputRef}
                 type="file"
                 onChange={handleUploadWorkspaceFile}
-                accept=".py,.js,.ts,.json,.txt,.md,.csv,.xml,.yaml,.yml,.html,.css,.sql,.sh,.r,.ipynb"
+                accept=".py,.js,.ts,.json,.txt,.md,.markdown,.mdown,.mkdn,.csv,.xml,.yaml,.yml,.html,.css,.sql,.sh,.r,.ipynb,.pdf,.doc,.docx,.xls,.xlsx,.pptx"
                 className="hidden"
               />
             </div>
@@ -337,7 +339,7 @@ export default function WorkspaceTab() {
               ref={docInputRef}
               type="file"
               onChange={handleUploadDocument}
-              accept=".pdf,.txt,.md,.doc,.docx"
+              accept=".pdf,.txt,.md,.markdown,.mdown,.mkdn,.doc,.docx,.xls,.xlsx,.pptx"
               className="hidden"
             />
           </div>

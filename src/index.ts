@@ -47,6 +47,8 @@ import { handleEditorWsUpgrade } from './editor/editor.websocket.js';
 import { shutdownHocuspocusServer } from './editor/hocuspocus.server.js';
 import { verifyToken } from './auth/jwt.js';
 import { isWireGuardRequest, WIREGUARD_USER } from './auth/auth.middleware.js';
+import { ircService } from './abilities/irc.service.js';
+import { getAllActiveUsers } from './auth/auth.service.js';
 
 const app = express();
 
@@ -138,7 +140,7 @@ app.use((req, res, next) => {
   const start = Date.now();
   res.on('finish', () => {
     const duration = Date.now() - start;
-    logger.debug(`${req.method} ${req.path}`, {
+    logger.info(`${req.method} ${req.path}`, {
       status: res.statusCode,
       duration: `${duration}ms`,
     });
@@ -306,6 +308,21 @@ server.listen(config.port, () => {
 
   // Initialize background critique queue (fast path feature)
   initializeCritiqueQueue();
+
+  // Initialize IRC if enabled
+  if (config.irc.enabled) {
+    getAllActiveUsers().then(users => {
+      if (users.length > 0) {
+        // For now, connect Luna to IRC for the first user found (or all users if needed)
+        // In a more complex setup, each user might have their own IRC config
+        ircService.connect(users[0].id).catch(err => {
+          logger.error('Failed to connect to IRC on startup', { error: err.message });
+        });
+      }
+    }).catch(err => {
+      logger.error('Failed to fetch users for IRC initialization', { error: err.message });
+    });
+  }
 
   // Start background jobs
   startJobs();

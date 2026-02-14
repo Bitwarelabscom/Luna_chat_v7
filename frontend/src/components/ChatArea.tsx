@@ -246,8 +246,8 @@ function StandardChatArea() {
           // Signal to open videos window with YouTube search results
           setVideoAction({ type: 'open', videos: chunk.videos, query: chunk.query });
         } else if (chunk.type === 'media_action' && chunk.items) {
-          // Signal to open media player with Jellyfin results
-          setMediaAction({ type: (chunk.action as 'search' | 'play') || 'search', items: chunk.items, query: chunk.query || '', source: (chunk.source as 'youtube' | 'jellyfin') || 'jellyfin' });
+          // Signal to open media player with Jellyfin or local results
+          setMediaAction({ type: (chunk.action as 'search' | 'play') || 'search', items: chunk.items, query: chunk.query || '', source: (chunk.source as 'youtube' | 'jellyfin' | 'local') || 'local' });
         } else if (chunk.type === 'background_refresh') {
           // Signal to refresh desktop background (after Luna generates/changes it)
           window.dispatchEvent(new CustomEvent('luna:background-refresh'));

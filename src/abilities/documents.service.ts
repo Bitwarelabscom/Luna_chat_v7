@@ -14,13 +14,15 @@ const CHUNK_OVERLAP = 200;
 
 // SECURITY: Allowed file types whitelist
 const ALLOWED_EXTENSIONS = new Set([
-  '.txt', '.md', '.json', '.csv', '.js', '.ts', '.html', '.xml', '.pdf',
+  '.txt', '.md', '.markdown', '.mdown', '.mkdn', '.json', '.csv', '.js', '.ts', '.html', '.xml', '.pdf',
+  '.doc', '.docx', '.xls', '.xlsx', '.pptx',
   // Image extensions
   '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'
 ]);
 const ALLOWED_MIME_TYPES = new Set([
   'text/plain',
   'text/markdown',
+  'text/x-markdown',
   'text/csv',
   'text/html',
   'text/xml',
@@ -28,6 +30,12 @@ const ALLOWED_MIME_TYPES = new Set([
   'application/javascript',
   'application/typescript',
   'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/octet-stream',
   // Image MIME types
   'image/jpeg',
   'image/png',
@@ -58,10 +66,10 @@ async function validateFile(
 
   // Detect actual MIME type from file content
   const detectedType = await fileTypeFromBuffer(buffer);
-  const detectedMimeType = detectedType?.mime || claimedMimeType;
+  const detectedMimeType = detectedType?.mime || claimedMimeType || 'application/octet-stream';
 
   // For text files, file-type may not detect MIME, so we trust the extension
-  const isTextFile = ['.txt', '.md', '.json', '.csv', '.js', '.ts', '.html', '.xml'].includes(ext);
+  const isTextFile = ['.txt', '.md', '.markdown', '.mdown', '.mkdn', '.json', '.csv', '.js', '.ts', '.html', '.xml'].includes(ext);
   const isImageFile = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'].includes(ext);
   if (!isTextFile && !isImageFile && detectedType) {
     // For binary files, verify the detected MIME type is allowed
@@ -196,7 +204,7 @@ Be detailed and specific so this description can be used for search and referenc
       }
     }
     // Extract text based on mime type for non-images
-    else if (mimeType === 'text/plain' || mimeType === 'text/markdown') {
+    else if (mimeType === 'text/plain' || mimeType === 'text/markdown' || mimeType === 'text/x-markdown') {
       text = content.toString('utf-8');
     } else if (mimeType === 'application/json') {
       const json = JSON.parse(content.toString('utf-8'));

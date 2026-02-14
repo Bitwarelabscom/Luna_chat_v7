@@ -15,8 +15,10 @@ import * as mood from './mood.service.js';
 import * as lunaMedia from './luna-media.service.js';
 import * as facts from '../memory/facts.service.js';
 import * as spotify from './spotify.service.js';
+import * as irc from './irc.service.js';
 import * as spotifyOAuth from './spotify-oauth.js';
 import { getAbilitySummary } from './orchestrator.js';
+import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
 
 // Helper to get userId from authenticated request
@@ -1412,6 +1414,88 @@ router.get('/spotify/preferences', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to get Spotify preferences', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to get Spotify preferences' });
+  }
+});
+
+// ============================================
+// IRC
+// ============================================
+
+router.get('/irc/status', async (_req: Request, res: Response) => {
+  try {
+    const status = irc.ircService.getStatus();
+    res.json(status);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get IRC status' });
+  }
+});
+
+router.post('/irc/connect', async (req: Request, res: Response) => {
+  try {
+    const { server, port, nick, channels, tls } = req.body;
+    await irc.ircService.connect(getUserId(req), {
+      server: server || config.irc.server,
+      port: port || config.irc.port,
+      nick: nick || config.irc.nick,
+      channels: channels || config.irc.channels,
+      tls: tls ?? false,
+    });
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Failed to connect to IRC', { error: (error as Error).message });
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+router.post('/irc/disconnect', async (_req: Request, res: Response) => {
+  try {
+    irc.ircService.disconnect();
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to disconnect from IRC' });
+  }
+});
+
+router.post('/irc/send', async (req: Request, res: Response) => {
+  try {
+    const { target, message } = req.body;
+    if (!target || !message) {
+      res.status(400).json({ error: 'target and message are required' });
+      return;
+    }
+    await irc.ircService.sendMessage(target, message);
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Failed to send IRC message', { error: (error as Error).message });
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+router.post('/irc/join', async (req: Request, res: Response) => {
+  try {
+    const { channel } = req.body;
+    if (!channel) {
+      res.status(400).json({ error: 'channel is required' });
+      return;
+    }
+    irc.ircService.joinChannel(channel);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to join channel' });
+  }
+});
+
+router.post('/irc/leave', async (req: Request, res: Response) => {
+  try {
+    const { channel } = req.body;
+    if (!channel) {
+      res.status(400).json({ error: 'channel is required' });
+      return;
+    }
+    irc.ircService.partChannel(channel);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to leave channel' });
   }
 });
 

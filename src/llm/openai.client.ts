@@ -507,26 +507,21 @@ export const youtubeSearchTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   },
 };
 
-export const jellyfinSearchTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+export const localMediaSearchTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: 'function',
   function: {
-    name: 'jellyfin_search',
-    description: 'Search the local media library (Jellyfin) for music, movies, and videos. Use this FIRST when user asks to play music or videos - check local library before YouTube.',
+    name: 'local_media_search',
+    description: 'Search for local media files (movies, shows, music) in the server /mnt/data/media directory. Use this when the user asks for local files. IMPORTANT: Search for broad terms like just the show name (e.g., "Shantaram") instead of specific episode numbers if a specific search fails.',
     parameters: {
       type: 'object',
       properties: {
         query: {
           type: 'string',
-          description: 'The search query for media',
-        },
-        mediaType: {
-          type: 'string',
-          enum: ['audio', 'video', 'all'],
-          description: 'Type of media to search for (default: all)',
+          description: 'The search query for local files (e.g., "Shantaram", "Rick Astley")',
         },
         limit: {
           type: 'number',
-          description: 'Number of results to return (default: 5, max: 10)',
+          description: 'Number of results to return (default: 5)',
         },
       },
       required: ['query'],
@@ -534,24 +529,24 @@ export const jellyfinSearchTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   },
 };
 
-export const jellyfinPlayTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+export const localMediaPlayTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: 'function',
   function: {
-    name: 'jellyfin_play',
-    description: 'Play a specific item from the local Jellyfin media library by its ID.',
+    name: 'local_media_play',
+    description: 'Stream a local media file by its ID (base64 path). This starts a cvlc stream and opens the media player.',
     parameters: {
       type: 'object',
       properties: {
-        itemId: {
+        fileId: {
           type: 'string',
-          description: 'The Jellyfin item ID to play',
+          description: 'The ID of the local media file to play',
         },
-        itemName: {
+        fileName: {
           type: 'string',
-          description: 'The name of the item (for display)',
+          description: 'The name of the file (for display)',
         },
       },
-      required: ['itemId', 'itemName'],
+      required: ['fileId', 'fileName'],
     },
   },
 };

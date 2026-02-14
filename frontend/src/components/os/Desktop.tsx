@@ -31,6 +31,7 @@ import ConsciousnessWindow from './apps/ConsciousnessWindow';
 import AutonomousLearningWindow from './apps/AutonomousLearningWindow';
 import NewsWindow from './apps/NewsWindow';
 import PlannerWindow from './apps/PlannerWindow';
+import IRCWindow from './apps/IRCWindow';
 import PlaceholderWindow from './apps/PlaceholderWindow';
 
 // Map appId to component
@@ -38,6 +39,8 @@ function getAppComponent(appId: AppId): React.ReactNode {
   switch (appId) {
     case 'chat':
       return <ChatWindow />;
+    case 'irc':
+      return <IRCWindow />;
     case 'voice':
       return <VoiceWindow />;
     case 'files':
@@ -160,24 +163,29 @@ export function Desktop() {
     }
   }, [videoAction, openApp, setVideoAction, setPendingVideoResults]);
 
-  // Auto-open videos window when mediaAction is triggered (Jellyfin)
+  // Auto-open videos window when mediaAction is triggered
   useEffect(() => {
     if (mediaAction) {
       const mediaItems = mediaAction.items.map((item: any) => ({
         id: item.id,
         name: item.name,
-        type: item.type === 'Audio' || item.type === 'MusicAlbum' ? 'jellyfin-audio' as const : 'jellyfin-video' as const,
-        artist: item.artist,
-        album: item.album,
+        type: mediaAction.source === 'youtube' ? 'youtube' as const : (item.type === 'audio' ? 'media-audio' as const : 'media-video' as const),
+        youtubeId: item.id,
+        thumbnail: item.thumbnail,
+        channelTitle: item.channelTitle,
+        duration: item.duration,
+        isLive: item.isLive,
         streamUrl: item.streamUrl,
         imageUrl: item.imageUrl,
+        artist: item.artist,
+        album: item.album,
         year: item.year,
         durationTicks: item.durationTicks,
       }));
       setPendingMediaResults({
         items: mediaItems,
         query: mediaAction.query,
-        source: mediaAction.source,
+        source: mediaAction.source as any,
         autoPlay: mediaAction.type === 'play',
       });
       openApp('videos');

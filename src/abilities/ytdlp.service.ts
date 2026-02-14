@@ -3,7 +3,6 @@ import { promises as fs, existsSync } from 'fs';
 import path from 'path';
 import logger from '../utils/logger.js';
 import { config } from '../config/index.js';
-import { triggerLibraryScan } from './jellyfin.service.js';
 
 export interface DownloadJob {
   id: string;
@@ -22,11 +21,11 @@ const downloads = new Map<string, DownloadJob>();
 let downloadCounter = 0;
 
 function getVideoPath(): string {
-  return config.jellyfin?.mediaVideoPath || '/mnt/data/media/Videos';
+  return '/mnt/data/media/Videos';
 }
 
 function getMusicPath(): string {
-  return config.jellyfin?.mediaMusicPath || '/mnt/data/media/Music';
+  return '/mnt/data/media/Music';
 }
 
 /**
@@ -173,11 +172,6 @@ function runDownload(id: string, args: string[]): void {
         updatedJob.filePath = destMatch[1] || destMatch[2];
       }
       logger.info('Download completed', { id, filePath: updatedJob.filePath, duration: updatedJob.completedAt - updatedJob.startedAt });
-
-      // Trigger Jellyfin library scan so new files appear
-      triggerLibraryScan().catch(err => {
-        logger.warn('Failed to trigger library scan after download', { error: (err as Error).message });
-      });
     }
   });
 }

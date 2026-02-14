@@ -24,5 +24,7 @@ enum class ThemeType {
 
 enum class ChatMode {
     ASSISTANT,
-    COMPANION
+    COMPANION,
+    VOICE,
+    DJ_LUNA
 }

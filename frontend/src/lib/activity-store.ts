@@ -10,7 +10,8 @@ export type ActivityCategory =
   | 'state_event'
   | 'error'
   | 'background'
-  | 'system';
+  | 'system'
+  | 'irc';
 
 export type ActivityLevel = 'info' | 'success' | 'warn' | 'error';
 
@@ -38,6 +39,7 @@ export const categoryConfig: Record<ActivityCategory, { label: string; icon: str
   error: { label: 'Error', icon: 'alert-circle', color: 'red' },
   background: { label: 'Background', icon: 'activity', color: 'gray' },
   system: { label: 'System', icon: 'settings', color: 'slate' },
+  irc: { label: 'IRC', icon: 'hash', color: 'green' },
 };
 
 // Level display configuration

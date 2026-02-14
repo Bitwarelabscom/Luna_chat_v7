@@ -33,8 +33,6 @@ secrets:
     file: ./secrets/spotify_client_id.txt
   spotify_client_secret:
     file: ./secrets/spotify_client_secret.txt
-  jellyfin_password:
-    file: ./secrets/jellyfin_password.txt
   youtube_cookies:
     file: ./secrets/youtube_cookies.txt
 
@@ -51,7 +49,7 @@ services:
       - "127.0.0.1:3004:3000"
       - "10.0.0.2:3004:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=
+      - NEXT_PUBLIC_API_URL=http://10.0.0.2:3005
     depends_on:
       - luna-api
     networks:
@@ -80,7 +78,7 @@ services:
     ports:
       - "127.0.0.1:5556:5555"  # Internal only - nginx handles external access with IP restriction
     environment:
-      - NEXT_PUBLIC_API_URL=
+      - NEXT_PUBLIC_API_URL=http://10.0.0.2:3005
     depends_on:
       - luna-api
     networks:
@@ -133,7 +131,7 @@ services:
       - SEARXNG_ENABLED=${SEARXNG_ENABLED:-true}
       - RATE_LIMIT_WINDOW_MS=${RATE_LIMIT_WINDOW_MS:-60000}
       - RATE_LIMIT_MAX_REQUESTS=${RATE_LIMIT_MAX_REQUESTS:-40}
-      - CORS_ORIGIN=${CORS_ORIGIN:-http://10.0.0.2:3005}
+      - CORS_ORIGIN=${CORS_ORIGIN:-http://10.0.0.2:3004}
       - SANDBOX_CONTAINER=luna-sandbox
       - DOCKER_HOST=${DOCKER_HOST:-tcp://docker-proxy:2375}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
@@ -181,12 +179,6 @@ services:
       - NEO4J_URI=bolt://luna-neo4j:7687
       - NEO4J_USER=neo4j
       - NEO4J_ENABLED=${NEO4J_ENABLED:-true}
-      # Jellyfin media server
-      - JELLYFIN_URL=http://10.0.0.2:8096
-      - JELLYFIN_USERNAME=${JELLYFIN_USERNAME:-luna}
-      - JELLYFIN_ENABLED=${JELLYFIN_ENABLED:-true}
-      - MEDIA_VIDEO_PATH=/mnt/data/media/Videos
-      - MEDIA_MUSIC_PATH=/mnt/data/media/Music
       - YTDLP_COOKIES_PATH=/app/secrets/youtube_cookies.txt
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -208,13 +200,11 @@ services:
       - allowed_ips
       - spotify_client_id
       - spotify_client_secret
-      - jellyfin_password
       - youtube_cookies
     volumes:
       - luna-documents:/app/documents
       - luna-workspace:/app/workspace  # Shared workspace for scripts and data
       - ./images:/app/images  # Luna media (videos and generated images)
-      - /mnt/data/media:/mnt/data/media  # Media library shared with Jellyfin
       # Claude CLI credentials
       - ./secrets/claude_credentials.json:/claude-credentials.json:ro
       - ./secrets/claude_credentials.json:/home/node/.claude/.credentials.json:ro
@@ -223,6 +213,8 @@ services:
       - ./secrets/mcp-servers:/mcp-servers:ro  # MCP servers
       # YouTube cookies for yt-dlp
       - ./secrets/youtube_cookies.txt:/app/secrets/youtube_cookies.txt:ro
+      # Local media library (shows, videos, music)
+      - /mnt/data/media:/mnt/data/media:ro
     depends_on:
       luna-postgres:
         condition: service_healthy

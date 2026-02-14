@@ -20,14 +20,14 @@ export interface PendingVideoData {
 export interface MediaItem {
   id: string;
   name: string;
-  type: 'youtube' | 'jellyfin-audio' | 'jellyfin-video';
+  type: 'youtube' | 'media-audio' | 'media-video';
   // YouTube fields
   youtubeId?: string;
   thumbnail?: string;
   channelTitle?: string;
   duration?: string;
   isLive?: boolean;
-  // Jellyfin fields
+  // Generic Media fields
   artist?: string;
   album?: string;
   streamUrl?: string;
@@ -39,7 +39,7 @@ export interface MediaItem {
 export interface PendingMediaData {
   items: MediaItem[];
   query: string;
-  source: 'youtube' | 'jellyfin' | 'mixed';
+  source: 'youtube' | 'local';
   autoPlay?: boolean;
 }
 

@@ -38,7 +38,7 @@ export default function VideosWindow() {
         youtubeVideos: [],
         mediaItems: pendingMedia.items,
         query: pendingMedia.query,
-        source: pendingMedia.source,
+        source: 'youtube',
       };
     } else if (pendingVideo) {
       initialData.current = {
@@ -138,7 +138,7 @@ export default function VideosWindow() {
       <div className="flex flex-col items-center justify-center h-full gap-4" style={{ color: 'var(--theme-text-muted)' }}>
         <Video className="w-16 h-16 opacity-40" />
         <p className="text-lg font-medium" style={{ color: 'var(--theme-text-secondary)' }}>No media yet</p>
-        <p className="text-sm text-center px-8">Ask Luna to search YouTube or your local media library</p>
+        <p className="text-sm text-center px-8">Ask Luna to search YouTube</p>
       </div>
     );
   }
@@ -166,7 +166,7 @@ export default function VideosWindow() {
           </div>
         )}
 
-        {activeItem?.kind === 'media' && activeItem.item.type === 'jellyfin-video' && activeItem.item.streamUrl && (
+        {activeItem?.kind === 'media' && activeItem.item.type === 'media-video' && activeItem.item.streamUrl && (
           <div className="relative w-full" style={{ paddingBottom: '56.25%' }}>
             <video
               className="absolute top-0 left-0 w-full h-full"
@@ -178,7 +178,7 @@ export default function VideosWindow() {
           </div>
         )}
 
-        {activeItem?.kind === 'media' && activeItem.item.type === 'jellyfin-audio' && (
+        {activeItem?.kind === 'media' && activeItem.item.type === 'media-audio' && (
           <div className="flex flex-col items-center justify-center p-8 gap-4" style={{ minHeight: '200px' }}>
             {activeItem.item.imageUrl ? (
               <img
@@ -328,13 +328,13 @@ export default function VideosWindow() {
             );
           })}
 
-          {/* Jellyfin results */}
+          {/* Local results */}
           {mediaItems.map((item) => {
             const isActive = activeItem?.kind === 'media' && activeItem.item.id === item.id;
-            const isAudio = item.type === 'jellyfin-audio';
+            const isAudio = item.type === 'media-audio';
             return (
               <button
-                key={`jf-${item.id}`}
+                key={`media-${item.id}`}
                 onClick={() => setActiveItem({ kind: 'media', item })}
                 className="w-full text-left p-2 flex gap-2 hover:brightness-110 transition-all"
                 style={{

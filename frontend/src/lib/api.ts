@@ -936,7 +936,7 @@ export function isTextFile(mimeTypeOrFilename: string | null | undefined): boole
     return true;
   }
   const ext = mimeTypeOrFilename.split('.').pop()?.toLowerCase();
-  const textExts = ['txt', 'md', 'json', 'js', 'ts', 'jsx', 'tsx', 'css', 'html', 'xml', 'yaml', 'yml', 'csv', 'sql', 'sh', 'py', 'r', 'ipynb'];
+  const textExts = ['txt', 'md', 'markdown', 'mdown', 'mkdn', 'json', 'js', 'ts', 'jsx', 'tsx', 'css', 'html', 'xml', 'yaml', 'yml', 'csv', 'sql', 'sh', 'py', 'r', 'ipynb'];
   return textExts.includes(ext || '');
 }
 
@@ -3308,4 +3308,26 @@ export const mediaApi = {
     api<{ downloads: Array<{ id: string; videoId: string; title: string; format: string; status: string }> }>(
       '/api/media/downloads'
     ),
+};
+
+// Abilities API
+export const abilitiesApi = {
+  // IRC
+  getIRCStatus: () =>
+    api<{ connected: boolean; server: string; port: number; nick: string; channels: string[]; tls: boolean }>('/api/abilities/irc/status'),
+
+  connectIRC: (settings: { server: string; port: number; nick: string; channels: string[]; tls: boolean }) =>
+    api<{ success: boolean }>('/api/abilities/irc/connect', { method: 'POST', body: settings }),
+
+  disconnectIRC: () =>
+    api<{ success: boolean }>('/api/abilities/irc/disconnect', { method: 'POST' }),
+
+  sendIRCMessage: (target: string, message: string) =>
+    api<{ success: boolean }>('/api/abilities/irc/send', { method: 'POST', body: { target, message } }),
+
+  joinIRCChannel: (channel: string) =>
+    api<{ success: boolean }>('/api/abilities/irc/join', { method: 'POST', body: { channel } }),
+
+  leaveIRCChannel: (channel: string) =>
+    api<{ success: boolean }>('/api/abilities/irc/leave', { method: 'POST', body: { channel } }),
 };

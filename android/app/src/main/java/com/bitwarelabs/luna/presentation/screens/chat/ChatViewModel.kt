@@ -265,6 +265,22 @@ class ChatViewModel @Inject constructor(
                                     )
                                 }
                             }
+                            is StreamEvent.Reasoning -> {
+                                // Show reasoning in status or handle as needed
+                                _uiState.update { it.copy(statusMessage = event.content) }
+                            }
+                            is StreamEvent.BrowserAction -> {
+                                // Log browser activity (future: open browser window)
+                                // Currently just log the action
+                            }
+                            is StreamEvent.VideoAction -> {
+                                // Log video results (future: open video player)
+                                // Currently just log the action
+                            }
+                            is StreamEvent.MediaAction -> {
+                                // Log media results (future: open media player)
+                                // Currently just log the action
+                            }
                             is StreamEvent.Done -> {
                                 val assistantMessage = Message(
                                     id = event.messageId,
@@ -298,6 +314,13 @@ class ChatViewModel @Inject constructor(
                         }
                     }
             }
+        }
+    }
+
+    fun endCurrentSession() {
+        val sessionId = _uiState.value.currentSessionId ?: return
+        viewModelScope.launch {
+            chatRepository.endSession(sessionId)
         }
     }
 

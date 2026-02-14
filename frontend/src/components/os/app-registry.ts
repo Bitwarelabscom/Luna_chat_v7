@@ -19,6 +19,7 @@ import {
   Brain,
   GitBranch,
   Newspaper,
+  Hash,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -41,7 +42,8 @@ export type AppId =
   | 'activity'
   | 'consciousness'
   | 'autonomous-learning'
-  | 'news';
+  | 'news'
+  | 'irc';
 
 export interface AppConfig {
   id: AppId;
@@ -61,6 +63,14 @@ export const appConfig: Record<AppId, AppConfig> = {
     color: 'from-cyan-400 to-blue-500',
     defaultSize: { width: 700, height: 500 },
     keepAlive: true,
+    showInDock: true,
+  },
+  irc: {
+    id: 'irc',
+    title: 'IRC',
+    icon: Hash,
+    color: 'from-green-500 to-emerald-600',
+    defaultSize: { width: 800, height: 500 },
     showInDock: true,
   },
   voice: {
@@ -213,6 +223,7 @@ export const appConfig: Record<AppId, AppConfig> = {
 // Apps to show in the dock (in order)
 export const dockApps: AppId[] = [
   'chat',
+  'irc',
   'voice',
   'files',
   'planner',

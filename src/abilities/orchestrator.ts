@@ -8,6 +8,8 @@ import * as agents from './agents.service.js';
 import * as calendar from './calendar.service.js';
 import * as email from './email.service.js';
 import * as spotify from './spotify.service.js';
+import * as irc from './irc.service.js';
+import * as activity from '../activity/activity.service.js';
 import * as facts from '../memory/facts.service.js';
 import * as coderSettings from './coder-settings.service.js';
 import { createCompletion } from '../llm/router.js';
@@ -23,11 +25,12 @@ export interface AbilityContext {
   email: string;
   mood: string;
   spotify: string;
+  irc: string;
   tools: string[];
 }
 
 export interface AbilityIntent {
-  type: 'task' | 'knowledge' | 'code' | 'document' | 'calendar' | 'email' | 'agent' | 'tool' | 'smalltalk' | 'weather' | 'status' | 'fact_correction' | 'spotify' | 'project' | 'none';
+  type: 'task' | 'knowledge' | 'code' | 'document' | 'calendar' | 'email' | 'agent' | 'tool' | 'smalltalk' | 'weather' | 'status' | 'fact_correction' | 'spotify' | 'project' | 'irc' | 'none';
   action?: string;
   params?: Record<string, unknown>;
   confidence: number;
@@ -532,6 +535,7 @@ export interface ContextBuildOptions {
   loadMood?: boolean;      // Process mood
   loadTools?: boolean;     // Load available tools
   loadSpotify?: boolean;   // Load Spotify playback state
+  loadIRC?: boolean;       // Load recent IRC activity
 }
 
 /**
@@ -555,6 +559,7 @@ export function getContextOptions(message: string): ContextBuildOptions {
     loadMood: true, // Mood is lightweight
     loadTools: /\b(tool|search|execute|run|calculate|weather|document)\b/i.test(lower) || lower.includes('?'),
     loadSpotify: /\b(play|pause|music|song|spotify|track|artist|album|playlist|skip|next|previous|volume|queue|listen|what.*playing)\b/i.test(lower),
+    loadIRC: /\b(irc|chat|channel|message|say.*in|#)\b/i.test(lower),
   };
 
   return options;
@@ -582,6 +587,7 @@ export async function buildAbilityContext(
       email: '',
       mood: '',
       spotify: '',
+      irc: '',
       tools: [],
     };
   }
@@ -589,7 +595,17 @@ export async function buildAbilityContext(
   try {
     // Selective fetches based on options
     const promises: Promise<unknown>[] = [];
-    const indices: { knowledge?: number; tasks?: number; calendar?: number; email?: number; mood?: number; moodTrends?: number; tools?: number; spotify?: number } = {};
+    const indices: {
+      knowledge?: number;
+      tasks?: number;
+      calendar?: number;
+      email?: number;
+      mood?: number;
+      moodTrends?: number;
+      tools?: number;
+      spotify?: number;
+      irc?: number;
+    } = {};
 
     if (opts.loadKnowledge !== false) {
       indices.knowledge = promises.length;
@@ -628,6 +644,11 @@ export async function buildAbilityContext(
       promises.push(spotify.getPlaybackStatus(userId).catch(() => null));
     }
 
+    if (opts.loadIRC) {
+      indices.irc = promises.length;
+      promises.push(activity.getRecentActivity(userId, { category: 'irc', limit: 10 }).catch(() => []));
+    }
+
     const results = await Promise.all(promises);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -644,6 +665,7 @@ export async function buildAbilityContext(
     const moodTrends = getResult<Awaited<ReturnType<typeof mood.getMoodTrends>>>('moodTrends') || { averageSentiment: 0, dominantEmotions: [], moodTrend: 'stable' as const, topTopics: [] };
     const userTools = getResult<Awaited<ReturnType<typeof tools.getTools>>>('tools') || [];
     const spotifyState = getResult<Awaited<ReturnType<typeof spotify.getPlaybackStatus>>>('spotify');
+    const ircActivity = getResult<activity.ActivityLog[]>('irc') || [];
 
     return {
       knowledge: knowledge.formatKnowledgeForPrompt(relevantKnowledge),
@@ -652,6 +674,7 @@ export async function buildAbilityContext(
       email: email.formatEmailsForPrompt(recentEmails),
       mood: mood.formatMoodForPrompt(currentMood, moodTrends),
       spotify: spotify.formatSpotifyForPrompt(spotifyState),
+      irc: irc.formatIRCActivityForPrompt(ircActivity),
       tools: userTools.map(t => t.name),
     };
   } catch (error) {
@@ -663,6 +686,7 @@ export async function buildAbilityContext(
       email: '',
       mood: '',
       spotify: '',
+      irc: '',
       tools: [],
     };
   }
@@ -681,6 +705,7 @@ export function formatAbilityContextForPrompt(context: AbilityContext): string {
   if (context.email) sections.push(context.email);
   if (context.mood) sections.push(context.mood);
   if (context.spotify) sections.push(context.spotify);
+  if (context.irc) sections.push(context.irc);
   if (context.knowledge) sections.push(context.knowledge);
 
   if (context.tools.length > 0) {
@@ -1716,6 +1741,61 @@ export async function executeAbilityAction(
               handled: true,
               result: state ? spotify.formatSpotifyForPrompt(state) : "Nothing playing. What would you like to listen to?",
               data: { state },
+            };
+          }
+        }
+      }
+
+      case 'irc': {
+        if (!config.irc.enabled) {
+          return { handled: true, result: 'IRC is currently disabled in the configuration.' };
+        }
+
+        switch (intent.action) {
+          case 'send': {
+            // Extract target and message
+            // e.g., "say hello to #luna" or "#luna hello"
+            const channelMatch = message.match(/(#\w+)/);
+            const target = channelMatch ? channelMatch[1] : config.irc.channels[0];
+            
+            // Remove target from message to get the actual text
+            let text = message.replace(target, '').replace(/\b(say|send|message|tell)\b/i, '').trim();
+            if (text.startsWith(':')) text = text.substring(1).trim();
+
+            if (!text) {
+              return { handled: true, result: `What would you like me to say in ${target}?` };
+            }
+
+            try {
+              await irc.ircService.sendMessage(target, text);
+              return { handled: true, result: `Sent message to ${target}: ${text}` };
+            } catch (error) {
+              return { handled: true, result: `Failed to send IRC message: ${(error as Error).message}` };
+            }
+          }
+
+          case 'join': {
+            const channelMatch = message.match(/(#\w+)/);
+            if (!channelMatch) return { handled: true, result: 'Which channel should I join?' };
+            irc.ircService.joinChannel(channelMatch[1]);
+            return { handled: true, result: `Joining IRC channel: ${channelMatch[1]}` };
+          }
+
+          case 'leave': {
+            const channelMatch = message.match(/(#\w+)/);
+            if (!channelMatch) return { handled: true, result: 'Which channel should I leave?' };
+            irc.ircService.partChannel(channelMatch[1]);
+            return { handled: true, result: `Leaving IRC channel: ${channelMatch[1]}` };
+          }
+
+          default: {
+            const connected = irc.ircService.isConnected();
+            return {
+              handled: true,
+              result: connected 
+                ? `I am connected to IRC server ${config.irc.server}:${config.irc.port} in channels: ${config.irc.channels.join(', ')}`
+                : 'I am not currently connected to IRC.',
+              data: { connected }
             };
           }
         }

@@ -207,3 +207,10 @@ export async function generateTokensForUser(userId: string): Promise<AuthTokens>
 
   return tokens;
 }
+
+export async function getAllActiveUsers(): Promise<Array<Omit<User, 'settings'> & { settings: Record<string, unknown> }>> {
+  const users = await query<DbUser>(
+    'SELECT * FROM users WHERE is_active = true'
+  );
+  return users.map(mapDbUser);
+}

@@ -1,5 +1,6 @@
 package com.bitwarelabs.luna.domain.repository
 
+import android.net.Uri
 import com.bitwarelabs.luna.data.network.StreamEvent
 import com.bitwarelabs.luna.domain.model.ChatMode
 import com.bitwarelabs.luna.domain.model.Session
@@ -28,6 +29,14 @@ interface ChatRepository {
     ): Result<Session>
 
     suspend fun deleteSession(id: String): Result<Unit>
+
+    suspend fun endSession(id: String): Result<Unit>
+
+    suspend fun sendMessageWithAttachments(
+        sessionId: String,
+        message: String,
+        fileUris: List<Uri>
+    ): Result<Unit>
 
     fun streamMessage(sessionId: String, message: String): Flow<StreamEvent>
 }
