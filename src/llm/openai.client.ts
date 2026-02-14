@@ -533,7 +533,7 @@ export const localMediaPlayTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: 'function',
   function: {
     name: 'local_media_play',
-    description: 'Stream a local media file by its ID (base64 path). This starts a cvlc stream and opens the media player.',
+    description: 'Stream a local media file by its ID (base64 path). This opens the integrated media player and starts playback.',
     parameters: {
       type: 'object',
       properties: {
