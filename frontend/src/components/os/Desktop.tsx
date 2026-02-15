@@ -33,6 +33,7 @@ import NewsWindow from './apps/NewsWindow';
 import PlannerWindow from './apps/PlannerWindow';
 import IRCWindow from './apps/IRCWindow';
 import PlaceholderWindow from './apps/PlaceholderWindow';
+import { CanvasWindow } from './apps/CanvasWindow';
 
 // Map appId to component
 function getAppComponent(appId: AppId): React.ReactNode {
@@ -77,6 +78,8 @@ function getAppComponent(appId: AppId): React.ReactNode {
       return <AutonomousLearningWindow />;
     case 'news':
       return <NewsWindow />;
+    case 'canvas':
+      return <CanvasWindow />;
     default:
       return <PlaceholderWindow title="Unknown" message="Unknown app" />;
   }
@@ -101,6 +104,9 @@ export function Desktop() {
   const mediaAction = useChatStore((state) => state.mediaAction);
   const setMediaAction = useChatStore((state) => state.setMediaAction);
   const setPendingMediaResults = useWindowStore((state) => state.setPendingMediaResults);
+  const canvasAction = useChatStore((state) => state.canvasAction);
+  const setCanvasAction = useChatStore((state) => state.setCanvasAction);
+  const setPendingCanvasData = useWindowStore((state) => state.setPendingCanvasData);
 
   const { activeBackground, setActiveBackground } = useBackgroundStore();
 
@@ -192,6 +198,18 @@ export function Desktop() {
       setMediaAction(null);
     }
   }, [mediaAction, openApp, setMediaAction, setPendingMediaResults]);
+
+  // Auto-open canvas window when canvasAction is triggered
+  useEffect(() => {
+    if (canvasAction?.type === 'complete' && canvasAction.content) {
+      setPendingCanvasData({
+        artifactId: canvasAction.artifactId,
+        content: canvasAction.content,
+      });
+      openApp('canvas');
+      setCanvasAction(null);
+    }
+  }, [canvasAction, openApp, setCanvasAction, setPendingCanvasData]);
 
   // Keyboard shortcuts
   useEffect(() => {

@@ -11,32 +11,36 @@ export interface TriggerWords {
   claude: string[];
   gemini: string[];
   api: string[];
+  codex: string[];
 }
 
 export interface CoderSettings {
   userId: string;
   claudeCliEnabled: boolean;
   geminiCliEnabled: boolean;
+  codexCliEnabled: boolean;
   coderApiEnabled: boolean;
   coderApiProvider: ProviderId | null;
   coderApiModel: string | null;
   triggerWords: TriggerWords;
-  defaultCoder: 'claude' | 'gemini' | 'api';
+  defaultCoder: 'claude' | 'gemini' | 'api' | 'codex';
 }
 
-export type CoderType = 'coder-claude' | 'coder-gemini' | 'coder-api';
+export type CoderType = 'coder-claude' | 'coder-gemini' | 'coder-api' | 'coder-codex';
 
 // Default trigger words
 const DEFAULT_TRIGGER_WORDS: TriggerWords = {
   claude: ['refactor', 'security', 'debug', 'architecture', 'critical', 'production', 'careful', 'edge case'],
   gemini: ['test', 'explain', 'analyze', 'log', 'simple', 'script', 'generate', 'boilerplate', 'documentation'],
   api: [],
+  codex: ['quick fix', 'patch', 'codex', 'small refactor', 'fast'],
 };
 
 // Default settings for new users
 const DEFAULT_SETTINGS: Omit<CoderSettings, 'userId'> = {
   claudeCliEnabled: false,
   geminiCliEnabled: false,
+  codexCliEnabled: false,
   coderApiEnabled: false,
   coderApiProvider: null,
   coderApiModel: null,
@@ -81,6 +85,7 @@ export async function getCoderSettings(userId: string): Promise<CoderSettings> {
       `SELECT
         claude_cli_enabled,
         gemini_cli_enabled,
+        codex_cli_enabled,
         coder_api_enabled,
         coder_api_provider,
         coder_api_model,
@@ -95,14 +100,21 @@ export async function getCoderSettings(userId: string): Promise<CoderSettings> {
 
     if (result.rows.length > 0) {
       const row = result.rows[0];
+      const triggerWords = (row.trigger_words || {}) as Partial<TriggerWords>;
       settings = {
         userId,
         claudeCliEnabled: row.claude_cli_enabled,
         geminiCliEnabled: row.gemini_cli_enabled,
+        codexCliEnabled: row.codex_cli_enabled ?? false,
         coderApiEnabled: row.coder_api_enabled,
         coderApiProvider: row.coder_api_provider as ProviderId | null,
         coderApiModel: row.coder_api_model,
-        triggerWords: row.trigger_words || DEFAULT_TRIGGER_WORDS,
+        triggerWords: {
+          claude: Array.isArray(triggerWords.claude) ? triggerWords.claude : DEFAULT_TRIGGER_WORDS.claude,
+          gemini: Array.isArray(triggerWords.gemini) ? triggerWords.gemini : DEFAULT_TRIGGER_WORDS.gemini,
+          api: Array.isArray(triggerWords.api) ? triggerWords.api : DEFAULT_TRIGGER_WORDS.api,
+          codex: Array.isArray(triggerWords.codex) ? triggerWords.codex : DEFAULT_TRIGGER_WORDS.codex,
+        },
         defaultCoder: row.default_coder || 'claude',
       };
     } else {
@@ -144,6 +156,10 @@ export async function updateCoderSettings(
     if (updates.geminiCliEnabled !== undefined) {
       fields.push(`gemini_cli_enabled = $${paramIndex++}`);
       values.push(updates.geminiCliEnabled);
+    }
+    if (updates.codexCliEnabled !== undefined) {
+      fields.push(`codex_cli_enabled = $${paramIndex++}`);
+      values.push(updates.codexCliEnabled);
     }
     if (updates.coderApiEnabled !== undefined) {
       fields.push(`coder_api_enabled = $${paramIndex++}`);
@@ -216,8 +232,8 @@ export async function resetCoderSettings(userId: string): Promise<void> {
 
 /**
  * Parse explicit coder override from message
- * Patterns: @coder-claude, @coder-gemini, @coder-api
- *           "use coder-claude", "use coder-gemini", "use coder-api"
+ * Patterns: @coder-claude, @coder-gemini, @coder-api, @coder-codex
+ *           "use coder-claude", "use coder-gemini", "use coder-api", "use coder-codex"
  */
 export function parseExplicitOverride(message: string): CoderType | null {
   const lower = message.toLowerCase();
@@ -226,11 +242,13 @@ export function parseExplicitOverride(message: string): CoderType | null {
   if (/@coder-claude\b/i.test(message)) return 'coder-claude';
   if (/@coder-gemini\b/i.test(message)) return 'coder-gemini';
   if (/@coder-api\b/i.test(message)) return 'coder-api';
+  if (/@coder-codex\b/i.test(message)) return 'coder-codex';
 
   // "use X" patterns
   if (/\buse\s+coder-claude\b/i.test(lower)) return 'coder-claude';
   if (/\buse\s+coder-gemini\b/i.test(lower)) return 'coder-gemini';
   if (/\buse\s+coder-api\b/i.test(lower)) return 'coder-api';
+  if (/\buse\s+coder-codex\b/i.test(lower)) return 'coder-codex';
 
   return null;
 }
@@ -246,6 +264,8 @@ function isCoderEnabled(settings: CoderSettings, coderType: CoderType): boolean 
       return settings.geminiCliEnabled;
     case 'coder-api':
       return settings.coderApiEnabled && !!settings.coderApiProvider && !!settings.coderApiModel;
+    case 'coder-codex':
+      return settings.codexCliEnabled;
     default:
       return false;
   }
@@ -258,6 +278,7 @@ function getEnabledCoders(settings: CoderSettings): CoderType[] {
   const enabled: CoderType[] = [];
   if (settings.claudeCliEnabled) enabled.push('coder-claude');
   if (settings.geminiCliEnabled) enabled.push('coder-gemini');
+  if (settings.codexCliEnabled) enabled.push('coder-codex');
   if (settings.coderApiEnabled && settings.coderApiProvider && settings.coderApiModel) {
     enabled.push('coder-api');
   }
@@ -288,6 +309,13 @@ function matchTriggerWords(message: string, triggerWords: TriggerWords): CoderTy
   for (const word of triggerWords.api) {
     if (lower.includes(word.toLowerCase())) {
       return 'coder-api';
+    }
+  }
+
+  // Check Codex trigger words
+  for (const word of triggerWords.codex) {
+    if (lower.includes(word.toLowerCase())) {
+      return 'coder-codex';
     }
   }
 

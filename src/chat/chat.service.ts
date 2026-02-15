@@ -47,6 +47,13 @@ import {
   researchTool,
   loadContextTool,
   correctSummaryTool,
+  generateArtifactTool,
+  rewriteArtifactTool,
+  updateHighlightedTool,
+  saveArtifactFileTool,
+  listArtifactsTool,
+  loadArtifactTool,
+  getArtifactDownloadLinkTool,
   formatSearchResultsForContext,
   formatAgentResultForContext,
   type ChatMessage,
@@ -72,6 +79,41 @@ function decodeHtmlEntities(text: string): string {
     '&nbsp;': ' ',
   };
   return text.replace(/&(?:lt|gt|amp|quot|apos|nbsp|#39|#x27|#x2F|#47);/gi, (match) => entities[match.toLowerCase()] || match);
+}
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isUuid(value: unknown): value is string {
+  return typeof value === 'string' && UUID_REGEX.test(value);
+}
+
+async function resolveArtifactIdForSession(
+  canvasService: { getLatestArtifactIdForSession: (userId: string, sessionId: string) => Promise<string | null> },
+  userId: string,
+  sessionId: string,
+  requestedArtifactId: unknown
+): Promise<string | null> {
+  if (isUuid(requestedArtifactId)) {
+    return requestedArtifactId;
+  }
+
+  const fallbackArtifactId = await canvasService.getLatestArtifactIdForSession(userId, sessionId);
+  if (fallbackArtifactId) {
+    logger.warn('Resolved non-UUID artifact ID to latest session artifact', {
+      requestedArtifactId,
+      resolvedArtifactId: fallbackArtifactId,
+      sessionId,
+      userId,
+    });
+    return fallbackArtifactId;
+  }
+
+  logger.warn('Unable to resolve artifact ID for session', {
+    requestedArtifactId,
+    sessionId,
+    userId,
+  });
+  return null;
 }
 import * as questionsService from '../autonomous/questions.service.js';
 import { getUserModelConfig } from '../llm/model-config.service.js';
@@ -530,8 +572,23 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     sessionLogService.createSessionLog(userId, sessionId, mode).catch(() => {});
   }
 
+  // Fetch canvas style rules for artifact generation
+  let canvasStylePrompt = '';
+  let canvasSessionPrompt = '';
+  try {
+    const canvasService = await import('../canvas/canvas.service.js');
+    const styleRules = await canvasService.getStyleRules(userId, 5);
+    canvasStylePrompt = canvasService.formatStyleRules(styleRules);
+    const latestArtifactId = await canvasService.getLatestArtifactIdForSession(userId, sessionId);
+    if (latestArtifactId) {
+      canvasSessionPrompt = `ACTIVE CANVAS ARTIFACT ID: ${latestArtifactId}\nWhen editing an existing artifact, always use this exact UUID as artifactId for rewrite_artifact/update_highlighted unless the user explicitly gives a different UUID.`;
+    }
+  } catch (error) {
+    // Silently fail if canvas service unavailable
+  }
+
   // Combine all context
-  const fullContext = [memoryPrompt, abilityPrompt, prefPrompt, intentPrompt, abilityActionResult].filter(Boolean).join('\n\n');
+  const fullContext = [memoryPrompt, abilityPrompt, prefPrompt, intentPrompt, abilityActionResult, canvasStylePrompt, canvasSessionPrompt].filter(Boolean).join('\n\n');
 
   // Build messages array with MCP tool info and compressed context
   const mcpToolsForPrompt = mcpUserTools.map(t => ({
@@ -604,7 +661,9 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool,
     generateImageTool, generateBackgroundTool, researchTool, delegateToAgentTool,
     loadContextTool, correctSummaryTool,
-    workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool
+    workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool,
+    generateArtifactTool, rewriteArtifactTool, updateHighlightedTool, saveArtifactFileTool,
+    listArtifactsTool, loadArtifactTool, getArtifactDownloadLinkTool
   ];
 
   // Assistant tools - full sysadmin capabilities (sysmon, MCP)
@@ -716,6 +775,215 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
             role: 'tool',
             tool_call_id: toolCall.id,
             content: `Download failed: ${(dlError as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'generate_artifact') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Generating artifact', { type: args.type, title: args.title, language: args.language });
+
+        try {
+          const canvasService = await import('../canvas/canvas.service.js');
+          const result = await canvasService.generateArtifact(
+            userId,
+            sessionId,
+            args.type,
+            args.title,
+            args.content,
+            args.language
+          );
+
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Artifact created: "${args.title}" (ID: ${result.artifactId})`,
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Error generating artifact:', error);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to create artifact: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'rewrite_artifact') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Rewriting artifact', { artifactId: args.artifactId });
+
+        try {
+          const canvasService = await import('../canvas/canvas.service.js');
+          const artifactId = await resolveArtifactIdForSession(canvasService, userId, sessionId, args.artifactId);
+          if (!artifactId) {
+            throw new Error('No editable artifact found in this session');
+          }
+          const result = await canvasService.rewriteArtifact(
+            userId,
+            artifactId,
+            args.title,
+            args.content
+          );
+
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Artifact updated to version ${result.content.index}`,
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Error rewriting artifact:', error);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to update artifact: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'update_highlighted') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Updating highlighted text', { artifactId: args.artifactId, range: [args.startIndex, args.endIndex] });
+
+        try {
+          const canvasService = await import('../canvas/canvas.service.js');
+          const artifactId = await resolveArtifactIdForSession(canvasService, userId, sessionId, args.artifactId);
+          if (!artifactId) {
+            throw new Error('No editable artifact found in this session');
+          }
+          const result = await canvasService.updateHighlighted(
+            userId,
+            artifactId,
+            args.startIndex,
+            args.endIndex,
+            args.newContent
+          );
+
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Highlighted text updated, created version ${result.content.index}`,
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Error updating highlighted text:', error);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to update highlighted text: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'save_artifact_file') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Saving artifact file', { artifactId: args.artifactId, path: args.path });
+
+        try {
+          const canvasService = await import('../canvas/canvas.service.js');
+          const artifactId = await resolveArtifactIdForSession(canvasService, userId, sessionId, args.artifactId);
+          if (!artifactId) {
+            throw new Error('No editable artifact found in this session');
+          }
+          if (typeof args.path !== 'string' || typeof args.content !== 'string') {
+            throw new Error('path and content are required');
+          }
+
+          const saved = await canvasService.saveArtifactFile(
+            userId,
+            artifactId,
+            args.path,
+            args.content,
+            typeof args.language === 'string' ? args.language : undefined
+          );
+
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Saved file "${args.path}" to artifact ${artifactId}, created version ${saved.versionIndex}.`,
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Error saving artifact file:', error);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to save artifact file: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'list_artifacts') {
+        const args = JSON.parse(toolCall.function.arguments || '{}');
+        logger.info('Listing artifacts', { requestedSessionId: args.sessionId, limit: args.limit });
+
+        try {
+          const canvasService = await import('../canvas/canvas.service.js');
+          const artifacts = await canvasService.listArtifacts(userId, {
+            sessionId: typeof args.sessionId === 'string' ? args.sessionId : sessionId,
+            limit: typeof args.limit === 'number' ? args.limit : 15,
+          });
+
+          const listText = artifacts.length === 0
+            ? 'No artifacts found.'
+            : artifacts.map((a: any) => `- ${a.title} (id: ${a.id}, v${a.currentIndex}, ${a.type}${a.language ? `/${a.language}` : ''})`).join('\n');
+
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Recent artifacts:\n${listText}`,
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Error listing artifacts:', error);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to list artifacts: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'load_artifact') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Loading artifact', { artifactId: args.artifactId, index: args.index });
+
+        try {
+          const canvasService = await import('../canvas/canvas.service.js');
+          const artifactId = await resolveArtifactIdForSession(canvasService, userId, sessionId, args.artifactId);
+          if (!artifactId) {
+            throw new Error('No artifact found to load');
+          }
+          const artifact = await canvasService.getArtifact(userId, artifactId);
+          const targetIndex = typeof args.index === 'number' ? args.index : artifact.currentIndex;
+          const version = artifact.contents.find((c: any) => c.index === targetIndex);
+          if (!version) {
+            throw new Error(`Version ${targetIndex} not found`);
+          }
+          await canvasService.navigateToVersion(userId, artifactId, targetIndex);
+
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Loaded artifact "${version.title}" (id: ${artifactId}) at version ${targetIndex}.`,
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Error loading artifact:', error);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to load artifact: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'get_artifact_download_link') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Generating artifact download link', { artifactId: args.artifactId, index: args.index });
+
+        try {
+          const canvasService = await import('../canvas/canvas.service.js');
+          const artifactId = await resolveArtifactIdForSession(canvasService, userId, sessionId, args.artifactId);
+          if (!artifactId) {
+            throw new Error('No artifact found to download');
+          }
+          const query = typeof args.index === 'number' ? `?index=${args.index}` : '';
+          const link = `/api/canvas/artifacts/${artifactId}/download${query}`;
+
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Download link: ${link}`,
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Error generating artifact download link:', error);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to generate download link: ${(error as Error).message}`,
           } as ChatMessage);
         }
       } else if (toolCall.function.name === 'browser_visual_search') {
@@ -2539,7 +2807,7 @@ export interface StreamMetrics {
 
 export async function* streamMessage(
   input: ChatInput
-): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'background_refresh' | 'reasoning' | 'video_action' | 'media_action'; content?: string; status?: string; messageId?: string; tokensUsed?: number; metrics?: StreamMetrics; action?: string; url?: string; videos?: any[]; query?: string; items?: any[]; source?: string }> {
+): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'background_refresh' | 'reasoning' | 'video_action' | 'media_action' | 'canvas_artifact'; content?: string | any; status?: string; messageId?: string; tokensUsed?: number; metrics?: StreamMetrics; action?: string; url?: string; videos?: any[]; query?: string; items?: any[]; source?: string; artifactId?: string }> {
   const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode, novaMode, documentIds } = input;
 
   // Initialize MemoryCore session for consolidation tracking
@@ -3053,7 +3321,7 @@ export async function* streamMessage(
     }
   }
 
-  yield { type: 'status', status: 'Thinking...' };
+  yield { type: 'status', status: '' };
 
   // Load MCP tools dynamically for this user (before building system prompt)
   const mcpUserTools = await mcpService.getAllUserTools(userId);
@@ -3069,8 +3337,23 @@ export async function* streamMessage(
     sessionLogService.createSessionLog(userId, sessionId, mode).catch(() => {});
   }
 
+  // Fetch canvas style rules for artifact generation
+  let canvasStylePrompt = '';
+  let canvasSessionPrompt = '';
+  try {
+    const canvasService = await import('../canvas/canvas.service.js');
+    const styleRules = await canvasService.getStyleRules(userId, 5);
+    canvasStylePrompt = canvasService.formatStyleRules(styleRules);
+    const latestArtifactId = await canvasService.getLatestArtifactIdForSession(userId, sessionId);
+    if (latestArtifactId) {
+      canvasSessionPrompt = `ACTIVE CANVAS ARTIFACT ID: ${latestArtifactId}\nWhen editing an existing artifact, always use this exact UUID as artifactId for rewrite_artifact/update_highlighted unless the user explicitly gives a different UUID.`;
+    }
+  } catch (error) {
+    // Silently fail if canvas service unavailable
+  }
+
   // Combine all context
-  const fullContext = [memoryPrompt, abilityPrompt, prefPrompt, intentPrompt, abilityActionResult].filter(Boolean).join('\n\n');
+  const fullContext = [memoryPrompt, abilityPrompt, prefPrompt, intentPrompt, abilityActionResult, canvasStylePrompt, canvasSessionPrompt].filter(Boolean).join('\n\n');
 
   // Build messages array with MCP tool info and compressed context
   const mcpToolsForPrompt = mcpUserTools.map(t => ({
@@ -3146,7 +3429,9 @@ export async function* streamMessage(
     browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool,
     generateImageTool, generateBackgroundTool, researchTool, delegateToAgentTool,
     loadContextTool, correctSummaryTool,
-    workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool
+    workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool,
+    generateArtifactTool, rewriteArtifactTool, updateHighlightedTool, saveArtifactFileTool,
+    listArtifactsTool, loadArtifactTool, getArtifactDownloadLinkTool
   ];
 
   // Assistant tools - full sysadmin capabilities (sysmon, MCP)
@@ -3181,6 +3466,10 @@ export async function* streamMessage(
       nodeName: 'chat_streaming_initial',
     },
   });
+
+  if (initialCompletion.reasoning) {
+    yield { type: 'reasoning', content: initialCompletion.reasoning };
+  }
 
   logger.info('Initial completion result', {
     hasToolCalls: !!(initialCompletion.toolCalls && initialCompletion.toolCalls.length > 0),
@@ -3324,6 +3613,256 @@ export async function* streamMessage(
           tool_call_id: toolCall.id,
           content: `Browser opened to ${searchUrl} for visual browsing.\n\nSearch results for context:\n${searchContext}`,
         } as ChatMessage);
+      } else if (toolCall.function.name === 'generate_artifact') {
+        const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'reasoning', content: `> Generating ${args.type} artifact: "${args.title}"\n` };
+        logger.info('Generating artifact (stream)', { type: args.type, title: args.title, language: args.language });
+
+        try {
+          const canvasService = await import('../canvas/canvas.service.js');
+          const result = await canvasService.generateArtifact(
+            userId,
+            sessionId,
+            args.type,
+            args.title,
+            args.content,
+            args.language
+          );
+
+          // Stream artifact to frontend
+          yield {
+            type: 'canvas_artifact',
+            artifactId: result.artifactId,
+            content: result.content
+          };
+
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Artifact created: "${args.title}" (ID: ${result.artifactId})`,
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Error generating artifact (stream):', error);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to create artifact: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'rewrite_artifact') {
+        const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'reasoning', content: `> Updating artifact...\n` };
+        logger.info('Rewriting artifact (stream)', { artifactId: args.artifactId });
+
+        try {
+          const canvasService = await import('../canvas/canvas.service.js');
+          const artifactId = await resolveArtifactIdForSession(canvasService, userId, sessionId, args.artifactId);
+          if (!artifactId) {
+            throw new Error('No editable artifact found in this session');
+          }
+          const result = await canvasService.rewriteArtifact(
+            userId,
+            artifactId,
+            args.title,
+            args.content
+          );
+
+          // Stream updated artifact to frontend
+          yield {
+            type: 'canvas_artifact',
+            artifactId,
+            content: result.content
+          };
+
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Artifact updated to version ${result.content.index}`,
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Error rewriting artifact (stream):', error);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to update artifact: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'update_highlighted') {
+        const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'reasoning', content: `> Updating selected text...\n` };
+        logger.info('Updating highlighted text (stream)', { artifactId: args.artifactId, range: [args.startIndex, args.endIndex] });
+
+        try {
+          const canvasService = await import('../canvas/canvas.service.js');
+          const artifactId = await resolveArtifactIdForSession(canvasService, userId, sessionId, args.artifactId);
+          if (!artifactId) {
+            throw new Error('No editable artifact found in this session');
+          }
+          const result = await canvasService.updateHighlighted(
+            userId,
+            artifactId,
+            args.startIndex,
+            args.endIndex,
+            args.newContent
+          );
+
+          // Stream updated artifact to frontend
+          yield {
+            type: 'canvas_artifact',
+            artifactId,
+            content: result.content
+          };
+
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Highlighted text updated, created version ${result.content.index}`,
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Error updating highlighted text (stream):', error);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to update highlighted text: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'save_artifact_file') {
+        const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'reasoning', content: `> Saving file ${args.path || ''}...\n` };
+        logger.info('Saving artifact file (stream)', { artifactId: args.artifactId, path: args.path });
+
+        try {
+          const canvasService = await import('../canvas/canvas.service.js');
+          const artifactId = await resolveArtifactIdForSession(canvasService, userId, sessionId, args.artifactId);
+          if (!artifactId) {
+            throw new Error('No editable artifact found in this session');
+          }
+          if (typeof args.path !== 'string' || typeof args.content !== 'string') {
+            throw new Error('path and content are required');
+          }
+
+          const saved = await canvasService.saveArtifactFile(
+            userId,
+            artifactId,
+            args.path,
+            args.content,
+            typeof args.language === 'string' ? args.language : undefined
+          );
+          const version = await canvasService.getArtifactVersion(userId, artifactId, saved.versionIndex);
+
+          yield {
+            type: 'canvas_artifact',
+            artifactId,
+            content: version,
+          };
+
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Saved file "${args.path}" and created version ${saved.versionIndex}.`,
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Error saving artifact file (stream):', error);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to save artifact file: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'list_artifacts') {
+        const args = JSON.parse(toolCall.function.arguments || '{}');
+        yield { type: 'reasoning', content: `> Listing recent artifacts...\n` };
+        logger.info('Listing artifacts (stream)', { requestedSessionId: args.sessionId, limit: args.limit });
+
+        try {
+          const canvasService = await import('../canvas/canvas.service.js');
+          const artifacts = await canvasService.listArtifacts(userId, {
+            sessionId: typeof args.sessionId === 'string' ? args.sessionId : sessionId,
+            limit: typeof args.limit === 'number' ? args.limit : 15,
+          });
+
+          const listText = artifacts.length === 0
+            ? 'No artifacts found.'
+            : artifacts.map((a: any) => `- ${a.title} (id: ${a.id}, v${a.currentIndex}, ${a.type}${a.language ? `/${a.language}` : ''})`).join('\n');
+
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Recent artifacts:\n${listText}`,
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Error listing artifacts (stream):', error);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to list artifacts: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'load_artifact') {
+        const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'reasoning', content: `> Loading artifact...\n` };
+        logger.info('Loading artifact (stream)', { artifactId: args.artifactId, index: args.index });
+
+        try {
+          const canvasService = await import('../canvas/canvas.service.js');
+          const artifactId = await resolveArtifactIdForSession(canvasService, userId, sessionId, args.artifactId);
+          if (!artifactId) {
+            throw new Error('No artifact found to load');
+          }
+          const artifact = await canvasService.getArtifact(userId, artifactId);
+          const targetIndex = typeof args.index === 'number' ? args.index : artifact.currentIndex;
+          const version = artifact.contents.find((c: any) => c.index === targetIndex);
+          if (!version) {
+            throw new Error(`Version ${targetIndex} not found`);
+          }
+          await canvasService.navigateToVersion(userId, artifactId, targetIndex);
+
+          yield {
+            type: 'canvas_artifact',
+            artifactId,
+            content: version,
+          };
+
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Loaded artifact "${version.title}" (id: ${artifactId}) at version ${targetIndex}.`,
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Error loading artifact (stream):', error);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to load artifact: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'get_artifact_download_link') {
+        const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'reasoning', content: `> Preparing artifact download link...\n` };
+        logger.info('Generating artifact download link (stream)', { artifactId: args.artifactId, index: args.index });
+
+        try {
+          const canvasService = await import('../canvas/canvas.service.js');
+          const artifactId = await resolveArtifactIdForSession(canvasService, userId, sessionId, args.artifactId);
+          if (!artifactId) {
+            throw new Error('No artifact found to download');
+          }
+          const query = typeof args.index === 'number' ? `?index=${args.index}` : '';
+          const link = `/api/canvas/artifacts/${artifactId}/download${query}`;
+
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Download link: ${link}`,
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('Error generating artifact download link (stream):', error);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to generate download link: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
       } else if (toolCall.function.name === 'delegate_to_agent') {
         const args = JSON.parse(toolCall.function.arguments);
         yield { type: 'reasoning', content: `> Invoking agent: ${args.agent}...\n` };
@@ -4340,7 +4879,7 @@ export async function* streamMessage(
     }
   }
 
-  yield { type: 'status', status: 'Composing response...' };
+  yield { type: 'status', status: '' };
 
   // OPTIMIZED: Only make second LLM call if tools were used
   // If no tools were called, reuse the initial completion content
@@ -4373,6 +4912,10 @@ export async function* streamMessage(
           nodeName: 'chat_streaming_followup',
         },
       });
+
+      if (followUpCompletion.reasoning) {
+        yield { type: 'reasoning', content: followUpCompletion.reasoning };
+      }
 
       // If no more tool calls, stream the final response
       if (!followUpCompletion.toolCalls || followUpCompletion.toolCalls.length === 0) {

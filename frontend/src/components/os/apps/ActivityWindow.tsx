@@ -207,6 +207,7 @@ export default function ActivityWindow() {
       const response = details.response as { content: string; finishReason: string; toolCalls?: Array<{ name: string; arguments: string }> } | undefined;
       const temperature = details.temperature as number | undefined;
       const maxTokens = details.maxTokens as number | undefined;
+      const numCtx = details.numCtx as number | undefined;
       const reasoning = details.reasoning as string | undefined;
 
       return (
@@ -218,6 +219,7 @@ export default function ActivityWindow() {
           <div className="flex items-center gap-4" style={{ color: 'var(--theme-text-muted)' }}>
             {temperature !== undefined && <span>temp: {temperature}</span>}
             {maxTokens !== undefined && <span>max_tokens: {maxTokens}</span>}
+            {numCtx !== undefined && <span>num_ctx: {numCtx}</span>}
             {tools && tools.length > 0 && <span>tools: {tools.length}</span>}
           </div>
 

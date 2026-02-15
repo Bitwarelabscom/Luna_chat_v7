@@ -14,6 +14,7 @@ import {
   type MarketRegimeData,
 } from '@/lib/api';
 import { useTradingWebSocket } from '@/hooks/useTradingWebSocket';
+import { useThinkingMessage } from './ThinkingStatus';
 
 // Smart price formatting - shows more decimals for low-priced coins
 function formatPrice(price: number | null | undefined): string {
@@ -326,6 +327,7 @@ export function TradingView() {
   const [chatSessionId, setChatSessionId] = useState<string | null>(null);
   const [isSendingChat, setIsSendingChat] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const thinkingPhrase = useThinkingMessage(isSendingChat);
 
   // WebSocket for live prices
   const symbols = activeTrades.map(t => t.symbol);
@@ -690,7 +692,7 @@ export function TradingView() {
                 <div className="bg-[var(--terminal-surface)] rounded-2xl rounded-bl-md px-4 py-3">
                   <div className="flex items-center gap-2">
                     <div className="w-2 h-2 bg-[var(--terminal-accent)] rounded-full animate-pulse" />
-                    <span className="text-sm text-[var(--terminal-text-muted)]">Thinking...</span>
+                    <span className="text-sm text-[var(--terminal-text-muted)]">{thinkingPhrase}...</span>
                   </div>
                 </div>
               </div>

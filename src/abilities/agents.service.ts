@@ -13,17 +13,18 @@ import { config } from '../config/index.js';
 
 /**
  * Execute command using spawn (more reliable than execFile for Claude CLI)
- * Supports cwd option for workspace sandboxing
+ * Supports cwd and env options for workspace sandboxing
  */
 function spawnAsync(
   command: string,
   args: string[],
-  options: { timeout?: number; maxBuffer?: number; cwd?: string } = {}
+  options: { timeout?: number; maxBuffer?: number; cwd?: string; env?: NodeJS.ProcessEnv } = {}
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       cwd: options.cwd,
+      env: options.env ? { ...process.env, ...options.env } : process.env,
     });
 
     let stdout = '';
@@ -301,6 +302,40 @@ IMPORTANT - EXECUTE YOUR CODE:
     tools: ['code_execution', 'workspace'],
     isDefault: false,
   },
+  'coder-codex': {
+    name: 'coder-codex',
+    description: 'Balanced Coder - Fast, practical coding with codex-mini-latest (OpenAI API)',
+    systemPrompt: `You are a PRACTICAL SOFTWARE ENGINEER powered by Codex Mini.
+
+YOUR STRENGTHS:
+- Fast implementation with solid code quality
+- Debugging common failures and regressions
+- Refactoring focused, testable changes
+- Writing clean patches with concise explanations
+- Producing implementation-ready code and scripts
+
+YOUR APPROACH:
+- Be precise and outcome-oriented
+- Prefer minimal, safe diffs over broad rewrites
+- Include tests when behavior changes
+- Call out assumptions and constraints clearly
+- Keep solutions maintainable and easy to review
+
+WORKSPACE & CODE EXECUTION:
+- Save scripts using markdown code blocks with filename annotation: \`\`\`python:analysis.py
+- Supported file types: .py, .js, .ts, .sh, .json, .txt, .md, .csv, .sql
+
+IMPORTANT - EXECUTE YOUR CODE:
+- After writing a script, USE run_shell_command to execute it immediately
+- Example: After saving analysis.py, run: python3 analysis.py
+- Always show the actual execution output to the user
+- If the script generates files (like charts), mention where they are saved
+- DO NOT just save scripts - EXECUTE them and show results${EM_DASH_RULE}`,
+    model: 'codex-mini-latest',
+    temperature: 0.2,
+    tools: ['code_execution', 'workspace'],
+    isDefault: false,
+  },
   'coder-api': {
     name: 'coder-api',
     description: 'Flexible Coder - Uses your configured API provider/model for coding tasks',
@@ -387,6 +422,7 @@ CODING AGENTS - You have TWO coding specialists with different strengths:
 |-------|---------|-----------|
 | coder-claude | HIGH COMPLEXITY | Architecture, refactoring, debugging complex errors, security-critical code |
 | coder-gemini | HIGH VOLUME/SPEED | Simple scripts, unit tests, large file analysis, code explanations |
+| coder-codex | BALANCED EXECUTION | Fast practical coding, focused patches, test-oriented implementation |
 
 CODING AGENT DECISION LOGIC:
 - "Refactor the authentication system" -> coder-claude (complex logic)
@@ -396,6 +432,8 @@ CODING AGENT DECISION LOGIC:
 - "Write unit tests for this module" -> coder-gemini (high volume)
 - "Create a simple utility script" -> coder-gemini (fast prototyping)
 - "Explain what this code does" -> coder-gemini (code explanation)
+- "Implement this focused bugfix quickly" -> coder-codex (balanced execution)
+- "Ship a practical patch with tests" -> coder-codex (test-oriented implementation)
 - If unsure, prefer coder-claude for production code, coder-gemini for tests/scripts
 
 Output your plan as JSON with this exact format:
@@ -411,7 +449,7 @@ Rules:
 - Use "dependsOn" to list step numbers that must complete first
 - Steps with no dependencies use an empty array: []
 - Be VERY specific in task descriptions - include what to search for, what to analyze, etc.
-- Only use the agents listed above (researcher, analyst, writer, coder-claude, coder-gemini)${EM_DASH_RULE}`,
+- Only use the agents listed above (researcher, analyst, writer, coder-claude, coder-gemini, coder-codex)${EM_DASH_RULE}`,
     model: 'o4-mini',
     temperature: 0.4,
     tools: [],
@@ -528,7 +566,7 @@ Output JSON only:
 {
   "action": "retry_same|modify_task|switch_agent|abort",
   "modifiedTask": "new task text if action is modify_task",
-  "newAgent": "researcher|coder-claude|coder-gemini|writer|analyst if action is switch_agent",
+  "newAgent": "researcher|coder-claude|coder-gemini|coder-codex|writer|analyst if action is switch_agent",
   "explanation": "brief explanation of your reasoning"
 }
 
@@ -536,12 +574,14 @@ Available agents:
 - researcher: Deep research, information gathering, web search
 - coder-claude: SENIOR ENGINEER - Complex architecture, refactoring, debugging hard errors, security-critical
 - coder-gemini: RAPID PROTOTYPER - Simple scripts, unit tests, large context analysis, code explanations
+- coder-codex: BALANCED CODER - Practical implementation, focused patches, test-oriented delivery
 - writer: Creative writing, content synthesis, drafting
 - analyst: Data analysis, calculations, insights
 
 CODING AGENT FAILOVER:
 - If coder-claude fails on a simple task, suggest switch to coder-gemini
 - If coder-gemini fails on complex logic, suggest switch to coder-claude
+- If coder-codex fails on deep architecture, suggest coder-claude
 - If either fails on large context, suggest coder-gemini (1M token window)
 
 IMPORTANT: Only suggest switch_agent if the current agent type is clearly wrong for the task.
@@ -674,6 +714,9 @@ export async function executeAgentTask(
     } else if (task.agentName === 'coder-gemini') {
       // Gemini CLI for rapid prototyper agent
       return executeWithGeminiCLI(task.agentName, systemPrompt, userMessage, startTime, userId);
+    } else if (task.agentName === 'coder-codex') {
+      // OpenAI Codex Mini for balanced coding tasks
+      return executeWithCodexMini(task.agentName, systemPrompt, userMessage, startTime, userId);
     } else if (task.agentName === 'coder-api') {
       // User-configured API provider/model for coding tasks
       return executeWithCoderAPI(task.agentName, systemPrompt, userMessage, startTime, userId);
@@ -966,6 +1009,7 @@ ${userMessage}`;
       maxBuffer: 100 * 1024 * 1024,
       timeout: 300000,
       cwd: userWorkspace, // Run from user's workspace directory
+      env: config.anthropic?.apiKey ? { ANTHROPIC_API_KEY: config.anthropic.apiKey } : {},
     });
 
     if (stderr) {
@@ -1069,6 +1113,7 @@ ${userMessage}`;
       maxBuffer: 100 * 1024 * 1024,
       timeout: 300000,
       cwd: userWorkspace, // Run from user's workspace directory
+      env: config.google?.apiKey ? { GOOGLE_API_KEY: config.google.apiKey } : {},
     });
 
     if (stderr) {
@@ -1198,6 +1243,92 @@ async function executeWithCoderAPI(
     };
   } catch (error) {
     logger.error('Coder API execution failed', {
+      error: (error as Error).message,
+      agentName,
+      userId,
+    });
+    return {
+      agentName,
+      success: false,
+      result: `Error: ${(error as Error).message}`,
+      executionTimeMs: Date.now() - startTime,
+    };
+  }
+}
+
+/**
+ * Execute task with OpenAI Codex Mini (for coder-codex agent)
+ * Automatically extracts and saves code files to workspace
+ */
+async function executeWithCodexMini(
+  agentName: string,
+  systemPrompt: string,
+  userMessage: string,
+  startTime: number,
+  userId: string
+): Promise<AgentResult> {
+  try {
+    const userWorkspace = await ensureUserWorkspace(userId);
+
+    const workspacePrompt = `WORKSPACE CONTEXT:
+- You are working against the user's persistent workspace at: ${userWorkspace}
+- Use relative file paths when generating files
+- Output full file content in code blocks with filename annotations when creating or updating files
+
+${userMessage}`;
+
+    logger.info('Executing agent task via OpenAI Codex Mini', {
+      agentName,
+      model: 'codex-mini-latest',
+      workspace: userWorkspace,
+    });
+
+    const completion = await createChatCompletion({
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: workspacePrompt }
+      ],
+      provider: 'openai',
+      model: 'codex-mini-latest',
+      loggingContext: {
+        userId,
+        source: 'agents',
+        nodeName: 'coder-codex',
+      },
+    });
+
+    let result = completion.content || 'No response generated';
+
+    // Extract and save any files from the output
+    const extractedFiles = extractFilesFromOutput(result);
+    const savedFileNames: string[] = [];
+
+    if (extractedFiles.length > 0) {
+      const savedFiles = await saveExtractedFiles(userId, extractedFiles);
+      savedFileNames.push(...savedFiles.map(f => f.name));
+
+      if (savedFiles.length > 0) {
+        result += `\n\n📁 **Saved to workspace:** ${savedFiles.map(f => f.name).join(', ')}`;
+      }
+    }
+
+    logger.info('Codex Mini agent task completed', {
+      agentName,
+      model: 'codex-mini-latest',
+      executionTimeMs: Date.now() - startTime,
+      savedFiles: savedFileNames.length,
+      tokensUsed: completion.tokensUsed,
+    });
+
+    return {
+      agentName,
+      success: true,
+      result,
+      executionTimeMs: Date.now() - startTime,
+      savedFiles: savedFileNames.length > 0 ? savedFileNames : undefined,
+    };
+  } catch (error) {
+    logger.error('Codex Mini execution failed', {
       error: (error as Error).message,
       agentName,
       userId,

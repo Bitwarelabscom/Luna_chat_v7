@@ -43,6 +43,21 @@ export interface PendingMediaData {
   autoPlay?: boolean;
 }
 
+export interface ArtifactContent {
+  id: string;
+  index: number;
+  type: 'code' | 'text';
+  title: string;
+  language?: string;
+  content: string;
+  createdAt: Date;
+}
+
+export interface PendingCanvasData {
+  artifactId: string;
+  content: ArtifactContent;
+}
+
 export interface EditorFileContext {
   sourceType: 'workspace' | 'project';
   sourceId: string;
@@ -72,6 +87,8 @@ interface WindowStore {
   pendingVideoResults: PendingVideoData | null;
   // Pending media results for unified media player
   pendingMediaResults: PendingMediaData | null;
+  // Pending canvas artifact data
+  pendingCanvasData: PendingCanvasData | null;
 
   // Actions
   openApp: (appId: AppId) => void;
@@ -92,6 +109,9 @@ interface WindowStore {
   // Media results actions (unified)
   setPendingMediaResults: (data: PendingMediaData | null) => void;
   consumePendingMediaResults: () => PendingMediaData | null;
+  // Canvas artifact actions
+  setPendingCanvasData: (data: PendingCanvasData | null) => void;
+  consumePendingCanvasData: () => PendingCanvasData | null;
 }
 
 let windowIdCounter = 0;
@@ -104,6 +124,7 @@ export const useWindowStore = create<WindowStore>((set, get) => ({
   pendingEditorContext: null,
   pendingVideoResults: null,
   pendingMediaResults: null,
+  pendingCanvasData: null,
 
   openApp: (appId: AppId) => {
     const { windows, maxZIndex } = get();
@@ -267,6 +288,18 @@ export const useWindowStore = create<WindowStore>((set, get) => ({
       set({ pendingMediaResults: null });
     }
     return pendingMediaResults;
+  },
+
+  setPendingCanvasData: (data: PendingCanvasData | null) => {
+    set({ pendingCanvasData: data });
+  },
+
+  consumePendingCanvasData: () => {
+    const { pendingCanvasData } = get();
+    if (pendingCanvasData) {
+      set({ pendingCanvasData: null });
+    }
+    return pendingCanvasData;
   },
 }));
 

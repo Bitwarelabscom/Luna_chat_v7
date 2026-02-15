@@ -20,6 +20,7 @@ import {
   GitBranch,
   Newspaper,
   Hash,
+  Code2,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -43,7 +44,8 @@ export type AppId =
   | 'consciousness'
   | 'autonomous-learning'
   | 'news'
-  | 'irc';
+  | 'irc'
+  | 'canvas';
 
 export interface AppConfig {
   id: AppId;
@@ -217,6 +219,14 @@ export const appConfig: Record<AppId, AppConfig> = {
     color: 'from-blue-400 to-cyan-500',
     defaultSize: { width: 900, height: 650 },
     showInDock: true,
+  },
+  canvas: {
+    id: 'canvas',
+    title: 'Canvas',
+    icon: Code2,
+    color: 'from-purple-400 to-pink-500',
+    defaultSize: { width: 1100, height: 750 },
+    showInDock: false, // Opened from chat actions, not dock
   },
 };
 

@@ -11,10 +11,11 @@ export default function CoderTab() {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [newTriggerWord, setNewTriggerWord] = useState<{ claude: string; gemini: string; api: string }>({
+  const [newTriggerWord, setNewTriggerWord] = useState<{ claude: string; gemini: string; api: string; codex: string }>({
     claude: '',
     gemini: '',
     api: '',
+    codex: '',
   });
 
   useEffect(() => {
@@ -29,7 +30,7 @@ export default function CoderTab() {
         settingsApi.getCoderSettings(),
         settingsApi.getAvailableModels(),
       ]);
-      setSettings(coderRes);
+      setSettings(coderRes.settings);
       setProviders(modelsRes.providers);
     } catch {
       setError('Failed to load coder settings');
@@ -49,7 +50,7 @@ export default function CoderTab() {
     setError(null);
     try {
       const updated = await settingsApi.updateCoderSettings(updates);
-      setSettings(updated);
+      setSettings(updated.settings);
       showSuccess('Settings saved');
     } catch {
       setError('Failed to save settings');
@@ -105,6 +106,7 @@ export default function CoderTab() {
     let count = 0;
     if (settings.claudeCliEnabled) count++;
     if (settings.geminiCliEnabled) count++;
+    if (settings.codexCliEnabled) count++;
     if (settings.coderApiEnabled) count++;
     return count;
   }
@@ -281,6 +283,28 @@ export default function CoderTab() {
             </div>
           )}
         </div>
+
+        {/* Codex (OpenAI) */}
+        <div className="p-4 bg-theme-bg-tertiary/50 border border-theme-border rounded-lg">
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={settings.codexCliEnabled}
+              onChange={e => updateSettings({ codexCliEnabled: e.target.checked })}
+              disabled={isSaving}
+              className="mt-1 w-4 h-4 rounded border-theme-border bg-theme-bg-secondary text-theme-accent-primary focus:ring-theme-accent-primary/50"
+            />
+            <div className="flex-1">
+              <div className="flex items-center gap-2">
+                <span className="font-medium text-theme-text-primary">Codex Mini</span>
+                <span className="px-2 py-0.5 text-xs bg-cyan-500/20 text-cyan-400 rounded">Balanced Coder</span>
+              </div>
+              <p className="text-sm text-theme-text-muted mt-1">
+                Uses OpenAI <code>codex-mini-latest</code> for fast, practical coding and focused patches.
+              </p>
+            </div>
+          </label>
+        </div>
       </div>
 
       {/* Default Coder */}
@@ -294,6 +318,7 @@ export default function CoderTab() {
             {[
               { value: 'claude', label: 'Claude CLI', enabled: settings.claudeCliEnabled },
               { value: 'gemini', label: 'Gemini CLI', enabled: settings.geminiCliEnabled },
+              { value: 'codex', label: 'Codex Mini', enabled: settings.codexCliEnabled },
               { value: 'api', label: 'Coder API', enabled: settings.coderApiEnabled },
             ].filter(o => o.enabled).map(option => (
               <label key={option.value} className="flex items-center gap-2 cursor-pointer">
@@ -302,7 +327,7 @@ export default function CoderTab() {
                   name="defaultCoder"
                   value={option.value}
                   checked={settings.defaultCoder === option.value}
-                  onChange={e => updateSettings({ defaultCoder: e.target.value as 'claude' | 'gemini' | 'api' })}
+                  onChange={e => updateSettings({ defaultCoder: e.target.value as 'claude' | 'gemini' | 'codex' | 'api' })}
                   disabled={isSaving}
                   className="w-4 h-4 border-theme-border bg-theme-bg-secondary text-theme-accent-primary focus:ring-theme-accent-primary/50"
                 />
@@ -452,6 +477,52 @@ export default function CoderTab() {
               </div>
             </div>
           )}
+
+          {/* Codex Triggers */}
+          {settings.codexCliEnabled && (
+            <div className="p-4 bg-theme-bg-tertiary/50 border border-theme-border rounded-lg">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="w-2.5 h-2.5 rounded-full bg-cyan-500" />
+                <span className="text-sm font-medium text-theme-text-primary">Codex Triggers</span>
+              </div>
+              <div className="flex flex-wrap gap-2 mb-3">
+                {settings.triggerWords.codex.length === 0 ? (
+                  <span className="text-sm text-theme-text-muted italic">No triggers set - uses default fallback</span>
+                ) : (
+                  settings.triggerWords.codex.map(word => (
+                    <span
+                      key={word}
+                      className="inline-flex items-center gap-1 px-2 py-1 bg-cyan-500/20 text-cyan-400 rounded text-sm"
+                    >
+                      {word}
+                      <button
+                        onClick={() => removeTriggerWord('codex', word)}
+                        className="hover:text-cyan-200"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  ))
+                )}
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={newTriggerWord.codex}
+                  onChange={e => setNewTriggerWord(prev => ({ ...prev, codex: e.target.value }))}
+                  onKeyDown={e => e.key === 'Enter' && addTriggerWord('codex')}
+                  placeholder="Add trigger word..."
+                  className="flex-1 px-3 py-1.5 bg-theme-bg-secondary border border-theme-border rounded-lg text-theme-text-primary text-sm focus:outline-none focus:border-theme-border-focus"
+                />
+                <button
+                  onClick={() => addTriggerWord('codex')}
+                  className="px-3 py-1.5 bg-cyan-500/20 text-cyan-400 rounded-lg hover:bg-cyan-500/30 transition"
+                >
+                  <Plus className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -479,6 +550,11 @@ export default function CoderTab() {
             <code className="px-1.5 py-0.5 bg-theme-bg-tertiary rounded text-green-400">@coder-api</code>
             {' '}or{' '}
             <code className="px-1.5 py-0.5 bg-theme-bg-tertiary rounded text-green-400">use coder-api</code>
+          </li>
+          <li>
+            <code className="px-1.5 py-0.5 bg-theme-bg-tertiary rounded text-cyan-400">@coder-codex</code>
+            {' '}or{' '}
+            <code className="px-1.5 py-0.5 bg-theme-bg-tertiary rounded text-cyan-400">use coder-codex</code>
           </li>
         </ul>
       </div>

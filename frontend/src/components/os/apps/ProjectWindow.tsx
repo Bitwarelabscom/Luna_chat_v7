@@ -3,11 +3,20 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   FolderOpen, RefreshCw, Pause,
-  FileText, Image as ImageIcon, Code, Eye, Edit3,
+  FileText, Image as ImageIcon, Code, Eye, Edit3, Download, Layers,
   ChevronRight, Trash2, AlertCircle, CheckCircle2,
   Clock, Circle, XCircle
 } from 'lucide-react';
-import { projectsApi, editorBridgeApi, isTextFile, Project, ProjectFile } from '@/lib/api';
+import {
+  projectsApi,
+  editorBridgeApi,
+  isTextFile,
+  Project,
+  ProjectFile,
+  canvasApi,
+  CanvasArtifact,
+  CanvasArtifactSummary,
+} from '@/lib/api';
 import { useWindowStore } from '@/lib/window-store';
 
 type StepStatus = 'pending' | 'active' | 'waiting_input' | 'complete' | 'completed' | 'error' | 'skipped';
@@ -65,12 +74,17 @@ function getStatusColor(status: string): string {
 }
 
 export default function ProjectWindow() {
+  const [viewMode, setViewMode] = useState<'projects' | 'artifacts'>('projects');
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const [artifacts, setArtifacts] = useState<CanvasArtifactSummary[]>([]);
+  const [selectedArtifact, setSelectedArtifact] = useState<CanvasArtifact | null>(null);
+  const [selectedArtifactVersion, setSelectedArtifactVersion] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [files, setFiles] = useState<ProjectFile[]>([]);
   const openApp = useWindowStore((state) => state.openApp);
   const setPendingEditorContext = useWindowStore((state) => state.setPendingEditorContext);
+  const setPendingCanvasData = useWindowStore((state) => state.setPendingCanvasData);
 
   const handleOpenInEditor = async (file: ProjectFile) => {
     if (!selectedProject) return;
@@ -122,15 +136,74 @@ export default function ProjectWindow() {
     }
   }, []);
 
+  const loadArtifacts = useCallback(async () => {
+    try {
+      const data = await canvasApi.listArtifacts({ limit: 50 });
+      setArtifacts(data || []);
+    } catch (error) {
+      console.error('Failed to load artifacts:', error);
+    }
+  }, []);
+
   useEffect(() => {
     loadProjects();
-  }, [loadProjects]);
+    loadArtifacts();
+  }, [loadProjects, loadArtifacts]);
 
   useEffect(() => {
     if (selectedProject) {
       loadProjectFiles(selectedProject.id);
     }
   }, [selectedProject, loadProjectFiles]);
+
+  const handleSelectArtifact = async (artifactSummary: CanvasArtifactSummary) => {
+    try {
+      const artifact = await canvasApi.getArtifact(artifactSummary.id);
+      setSelectedArtifact(artifact);
+      setSelectedArtifactVersion(artifact.currentIndex);
+    } catch (error) {
+      console.error('Failed to load artifact:', error);
+    }
+  };
+
+  const handleOpenArtifactInCanvas = () => {
+    if (!selectedArtifact) return;
+    const versionIndex = selectedArtifactVersion ?? selectedArtifact.currentIndex;
+    const version = selectedArtifact.contents.find((c) => c.index === versionIndex);
+    if (!version) return;
+
+    setPendingCanvasData({
+      artifactId: selectedArtifact.id,
+      content: {
+        id: version.id,
+        index: version.index,
+        type: version.type,
+        title: version.title,
+        language: version.language,
+        content: version.content,
+        createdAt: new Date(version.createdAt),
+      },
+    });
+    openApp('canvas');
+  };
+
+  const handleDownloadArtifact = async () => {
+    if (!selectedArtifact) return;
+    const versionIndex = selectedArtifactVersion ?? selectedArtifact.currentIndex;
+    try {
+      const { blob, filename } = await canvasApi.downloadArtifact(selectedArtifact.id, versionIndex);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Failed to download artifact:', error);
+    }
+  };
 
   const handleDeleteProject = async (id: string) => {
     if (!confirm('Are you sure you want to delete this project?')) return;
@@ -180,10 +253,28 @@ export default function ProjectWindow() {
       >
         <div className="flex items-center gap-2">
           <FolderOpen className="w-5 h-5" style={{ color: 'var(--theme-accent-primary)' }} />
-          <span className="font-medium" style={{ color: 'var(--theme-text-primary)' }}>Projects</span>
+          <span className="font-medium" style={{ color: 'var(--theme-text-primary)' }}>
+            {viewMode === 'projects' ? 'Projects' : 'Artifacts'}
+          </span>
+          <div className="ml-3 flex rounded border" style={{ borderColor: 'var(--theme-border-default)' }}>
+            <button
+              onClick={() => setViewMode('projects')}
+              className={`px-2 py-0.5 text-xs transition ${viewMode === 'projects' ? 'bg-[var(--theme-accent-primary)]/20' : ''}`}
+              style={{ color: 'var(--theme-text-primary)' }}
+            >
+              Projects
+            </button>
+            <button
+              onClick={() => setViewMode('artifacts')}
+              className={`px-2 py-0.5 text-xs transition ${viewMode === 'artifacts' ? 'bg-[var(--theme-accent-primary)]/20' : ''}`}
+              style={{ color: 'var(--theme-text-primary)' }}
+            >
+              Artifacts
+            </button>
+          </div>
         </div>
         <button
-          onClick={loadProjects}
+          onClick={viewMode === 'projects' ? loadProjects : loadArtifacts}
           disabled={loading}
           className="p-1.5 rounded transition hover:bg-[var(--theme-bg-tertiary)]"
           style={{ color: 'var(--theme-text-muted)' }}
@@ -198,11 +289,11 @@ export default function ProjectWindow() {
           className="w-64 border-r overflow-auto"
           style={{ borderColor: 'var(--theme-border-default)' }}
         >
-          {loading ? (
+          {loading && viewMode === 'projects' ? (
             <div className="flex items-center justify-center h-full">
               <RefreshCw className="w-6 h-6 animate-spin" style={{ color: 'var(--theme-accent-primary)' }} />
             </div>
-          ) : projects.length === 0 ? (
+          ) : viewMode === 'projects' && projects.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full p-4 text-center">
               <FolderOpen className="w-12 h-12 mb-2 opacity-30" style={{ color: 'var(--theme-text-muted)' }} />
               <p className="text-sm" style={{ color: 'var(--theme-text-muted)' }}>No projects yet</p>
@@ -210,7 +301,7 @@ export default function ProjectWindow() {
                 Ask Luna to create a website or app to get started
               </p>
             </div>
-          ) : (
+          ) : viewMode === 'projects' ? (
             <div className="p-2">
               {projects.map((project) => (
                 <div
@@ -239,12 +330,49 @@ export default function ProjectWindow() {
                 </div>
               ))}
             </div>
+          ) : artifacts.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full p-4 text-center">
+              <Layers className="w-12 h-12 mb-2 opacity-30" style={{ color: 'var(--theme-text-muted)' }} />
+              <p className="text-sm" style={{ color: 'var(--theme-text-muted)' }}>No artifacts yet</p>
+              <p className="text-xs mt-1" style={{ color: 'var(--theme-text-muted)' }}>
+                Generate an artifact in chat, then it will appear here
+              </p>
+            </div>
+          ) : (
+            <div className="p-2">
+              {artifacts.map((artifact) => (
+                <div
+                  key={artifact.id}
+                  onClick={() => handleSelectArtifact(artifact)}
+                  className={`p-3 rounded cursor-pointer transition mb-1 ${
+                    selectedArtifact?.id === artifact.id
+                      ? 'bg-[var(--theme-accent-primary)]/20'
+                      : 'hover:bg-[var(--theme-bg-tertiary)]'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-medium truncate" style={{ color: 'var(--theme-text-primary)' }}>
+                      {artifact.title}
+                    </span>
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-[var(--theme-bg-secondary)]" style={{ color: 'var(--theme-text-muted)' }}>
+                      v{artifact.currentIndex}
+                    </span>
+                  </div>
+                  <p className="text-xs mt-1 truncate" style={{ color: 'var(--theme-text-muted)' }}>
+                    {artifact.type}{artifact.language ? ` • ${artifact.language}` : ''}
+                  </p>
+                  <p className="text-xs mt-1" style={{ color: 'var(--theme-text-muted)' }}>
+                    {formatDate(artifact.updatedAt)}
+                  </p>
+                </div>
+              ))}
+            </div>
           )}
         </div>
 
         {/* Project Details */}
         <div className="flex-1 overflow-auto">
-          {selectedProject ? (
+          {viewMode === 'projects' ? (selectedProject ? (
             <div className="p-4">
               {/* Project Header */}
               <div className="mb-4">
@@ -417,7 +545,82 @@ export default function ProjectWindow() {
                 Select a project to view details
               </p>
             </div>
-          )}
+          )) : (selectedArtifact ? (
+            <div className="p-4">
+              <div className="mb-4">
+                <div className="flex items-center justify-between mb-2">
+                  <h2 className="text-lg font-semibold" style={{ color: 'var(--theme-text-primary)' }}>
+                    {selectedArtifact.contents.find((c) => c.index === (selectedArtifactVersion ?? selectedArtifact.currentIndex))?.title || 'Artifact'}
+                  </h2>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={handleOpenArtifactInCanvas}
+                      className="p-1.5 rounded hover:bg-[var(--theme-bg-tertiary)] transition"
+                      style={{ color: 'var(--theme-text-muted)' }}
+                      title="Open in Canvas"
+                    >
+                      <Edit3 className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={handleDownloadArtifact}
+                      className="p-1.5 rounded hover:bg-[var(--theme-bg-tertiary)] transition"
+                      style={{ color: 'var(--theme-text-muted)' }}
+                      title="Download version"
+                    >
+                      <Download className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+                <p className="text-xs" style={{ color: 'var(--theme-text-muted)' }}>
+                  Artifact ID: {selectedArtifact.id}
+                </p>
+              </div>
+
+              <div className="mb-4">
+                <h3 className="text-sm font-medium mb-2" style={{ color: 'var(--theme-text-primary)' }}>
+                  Versions
+                </h3>
+                <div className="grid gap-2">
+                  {selectedArtifact.contents.slice().reverse().map((version) => (
+                    <button
+                      key={version.id}
+                      onClick={() => setSelectedArtifactVersion(version.index)}
+                      className={`text-left p-3 rounded transition ${
+                        (selectedArtifactVersion ?? selectedArtifact.currentIndex) === version.index
+                          ? 'bg-[var(--theme-accent-primary)]/20'
+                          : 'hover:bg-[var(--theme-bg-tertiary)]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium" style={{ color: 'var(--theme-text-primary)' }}>
+                          Version {version.index}
+                        </span>
+                        <span className="text-xs" style={{ color: 'var(--theme-text-muted)' }}>
+                          {formatDate(version.createdAt)}
+                        </span>
+                      </div>
+                      <p className="text-xs mt-1" style={{ color: 'var(--theme-text-muted)' }}>
+                        {version.type}{version.language ? ` • ${version.language}` : ''}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded p-3 max-h-64 overflow-auto" style={{ background: 'var(--theme-bg-tertiary)' }}>
+                <pre className="text-xs whitespace-pre-wrap break-words" style={{ color: 'var(--theme-text-primary)' }}>
+                  {selectedArtifact.contents.find((c) => c.index === (selectedArtifactVersion ?? selectedArtifact.currentIndex))?.content || ''}
+                </pre>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center h-full p-4 text-center">
+              <ChevronRight className="w-12 h-12 mb-2 opacity-30" style={{ color: 'var(--theme-text-muted)' }} />
+              <p className="text-sm" style={{ color: 'var(--theme-text-muted)' }}>
+                Select an artifact to view details
+              </p>
+            </div>
+          ))}
         </div>
       </div>
     </div>

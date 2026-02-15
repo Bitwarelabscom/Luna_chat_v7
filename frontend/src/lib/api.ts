@@ -20,6 +20,43 @@ interface ApiOptions {
   headers?: Record<string, string>;
 }
 
+export async function downloadApiFile(endpoint: string): Promise<{ blob: Blob; filename: string }> {
+  let response = await fetch(`${API_URL}${API_PREFIX}${endpoint}`, {
+    method: 'GET',
+    credentials: 'include',
+    cache: 'no-store',
+  });
+
+  if (response.status === 401) {
+    const refreshed = await fetch(`${API_URL}${API_PREFIX}/api/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ refreshToken: null }),
+    }).then(r => r.ok).catch(() => false);
+
+    if (refreshed) {
+      response = await fetch(`${API_URL}${API_PREFIX}${endpoint}`, {
+        method: 'GET',
+        credentials: 'include',
+        cache: 'no-store',
+      });
+    }
+  }
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Request failed' }));
+    throw new ApiError(response.status, error.error || 'Request failed', error.code);
+  }
+
+  const blob = await response.blob();
+  const disposition = response.headers.get('content-disposition') || '';
+  const filenameMatch = disposition.match(/filename=\"?([^\";]+)\"?/i);
+  const filename = filenameMatch?.[1] || 'download.txt';
+
+  return { blob, filename };
+}
+
 class ApiError extends Error {
   constructor(public status: number, message: string, public code?: string) {
     super(message);
@@ -39,6 +76,7 @@ export async function api<T>(endpoint: string, options: ApiOptions = {}): Promis
     headers,
     body: body ? JSON.stringify(body) : undefined,
     credentials: 'include',
+    cache: 'no-store',
   });
 
   // Handle token refresh
@@ -56,6 +94,7 @@ export async function api<T>(endpoint: string, options: ApiOptions = {}): Promis
         headers,
         body: body ? JSON.stringify(body) : undefined,
         credentials: 'include',
+        cache: 'no-store',
       });
     }
   }
@@ -214,7 +253,7 @@ export async function* streamMessage(
   projectMode?: boolean,
   thinkingMode?: boolean,
   novaMode?: boolean
-): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'reasoning' | 'background_refresh' | 'video_action' | 'media_action'; content?: string; status?: string; messageId?: string; metrics?: MessageMetrics; action?: string; url?: string; videos?: any[]; query?: string; items?: any[]; source?: string }> {
+): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'reasoning' | 'background_refresh' | 'video_action' | 'media_action' | 'canvas_artifact'; content?: string | any; status?: string; messageId?: string; metrics?: MessageMetrics; action?: string; url?: string; videos?: any[]; query?: string; items?: any[]; source?: string; artifactId?: string }> {
   const response = await fetch(`${API_URL}${API_PREFIX}/api/chat/sessions/${sessionId}/send`, {
     method: 'POST',
     headers: {
@@ -266,7 +305,7 @@ export async function* streamMessageWithFiles(
   projectMode?: boolean,
   thinkingMode?: boolean,
   novaMode?: boolean
-): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'reasoning' | 'background_refresh' | 'video_action' | 'media_action'; content?: string; status?: string; messageId?: string; metrics?: MessageMetrics; action?: string; url?: string; videos?: any[]; query?: string; items?: any[]; source?: string }> {
+): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'reasoning' | 'background_refresh' | 'video_action' | 'media_action' | 'canvas_artifact'; content?: string | any; status?: string; messageId?: string; metrics?: MessageMetrics; action?: string; url?: string; videos?: any[]; query?: string; items?: any[]; source?: string; artifactId?: string }> {
   const formData = new FormData();
   formData.append('message', message);
   formData.append('stream', 'true');
@@ -323,7 +362,7 @@ export async function* streamMessageWithFiles(
 export async function* regenerateMessage(
   sessionId: string,
   messageId: string
-): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'reasoning'; content?: string; status?: string; messageId?: string; metrics?: MessageMetrics }> {
+): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'reasoning' | 'canvas_artifact'; content?: string | any; status?: string; messageId?: string; metrics?: MessageMetrics; artifactId?: string }> {
   const response = await fetch(`${API_URL}${API_PREFIX}/api/chat/sessions/${sessionId}/messages/${messageId}/regenerate`, {
     method: 'POST',
     headers: {
@@ -538,23 +577,25 @@ export interface TtsSettings {
 }
 
 // Coder Settings Types
-export type ProviderId = 'openai' | 'groq' | 'anthropic' | 'xai' | 'openrouter' | 'ollama' | 'ollama_secondary' | 'google' | 'sanhedrin' | 'moonshot';
+export type ProviderId = 'openai' | 'groq' | 'anthropic' | 'xai' | 'openrouter' | 'ollama' | 'ollama_secondary' | 'ollama_tertiary' | 'google' | 'sanhedrin' | 'moonshot';
 
 export interface TriggerWords {
   claude: string[];
   gemini: string[];
   api: string[];
+  codex: string[];
 }
 
 export interface CoderSettings {
   userId: string;
   claudeCliEnabled: boolean;
   geminiCliEnabled: boolean;
+  codexCliEnabled: boolean;
   coderApiEnabled: boolean;
   coderApiProvider: ProviderId | null;
   coderApiModel: string | null;
   triggerWords: TriggerWords;
-  defaultCoder: 'claude' | 'gemini' | 'api';
+  defaultCoder: 'claude' | 'gemini' | 'api' | 'codex';
 }
 
 export type ThemeType = 'dark' | 'retro' | 'light' | 'cyberpunk' | 'nord' | 'solarized';
@@ -700,10 +741,10 @@ export const settingsApi = {
 
   // Coder Settings
   getCoderSettings: () =>
-    api<CoderSettings>('/api/settings/coder'),
+    api<{ settings: CoderSettings; defaultTriggerWords: TriggerWords }>('/api/settings/coder'),
 
   updateCoderSettings: (updates: Partial<Omit<CoderSettings, 'userId'>>) =>
-    api<CoderSettings>('/api/settings/coder', { method: 'PUT', body: updates }),
+    api<{ success: boolean; settings: CoderSettings }>('/api/settings/coder', { method: 'PUT', body: updates }),
 
   resetCoderSettings: () =>
     api<{ success: boolean }>('/api/settings/coder', { method: 'DELETE' }),
@@ -3043,6 +3084,107 @@ export const projectsApi = {
   delete: (id: string) =>
     api<{ success: boolean }>(`/api/projects/${id}`, { method: 'DELETE' }),
 };
+
+// ==================== Canvas API ====================
+
+export interface CanvasArtifactContent {
+  id: string;
+  index: number;
+  type: 'code' | 'text';
+  title: string;
+  language?: string;
+  content: string;
+  createdAt: string;
+}
+
+export interface CanvasArtifact {
+  id: string;
+  userId: string;
+  sessionId: string | null;
+  currentIndex: number;
+  contents: CanvasArtifactContent[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CanvasArtifactSummary {
+  id: string;
+  sessionId: string | null;
+  currentIndex: number;
+  title: string;
+  type: 'code' | 'text';
+  language?: string;
+  updatedAt: string;
+}
+
+export interface CanvasArtifactFile {
+  id: string;
+  path: string;
+  fileType: 'code' | 'text' | 'image' | 'asset';
+  language?: string;
+  storage: 'db' | 'fs';
+  content?: string;
+  fsPath?: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  updatedAt: string;
+}
+
+export interface CanvasSnapshot {
+  versionIndex: number;
+  createdAt: string;
+  entryFile?: string;
+}
+
+export const canvasApi = {
+  listArtifacts: (params?: { sessionId?: string; limit?: number }) => {
+    const searchParams = new URLSearchParams();
+    if (params?.sessionId) searchParams.set('sessionId', params.sessionId);
+    if (typeof params?.limit === 'number') searchParams.set('limit', String(params.limit));
+    const query = searchParams.toString();
+    return api<CanvasArtifactSummary[]>(`/api/canvas/artifacts${query ? `?${query}` : ''}`);
+  },
+
+  getArtifact: (id: string) =>
+    api<CanvasArtifact>(`/api/canvas/artifacts/${id}`),
+
+  listFiles: (id: string, index?: number) =>
+    api<CanvasArtifactFile[]>(`/api/canvas/artifacts/${id}/files${typeof index === 'number' ? `?index=${index}` : ''}`),
+
+  saveFile: (id: string, path: string, content: string, language?: string) =>
+    api<{ versionIndex: number }>(`/api/canvas/artifacts/${id}/files`, {
+      method: 'POST',
+      body: { path, content, language },
+    }),
+
+  listSnapshots: (id: string) =>
+    api<CanvasSnapshot[]>(`/api/canvas/artifacts/${id}/snapshots`),
+
+  generateImage: (
+    id: string,
+    prompt: string,
+    options?: { filename?: string; autoInsert?: boolean }
+  ) =>
+    api<{ assetPath: string; versionIndex: number }>(`/api/canvas/artifacts/${id}/images/generate`, {
+      method: 'POST',
+      body: {
+        prompt,
+        filename: options?.filename,
+        autoInsert: options?.autoInsert ?? true,
+      },
+    }),
+
+  downloadArtifact: (id: string, index?: number) =>
+    downloadApiFile(`/api/canvas/artifacts/${id}/download${typeof index === 'number' ? `?index=${index}` : ''}`),
+
+  downloadProjectZip: (id: string, index?: number) =>
+    downloadApiFile(`/api/canvas/artifacts/${id}/export.zip${typeof index === 'number' ? `?index=${index}` : ''}`),
+};
+
+export function canvasArtifactAssetBaseUrl(artifactId: string): string {
+  // Must stay same-origin for iframe preview (avoids CORP/CORS issues on :3005 direct host)
+  return `${API_PREFIX}/api/canvas/artifacts/${artifactId}/assets/`;
+}
 
 // Background API
 export interface Background {

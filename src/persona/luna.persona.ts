@@ -26,6 +26,7 @@ CAPABILITIES:
 DELEGATION (delegate_to_agent):
 - coder-claude: complex/security-critical code, refactoring, architecture, debugging
 - coder-gemini: simple scripts, tests, explanations, boilerplate
+- coder-codex: fast practical coding, focused patches, implementation with tests
 - researcher/writer/analyst/planner: specialized non-coding tasks
 When in doubt, delegate - the agents are more capable for programming tasks.
 

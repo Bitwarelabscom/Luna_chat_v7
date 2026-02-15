@@ -200,6 +200,12 @@ const configSchema = z.object({
     enabled: z.coerce.boolean().default(true),
   }).optional(),
 
+  ollamaTertiary: z.object({
+    url: z.string().url().default('http://10.0.0.30:11434'),
+    enabled: z.coerce.boolean().default(true),
+    numCtx: z.coerce.number().int().positive().default(65536),
+  }).optional(),
+
   orchestration: z.object({
     maxConcurrency: z.coerce.number().min(1).max(10).default(3),
     maxRetries: z.coerce.number().min(0).max(10).default(3),
@@ -407,6 +413,12 @@ const rawConfig = {
   ollamaSecondary: {
     url: process.env.OLLAMA_SECONDARY_URL,
     enabled: process.env.OLLAMA_SECONDARY_ENABLED,
+  },
+
+  ollamaTertiary: {
+    url: process.env.OLLAMA_TERTIARY_URL,
+    enabled: process.env.OLLAMA_TERTIARY_ENABLED,
+    numCtx: process.env.OLLAMA_TERTIARY_NUM_CTX,
   },
 
   orchestration: process.env.ORCHESTRATION_MAX_CONCURRENCY ? {

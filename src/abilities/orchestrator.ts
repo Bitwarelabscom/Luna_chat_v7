@@ -722,7 +722,7 @@ export function formatAbilityContextForPrompt(context: AbilityContext): string {
  *
  * @deprecated Use detectCodingAgentWithSettings for user-aware routing
  */
-export function detectCodingAgentShortcut(message: string): 'coder-claude' | 'coder-gemini' | null {
+export function detectCodingAgentShortcut(message: string): 'coder-claude' | 'coder-gemini' | 'coder-codex' | null {
   const lower = message.toLowerCase();
 
   // Keywords that strongly suggest coder-gemini (large context, high volume)
@@ -735,6 +735,12 @@ export function detectCodingAgentShortcut(message: string): 'coder-claude' | 'co
     'simple script', 'quick script', 'utility',        // Simple scripts
     'boilerplate', 'generate', 'scaffold',             // Code generation
     'documentation', 'document this', 'comments',      // Documentation
+  ];
+
+  // Keywords that suggest coder-codex (fast practical implementation)
+  const codexTriggers = [
+    'quick fix', 'hotfix', 'small patch', 'minimal diff', 'codex',
+    'implement this', 'ship this', 'apply patch', 'focused fix',
   ];
 
   // Keywords that strongly suggest coder-claude (complexity, security)
@@ -754,6 +760,14 @@ export function detectCodingAgentShortcut(message: string): 'coder-claude' | 'co
     if (lower.includes(trigger)) {
       logger.debug('Coding agent shortcut: coder-gemini', { trigger });
       return 'coder-gemini';
+    }
+  }
+
+  // Check for codex triggers
+  for (const trigger of codexTriggers) {
+    if (lower.includes(trigger)) {
+      logger.debug('Coding agent shortcut: coder-codex', { trigger });
+      return 'coder-codex';
     }
   }
 

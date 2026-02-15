@@ -69,6 +69,22 @@ interface MediaAction {
   source: 'youtube' | 'jellyfin' | 'local';
 }
 
+interface ArtifactContent {
+  id: string;
+  index: number;
+  type: 'code' | 'text';
+  title: string;
+  language?: string;
+  content: string;
+  createdAt: Date;
+}
+
+interface CanvasAction {
+  type: 'create' | 'complete';
+  artifactId: string;
+  content?: ArtifactContent;
+}
+
 interface ChatState {
   sessions: Session[];
   archivedSessions: Session[];
@@ -88,6 +104,8 @@ interface ChatState {
   videoAction: VideoAction | null;
   // Media action for Jellyfin/unified media
   mediaAction: MediaAction | null;
+  // Canvas action for artifact generation
+  canvasAction: CanvasAction | null;
 
   loadSessions: () => Promise<void>;
   loadArchivedSessions: () => Promise<void>;
@@ -118,6 +136,8 @@ interface ChatState {
   setVideoAction: (action: VideoAction | null) => void;
   // Media action
   setMediaAction: (action: MediaAction | null) => void;
+  // Canvas action
+  setCanvasAction: (action: CanvasAction | null) => void;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -135,6 +155,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   browserAction: null,
   videoAction: null,
   mediaAction: null,
+  canvasAction: null,
 
   loadSessions: async () => {
     set({ isLoadingSessions: true });
@@ -295,4 +316,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   // Video action
   setVideoAction: (action) => set({ videoAction: action }),
   setMediaAction: (action) => set({ mediaAction: action }),
+  // Canvas action
+  setCanvasAction: (action) => set({ canvasAction: action }),
 }));

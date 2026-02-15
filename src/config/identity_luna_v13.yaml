@@ -250,6 +250,9 @@ delegation:
   coder-gemini:
     triggers: [explain, test, log, simple script, boilerplate, documentation]
     description: Rapid prototyper - simple scripts, unit tests, code explanations
+  coder-codex:
+    triggers: [patch, quick fix, codex, focused fix, implementation]
+    description: Balanced coder - practical patches, fast implementation, test-oriented delivery
   researcher:
     triggers: [research, investigate, find out, deep dive]
     description: Deep research and fact-finding

@@ -485,6 +485,89 @@ export async function purgeSelfReferences(): Promise<number> {
   return typeof deleted === 'object' ? deleted.low : Number(deleted) || 0;
 }
 
+// ============================================
+// Canvas Style Rules
+// ============================================
+
+/**
+ * Store a canvas style rule in Neo4j
+ * Style rules are stored as Topic nodes with "canvas_style:" prefix
+ */
+export async function syncCanvasStyleRule(
+  userId: string,
+  rule: string
+): Promise<boolean> {
+  if (!neo4jClient.isNeo4jEnabled()) return false;
+  if (!rule || rule.trim().length === 0) return false;
+
+  // Use special prefix to distinguish style rules from regular topics
+  const ruleName = `canvas_style:${rule.trim()}`;
+
+  const cypher = `
+    MERGE (t:Topic {userId: $userId, name: $ruleName})
+    SET t.type = 'canvas_style_rule',
+        t.mentionCount = COALESCE(t.mentionCount, 0) + 1,
+        t.lastMentioned = datetime(),
+        t.updatedAt = datetime()
+    RETURN t
+  `;
+
+  return neo4jClient.writeQueryVoid(cypher, {
+    userId,
+    ruleName,
+  });
+}
+
+/**
+ * Get canvas style rules for a user
+ * Returns up to `limit` most recent style rules
+ */
+export async function getCanvasStyleRules(
+  userId: string,
+  limit: number = 5
+): Promise<string[]> {
+  if (!neo4jClient.isNeo4jEnabled()) return [];
+
+  const cypher = `
+    MATCH (t:Topic {userId: $userId})
+    WHERE t.name STARTS WITH 'canvas_style:'
+    RETURN t.name as name, t.mentionCount as count, t.lastMentioned as lastMentioned
+    ORDER BY t.lastMentioned DESC
+    LIMIT $limit
+  `;
+
+  const result = await neo4jClient.readQuery<{
+    name: string;
+    count: { low: number } | number;
+    lastMentioned: any;
+  }>(cypher, { userId, limit });
+
+  // Remove "canvas_style:" prefix from results
+  return result
+    .map(r => r.name.replace(/^canvas_style:/, ''))
+    .filter(rule => rule.length > 0);
+}
+
+/**
+ * Delete a canvas style rule
+ */
+export async function deleteCanvasStyleRule(
+  userId: string,
+  rule: string
+): Promise<boolean> {
+  if (!neo4jClient.isNeo4jEnabled()) return false;
+
+  const ruleName = `canvas_style:${rule.trim()}`;
+
+  const cypher = `
+    MATCH (t:Topic {userId: $userId, name: $ruleName})
+    DETACH DELETE t
+    RETURN count(*) as deleted
+  `;
+
+  return neo4jClient.writeQueryVoid(cypher, { userId, ruleName });
+}
+
 export default {
   isNoiseToken,
   syncEntityToGraph,
@@ -500,4 +583,7 @@ export default {
   getTopTopics,
   purgeNoiseNodes,
   purgeSelfReferences,
+  syncCanvasStyleRule,
+  getCanvasStyleRules,
+  deleteCanvasStyleRule,
 };

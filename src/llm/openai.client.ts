@@ -11,6 +11,7 @@ const clients: Partial<Record<ProviderId, OpenAI>> = {};
 
 function getClient(provider: ProviderId = 'openai'): OpenAI {
   if (!clients[provider]) {
+    logger.info('Creating OpenAI client for provider', { provider });
     switch (provider) {
       case 'openai':
         clients.openai = new OpenAI({ apiKey: config.openai.apiKey });
@@ -59,6 +60,13 @@ function getClient(provider: ProviderId = 'openai'): OpenAI {
           baseURL: `${config.ollamaSecondary.url}/v1`,
         });
         break;
+      case 'ollama_tertiary':
+        if (!config.ollamaTertiary?.url) throw new Error('Ollama Tertiary URL not configured');
+        clients.ollama_tertiary = new OpenAI({
+          apiKey: 'ollama',
+          baseURL: `${config.ollamaTertiary.url}/v1`,
+        });
+        break;
       case 'anthropic':
         // Anthropic tool calling is handled separately via native provider
         // This error only triggers if someone tries to use the OpenAI client directly
@@ -66,9 +74,6 @@ function getClient(provider: ProviderId = 'openai'): OpenAI {
       case 'google':
         // Google Gemini uses different API format, not OpenAI-compatible
         throw new Error('Google Gemini is not supported for chat with tool calling. Use OpenAI, Groq, xAI, or OpenRouter.');
-      case 'ollama':
-        // Ollama doesn't support tool calling in the same way
-        throw new Error('Ollama is not supported for chat with tool calling. Use OpenAI, Groq, xAI, or OpenRouter.');
       default:
         throw new Error(`Unknown provider: ${provider}`);
     }
@@ -109,6 +114,7 @@ export interface ChatCompletionOptions {
 
 export interface ChatCompletionResult {
   content: string;
+  reasoning?: string;
   tokensUsed: number;
   promptTokens: number;
   completionTokens: number;
@@ -123,13 +129,15 @@ export async function createChatCompletion(
     messages,
     tools,
     temperature = 0.7,
-    maxTokens = 4096,
+    maxTokens,
     provider = 'openai',
     model,
     reasoning,
     loggingContext,
     response_format,
   } = options;
+  const resolvedMaxTokens = maxTokens ?? (provider === 'ollama_tertiary' ? 8192 : 4096);
+  const tertiaryNumCtx = config.ollamaTertiary?.numCtx ?? 65536;
 
   const modelToUse = model || config.openai.model;
   const startTime = Date.now();
@@ -165,7 +173,8 @@ export async function createChatCompletion(
             description: t.function.description,
           })),
           temperature,
-          maxTokens,
+          maxTokens: resolvedMaxTokens,
+          numCtx: provider === 'ollama_tertiary' ? tertiaryNumCtx : undefined,
           // Response details
           response: {
             content: result.content,
@@ -189,7 +198,7 @@ export async function createChatCompletion(
     const result = await sanhedrinProvider.createCompletion(
       modelToUse,
       messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
-      { temperature, maxTokens }
+      { temperature, maxTokens: resolvedMaxTokens }
     );
     const completionResult: ChatCompletionResult = {
       content: result.content,
@@ -209,7 +218,7 @@ export async function createChatCompletion(
     const result = await moonshotProvider.createCompletion(
       modelToUse,
       messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
-      { temperature, maxTokens }
+      { temperature, maxTokens: resolvedMaxTokens }
     );
     const completionResult: ChatCompletionResult = {
       content: result.content,
@@ -223,15 +232,22 @@ export async function createChatCompletion(
     return completionResult;
   }
 
-  // Route Ollama to native provider
-  if (provider === 'ollama' || provider === 'ollama_secondary') {
-    const ollamaProvider = provider === 'ollama' 
-      ? await import('./providers/ollama.provider.js')
-      : await import('./providers/ollama-secondary.provider.js');
+  // Route Ollama to native provider (only if no tools, as native doesn't support them)
+  if ((provider === 'ollama' || provider === 'ollama_secondary' || provider === 'ollama_tertiary') && (!tools || tools.length === 0)) {
+    let ollamaProvider;
+    if (provider === 'ollama') {
+      ollamaProvider = await import('./providers/ollama.provider.js');
+    } else if (provider === 'ollama_secondary') {
+      ollamaProvider = await import('./providers/ollama-secondary.provider.js');
+    } else {
+      ollamaProvider = await import('./providers/ollama-tertiary.provider.js');
+    }
     const result = await ollamaProvider.createCompletion(
       modelToUse,
       messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
-      { temperature, maxTokens }
+      provider === 'ollama_tertiary'
+        ? { temperature, maxTokens: resolvedMaxTokens, numCtx: tertiaryNumCtx }
+        : { temperature, maxTokens: resolvedMaxTokens }
     );
     const completionResult: ChatCompletionResult = {
       content: result.content,
@@ -251,7 +267,7 @@ export async function createChatCompletion(
     const result = await googleProvider.createCompletion(
       modelToUse,
       messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
-      { temperature, maxTokens }
+      { temperature, maxTokens: resolvedMaxTokens }
     );
     const completionResult: ChatCompletionResult = {
       content: result.content,
@@ -273,7 +289,7 @@ export async function createChatCompletion(
         modelToUse,
         messages as anthropicProvider.ToolMessage[],
         tools as anthropicProvider.OpenAITool[],
-        { temperature, maxTokens }
+        { temperature, maxTokens: resolvedMaxTokens }
       );
       const completionResult: ChatCompletionResult = {
         content: result.content,
@@ -291,7 +307,7 @@ export async function createChatCompletion(
       const result = await anthropicProvider.createCompletion(
         modelToUse,
         messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
-        { temperature, maxTokens }
+        { temperature, maxTokens: resolvedMaxTokens }
       );
       const completionResult: ChatCompletionResult = {
         content: result.content,
@@ -314,8 +330,8 @@ export async function createChatCompletion(
     const skipTemperature = modelToUse.includes('gpt-5') || modelToUse.includes('o4-') || modelToUse.startsWith('o4');
     
     const tokenParam = provider === 'openai'
-      ? { max_completion_tokens: maxTokens }
-      : { max_tokens: maxTokens };
+      ? { max_completion_tokens: resolvedMaxTokens }
+      : { max_tokens: resolvedMaxTokens };
 
     // xAI Grok 4.1 Fast supports reasoning mode
     const isXAIReasoning = provider === 'xai' &&
@@ -347,6 +363,7 @@ export async function createChatCompletion(
 
     const completionResult: ChatCompletionResult = {
       content: choice.message.content || '',
+      reasoning: (choice.message as any).reasoning_content || (choice.message as any).reasoning,
       tokensUsed: response.usage?.total_tokens || 0,
       promptTokens: response.usage?.prompt_tokens || 0,
       completionTokens: response.usage?.completion_tokens || 0,
@@ -367,15 +384,16 @@ export async function createChatCompletion(
 
 export async function* streamChatCompletion(
   options: ChatCompletionOptions
-): AsyncGenerator<{ content: string; done: boolean; tokensUsed?: number; promptTokens?: number; completionTokens?: number }> {
+): AsyncGenerator<{ type: 'content' | 'reasoning' | 'done'; content?: string; done: boolean; tokensUsed?: number; promptTokens?: number; completionTokens?: number }> {
   const {
     messages,
     tools,
     temperature = 0.7,
-    maxTokens = 4096,
+    maxTokens,
     provider = 'openai',
     model,
   } = options;
+  const resolvedMaxTokens = maxTokens ?? (provider === 'ollama_tertiary' ? 8192 : 4096);
 
   const client = getClient(provider);
   const modelToUse = model || config.openai.model;
@@ -385,11 +403,11 @@ export async function* streamChatCompletion(
     // Skip temperature for OpenAI gpt-5 and o4 models (only supports default)
     // Moonshot reasoning models require temperature 1.0
     const isMoonshotReasoning = provider === 'moonshot' && (modelToUse.includes('thinking') || modelToUse.includes('k2.5'));
-    const skipTemperature = modelToUse.includes('gpt-5') || modelToUse.includes('o4-') || modelToUse.startsWith('o4') || isMoonshotReasoning;
+    const skipTemperature = modelToUse.includes('gpt-5') || modelToUse.includes('o4-') || modelToUse.includes('o1-') || modelToUse.includes('o3-') || modelToUse.startsWith('o4') || isMoonshotReasoning;
     
     const tokenParam = provider === 'openai'
-      ? { max_completion_tokens: maxTokens }
-      : { max_tokens: maxTokens };
+      ? { max_completion_tokens: resolvedMaxTokens }
+      : { max_tokens: resolvedMaxTokens };
 
     // Format messages for OpenAI API (handle tool calls and tool results)
     const formattedMessages = messages.map(m => {
@@ -417,7 +435,7 @@ export async function* streamChatCompletion(
     let completionTokens = 0;
 
     for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta;
+      const delta = chunk.choices[0]?.delta as any;
 
       if (chunk.usage) {
         tokensUsed = chunk.usage.total_tokens;
@@ -425,12 +443,18 @@ export async function* streamChatCompletion(
         completionTokens = chunk.usage.completion_tokens || 0;
       }
 
+      // Handle reasoning content (OpenAI o1/o3, xAI Grok)
+      const reasoningContent = delta?.reasoning_content || delta?.reasoning;
+      if (reasoningContent) {
+        yield { type: 'reasoning', content: reasoningContent, done: false };
+      }
+
       if (delta?.content) {
-        yield { content: delta.content, done: false };
+        yield { type: 'content', content: delta.content, done: false };
       }
 
       if (chunk.choices[0]?.finish_reason) {
-        yield { content: '', done: true, tokensUsed, promptTokens, completionTokens };
+        yield { type: 'done', content: '', done: true, tokensUsed, promptTokens, completionTokens };
       }
     }
   } catch (error) {
@@ -578,6 +602,190 @@ export const mediaDownloadTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   },
 };
 
+export const generateArtifactTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'generate_artifact',
+    description: 'Generate a new code or text artifact in the canvas. Use when creating code files, documents, or any substantial content the user wants to edit. Creates versioned, editable content that can be modified through quick actions or text selection.',
+    parameters: {
+      type: 'object',
+      properties: {
+        type: {
+          type: 'string',
+          enum: ['code', 'text'],
+          description: 'Type of artifact: code for programming files, text for documents/markdown',
+        },
+        title: {
+          type: 'string',
+          description: 'Brief title for the artifact (max 5 words)',
+        },
+        language: {
+          type: 'string',
+          enum: ['typescript', 'javascript', 'python', 'html', 'css', 'markdown', 'json', 'sql', 'rust', 'cpp', 'java'],
+          description: 'Programming language (required for type=code)',
+        },
+        content: {
+          type: 'string',
+          description: 'The full content of the artifact',
+        },
+      },
+      required: ['type', 'title', 'content'],
+    },
+  },
+};
+
+export const rewriteArtifactTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'rewrite_artifact',
+    description: 'Modify an existing artifact by creating a new version. Use when the user asks to edit, change, update, or improve an artifact. Creates a new version while preserving history.',
+    parameters: {
+      type: 'object',
+      properties: {
+        artifactId: {
+          type: 'string',
+          description: 'The ID of the artifact to modify',
+        },
+        title: {
+          type: 'string',
+          description: 'New title (optional, keeps existing if not provided)',
+        },
+        content: {
+          type: 'string',
+          description: 'The new content for this version',
+        },
+      },
+      required: ['artifactId', 'content'],
+    },
+  },
+};
+
+export const updateHighlightedTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'update_highlighted',
+    description: 'Update a selected portion of an artifact. Use when the user has selected text and asks to modify just that selection.',
+    parameters: {
+      type: 'object',
+      properties: {
+        artifactId: {
+          type: 'string',
+          description: 'The ID of the artifact',
+        },
+        startIndex: {
+          type: 'number',
+          description: 'Start position of the selected text',
+        },
+        endIndex: {
+          type: 'number',
+          description: 'End position of the selected text',
+        },
+        newContent: {
+          type: 'string',
+          description: 'The new content to replace the selection',
+        },
+      },
+      required: ['artifactId', 'startIndex', 'endIndex', 'newContent'],
+    },
+  },
+};
+
+export const saveArtifactFileTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'save_artifact_file',
+    description: 'Save or update a file in an existing artifact project (multi-file support). Use for adding/updating files like styles.css, script.js, additional html/json/txt files. Creates a new version snapshot.',
+    parameters: {
+      type: 'object',
+      properties: {
+        artifactId: {
+          type: 'string',
+          description: 'The ID of the artifact project',
+        },
+        path: {
+          type: 'string',
+          description: 'Project-relative file path, e.g. index.html, styles.css, js/app.js',
+        },
+        content: {
+          type: 'string',
+          description: 'The full file content',
+        },
+        language: {
+          type: 'string',
+          description: 'Optional language hint (html, css, javascript, json, markdown, etc.)',
+        },
+      },
+      required: ['artifactId', 'path', 'content'],
+    },
+  },
+};
+
+export const listArtifactsTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'list_artifacts',
+    description: 'List recent canvas artifacts for the current user. Use this before loading or downloading older artifacts when artifact ID is unknown.',
+    parameters: {
+      type: 'object',
+      properties: {
+        sessionId: {
+          type: 'string',
+          description: 'Optional session ID to scope artifacts to a specific chat session',
+        },
+        limit: {
+          type: 'number',
+          description: 'Optional maximum artifacts to return (1-50)',
+        },
+      },
+      required: [],
+    },
+  },
+};
+
+export const loadArtifactTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'load_artifact',
+    description: 'Load an existing artifact (optionally a specific version) into canvas for viewing/editing.',
+    parameters: {
+      type: 'object',
+      properties: {
+        artifactId: {
+          type: 'string',
+          description: 'Artifact UUID to load',
+        },
+        index: {
+          type: 'number',
+          description: 'Optional version index to load. If omitted, loads current version.',
+        },
+      },
+      required: ['artifactId'],
+    },
+  },
+};
+
+export const getArtifactDownloadLinkTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'get_artifact_download_link',
+    description: 'Generate a direct download URL for an artifact version.',
+    parameters: {
+      type: 'object',
+      properties: {
+        artifactId: {
+          type: 'string',
+          description: 'Artifact UUID to download',
+        },
+        index: {
+          type: 'number',
+          description: 'Optional version index to download. If omitted, downloads current version.',
+        },
+      },
+      required: ['artifactId'],
+    },
+  },
+};
+
 export const delegateToAgentTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: 'function',
   function: {
@@ -586,6 +794,7 @@ export const delegateToAgentTool: OpenAI.Chat.Completions.ChatCompletionTool = {
 - researcher: Deep research, information gathering, fact-finding
 - coder-claude: SENIOR ENGINEER - Use for HIGH COMPLEXITY: architecture, refactoring, debugging hard errors, security-critical code
 - coder-gemini: RAPID PROTOTYPER - Use for HIGH VOLUME/SPEED: simple scripts, unit tests, log analysis, code explanations, boilerplate
+- coder-codex: BALANCED CODER - Use for FAST PRACTICAL DELIVERY: focused patches, implementation with tests, concise code fixes
 - writer: Creative writing, professional writing, editing, content creation
 - analyst: Data analysis, calculations, statistics, insights
 - planner: Task breakdown, project planning, organizing complex goals
@@ -600,15 +809,17 @@ CODING AGENT DECISION MATRIX:
 | "Write unit tests" | coder-gemini |
 | "Create a simple utility script" | coder-gemini |
 | "Explain what this code does" | coder-gemini |
+| "Ship this practical bugfix quickly" | coder-codex |
+| "Implement a focused patch with tests" | coder-codex |
 
-Default: coder-claude for production code, coder-gemini for tests/scripts/docs.
+Default: coder-claude for deep complexity, coder-gemini for high-volume generation, coder-codex for balanced practical patches.
 The coding agents can execute code, create files/folders in the workspace, and persist work across sessions.`,
     parameters: {
       type: 'object',
       properties: {
         agent: {
           type: 'string',
-          enum: ['researcher', 'coder-claude', 'coder-gemini', 'writer', 'analyst', 'planner'],
+          enum: ['researcher', 'coder-claude', 'coder-gemini', 'coder-codex', 'writer', 'analyst', 'planner'],
           description: 'The specialist agent to delegate to',
         },
         task: {

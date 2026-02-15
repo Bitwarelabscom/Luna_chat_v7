@@ -6,6 +6,7 @@ import logger from '../utils/logger.js';
 import * as voiceChat from '../chat/voice-chat.service.js';
 import { synthesizeWithOpenAI } from '../llm/tts.service.js';
 import { streamChatCompletion } from '../llm/openai.client.js';
+import { logActivityAndBroadcast } from '../activity/activity.service.js';
 import { getVoicePrompt } from '../persona/voice.persona.js';
 
 // Configuration
@@ -187,11 +188,36 @@ async function processTextCommand(
           provider: 'openai',
           maxTokens: 300
       });
+      let loggedReasoningVisible = false;
 
       ws.send(JSON.stringify({ type: 'status', status: 'speaking' }));
 
       for await (const chunk of stream) {
-          if (chunk.content) {
+          if (chunk.type === 'reasoning' && chunk.content) {
+              ws.send(JSON.stringify({ type: 'reasoning', content: chunk.content }));
+              if (!loggedReasoningVisible) {
+                loggedReasoningVisible = true;
+                void logActivityAndBroadcast({
+                  userId,
+                  sessionId: sessionId || undefined,
+                  category: 'state_event',
+                  eventType: 'thinking_visible',
+                  level: 'info',
+                  title: 'Thinking view shown',
+                  message: 'Reasoning stream displayed in voice mode',
+                  details: {
+                    mode: 'voice',
+                    sourceType: 'text_command',
+                  },
+                  source: 'voice-stream',
+                }).catch((activityError) => {
+                  logger.warn('Failed to log thinking visibility activity', {
+                    error: (activityError as Error).message,
+                    sessionId,
+                  });
+                });
+              }
+          } else if (chunk.type === 'content' && chunk.content) {
               const content = chunk.content;
               fullResponse += content;
               sentenceBuffer += content;
@@ -289,11 +315,36 @@ async function processUtterance(
           provider: 'openai',
           maxTokens: 300
       });
+      let loggedReasoningVisible = false;
 
       ws.send(JSON.stringify({ type: 'status', status: 'speaking' }));
 
       for await (const chunk of stream) {
-          if (chunk.content) {
+          if (chunk.type === 'reasoning' && chunk.content) {
+              ws.send(JSON.stringify({ type: 'reasoning', content: chunk.content }));
+              if (!loggedReasoningVisible) {
+                loggedReasoningVisible = true;
+                void logActivityAndBroadcast({
+                  userId,
+                  sessionId: sessionId || undefined,
+                  category: 'state_event',
+                  eventType: 'thinking_visible',
+                  level: 'info',
+                  title: 'Thinking view shown',
+                  message: 'Reasoning stream displayed in voice mode',
+                  details: {
+                    mode: 'voice',
+                    sourceType: 'utterance',
+                  },
+                  source: 'voice-stream',
+                }).catch((activityError) => {
+                  logger.warn('Failed to log thinking visibility activity', {
+                    error: (activityError as Error).message,
+                    sessionId,
+                  });
+                });
+              }
+          } else if (chunk.type === 'content' && chunk.content) {
               const content = chunk.content;
               fullResponse += content;
               sentenceBuffer += content;

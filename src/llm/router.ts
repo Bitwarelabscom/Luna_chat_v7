@@ -7,6 +7,7 @@ import * as xaiProvider from './providers/xai.provider.js';
 import * as openrouterProvider from './providers/openrouter.provider.js';
 import * as ollamaProvider from './providers/ollama.provider.js';
 import * as ollamaSecondaryProvider from './providers/ollama-secondary.provider.js';
+import * as ollamaTertiaryProvider from './providers/ollama-tertiary.provider.js';
 import * as googleProvider from './providers/google.provider.js';
 import * as sanhedrinProvider from './providers/sanhedrin.provider.js';
 import * as moonshotProvider from './providers/moonshot.provider.js';
@@ -46,6 +47,7 @@ const providers: Record<ProviderId, ProviderModule> = {
   openrouter: openrouterProvider,
   ollama: ollamaProvider,
   ollama_secondary: ollamaSecondaryProvider,
+  ollama_tertiary: ollamaTertiaryProvider,
   google: googleProvider,
   sanhedrin: sanhedrinProvider,
   moonshot: moonshotProvider,
@@ -54,6 +56,7 @@ const providers: Record<ProviderId, ProviderModule> = {
 function getProvider(providerId: ProviderId): ProviderModule {
   const provider = providers[providerId];
   if (!provider) {
+    logger.error('Provider lookup failed', { providerId, availableProviders: Object.keys(providers) });
     throw new Error(`Unknown provider: ${providerId}`);
   }
   if (!provider.isConfigured()) {
@@ -73,6 +76,7 @@ export async function createCompletion(
   messages: ChatMessage[],
   options: { temperature?: number; maxTokens?: number; systemBlocks?: CacheableSystemBlock[]; loggingContext?: LLMLoggingContext } = {}
 ): Promise<CompletionResult> {
+  logger.info('Router createCompletion called', { providerId, model });
   const provider = getProvider(providerId);
   const startTime = Date.now();
 

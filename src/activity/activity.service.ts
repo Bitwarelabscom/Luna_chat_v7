@@ -332,6 +332,7 @@ export interface LLMCallDetails {
   }>;
   temperature?: number;
   maxTokens?: number;
+  numCtx?: number;
   // Response details
   response?: {
     content: string;
@@ -405,6 +406,7 @@ export const activityHelpers = {
         tools: fullDetails?.tools,
         temperature: fullDetails?.temperature,
         maxTokens: fullDetails?.maxTokens,
+        numCtx: fullDetails?.numCtx,
         response: truncateResponse(fullDetails?.response),
       },
       source: nodeName.includes('_') ? nodeName.split('_')[0] : 'llm',

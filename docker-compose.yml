@@ -155,6 +155,9 @@ services:
       - OLLAMA_URL=http://luna-ollama:11434
       - OLLAMA_SECONDARY_URL=${OLLAMA_SECONDARY_URL:-http://10.0.0.3:11434}
       - OLLAMA_SECONDARY_ENABLED=${OLLAMA_SECONDARY_ENABLED:-true}
+      - OLLAMA_TERTIARY_URL=${OLLAMA_TERTIARY_URL:-http://10.0.0.30:11434}
+      - OLLAMA_TERTIARY_ENABLED=${OLLAMA_TERTIARY_ENABLED:-true}
+      - OLLAMA_TERTIARY_NUM_CTX=${OLLAMA_TERTIARY_NUM_CTX:-65536}
       - OLLAMA_EMBEDDING_MODEL=${OLLAMA_EMBEDDING_MODEL:-bge-m3}
       - RADICALE_URL=http://luna-radicale:5232
       # ElevenLabs TTS - using turbo model for speed and cost efficiency

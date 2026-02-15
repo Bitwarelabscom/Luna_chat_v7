@@ -8,6 +8,7 @@ import * as startupService from './startup.service.js';
 import * as sessionActivityService from './session-activity.service.js';
 import * as ttsService from '../llm/tts.service.js';
 import * as documentsService from '../abilities/documents.service.js';
+import { logActivityAndBroadcast } from '../activity/activity.service.js';
 import { incrementRateLimit, incrementRateLimitCustom } from '../db/redis.js';
 import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
@@ -292,12 +293,34 @@ router.post('/sessions/:id/send', rateLimit, upload.array('files', 5), async (re
         novaMode: data.novaMode,
         documentIds: documentIds.length > 0 ? documentIds : undefined,
       });
+      let loggedReasoningVisible = false;
 
       for await (const chunk of stream) {
         if (chunk.type === 'status') {
           res.write(`data: ${JSON.stringify({ type: 'status', status: chunk.status })}\n\n`);
         } else if (chunk.type === 'reasoning') {
           res.write(`data: ${JSON.stringify({ type: 'reasoning', content: chunk.content })}\n\n`);
+          if (!loggedReasoningVisible) {
+            loggedReasoningVisible = true;
+            void logActivityAndBroadcast({
+              userId: req.user!.userId,
+              sessionId: session.id,
+              category: 'state_event',
+              eventType: 'thinking_visible',
+              level: 'info',
+              title: 'Thinking view shown',
+              message: 'Reasoning stream displayed in chat',
+              details: {
+                mode: session.mode,
+              },
+              source: 'chat-stream',
+            }).catch((activityError) => {
+              logger.warn('Failed to log thinking visibility activity', {
+                error: (activityError as Error).message,
+                sessionId: session.id,
+              });
+            });
+          }
         } else if (chunk.type === 'content') {
           res.write(`data: ${JSON.stringify({ type: 'content', content: chunk.content })}\n\n`);
         } else if (chunk.type === 'browser_action') {
@@ -306,6 +329,8 @@ router.post('/sessions/:id/send', rateLimit, upload.array('files', 5), async (re
           res.write(`data: ${JSON.stringify({ type: 'video_action', videos: chunk.videos, query: chunk.query })}\n\n`);
         } else if (chunk.type === 'media_action') {
           res.write(`data: ${JSON.stringify({ type: 'media_action', action: chunk.action, items: chunk.items, query: chunk.query, source: chunk.source })}\n\n`);
+        } else if (chunk.type === 'canvas_artifact') {
+          res.write(`data: ${JSON.stringify({ type: 'canvas_artifact', artifactId: chunk.artifactId, content: chunk.content })}\n\n`);
         } else if (chunk.type === 'done') {
           res.write(`data: ${JSON.stringify({
             type: 'done',
@@ -532,12 +557,35 @@ router.post('/sessions/:sessionId/messages/:messageId/regenerate', rateLimit, as
       message: userMessageContent,
       mode: session.mode,
     });
+    let loggedReasoningVisible = false;
 
     for await (const chunk of stream) {
       if (chunk.type === 'status') {
         res.write(`data: ${JSON.stringify({ type: 'status', status: chunk.status })}\n\n`);
       } else if (chunk.type === 'reasoning') {
         res.write(`data: ${JSON.stringify({ type: 'reasoning', content: chunk.content })}\n\n`);
+        if (!loggedReasoningVisible) {
+          loggedReasoningVisible = true;
+          void logActivityAndBroadcast({
+            userId: req.user!.userId,
+            sessionId: session.id,
+            category: 'state_event',
+            eventType: 'thinking_visible',
+            level: 'info',
+            title: 'Thinking view shown',
+            message: 'Reasoning stream displayed in chat',
+            details: {
+              mode: session.mode,
+              regenerate: true,
+            },
+            source: 'chat-stream',
+          }).catch((activityError) => {
+            logger.warn('Failed to log thinking visibility activity', {
+              error: (activityError as Error).message,
+              sessionId: session.id,
+            });
+          });
+        }
       } else if (chunk.type === 'content') {
         res.write(`data: ${JSON.stringify({ type: 'content', content: chunk.content })}\n\n`);
       } else if (chunk.type === 'browser_action') {
@@ -546,6 +594,8 @@ router.post('/sessions/:sessionId/messages/:messageId/regenerate', rateLimit, as
         res.write(`data: ${JSON.stringify({ type: 'video_action', videos: chunk.videos, query: chunk.query })}\n\n`);
       } else if (chunk.type === 'media_action') {
         res.write(`data: ${JSON.stringify({ type: 'media_action', action: chunk.action, items: chunk.items, query: chunk.query, source: chunk.source })}\n\n`);
+      } else if (chunk.type === 'canvas_artifact') {
+        res.write(`data: ${JSON.stringify({ type: 'canvas_artifact', artifactId: chunk.artifactId, content: chunk.content })}\n\n`);
       } else if (chunk.type === 'done') {
         res.write(`data: ${JSON.stringify({
           type: 'done',

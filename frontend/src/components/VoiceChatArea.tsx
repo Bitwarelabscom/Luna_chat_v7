@@ -3,22 +3,29 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useChatStore } from '@/lib/store';
 import { voiceApi } from '@/lib/api';
-import { Send, Mic, MicOff, Volume2, VolumeX, Loader2 } from 'lucide-react';
+import { Send, Mic, MicOff, Volume2, VolumeX, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
 import clsx from 'clsx';
 import LunaAvatar from './LunaAvatar';
+import { useThinkingMessage } from './ThinkingStatus';
 
 export default function VoiceChatArea() {
   const {
     isSending,
     streamingContent,
+    reasoningContent,
     statusMessage,
     addUserMessage,
     addAssistantMessage,
     setIsSending,
     setStreamingContent,
     appendStreamingContent,
+    setReasoningContent,
+    appendReasoningContent,
     setStatusMessage,
   } = useChatStore();
+
+  const thinkingPhrase = useThinkingMessage(isSending && !streamingContent);
+  const [showReasoning, setShowReasoning] = useState(true);
 
   const [input, setInput] = useState('');
   const [isListening, setIsListening] = useState(false);
@@ -118,14 +125,18 @@ export default function VoiceChatArea() {
   const handleWsMessage = (msg: any) => {
     switch (msg.type) {
       case 'status':
-        setStatusMessage(msg.status === 'thinking' ? 'Thinking...' : 
+        setStatusMessage(msg.status === 'thinking' ? `${thinkingPhrase}...` : 
                          msg.status === 'transcribing' ? 'Transcribing...' :
                          msg.status === 'speaking' ? 'Speaking...' : '');
         if (msg.status === 'thinking') {
              setIsSending(true);
              setStreamingContent('');
+             setReasoningContent(''); // Clear previous reasoning
              responseBufferRef.current = '';
         }
+        break;
+      case 'reasoning':
+        appendReasoningContent(msg.content);
         break;
       case 'transcript':
         setInput(msg.text);
@@ -381,7 +392,7 @@ export default function VoiceChatArea() {
               Speaking
             </span>
           ) : isSending ? (
-            <span className="text-gray-400 text-sm">{statusMessage || 'Thinking...'}</span>
+            <span className="text-gray-400 text-sm">{statusMessage || `${thinkingPhrase}...`}</span>
           ) : isListening ? (
              <span className="text-red-400 text-sm animate-pulse">Listening...</span>
           ) : (
@@ -417,6 +428,23 @@ export default function VoiceChatArea() {
       {/* Middle section - Luna's response text */}
       <div className="relative z-10 flex-1 flex flex-col items-center justify-center px-6 overflow-y-auto">
         <div className="max-w-2xl w-full text-center py-4">
+          {reasoningContent && (
+            <div className="mb-6 text-left">
+              <button 
+                onClick={() => setShowReasoning(!showReasoning)}
+                className="flex items-center gap-2 text-xs text-gray-500 hover:text-gray-400 transition-colors mb-2 mx-auto"
+              >
+                {showReasoning ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                <span>{thinkingPhrase}...</span>
+              </button>
+              {showReasoning && (
+                <div className="px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-gray-400 text-sm font-mono whitespace-pre-wrap max-h-40 overflow-y-auto custom-scrollbar">
+                  {reasoningContent}
+                </div>
+              )}
+            </div>
+          )}
+
           {isSending && !streamingContent ? (
             <div className="flex justify-center">
               <div className="flex gap-2">

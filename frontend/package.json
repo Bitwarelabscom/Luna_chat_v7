@@ -9,6 +9,17 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@blocknote/core": "^0.46.2",
+    "@blocknote/react": "^0.46.2",
+    "@codemirror/lang-cpp": "^6.0.3",
+    "@codemirror/lang-css": "^6.3.1",
+    "@codemirror/lang-html": "^6.4.11",
+    "@codemirror/lang-java": "^6.0.2",
+    "@codemirror/lang-javascript": "^6.2.4",
+    "@codemirror/lang-python": "^6.2.1",
+    "@codemirror/lang-rust": "^6.0.2",
+    "@codemirror/lang-sql": "^6.10.0",
+    "@codemirror/language": "^6.12.1",
     "@hocuspocus/provider": "^2.15.0",
     "@tiptap/extension-collaboration": "^2.10.4",
     "@tiptap/extension-collaboration-cursor": "^2.10.4",
@@ -16,6 +27,7 @@
     "@tiptap/pm": "^2.10.4",
     "@tiptap/react": "^2.10.4",
     "@tiptap/starter-kit": "^2.10.4",
+    "@uiw/react-codemirror": "^4.25.4",
     "clsx": "^2.1.1",
     "hls.js": "^1.6.15",
     "lucide-react": "^0.453.0",
@@ -23,6 +35,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^9.0.1",
+    "react-resizable-panels": "^4.6.3",
     "y-websocket": "^2.0.4",
     "yjs": "^13.6.21",
     "zustand": "^5.0.0"

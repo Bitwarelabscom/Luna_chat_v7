@@ -418,7 +418,11 @@ async function fetchMoonshotModels(): Promise<ModelConfig[]> {
 // Fetch Ollama models (generic)
 async function fetchOllamaModelsGeneric(url: string, name: string): Promise<ModelConfig[]> {
   try {
-    const response = await fetch(`${url}/api/tags`);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    
+    const response = await fetch(`${url}/api/tags`, { signal: controller.signal });
+    clearTimeout(timeout);
 
     if (!response.ok) {
       return [];
@@ -447,6 +451,11 @@ async function fetchOllamaModels(): Promise<ModelConfig[]> {
 async function fetchOllamaSecondaryModels(): Promise<ModelConfig[]> {
   if (!config.ollamaSecondary?.url) return [];
   return fetchOllamaModelsGeneric(config.ollamaSecondary.url, 'ollama_secondary');
+}
+
+async function fetchOllamaTertiaryModels(): Promise<ModelConfig[]> {
+  if (!config.ollamaTertiary?.url) return [];
+  return fetchOllamaModelsGeneric(config.ollamaTertiary.url, 'ollama_tertiary');
 }
 
 // Fetch OpenRouter models (with pricing!)
@@ -643,7 +652,7 @@ async function fetchSanhedrinModels(): Promise<ModelConfig[]> {
 export async function fetchAllModels(): Promise<LLMProvider[]> {
   logger.info('Fetching models from all providers...');
 
-  const [openai, anthropic, google, xai, groq, openrouter, sanhedrin, moonshot, ollama, ollamaSecondary] = await Promise.all([
+  const [openai, anthropic, google, xai, groq, openrouter, sanhedrin, moonshot, ollama, ollamaSecondary, ollamaTertiary] = await Promise.all([
     fetchOpenAIModels(),
     fetchAnthropicModels(),
     fetchGoogleModels(),
@@ -654,6 +663,7 @@ export async function fetchAllModels(): Promise<LLMProvider[]> {
     fetchMoonshotModels(),
     fetchOllamaModels(),
     fetchOllamaSecondaryModels(),
+    fetchOllamaTertiaryModels(),
   ]);
 
   const providers: LLMProvider[] = [];
@@ -712,7 +722,25 @@ export async function fetchAllModels(): Promise<LLMProvider[]> {
     });
   }
 
-  if (ollama.length > 0) {
+  if (ollamaTertiary.length > 0 || config.ollamaTertiary?.enabled) {
+    logger.info('Pushing ollama_tertiary provider', { models: ollamaTertiary.length, enabled: config.ollamaTertiary?.enabled });
+    providers.push({
+      id: 'ollama_tertiary',
+      name: 'Ollama (Remote 10.0.0.30)',
+      enabled: true,
+      models: ollamaTertiary.length > 0 ? ollamaTertiary : [
+        {
+          id: 'unreachable',
+          name: 'Status: Unreachable (Check 10.0.0.30:11434)',
+          contextWindow: 0,
+          maxOutputTokens: 0,
+          capabilities: ['chat'],
+        }
+      ],
+    });
+  }
+
+  if (ollama.length > 0 || config.ollama.url) {
     providers.push({
       id: 'ollama',
       name: 'Ollama (Local)',
@@ -721,7 +749,7 @@ export async function fetchAllModels(): Promise<LLMProvider[]> {
     });
   }
 
-  if (ollamaSecondary.length > 0) {
+  if (ollamaSecondary.length > 0 || config.ollamaSecondary?.enabled) {
     providers.push({
       id: 'ollama_secondary',
       name: 'Ollama (Remote 10.0.0.3)',
@@ -760,6 +788,7 @@ export async function fetchAllModels(): Promise<LLMProvider[]> {
       moonshot: moonshot.length,
       ollama: ollama.length,
       ollamaSecondary: ollamaSecondary.length,
+      ollamaTertiary: ollamaTertiary.length,
     }
   });
 

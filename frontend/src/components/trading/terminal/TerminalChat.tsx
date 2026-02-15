@@ -2,6 +2,7 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Send, Zap, TrendingUp, FileCode2, Loader2 } from 'lucide-react';
+import { useThinkingMessage } from '../../ThinkingStatus';
 
 interface Message {
   id: string;
@@ -29,6 +30,7 @@ export default function TerminalChat({ onTradeExecuted, currentTab: _currentTab 
   const [loading, setLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const thinkingPhrase = useThinkingMessage(loading);
 
   // Initialize trading chat session
   const initSession = useCallback(async () => {
@@ -250,7 +252,7 @@ export default function TerminalChat({ onTradeExecuted, currentTab: _currentTab 
         {loading && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--terminal-text-muted)' }}>
             <Loader2 size={14} className="animate-spin" style={{ animation: 'spin 1s linear infinite' }} />
-            <span style={{ fontSize: '0.75rem' }}>Luna is thinking...</span>
+            <span style={{ fontSize: '0.75rem' }}>{thinkingPhrase}...</span>
           </div>
         )}
 

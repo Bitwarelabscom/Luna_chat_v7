@@ -59,6 +59,7 @@ interface ChatState {
   isLoadingMessages: boolean;
   isSending: boolean;
   streamingContent: string;
+  reasoningContent: string;
   statusMessage: string;
 
   loadSessions: () => Promise<void>;
@@ -68,6 +69,8 @@ interface ChatState {
   addAssistantMessage: (content: string, id: string, metrics?: MessageMetrics) => void;
   setStreamingContent: (content: string) => void;
   appendStreamingContent: (content: string) => void;
+  setReasoningContent: (content: string) => void;
+  appendReasoningContent: (content: string) => void;
   setIsSending: (isSending: boolean) => void;
   setStatusMessage: (status: string) => void;
   clearCurrentSession: () => void;
@@ -80,6 +83,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   isLoadingMessages: false,
   isSending: false,
   streamingContent: '',
+  reasoningContent: '',
   statusMessage: '',
 
   loadSessions: async () => {
@@ -149,7 +153,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setStreamingContent: (content) => set({ streamingContent: content }),
   appendStreamingContent: (content) =>
     set((state) => ({ streamingContent: state.streamingContent + content })),
+  setReasoningContent: (content) => set({ reasoningContent: content }),
+  appendReasoningContent: (content) =>
+    set((state) => ({ reasoningContent: state.reasoningContent + content })),
   setIsSending: (isSending) => set({ isSending }),
   setStatusMessage: (status) => set({ statusMessage: status }),
-  clearCurrentSession: () => set({ currentSession: null, streamingContent: '', statusMessage: '' }),
+  clearCurrentSession: () => set({ currentSession: null, streamingContent: '', reasoningContent: '', statusMessage: '' }),
 }));

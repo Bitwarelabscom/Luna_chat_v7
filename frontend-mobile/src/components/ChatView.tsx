@@ -5,6 +5,7 @@ import { Send, Plus, ChevronRight } from 'lucide-react';
 import { useChatStore } from '@/lib/store';
 import { streamMessage } from '@/lib/api';
 import ReactMarkdown from 'react-markdown';
+import { useThinkingMessage } from './ThinkingStatus';
 
 export function ChatView() {
   const {
@@ -13,6 +14,7 @@ export function ChatView() {
     isLoadingSessions,
     isSending,
     streamingContent,
+    reasoningContent,
     statusMessage,
     loadSessions,
     loadSession,
@@ -21,10 +23,14 @@ export function ChatView() {
     addAssistantMessage,
     setStreamingContent,
     appendStreamingContent,
+    setReasoningContent,
+    appendReasoningContent,
     setIsSending,
     setStatusMessage,
   } = useChatStore();
 
+  const thinkingPhrase = useThinkingMessage(isSending && !streamingContent);
+  const [showReasoning, setShowReasoning] = useState(true);
   const [input, setInput] = useState('');
   const [projectMode, setProjectMode] = useState(false);
   const [thinkingMode, setThinkingMode] = useState(false);
@@ -39,7 +45,7 @@ export function ChatView() {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [currentSession?.messages, streamingContent]);
+  }, [currentSession?.messages, streamingContent, reasoningContent]);
 
   const handleSend = async () => {
     if (!input.trim() || isSending) return;
@@ -58,6 +64,7 @@ export function ChatView() {
     addUserMessage(message);
     setIsSending(true);
     setStreamingContent('');
+    setReasoningContent('');
     setStatusMessage('');
 
     try {
@@ -68,6 +75,8 @@ export function ChatView() {
         if (chunk.type === 'content' && chunk.content) {
           fullContent += chunk.content;
           appendStreamingContent(chunk.content);
+        } else if (chunk.type === 'reasoning' && chunk.content) {
+          appendReasoningContent(chunk.content);
         } else if (chunk.type === 'status' && chunk.status) {
           setStatusMessage(chunk.status);
         } else if (chunk.type === 'done' && chunk.messageId) {
@@ -81,6 +90,7 @@ export function ChatView() {
     } finally {
       setIsSending(false);
       setStreamingContent('');
+      setReasoningContent('');
     }
   };
 
@@ -181,14 +191,34 @@ export function ChatView() {
           </div>
         ))}
 
+        {/* Reasoning content */}
+        {reasoningContent && (
+          <div className="flex justify-start">
+            <div className="max-w-[85%] bg-[var(--terminal-surface)] rounded-2xl rounded-bl-md px-4 py-3 border border-[var(--terminal-border)]">
+              <button 
+                onClick={() => setShowReasoning(!showReasoning)}
+                className="text-xs text-[var(--terminal-text-muted)] mb-2 flex items-center gap-2 w-full text-left"
+              >
+                <div className="w-2 h-2 bg-[var(--terminal-accent)] rounded-full animate-pulse" />
+                <span>{thinkingPhrase}...</span>
+              </button>
+              {showReasoning && (
+                <div className="text-xs text-[var(--terminal-text-muted)] font-mono whitespace-pre-wrap max-h-40 overflow-y-auto">
+                  {reasoningContent}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Streaming content */}
-        {(streamingContent || statusMessage) && (
+        {(streamingContent || isSending) && !reasoningContent && (
           <div className="flex justify-start">
             <div className="max-w-[85%] message-assistant rounded-2xl rounded-bl-md px-4 py-3">
-              {statusMessage && (
+              {(statusMessage || (isSending && !streamingContent)) && (
                 <div className="text-xs text-[var(--terminal-text-muted)] mb-2 flex items-center gap-2">
                   <div className="w-2 h-2 bg-[var(--terminal-accent)] rounded-full animate-pulse" />
-                  {statusMessage}
+                  {statusMessage || `${thinkingPhrase}...`}
                 </div>
               )}
               {streamingContent && (

@@ -14,6 +14,7 @@ import { parseMediaBlocks } from './YouTubeEmbed';
 import ImageEmbed from './ImageEmbed';
 import { AttachmentCard } from './AttachmentCard';
 import { FileChip } from './FileChip';
+import { useThinkingMessage } from './ThinkingStatus';
 import dynamic from 'next/dynamic';
 
 const VoiceChatArea = dynamic(() => import('./VoiceChatArea'), {
@@ -58,7 +59,10 @@ function StandardChatArea() {
     setBrowserAction,
     setVideoAction,
     setMediaAction,
+    setCanvasAction,
   } = useChatStore();
+
+  const thinkingPhrase = useThinkingMessage(isSending && !streamingContent);
 
   // Track background reflection status
   const activities = useActivityStore((state) => state.activities);
@@ -248,13 +252,15 @@ function StandardChatArea() {
         } else if (chunk.type === 'media_action' && chunk.items) {
           // Signal to open media player with Jellyfin or local results
           setMediaAction({ type: (chunk.action as 'search' | 'play') || 'search', items: chunk.items, query: chunk.query || '', source: (chunk.source as 'youtube' | 'jellyfin' | 'local') || 'local' });
+        } else if (chunk.type === 'canvas_artifact' && chunk.artifactId && chunk.content) {
+          // Signal to open canvas window with generated artifact
+          setCanvasAction({ type: 'complete', artifactId: chunk.artifactId, content: chunk.content });
         } else if (chunk.type === 'background_refresh') {
           // Signal to refresh desktop background (after Luna generates/changes it)
           window.dispatchEvent(new CustomEvent('luna:background-refresh'));
         } else if (chunk.type === 'done' && chunk.messageId) {
           addAssistantMessage(accumulatedContent, chunk.messageId, chunk.metrics);
           setStreamingContent('');
-          setReasoningContent('');  // Clear reasoning after done
           setStatusMessage('');
         }
       }
@@ -306,6 +312,9 @@ function StandardChatArea() {
           setStatusMessage('');
           accumulatedContent += chunk.content;
           appendStreamingContent(chunk.content);
+        } else if (chunk.type === 'canvas_artifact' && chunk.artifactId && chunk.content) {
+          // Signal to open/update canvas window with generated artifact
+          setCanvasAction({ type: 'complete', artifactId: chunk.artifactId, content: chunk.content });
         } else if (chunk.type === 'done' && chunk.messageId) {
           addAssistantMessage(accumulatedContent, chunk.messageId, chunk.metrics);
           setStreamingContent('');
@@ -544,7 +553,7 @@ function StandardChatArea() {
                 <details className="inline-block max-w-[85%]" open>
                   <summary className="cursor-pointer px-3 py-2 rounded-lg bg-theme-surface-secondary text-theme-text-secondary text-sm flex items-center gap-2 hover:bg-theme-surface-tertiary transition-colors">
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Thinking...</span>
+                    <span>{thinkingPhrase}...</span>
                   </summary>
                   <div className="mt-2 px-3 py-2 rounded-lg bg-theme-surface-secondary border border-theme-border text-theme-text-secondary text-sm font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
                     {reasoningContent}
@@ -585,7 +594,7 @@ function StandardChatArea() {
                       <span className="w-2 h-2 bg-theme-accent-primary rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
                       <span className="w-2 h-2 bg-theme-accent-primary rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                     </div>
-                    <span className="text-theme-text-secondary text-sm">{statusMessage || 'Luna is thinking...'}</span>
+                    <span className="text-theme-text-secondary text-sm">{statusMessage || `${thinkingPhrase}...`}</span>
                   </div>
                 </div>
               </div>
