@@ -273,7 +273,9 @@ export function SystemBar({ onSpotlightOpen, onSettingsOpen, onAppOpen, onNewFil
               </button>
               {activeMenu === key && (
                 <div
-                  className="absolute left-0 top-full mt-1 min-w-[180px] backdrop-blur-xl border rounded-lg shadow-2xl overflow-hidden z-[9999]"
+                  className={`absolute left-0 top-full mt-1 min-w-[180px] backdrop-blur-xl border rounded-lg shadow-2xl z-[9999] ${
+                    key === 'apps' ? 'max-h-[70vh] overflow-y-auto' : 'overflow-hidden'
+                  }`}
                   style={{
                     background: 'var(--theme-bg-secondary)',
                     borderColor: 'var(--theme-border)',

@@ -548,18 +548,30 @@ export async function executeGridBot(botId: string): Promise<{ trades: number }>
   const config = bot.config as GridBotConfig;
   const userId = bot.user_id;
 
-  // Get Crypto.com exchange client
-  const client = await getClient(userId);
-  if (!client) return { trades };
-
   // Get symbol from bot row (not config - symbol is stored as a column)
   const botSymbol = bot.symbol as string;
 
-  // Get current price using Crypto.com symbol format
+  // Get current price from Redis cache first, then public API fallback.
   const symbol = toCryptoComSymbol(botSymbol);
+  let currentPrice = 0;
 
-  const ticker = await client.getTickerPrice(symbol) as { price: string };
-  const currentPrice = parseFloat(ticker.price);
+  const cachedPrice = await redisTradingService.getPrice(symbol);
+  if (cachedPrice) {
+    currentPrice = cachedPrice.price;
+  } else {
+    try {
+      const publicClient = new CryptoComClient({ apiKey: '', apiSecret: '' });
+      const ticker = await publicClient.getTickerPrice(symbol) as { price: string };
+      currentPrice = parseFloat(ticker.price);
+    } catch (err) {
+      logger.warn('Grid bot skipped - unable to fetch price', {
+        botId,
+        symbol,
+        error: (err as Error).message,
+      });
+      return { trades };
+    }
+  }
 
   logger.info('Grid bot price check', { botId, symbol, currentPrice, botSymbol });
 

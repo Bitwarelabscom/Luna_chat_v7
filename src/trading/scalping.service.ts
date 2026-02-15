@@ -999,6 +999,10 @@ export async function runScalpingJob(): Promise<{
         maxHoldMinutes: row.max_hold_minutes,
         minTradesForLearning: row.min_trades_for_learning,
       };
+      const globalTradingSettings = await tradingService.getSettings(settings.userId);
+      const effectiveMode: 'paper' | 'live' = globalTradingSettings.paperMode
+        ? 'paper'
+        : settings.mode;
 
       results.usersProcessed++;
 
@@ -1019,7 +1023,7 @@ export async function runScalpingJob(): Promise<{
           continue;
         }
 
-        if (settings.mode === 'paper') {
+        if (effectiveMode === 'paper') {
           await executePaperTrade(opp, settings);
           results.paperTrades++;
         } else {
@@ -1035,7 +1039,7 @@ export async function runScalpingJob(): Promise<{
            ON CONFLICT (user_id, date, mode) DO UPDATE SET
              opportunities_detected = scalping_daily_stats.opportunities_detected + 1,
              opportunities_traded = scalping_daily_stats.opportunities_traded + 1`,
-          [settings.userId, today, settings.mode]
+          [settings.userId, today, effectiveMode]
         );
       }
     }
@@ -1152,6 +1156,10 @@ async function triggerQuickCheck(userId: string, symbol: string): Promise<void> 
   try {
     const settings = await getSettings(userId);
     if (!settings?.enabled) return;
+    const globalTradingSettings = await tradingService.getSettings(userId);
+    const effectiveMode: 'paper' | 'live' = globalTradingSettings.paperMode
+      ? 'paper'
+      : settings.mode;
 
     // Get open positions to check if we already have one
     // getOpenPositions works for both paper and live modes
@@ -1171,7 +1179,7 @@ async function triggerQuickCheck(userId: string, symbol: string): Promise<void> 
         confidence: opportunity.confidenceScore.toFixed(2),
       });
 
-      if (settings.mode === 'paper') {
+      if (effectiveMode === 'paper') {
         await executePaperTrade(opportunity, settings);
       } else {
         await executeLiveTrade(opportunity, settings);

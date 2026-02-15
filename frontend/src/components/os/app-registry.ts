@@ -21,6 +21,7 @@ import {
   Newspaper,
   Hash,
   Code2,
+  Gamepad2,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -45,7 +46,8 @@ export type AppId =
   | 'autonomous-learning'
   | 'news'
   | 'irc'
-  | 'canvas';
+  | 'canvas'
+  | 'games';
 
 export interface AppConfig {
   id: AppId;
@@ -228,6 +230,14 @@ export const appConfig: Record<AppId, AppConfig> = {
     defaultSize: { width: 1100, height: 750 },
     showInDock: false, // Opened from chat actions, not dock
   },
+  games: {
+    id: 'games',
+    title: 'Games',
+    icon: Gamepad2,
+    color: 'from-amber-500 to-yellow-500',
+    defaultSize: { width: 1100, height: 760 },
+    showInDock: true,
+  },
 };
 
 // Apps to show in the dock (in order)
@@ -251,6 +261,7 @@ export const dockApps: AppId[] = [
   'activity',
   'consciousness',
   'autonomous-learning',
+  'games',
 ];
 
 export default appConfig;

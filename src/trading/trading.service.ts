@@ -217,6 +217,20 @@ const clientCache = new Map<string, { client: IExchangeClient; expiresAt: number
 const CLIENT_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 // Encrypted API keys storage (per user in database)
+async function ensurePaperPortfolioInitialized(
+  userId: string,
+  startingBalanceUsdc: number
+): Promise<void> {
+  const existing = await pool.query(
+    `SELECT 1 FROM paper_portfolio WHERE user_id = $1 LIMIT 1`,
+    [userId]
+  );
+
+  if (existing.rows.length === 0) {
+    await paperPortfolio.initializePaperPortfolio(userId, startingBalanceUsdc);
+  }
+}
+
 async function getUserApiKeys(
   userId: string
 ): Promise<{ apiKey: string; apiSecret: string } | null> {
@@ -474,7 +488,14 @@ export async function updateSettings(
     );
   }
 
-  return getSettings(userId);
+  const settings = await getSettings(userId);
+
+  // Ensure paper portfolio exists for paper-mode users even if DB trigger was skipped.
+  if (settings.paperMode) {
+    await ensurePaperPortfolioInitialized(userId, settings.paperBalanceUsdc);
+  }
+
+  return settings;
 }
 
 /**
@@ -613,6 +634,8 @@ export async function getPortfolio(userId: string): Promise<Portfolio | null> {
   // Check if paper mode is enabled
   const settings = await getSettings(userId);
   if (settings.paperMode) {
+    await ensurePaperPortfolioInitialized(userId, settings.paperBalanceUsdc);
+
     // Return paper portfolio instead of real portfolio (no caching - changes immediately)
     const paperPort = await paperPortfolio.getPaperPortfolio(userId);
     return {
@@ -1044,7 +1067,7 @@ async function executePaperOrder(
     feeAsset: params.symbol.endsWith('USDT') ? 'USDT' : 'USDC',
     status: 'filled',
     binanceOrderId: `PAPER-${paperTrade.id.slice(0, 8)}`,
-    stopLossPrice: params.stopLoss || null,
+    stopLossPrice: stopLossPrice || null,
     takeProfitPrice: params.takeProfit || null,
     notes: params.notes ? `[PAPER] ${params.notes}` : '[PAPER TRADE]',
     createdAt: paperTrade.createdAt,
@@ -1072,6 +1095,7 @@ export async function placeOrder(
 
   // Handle paper trading mode
   if (settings.paperMode) {
+    await ensurePaperPortfolioInitialized(userId, settings.paperBalanceUsdc);
     return executePaperOrder(userId, params, settings);
   }
 

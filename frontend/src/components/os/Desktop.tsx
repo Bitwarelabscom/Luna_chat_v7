@@ -34,6 +34,7 @@ import PlannerWindow from './apps/PlannerWindow';
 import IRCWindow from './apps/IRCWindow';
 import PlaceholderWindow from './apps/PlaceholderWindow';
 import { CanvasWindow } from './apps/CanvasWindow';
+import GamesWindow from './apps/GamesWindow';
 
 // Map appId to component
 function getAppComponent(appId: AppId): React.ReactNode {
@@ -80,6 +81,8 @@ function getAppComponent(appId: AppId): React.ReactNode {
       return <NewsWindow />;
     case 'canvas':
       return <CanvasWindow />;
+    case 'games':
+      return <GamesWindow />;
     default:
       return <PlaceholderWindow title="Unknown" message="Unknown app" />;
   }

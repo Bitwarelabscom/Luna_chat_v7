@@ -34,9 +34,10 @@ type TabType = 'overview' | 'portfolio' | 'orders' | 'signals' | 'algorithms' | 
 interface TradingTerminalProps {
   onClose: () => void;
   userId?: string;
+  onOpenSettings?: () => void;
 }
 
-export default function TradingTerminal({ onClose, userId }: TradingTerminalProps) {
+export default function TradingTerminal({ onClose, userId, onOpenSettings }: TradingTerminalProps) {
   // State
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [settings, setSettings] = useState<TradingSettings | null>(null);
@@ -78,7 +79,7 @@ export default function TradingTerminal({ onClose, userId }: TradingTerminalProp
       const pricesData = await tradingApi.getPrices();
       setPrices(pricesData);
 
-      if (settingsData.exchangeConnected || settingsData.binanceConnected) {
+      if (settingsData.exchangeConnected || settingsData.binanceConnected || settingsData.paperMode) {
         const [portfolioData, tradesData, botsData] = await Promise.all([
           tradingApi.getPortfolio(),
           tradingApi.getTrades(100),
@@ -131,7 +132,7 @@ export default function TradingTerminal({ onClose, userId }: TradingTerminalProp
     { id: 'rules', label: 'Rules', icon: <FileCode2 size={14} /> },
   ];
 
-  const isConnected = settings?.exchangeConnected || settings?.binanceConnected;
+  const canUseTerminal = settings?.exchangeConnected || settings?.binanceConnected || settings?.paperMode;
 
   // Handle keyboard shortcut to close
   useEffect(() => {
@@ -248,7 +249,7 @@ export default function TradingTerminal({ onClose, userId }: TradingTerminalProp
       {/* Main Content + Chat Sidebar */}
       <div className="terminal-content">
         <main className="terminal-main">
-          {!isConnected && !loading ? (
+          {!canUseTerminal && !loading ? (
             <div style={{
               display: 'flex',
               flexDirection: 'column',
@@ -262,6 +263,15 @@ export default function TradingTerminal({ onClose, userId }: TradingTerminalProp
               <p style={{ fontSize: '0.8rem', opacity: 0.7 }}>
                 Connect your exchange in the trading settings to use the terminal
               </p>
+              {onOpenSettings && (
+                <button
+                  onClick={onOpenSettings}
+                  className="terminal-btn terminal-btn-primary"
+                  style={{ marginTop: '1rem' }}
+                >
+                  Open Trading Settings
+                </button>
+              )}
             </div>
           ) : (
             renderTabContent()

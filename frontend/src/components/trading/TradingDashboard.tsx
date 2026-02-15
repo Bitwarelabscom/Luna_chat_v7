@@ -780,6 +780,10 @@ export default function TradingDashboard() {
       {showTerminal && (
         <TradingTerminal
           onClose={() => setShowTerminal(false)}
+          onOpenSettings={() => {
+            setShowTerminal(false);
+            setShowSettings(true);
+          }}
         />
       )}
 

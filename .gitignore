@@ -36,6 +36,8 @@ coverage/
 
 # Docker volumes (local dev)
 data/
+!frontend/public/emulatorjs/data/
+!frontend/public/emulatorjs/data/**
 
 # Docker Compose local overrides
 docker-compose.override.yml
@@ -52,6 +54,9 @@ images/
 
 # Video files (too large for git)
 *.mp4
+
+# Downloaded game assets
+frontend/public/games/
 
 # Internal documentation
 prompting.md
