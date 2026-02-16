@@ -99,6 +99,7 @@ Built with a **Local-First** ethos, Luna integrates deeply with your digital lif
 - [Configuration](#configuration)
 - [Security](#security)
 - [Development](#development)
+- [Documentation](#documentation)
 - [Roadmap](#roadmap)
 - [License](#license)
 
@@ -135,7 +136,7 @@ Most AI assistants are stateless query engines. Luna is a **stateful companion**
 - **Friend Mode**: AI friends (Nova, Sage, Celer) discuss observations to build deeper understanding
 - **Goal Tracking**: Set and track personal/professional goals with milestone support
 - **Intent Persistence**: Tracks what you're working on across sessions - understands "try again" and "that worked!"
-- **RSS Monitoring**: Autonomous feed checking and summarization
+- **Newsfetcher Integration**: Verified news with multi-source fact-checking and confidence scores
 - **Proactive Insights**: Generates insights from accumulated knowledge
 
 ### Trading (Trader Luna)
@@ -156,23 +157,26 @@ Most AI assistants are stateless query engines. Luna is a **stateful companion**
 - **Research Assistant**: Luna can browse the web to answer questions
 
 ### Local Media
-- **Integrated Streaming**: Direct HTTP streaming of local media files
-- **Universal Player**: Unified video and audio player in the web UI
-- **Broad Search**: Intelligent search that matches filenames and parent directories
-- **Download Support**: Download YouTube videos/audio directly to your local library
+- **Direct Streaming**: Native HTTP streaming of local media files (no Jellyfin/VLC required)
+- **Universal Player**: Unified HTML5 video and audio player in the web UI
+- **Smart Search**: Intelligent fuzzy search matching filenames, directories, and metadata
+- **YouTube Integration**: Download videos/audio directly to your local library with yt-dlp
+- **Format Support**: MP4, MKV, AVI (video) | MP3, FLAC, M4A, OGG (audio)
 
 ### Integrations
 - **Calendar**: CalDAV integration (Google, Outlook, self-hosted Radicale)
-- **Email**: SMTP/IMAP support for sending and receiving
+- **Email**: SMTP/IMAP support for sending and receiving with Mail-Luna Gatekeeper security
 - **Telegram**: Two-way messaging and notifications via Telegram bot
 - **IRC**: Integrated IRC client for real-time chat in channels
+- **Newsfetcher**: Multi-source news aggregation with fact-checking and verification scores
 - **MCP Servers**: Model Context Protocol for external tool integration
 - **Code Sandbox**: Execute Python, JavaScript, and Shell scripts safely
-- **Document Processing**: Support for PDF, TXT, MD, DOCX, XLSX, and more
+- **Document Processing**: Support for PDF, TXT, MD, DOCX, XLSX, PPTX, and more
 - **Web Search**: SearXNG integration for web research
-- **Text-to-Speech**: ElevenLabs integration for voice responses
+- **Text-to-Speech**: OpenAI and ElevenLabs integration for voice responses
 - **Spotify**: Music playback control and recommendations
 - **Local Media Player**: Stream local movies, shows, and music from your server
+- **YouTube Integration**: Search, play, and download videos/audio with cookie-based authentication
 - **Quick Reminders**: Set reminders via natural language (validated: 1 min to 30 days)
 
 ### Voice Intelligence
@@ -183,9 +187,13 @@ Most AI assistants are stateless query engines. Luna is a **stateful companion**
 - **Expressive Speech**: Multi-engine TTS support (OpenAI, ElevenLabs) with emotional expression tags
 
 ### Developer Tools
+- **Canvas Artifacts**: Multi-file code artifacts with live preview, version history, and image asset support
 - **Activity Window**: Real-time activity logging for debugging
 - **System Monitoring**: CPU, memory, and process monitoring
 - **Session Logs**: Detailed logs per conversation turn
+
+### Entertainment
+- **Retro Games**: Built-in emulator for classic games (GB, GBC, GBA, NES, SNES, Sega Genesis)
 
 ### Security
 - **Docker Secrets**: Encrypted credential storage
@@ -1016,16 +1024,15 @@ luna-chat/
 |---------|------|-------------|
 | luna-frontend | 3004 | Next.js web UI (desktop) |
 | luna-mobile | 5555 | Next.js mobile-optimized UI |
-| luna-api | 3005 | Backend API |
-| luna-postgres | 5432 | PostgreSQL with pgvector |
-| luna-redis | 6379 | Redis cache |
-| luna-sandbox | - | Code execution sandbox |
-| luna-neo4j | 7474 | Local graph database (Neo4j 5) |
-| luna-ollama | 11434 | Local LLM and embeddings |
-| luna-radicale | 5232 | CalDAV calendar server |
+| luna-api | 3005 | Backend API (Node.js/Express) |
+| luna-postgres | 5432 | PostgreSQL 17 with pgvector for embeddings |
+| luna-redis | 6379 | Redis for caching and session management |
+| luna-sandbox | - | Isolated code execution sandbox |
+| luna-ollama | 11434 | Local LLM and embeddings (Ollama) |
+| luna-radicale | 5232 | CalDAV calendar server (self-hosted) |
 | tradecore | 9090 | High-performance trading engine (Go) |
 | luna-sanhedrin | 8000 | A2A Protocol multi-agent coordination |
-| docker-proxy | 2375 | Docker socket proxy |
+| docker-proxy | 2375 | Secure Docker socket proxy |
 
 ---
 
@@ -1142,9 +1149,20 @@ npm start
 | GET | `/api/autonomous/deliberations/live` | SSE stream for Theater Mode |
 | GET/POST | `/api/autonomous/questions` | Questions queue |
 | POST | `/api/autonomous/questions/:id/answer` | Answer a question |
-| GET/POST | `/api/autonomous/rss` | RSS feeds |
+| GET | `/api/autonomous/news` | Newsfetcher articles and claims |
 | GET | `/api/autonomous/insights` | Generated insights |
 | GET | `/api/autonomous/friends` | Friend conversations |
+
+### Canvas Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/canvas/create` | Create new canvas artifact |
+| GET | `/api/canvas/:id` | Get canvas artifact |
+| PUT | `/api/canvas/:id` | Update canvas artifact |
+| POST | `/api/canvas/:id/files` | Add/update file in canvas |
+| DELETE | `/api/canvas/:id/files/:filename` | Remove file from canvas |
+| GET | `/api/canvas/:id/preview` | Get live preview of canvas |
 
 ### Planner (Execution Graph) Endpoints
 
@@ -1393,9 +1411,42 @@ Luna expresses emotions through media:
 
 ---
 
+## Documentation
+
+### Core Documentation
+
+- **[README.md](README.md)**: This file - Quick start and feature overview
+- **[WIKI.md](docs/WIKI.md)**: Comprehensive system documentation and developer guide
+- **[MEMORY.md](docs/MEMORY.md)**: Deep dive into memory system architecture
+- **[AUTONOMOUS.md](docs/AUTONOMOUS.md)**: Autonomous mode and Council system
+- **[PLANNER.md](docs/PLANNER.md)**: Projects (Execution Graph) documentation
+- **[AUTONOMOUS_LEARNING.md](docs/AUTONOMOUS_LEARNING.md)**: Learning and consolidation system
+
+### Technical Specifications
+
+- **[DUAL_LNN_ARCHITECTURE.md](DUAL_LNN_ARCHITECTURE.md)**: Dual-LNN working memory specification
+- **[graph-memory-architecture.md](graph-memory-architecture.md)**: Graph memory technical specification
+- **[CLAUDE.md](CLAUDE.md)**: Project instructions for Claude Code
+
+### Quick Links
+
+- **[Installation Guide](#installation)**: Get Luna running
+- **[API Reference](#api-reference)**: Complete API documentation
+- **[Troubleshooting](docs/WIKI.md#troubleshooting)**: Common issues and solutions
+- **[Configuration](docs/WIKI.md#configuration)**: Environment variables and settings
+
+---
+
 ## Roadmap
 
 Planned features and integrations for future releases:
+
+### In Progress
+| Feature | Description | Status |
+|---------|-------------|--------|
+| **Vision Mode** | Real-time video analysis and interaction | Development |
+| **Multi-User Support** | Family/team accounts with privacy boundaries | Planning |
+| **Advanced RAG** | Multi-index retrieval with reranking | Development |
 
 ### Automation & Workflow
 | Feature | Description | Status |
@@ -1418,6 +1469,20 @@ Planned features and integrations for future releases:
 | **Home Assistant** | Smart home control and automation triggers | Exploring |
 | **Notion Sync** | Bidirectional sync with Notion databases | Exploring |
 | **Plugin System** | User-installable plugins for custom integrations | Exploring |
+| **Voice Cloning** | Custom voice profiles for TTS | Exploring |
+
+### Recently Completed (v7.x)
+| Feature | Completed |
+|---------|-----------|
+| **Canvas Artifacts** | ✅ Feb 2026 |
+| **Retro Games Emulator** | ✅ Feb 2026 |
+| **Newsfetcher Integration** | ✅ Feb 2026 |
+| **Paper Trading** | ✅ Feb 2026 |
+| **Local Media Player** | ✅ Feb 2026 |
+| **Dual-LNN Memory** | ✅ Feb 2026 |
+| **Graph Memory Sanitization** | ✅ Feb 2026 |
+| **IRC Integration** | ✅ Feb 2026 |
+| **YouTube Download** | ✅ Feb 2026 |
 
 Want to contribute or suggest features? [Open an issue](https://github.com/bitwarelabs/luna-chat/issues)!
 
