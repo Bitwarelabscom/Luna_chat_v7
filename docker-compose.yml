@@ -183,6 +183,7 @@ services:
       - NEO4J_USER=neo4j
       - NEO4J_ENABLED=${NEO4J_ENABLED:-true}
       - YTDLP_COOKIES_PATH=/app/secrets/youtube_cookies.txt
+      - NEWSFETCHER_URL=http://newsfetcher-app:8000
     extra_hosts:
       - "host.docker.internal:host-gateway"
     secrets:
@@ -237,6 +238,7 @@ services:
       - luna-network
       - searxng_default
       - memorycore_memorycore-network
+      - newsfetcher_default
       - docker-proxy
     # SECURITY: Container hardening
     security_opt:
@@ -532,6 +534,8 @@ networks:
   searxng_default:
     external: true
   memorycore_memorycore-network:
+    external: true
+  newsfetcher_default:
     external: true
   docker-proxy:
     driver: bridge

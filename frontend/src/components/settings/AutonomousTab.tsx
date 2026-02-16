@@ -2,16 +2,16 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import {
-  Play, Square, RefreshCw, Plus, Target, Rss, BookOpen,
+  Play, Square, RefreshCw, Plus, Target, BookOpen,
   Sparkles, Eye, Settings, Trash2, Check, User, MessageCircle, X, Send
 } from 'lucide-react';
 import { autonomousApi } from '../../lib/api';
 import type {
-  AutonomousConfig, AutonomousStatus, Goal, Achievement, RssFeed, ProactiveInsight, AutonomousQuestion
+  AutonomousConfig, AutonomousStatus, Goal, Achievement, ProactiveInsight, AutonomousQuestion
 } from '../../lib/api';
 import TheaterMode from '../TheaterMode';
 
-type TabSection = 'control' | 'goals' | 'journal' | 'rss' | 'insights';
+type TabSection = 'control' | 'goals' | 'journal' | 'insights';
 
 const goalTypeConfig = {
   user_focused: { color: 'text-blue-400', bg: 'bg-blue-400/10', label: 'User Focused' },
@@ -27,14 +27,11 @@ export default function AutonomousTab() {
   const [_config, setConfig] = useState<AutonomousConfig | null>(null);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [achievements, setAchievements] = useState<Achievement[]>([]);
-  const [feeds, setFeeds] = useState<RssFeed[]>([]);
   const [insights, setInsights] = useState<ProactiveInsight[]>([]);
   const [loading, setLoading] = useState(true);
   const [showTheater, setShowTheater] = useState(false);
   const [showNewGoal, setShowNewGoal] = useState(false);
-  const [showNewFeed, setShowNewFeed] = useState(false);
   const [newGoal, setNewGoal] = useState({ goalType: 'self_improvement', title: '', description: '', priority: 5 });
-  const [newFeed, setNewFeed] = useState({ url: '', category: 'tech' });
   const [userAvailable, setUserAvailable] = useState(false);
   const [pendingQuestions, setPendingQuestions] = useState<AutonomousQuestion[]>([]);
   const [answeringQuestion, setAnsweringQuestion] = useState<string | null>(null);
@@ -44,12 +41,11 @@ export default function AutonomousTab() {
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
-      const [statusRes, configRes, goalsRes, achievementsRes, feedsRes, insightsRes, availabilityRes, questionsRes] = await Promise.all([
+      const [statusRes, configRes, goalsRes, achievementsRes, insightsRes, availabilityRes, questionsRes] = await Promise.all([
         autonomousApi.getStatus(),
         autonomousApi.getConfig(),
         autonomousApi.getGoals(),
         autonomousApi.getAchievements(),
-        autonomousApi.getFeeds(),
         autonomousApi.getInsights({ unshared: true }),
         autonomousApi.getAvailability().catch(() => ({ available: false })),
         autonomousApi.getPendingQuestions().catch(() => ({ questions: [] })),
@@ -59,7 +55,6 @@ export default function AutonomousTab() {
       setConfig(configRes.config);
       setGoals(goalsRes.goals || []);
       setAchievements(achievementsRes.achievements || []);
-      setFeeds(feedsRes.feeds || []);
       setInsights(insightsRes.insights || []);
       setUserAvailable(availabilityRes.available);
       setPendingQuestions(questionsRes.questions || []);
@@ -134,49 +129,6 @@ export default function AutonomousTab() {
     }
   };
 
-  const handleAddFeed = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newFeed.url.trim()) return;
-
-    try {
-      await autonomousApi.addFeed(newFeed.url, newFeed.category);
-      setNewFeed({ url: '', category: 'tech' });
-      setShowNewFeed(false);
-      await loadData();
-    } catch (error) {
-      console.error('Failed to add feed:', error);
-    }
-  };
-
-  const handleAddDefaultFeeds = async () => {
-    try {
-      await autonomousApi.addDefaultFeeds();
-      await loadData();
-    } catch (error) {
-      console.error('Failed to add default feeds:', error);
-    }
-  };
-
-  const handleDeleteFeed = async (feedId: string) => {
-    if (!confirm('Remove this feed?')) return;
-    try {
-      await autonomousApi.deleteFeed(feedId);
-      await loadData();
-    } catch (error) {
-      console.error('Failed to delete feed:', error);
-    }
-  };
-
-  const handleFetchFeeds = async () => {
-    try {
-      const result = await autonomousApi.fetchFeeds();
-      alert(`Fetched ${result.articlesAdded} new articles`);
-      await loadData();
-    } catch (error) {
-      console.error('Failed to fetch feeds:', error);
-    }
-  };
-
   const handleDismissInsight = async (insightId: string) => {
     try {
       await autonomousApi.dismissInsight(insightId);
@@ -242,7 +194,6 @@ export default function AutonomousTab() {
           { id: 'control', icon: Settings, label: 'Control' },
           { id: 'goals', icon: Target, label: 'Goals' },
           { id: 'journal', icon: BookOpen, label: 'Journal' },
-          { id: 'rss', icon: Rss, label: 'RSS Feeds' },
           { id: 'insights', icon: Sparkles, label: 'Insights' },
         ].map(({ id, icon: Icon, label }) => (
           <button
@@ -642,113 +593,6 @@ export default function AutonomousTab() {
                         {new Date(achievement.createdAt).toLocaleDateString()}
                       </div>
                     </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* RSS Section */}
-      {activeSection === 'rss' && (
-        <div className="space-y-4">
-          <div className="flex justify-between items-center">
-            <h3 className="font-medium">RSS Feeds</h3>
-            <div className="flex gap-2">
-              <button
-                onClick={handleFetchFeeds}
-                className="flex items-center gap-2 px-3 py-1.5 text-sm bg-theme-bg-tertiary rounded-lg hover:bg-theme-bg-secondary"
-              >
-                <RefreshCw className="w-4 h-4" />
-                Fetch
-              </button>
-              <button
-                onClick={() => setShowNewFeed(!showNewFeed)}
-                className="flex items-center gap-2 px-3 py-1.5 text-sm bg-theme-accent-primary/20 text-theme-accent-primary rounded-lg hover:bg-theme-accent-primary/30"
-              >
-                <Plus className="w-4 h-4" />
-                Add Feed
-              </button>
-            </div>
-          </div>
-
-          {showNewFeed && (
-            <form onSubmit={handleAddFeed} className="bg-theme-bg-tertiary rounded-lg p-4 space-y-3">
-              <div>
-                <label className="block text-sm text-theme-text-secondary mb-1">Feed URL</label>
-                <input
-                  type="url"
-                  value={newFeed.url}
-                  onChange={(e) => setNewFeed({ ...newFeed, url: e.target.value })}
-                  placeholder="https://example.com/rss"
-                  className="w-full px-3 py-2 bg-theme-bg-secondary border border-theme-border rounded-lg text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-theme-text-secondary mb-1">Category</label>
-                <select
-                  value={newFeed.category}
-                  onChange={(e) => setNewFeed({ ...newFeed, category: e.target.value })}
-                  className="w-full px-3 py-2 bg-theme-bg-secondary border border-theme-border rounded-lg text-sm"
-                >
-                  <option value="tech">Technology</option>
-                  <option value="science">Science</option>
-                  <option value="news">News</option>
-                  <option value="custom">Custom</option>
-                </select>
-              </div>
-              <div className="flex gap-2">
-                <button
-                  type="submit"
-                  className="flex-1 px-3 py-2 bg-theme-accent-primary text-white rounded-lg text-sm hover:bg-theme-accent-primary/80"
-                >
-                  Add Feed
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowNewFeed(false)}
-                  className="px-3 py-2 bg-theme-bg-secondary rounded-lg text-sm hover:bg-theme-bg-tertiary"
-                >
-                  Cancel
-                </button>
-              </div>
-            </form>
-          )}
-
-          {feeds.length === 0 ? (
-            <div className="text-center py-8 text-theme-text-muted">
-              <Rss className="w-8 h-8 mx-auto mb-2 opacity-50" />
-              <p className="mb-3">No RSS feeds configured.</p>
-              <button
-                onClick={handleAddDefaultFeeds}
-                className="px-4 py-2 bg-theme-accent-primary/20 text-theme-accent-primary rounded-lg text-sm hover:bg-theme-accent-primary/30"
-              >
-                Add Default Tech & Science Feeds
-              </button>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {feeds.map((feed) => (
-                <div key={feed.id} className="bg-theme-bg-tertiary rounded-lg p-3 flex items-center justify-between">
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium truncate">{feed.title || feed.url}</div>
-                    <div className="text-xs text-theme-text-muted truncate">{feed.url}</div>
-                  </div>
-                  <div className="flex items-center gap-2 ml-3">
-                    <span className={`text-xs px-2 py-0.5 rounded ${
-                      feed.category === 'tech' ? 'bg-blue-400/10 text-blue-400' :
-                      feed.category === 'science' ? 'bg-green-400/10 text-green-400' :
-                      'bg-gray-400/10 text-gray-400'
-                    }`}>
-                      {feed.category || 'custom'}
-                    </span>
-                    <button
-                      onClick={() => handleDeleteFeed(feed.id)}
-                      className="p-1.5 text-red-400 hover:bg-red-400/10 rounded"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
                   </div>
                 </div>
               ))}

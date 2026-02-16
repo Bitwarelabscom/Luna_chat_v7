@@ -1191,35 +1191,37 @@ export interface Achievement {
   createdAt: string;
 }
 
-export interface RssFeed {
-  id: string;
-  userId: string;
-  url: string;
-  title: string | null;
-  category: string | null;
-  isActive: boolean;
-  lastChecked: string | null;
-  lastError: string | null;
-  errorCount: number;
-  createdAt: string;
-}
-
-export interface RssArticle {
-  id: string;
-  feedId: string;
-  userId: string;
+export interface NewsArticle {
+  id: number;
   title: string;
   url: string | null;
-  summary: string | null;
-  lunaSummary: string | null;
-  relevanceScore: number;
-  relevanceReason: string | null;
-  tags: string[] | null;
-  confidence: number;
-  isInteresting: boolean;
-  sharedWithUser: boolean;
   publishedAt: string | null;
-  fetchedAt: string;
+  sourceName: string;
+  verificationStatus: 'Verified' | 'Likely' | 'Unconfirmed' | 'Conflicted' | 'False/Retraction';
+  confidenceScore: number;
+  signal: 'low' | 'medium' | 'high' | null;
+  signalReason: string | null;
+  topics: string[] | null;
+  signalConfidence: number | null;
+}
+
+export interface NewsClaim {
+  id: number;
+  claimText: string;
+  verificationStatus: string;
+  confidenceScore: number;
+  scoreBreakdown: {
+    independencePoints: number;
+    primaryPoints: number;
+    recencyPoints: number;
+    consistencyPoints: number;
+    trustPoints: number;
+    independentSources: number;
+    primaryEvidenceCount: number;
+  };
+  articleTitle: string;
+  articleUrl: string | null;
+  publishedAt: string | null;
 }
 
 export interface ProactiveInsight {
@@ -1303,29 +1305,39 @@ export const autonomousApi = {
   celebrateAchievement: (id: string) =>
     api<{ achievement: Achievement }>(`/api/autonomous/achievements/${id}/celebrate`, { method: 'POST' }),
 
-  // RSS Feeds
-  getFeeds: () =>
-    api<{ feeds: RssFeed[] }>('/api/autonomous/rss/feeds'),
-
-  addFeed: (url: string, category?: string) =>
-    api<{ feed: RssFeed }>('/api/autonomous/rss/feeds', { method: 'POST', body: { url, category } }),
-
-  deleteFeed: (id: string) =>
-    api<{ success: boolean }>(`/api/autonomous/rss/feeds/${id}`, { method: 'DELETE' }),
-
-  addDefaultFeeds: () =>
-    api<{ feeds: RssFeed[] }>('/api/autonomous/rss/feeds/defaults', { method: 'POST' }),
-
-  fetchFeeds: () =>
-    api<{ success: boolean; articlesAdded: number }>('/api/autonomous/rss/fetch', { method: 'POST' }),
-
-  getArticles: (options?: { interesting?: boolean; limit?: number }) => {
+  // News (Newsfetcher)
+  getNewsArticles: (options?: { q?: string; status?: string; minScore?: number; limit?: number }) => {
     const params = new URLSearchParams();
-    if (options?.interesting) params.set('interesting', 'true');
+    if (options?.q) params.set('q', options.q);
+    if (options?.status) params.set('status', options.status);
+    if (options?.minScore) params.set('min_score', options.minScore.toString());
     if (options?.limit) params.set('limit', options.limit.toString());
     const query = params.toString();
-    return api<{ articles: RssArticle[] }>(`/api/autonomous/rss/articles${query ? `?${query}` : ''}`);
+    return api<{ articles: NewsArticle[] }>(`/api/autonomous/news/articles${query ? `?${query}` : ''}`);
   },
+
+  getNewsClaims: (options?: { status?: string; minScore?: number; limit?: number }) => {
+    const params = new URLSearchParams();
+    if (options?.status) params.set('status', options.status);
+    if (options?.minScore) params.set('min_score', options.minScore.toString());
+    if (options?.limit) params.set('limit', options.limit.toString());
+    const query = params.toString();
+    return api<{ claims: NewsClaim[] }>(`/api/autonomous/news/claims${query ? `?${query}` : ''}`);
+  },
+
+  enrichArticle: (id: number) =>
+    api<{ article: NewsArticle }>(`/api/autonomous/news/enrich/${id}`, { method: 'POST' }),
+
+  batchEnrich: (limit?: number) => {
+    const params = limit ? `?limit=${limit}` : '';
+    return api<{ enrichedCount: number }>(`/api/autonomous/news/enrich${params}`, { method: 'POST' });
+  },
+
+  triggerIngestion: () =>
+    api<{ success: boolean; ingested: number }>('/api/autonomous/news/ingest', { method: 'POST' }),
+
+  getNewsHealth: () =>
+    api<{ healthy: boolean; status?: string }>('/api/autonomous/news/health'),
 
   // Insights
   getInsights: (options?: { unshared?: boolean; limit?: number }) => {

@@ -2,7 +2,7 @@ import { pool } from '../db/index.js';
 import logger from '../utils/logger.js';
 import * as councilService from './council.service.js';
 import * as goalsService from './goals.service.js';
-import * as rssService from './rss.service.js';
+import * as newsfetcherService from './newsfetcher.service.js';
 import * as insightsService from './insights.service.js';
 import * as questionsService from './questions.service.js';
 import * as sessionWorkspaceService from './session-workspace.service.js';
@@ -1129,8 +1129,8 @@ async function executeGoalAction(userId: string, action: string): Promise<string
 }
 
 async function executeResearchAction(userId: string, _action: string, sessionId: string): Promise<string> {
-  // Trigger RSS fetch or research
-  await rssService.fetchAllFeeds(userId);
+  // Trigger newsfetcher ingestion
+  await newsfetcherService.triggerIngestion();
 
   // Create or update research collection for this session
   const collections = await researchService.getCollections(userId, { sessionId, limit: 1 });
@@ -1142,7 +1142,7 @@ async function executeResearchAction(userId: string, _action: string, sessionId:
     });
   }
 
-  return 'Refreshed RSS feeds and analyzed articles';
+  return 'Triggered news ingestion and prepared research collection';
 }
 
 async function executeAskUserAction(

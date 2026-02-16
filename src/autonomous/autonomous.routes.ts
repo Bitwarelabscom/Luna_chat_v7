@@ -3,7 +3,7 @@ import { authenticate } from '../auth/auth.middleware.js';
 import * as autonomousService from './autonomous.service.js';
 import * as councilService from './council.service.js';
 import * as goalsService from './goals.service.js';
-import * as rssService from './rss.service.js';
+import * as newsfetcherService from './newsfetcher.service.js';
 import * as insightsService from './insights.service.js';
 import * as questionsService from './questions.service.js';
 import * as sessionWorkspaceService from './session-workspace.service.js';
@@ -530,122 +530,119 @@ router.post('/achievements/:id/celebrate', async (req: Request, res: Response) =
 });
 
 // ============================================
-// RSS Feeds
+// News (Newsfetcher Integration)
 // ============================================
 
 /**
- * GET /api/autonomous/rss/feeds
- * List RSS feeds
+ * GET /api/autonomous/news/articles
+ * Query newsfetcher articles with optional filters
  */
-router.get('/rss/feeds', async (req: Request, res: Response) => {
+router.get('/news/articles', async (req: Request, res: Response) => {
   try {
-    const userId = req.user!.userId;
-    const feeds = await rssService.getFeeds(userId, false);
+    const q = req.query.q as string | undefined;
+    const status = req.query.status as string | undefined;
+    const minScore = req.query.min_score ? parseInt(req.query.min_score as string) : undefined;
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
 
-    res.json({ feeds });
-  } catch (error) {
-    logger.error('Error getting feeds', { error });
-    res.status(500).json({ error: 'Failed to get feeds' });
-  }
-});
-
-/**
- * POST /api/autonomous/rss/feeds
- * Add RSS feed
- */
-router.post('/rss/feeds', async (req: Request, res: Response) => {
-  try {
-    const userId = req.user!.userId;
-    const { url, title, category } = req.body;
-
-    if (!url) {
-      return res.status(400).json({ error: 'url is required' });
-    }
-
-    const feed = await rssService.createFeed(userId, { url, title, category });
-
-    return res.status(201).json({ feed });
-  } catch (error) {
-    logger.error('Error creating feed', { error });
-    return res.status(500).json({ error: 'Failed to create feed' });
-  }
-});
-
-/**
- * DELETE /api/autonomous/rss/feeds/:id
- * Remove RSS feed
- */
-router.delete('/rss/feeds/:id', async (req: Request, res: Response) => {
-  try {
-    const userId = req.user!.userId;
-    const feedId = req.params.id;
-
-    const deleted = await rssService.deleteFeed(feedId, userId);
-
-    if (!deleted) {
-      return res.status(404).json({ error: 'Feed not found' });
-    }
-
-    return res.json({ success: true });
-  } catch (error) {
-    logger.error('Error deleting feed', { error });
-    return res.status(500).json({ error: 'Failed to delete feed' });
-  }
-});
-
-/**
- * POST /api/autonomous/rss/feeds/defaults
- * Add default RSS feeds
- */
-router.post('/rss/feeds/defaults', async (req: Request, res: Response) => {
-  try {
-    const userId = req.user!.userId;
-    const feeds = await rssService.addDefaultFeeds(userId);
-
-    res.json({ feeds });
-  } catch (error) {
-    logger.error('Error adding default feeds', { error });
-    res.status(500).json({ error: 'Failed to add default feeds' });
-  }
-});
-
-/**
- * POST /api/autonomous/rss/fetch
- * Manually trigger RSS fetch
- */
-router.post('/rss/fetch', async (req: Request, res: Response) => {
-  try {
-    const userId = req.user!.userId;
-    const articlesAdded = await rssService.fetchAllFeeds(userId);
-
-    res.json({ success: true, articlesAdded });
-  } catch (error) {
-    logger.error('Error fetching feeds', { error });
-    res.status(500).json({ error: 'Failed to fetch feeds' });
-  }
-});
-
-/**
- * GET /api/autonomous/rss/articles
- * Get RSS articles
- */
-router.get('/rss/articles', async (req: Request, res: Response) => {
-  try {
-    const userId = req.user!.userId;
-    const interesting = req.query.interesting === 'true';
-    const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
-    const offset = parseInt(req.query.offset as string) || 0;
-
-    const articles = await rssService.getArticles(userId, {
-      isInteresting: interesting ? true : undefined,
-      limit,
-      offset,
-    });
+    const articles = await newsfetcherService.getArticles({ q, status, minScore, limit });
 
     res.json({ articles });
   } catch (error) {
-    logger.error('Error getting articles', { error });
-    res.status(500).json({ error: 'Failed to get articles' });
+    logger.error('Error getting news articles', { error });
+    res.status(500).json({ error: 'Failed to get news articles' });
+  }
+});
+
+/**
+ * GET /api/autonomous/news/claims
+ * Query newsfetcher claims with optional filters
+ */
+router.get('/news/claims', async (req: Request, res: Response) => {
+  try {
+    const status = req.query.status as string | undefined;
+    const minScore = req.query.min_score ? parseInt(req.query.min_score as string) : undefined;
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+
+    const claims = await newsfetcherService.getClaims({ status, minScore, limit });
+
+    res.json({ claims });
+  } catch (error) {
+    logger.error('Error getting news claims', { error });
+    res.status(500).json({ error: 'Failed to get news claims' });
+  }
+});
+
+/**
+ * POST /api/autonomous/news/enrich/:id
+ * Trigger AI enrichment for a single article
+ */
+router.post('/news/enrich/:id', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const articleId = parseInt(req.params.id);
+
+    if (isNaN(articleId)) {
+      return res.status(400).json({ error: 'Invalid article ID' });
+    }
+
+    const article = await newsfetcherService.enrichArticleById(articleId, userId);
+
+    if (!article) {
+      return res.status(404).json({ error: 'Article not found' });
+    }
+
+    return res.json({ article });
+  } catch (error) {
+    logger.error('Error enriching article', { error });
+    return res.status(500).json({ error: 'Failed to enrich article' });
+  }
+});
+
+/**
+ * POST /api/autonomous/news/enrich
+ * Batch-enrich recent articles with AI filter
+ */
+router.post('/news/enrich', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const limit = Math.min(parseInt(req.query.limit as string) || 25, 100);
+
+    const enrichedCount = await newsfetcherService.batchEnrichArticles(userId, limit);
+
+    res.json({ enrichedCount });
+  } catch (error) {
+    logger.error('Error batch enriching articles', { error });
+    res.status(500).json({ error: 'Failed to batch enrich articles' });
+  }
+});
+
+/**
+ * POST /api/autonomous/news/ingest
+ * Trigger manual newsfetcher ingestion
+ */
+router.post('/news/ingest', async (_req: Request, res: Response) => {
+  try {
+    const result = await newsfetcherService.triggerIngestion();
+
+    res.json({ success: true, ...result });
+  } catch (error) {
+    logger.error('Error triggering news ingestion', { error });
+    res.status(500).json({ error: 'Failed to trigger ingestion' });
+  }
+});
+
+/**
+ * GET /api/autonomous/news/health
+ * Newsfetcher health check
+ */
+router.get('/news/health', async (_req: Request, res: Response) => {
+  try {
+    const result = await newsfetcherService.healthCheck();
+
+    res.json(result);
+  } catch (error) {
+    logger.error('Error checking newsfetcher health', { error });
+    res.status(500).json({ healthy: false, error: 'Health check failed' });
   }
 });
 

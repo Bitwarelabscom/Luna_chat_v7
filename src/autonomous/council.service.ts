@@ -2,7 +2,7 @@ import { pool } from '../db/index.js';
 import { createCompletion } from '../llm/router.js';
 import { getUserModelConfig } from '../llm/model-config.service.js';
 import * as goalsService from './goals.service.js';
-import * as rssService from './rss.service.js';
+import * as newsfetcherService from './newsfetcher.service.js';
 import * as factsService from '../memory/facts.service.js';
 import * as sessionWorkspaceService from './session-workspace.service.js';
 import * as questionsService from './questions.service.js';
@@ -405,12 +405,12 @@ async function buildAuroraContext(userId: string, sessionId: string): Promise<st
     parts.push('---');
   }
 
-  // Get recent RSS articles
-  const articles = await rssService.getInterestingArticles(userId, 5);
+  // Get recent interesting articles from newsfetcher
+  const articles = await newsfetcherService.getInterestingArticles(5);
   if (articles.length > 0) {
     parts.push('Recent interesting articles:');
     for (const article of articles) {
-      parts.push(`- ${article.title} (relevance: ${(article.relevanceScore * 100).toFixed(0)}%)`);
+      parts.push(`- ${article.title} [${article.verificationStatus}] (confidence: ${article.confidenceScore}%)`);
     }
   }
 
@@ -437,7 +437,7 @@ async function buildAuroraContext(userId: string, sessionId: string): Promise<st
   return parts.join('\n');
 }
 
-async function buildVegaContext(userId: string, deliberation: CouncilDeliberation): Promise<string> {
+async function buildVegaContext(_userId: string, deliberation: CouncilDeliberation): Promise<string> {
   const parts: string[] = [];
 
   // Find what Aurora mentioned
@@ -448,14 +448,14 @@ async function buildVegaContext(userId: string, deliberation: CouncilDeliberatio
     parts.push('');
   }
 
-  // Get any relevant research data
-  const articles = await rssService.getInterestingArticles(userId, 3);
+  // Get any relevant research data from newsfetcher
+  const articles = await newsfetcherService.getInterestingArticles(3);
   if (articles.length > 0) {
     parts.push('Available research data:');
     for (const article of articles) {
-      parts.push(`- ${article.title}`);
-      if (article.lunaSummary) {
-        parts.push(`  Analysis: ${article.lunaSummary}`);
+      parts.push(`- ${article.title} [${article.verificationStatus}, ${article.confidenceScore}%]`);
+      if (article.signalReason) {
+        parts.push(`  Analysis: ${article.signalReason}`);
       }
     }
   }

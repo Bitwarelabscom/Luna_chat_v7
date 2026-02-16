@@ -136,6 +136,12 @@ const configSchema = z.object({
     enabled: z.coerce.boolean().default(true),
   }),
 
+  newsfetcher: z.object({
+    url: z.string().default('http://newsfetcher-app:8000'),
+    enabled: z.coerce.boolean().default(true),
+    cacheTtlSeconds: z.coerce.number().default(3600),
+  }).optional(),
+
   rateLimit: z.object({
     windowMs: z.coerce.number().default(60000),
     maxRequests: z.coerce.number().default(40),
@@ -349,6 +355,12 @@ const rawConfig = {
   searxng: {
     url: process.env.SEARXNG_URL,
     enabled: process.env.SEARXNG_ENABLED,
+  },
+
+  newsfetcher: {
+    url: process.env.NEWSFETCHER_URL,
+    enabled: process.env.NEWSFETCHER_ENABLED,
+    cacheTtlSeconds: process.env.NEWSFETCHER_CACHE_TTL,
   },
 
   rateLimit: {

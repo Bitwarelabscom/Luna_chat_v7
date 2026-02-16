@@ -3,7 +3,7 @@ import cron from 'node-cron';
 import * as preferencesService from '../memory/preferences.service.js';
 import * as taskPatterns from '../abilities/task-patterns.service.js';
 import * as oauthService from '../integrations/oauth.service.js';
-import * as rssService from '../autonomous/rss.service.js';
+import * as newsfetcherService from '../autonomous/newsfetcher.service.js';
 import * as insightsService from '../autonomous/insights.service.js';
 import * as triggerService from '../triggers/trigger.service.js';
 import * as deliveryService from '../triggers/delivery.service.js';
@@ -85,18 +85,18 @@ const jobs: Job[] = [
   },
   // Autonomous mode jobs
   {
-    name: 'rssFeedFetcher',
+    name: 'newsfetcherIngestion',
     intervalMs: 30 * 60 * 1000, // Every 30 minutes
     enabled: true,
     running: false,
-    handler: fetchRssFeeds,
+    handler: triggerNewsfetcherIngestion,
   },
   {
-    name: 'rssRelevanceAnalyzer',
+    name: 'newsEnrichment',
     intervalMs: 60 * 60 * 1000, // Hourly
     enabled: true,
     running: false,
-    handler: analyzeRssRelevance,
+    handler: enrichNewsArticles,
   },
   {
     name: 'sessionLearningConsolidator',
@@ -491,81 +491,58 @@ async function cleanupOldEventLogs(): Promise<void> {
 // ============================================
 
 /**
- * Fetch RSS feeds for all users with autonomous mode enabled
+ * Trigger newsfetcher ingestion (replaces old RSS feed fetching)
  */
-async function fetchRssFeeds(): Promise<void> {
+async function triggerNewsfetcherIngestion(): Promise<void> {
   try {
-    // Get users with autonomous mode enabled and RSS feeds configured
-    const result = await pool.query(`
-      SELECT DISTINCT rf.user_id
-      FROM rss_feeds rf
-      JOIN autonomous_config ac ON rf.user_id = ac.user_id
-      WHERE rf.is_active = true
-        AND ac.enabled = true
-    `);
-
-    for (const row of result.rows) {
-      try {
-        // Fetch all feeds for this user
-        const articlesCount = await rssService.fetchAllFeeds(row.user_id);
-        logger.debug('Fetched RSS feeds for user', {
-          userId: row.user_id,
-          newArticles: articlesCount
-        });
-        // Log activity if new articles found
-        if (articlesCount > 0) {
-          activityHelpers.logBackgroundJob(row.user_id, 'RSS Fetch', 'completed', {
-            newArticles: articlesCount,
-          }).catch(() => {}); // Non-blocking
-        }
-      } catch (err) {
-        logger.error('Failed to fetch feeds for user', {
-          error: (err as Error).message,
-          userId: row.user_id
-        });
-        activityHelpers.logBackgroundJob(row.user_id, 'RSS Fetch', 'failed', {
-          error: (err as Error).message,
-        }).catch(() => {}); // Non-blocking
-      }
+    const result = await newsfetcherService.triggerIngestion();
+    if (result.ingested > 0) {
+      logger.info('Newsfetcher ingestion completed', { ingested: result.ingested });
+    } else {
+      logger.debug('Newsfetcher ingestion completed - no new articles');
     }
-
-    logger.debug('RSS feed fetch job completed', { usersProcessed: result.rows.length });
   } catch (error) {
-    logger.error('RSS feed fetch job failed', {
+    logger.error('Newsfetcher ingestion job failed', {
       error: (error as Error).message
     });
   }
 }
 
 /**
- * Analyze relevance of recent RSS articles
+ * Enrich news articles with AI signal filtering (replaces old RSS relevance analysis)
  */
-async function analyzeRssRelevance(): Promise<void> {
+async function enrichNewsArticles(): Promise<void> {
   try {
-    // Get unanalyzed articles from the last 24 hours
+    // Get users with autonomous mode enabled
     const result = await pool.query(`
-      SELECT ra.id, ra.feed_id, rf.user_id
-      FROM rss_articles ra
-      JOIN rss_feeds rf ON ra.feed_id = rf.id
-      WHERE ra.relevance_score IS NULL
-        AND ra.fetched_at > NOW() - INTERVAL '24 hours'
-      LIMIT 50
+      SELECT DISTINCT user_id
+      FROM autonomous_config
+      WHERE enabled = true
     `);
 
     for (const row of result.rows) {
       try {
-        await rssService.analyzeArticleRelevance(row.user_id, row.id);
+        const enrichedCount = await newsfetcherService.batchEnrichArticles(row.user_id, 25);
+        if (enrichedCount > 0) {
+          logger.debug('Enriched news articles for user', {
+            userId: row.user_id,
+            enrichedCount,
+          });
+          activityHelpers.logBackgroundJob(row.user_id, 'News Enrichment', 'completed', {
+            enrichedCount,
+          }).catch(() => {}); // Non-blocking
+        }
       } catch (err) {
-        logger.warn('Failed to analyze article relevance', {
-          articleId: row.id,
-          error: (err as Error).message
+        logger.error('Failed to enrich articles for user', {
+          error: (err as Error).message,
+          userId: row.user_id
         });
       }
     }
 
-    logger.debug('RSS relevance analysis job completed', { articlesProcessed: result.rows.length });
+    logger.debug('News enrichment job completed', { usersProcessed: result.rows.length });
   } catch (error) {
-    logger.error('RSS relevance analysis job failed', {
+    logger.error('News enrichment job failed', {
       error: (error as Error).message
     });
   }
