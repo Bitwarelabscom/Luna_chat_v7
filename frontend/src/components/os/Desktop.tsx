@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { SystemBar } from './SystemBar';
 import { Spotlight } from './Spotlight';
 import { Window } from './Window';
@@ -11,30 +11,31 @@ import { useBackgroundStore } from '@/lib/background-store';
 import { getMediaUrl, backgroundApi } from '@/lib/api';
 import { type AppId, appConfig } from './app-registry';
 
-// App Components
+// ChatWindow loaded eagerly (always visible)
 import ChatWindow from './apps/ChatWindow';
-import BrowserWindow from './apps/BrowserWindow';
-import EditorWindow from './apps/EditorWindow';
-import VoiceWindow from './apps/VoiceWindow';
-import FilesWindow from './apps/FilesWindow';
-import TerminalWindow from './apps/TerminalWindow';
-import TasksWindow from './apps/TasksWindow';
-import CalendarWindow from './apps/CalendarWindow';
-import EmailWindow from './apps/EmailWindow';
-import FriendsWindow from './apps/FriendsWindow';
-import MusicWindow from './apps/MusicWindow';
-import VideosWindow from './apps/VideosWindow';
-import TradingWindow from './apps/TradingWindow';
-import SettingsWindow from './apps/SettingsWindow';
-import ActivityWindow from './apps/ActivityWindow';
-import ConsciousnessWindow from './apps/ConsciousnessWindow';
-import AutonomousLearningWindow from './apps/AutonomousLearningWindow';
-import NewsWindow from './apps/NewsWindow';
-import PlannerWindow from './apps/PlannerWindow';
-import IRCWindow from './apps/IRCWindow';
-import PlaceholderWindow from './apps/PlaceholderWindow';
-import { CanvasWindow } from './apps/CanvasWindow';
-import GamesWindow from './apps/GamesWindow';
+// All other windows loaded on-demand
+const BrowserWindow = lazy(() => import('./apps/BrowserWindow'));
+const EditorWindow = lazy(() => import('./apps/EditorWindow'));
+const VoiceWindow = lazy(() => import('./apps/VoiceWindow'));
+const FilesWindow = lazy(() => import('./apps/FilesWindow'));
+const TerminalWindow = lazy(() => import('./apps/TerminalWindow'));
+const TasksWindow = lazy(() => import('./apps/TasksWindow'));
+const CalendarWindow = lazy(() => import('./apps/CalendarWindow'));
+const EmailWindow = lazy(() => import('./apps/EmailWindow'));
+const FriendsWindow = lazy(() => import('./apps/FriendsWindow'));
+const MusicWindow = lazy(() => import('./apps/MusicWindow'));
+const VideosWindow = lazy(() => import('./apps/VideosWindow'));
+const TradingWindow = lazy(() => import('./apps/TradingWindow'));
+const SettingsWindow = lazy(() => import('./apps/SettingsWindow'));
+const ActivityWindow = lazy(() => import('./apps/ActivityWindow'));
+const ConsciousnessWindow = lazy(() => import('./apps/ConsciousnessWindow'));
+const AutonomousLearningWindow = lazy(() => import('./apps/AutonomousLearningWindow'));
+const NewsWindow = lazy(() => import('./apps/NewsWindow'));
+const PlannerWindow = lazy(() => import('./apps/PlannerWindow'));
+const IRCWindow = lazy(() => import('./apps/IRCWindow'));
+const PlaceholderWindow = lazy(() => import('./apps/PlaceholderWindow'));
+const LazyCanvasWindow = lazy(() => import('./apps/CanvasWindow').then(m => ({ default: m.CanvasWindow })));
+const GamesWindow = lazy(() => import('./apps/GamesWindow'));
 
 // Map appId to component
 function getAppComponent(appId: AppId): React.ReactNode {
@@ -80,7 +81,7 @@ function getAppComponent(appId: AppId): React.ReactNode {
     case 'news':
       return <NewsWindow />;
     case 'canvas':
-      return <CanvasWindow />;
+      return <LazyCanvasWindow />;
     case 'games':
       return <GamesWindow />;
     default:
@@ -314,7 +315,13 @@ export function Desktop() {
               initialSize={windowState.size}
               zIndex={windowState.zIndex}
             >
-              {getAppComponent(windowState.appId)}
+              <Suspense fallback={
+                <div className="flex items-center justify-center h-full w-full" style={{ color: 'var(--theme-text-secondary)' }}>
+                  <div className="animate-pulse text-sm">Loading...</div>
+                </div>
+              }>
+                {getAppComponent(windowState.appId)}
+              </Suspense>
             </Window>
           );
         })}

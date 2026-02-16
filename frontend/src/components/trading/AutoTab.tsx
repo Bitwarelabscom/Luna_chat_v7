@@ -29,7 +29,7 @@ interface AutoTabProps {
   onRefresh?: () => void;
 }
 
-export default function AutoTab({ onRefresh }: AutoTabProps) {
+function AutoTab({ onRefresh }: AutoTabProps) {
   const [settings, setSettings] = useState<AutoTradingSettings | null>(null);
   const [state, setState] = useState<AutoTradingState | null>(null);
   const [reconciliation, setReconciliation] = useState<ReconciliationResult | null>(null);
@@ -1088,3 +1088,5 @@ export default function AutoTab({ onRefresh }: AutoTabProps) {
     </div>
   );
 }
+
+export default React.memo(AutoTab);

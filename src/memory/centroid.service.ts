@@ -9,7 +9,7 @@ import { redis } from '../db/redis.js';
 import logger from '../utils/logger.js';
 
 const CENTROID_PREFIX = 'session:centroid:';
-const CENTROID_TTL = 60 * 60 * 2; // 2 hours
+const CENTROID_TTL = 60 * 60 * 8; // 8 hours
 const ALPHA = 0.3; // EMA decay factor - higher = more weight to recent
 
 /**

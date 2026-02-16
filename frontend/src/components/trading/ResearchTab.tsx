@@ -57,7 +57,7 @@ interface ResearchTabProps {
   onViewChart?: (symbol: string) => void;
 }
 
-export default function ResearchTab({ onViewChart }: ResearchTabProps) {
+function ResearchTab({ onViewChart }: ResearchTabProps) {
   const [signals, setSignals] = useState<ResearchSignal[]>([]);
   const [settings, setSettings] = useState<ResearchSettings | null>(null);
   const [metrics, setMetrics] = useState<ResearchMetrics | null>(null);
@@ -1085,3 +1085,5 @@ function SignalCard({
     </div>
   );
 }
+
+export default React.memo(ResearchTab);

@@ -11,7 +11,7 @@ interface TradingSettingsModalProps {
   onSettingsUpdate: () => void;
 }
 
-export default function TradingSettingsModal({
+function TradingSettingsModal({
   settings,
   onClose,
   onConnect,
@@ -1505,3 +1505,5 @@ export default function TradingSettingsModal({
     </div>
   );
 }
+
+export default React.memo(TradingSettingsModal);

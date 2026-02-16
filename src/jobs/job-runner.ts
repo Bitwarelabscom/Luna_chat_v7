@@ -131,7 +131,7 @@ const jobs: Job[] = [
   // Quick reminder job (user-set reminders via chat)
   {
     name: 'quickReminderProcessor',
-    intervalMs: 30 * 1000, // Every 30 seconds for faster response
+    intervalMs: 60 * 1000, // Every 60 seconds
     enabled: true,
     running: false,
     handler: processQuickReminders,
@@ -184,7 +184,7 @@ const jobs: Job[] = [
   },
   {
     name: 'researchSignalScanner',
-    intervalMs: 30 * 1000, // Every 30 seconds - scan for research signals
+    intervalMs: 60 * 1000, // Every 60 seconds - scan for research signals
     enabled: true,
     running: false,
     handler: runResearchSignalScanner,
@@ -295,32 +295,28 @@ const jobs: Job[] = [
  */
 async function analyzePreferences(): Promise<void> {
   try {
-    // Get users with recent conversations
+    // Batch fetch: users with recent conversations + their last 10 messages per session
     const result = await pool.query(`
-      SELECT DISTINCT s.user_id, s.id as session_id
+      SELECT s.user_id, s.id as session_id,
+        (SELECT json_agg(sub ORDER BY sub.created_at ASC)
+         FROM (SELECT role, content, created_at FROM messages WHERE session_id = s.id ORDER BY created_at DESC LIMIT 10) sub
+        ) as messages
       FROM messages m
       JOIN sessions s ON m.session_id = s.id
       WHERE m.created_at > NOW() - INTERVAL '1 hour'
         AND m.role = 'user'
+      GROUP BY s.user_id, s.id
       LIMIT 50
     `);
 
     for (const row of result.rows) {
       try {
-        // Get recent messages for this session
-        const messages = await pool.query(`
-          SELECT role, content
-          FROM messages
-          WHERE session_id = $1
-          ORDER BY created_at DESC
-          LIMIT 10
-        `, [row.session_id]);
-
-        if (messages.rows.length >= 2) {
+        const messages = row.messages || [];
+        if (messages.length >= 2) {
           await preferencesService.learnFromConversation(
             row.user_id,
             row.session_id,
-            messages.rows.reverse() // Chronological order
+            messages
           );
         }
       } catch (err) {
@@ -750,24 +746,33 @@ async function finalizeIdleSessions(): Promise<void> {
       return;
     }
 
+    // Batch fetch all messages for idle sessions
+    const sessionIds = idleLogs.map(l => l.sessionId);
+    const allMessages = await pool.query(
+      `SELECT session_id, role, content FROM messages
+       WHERE session_id = ANY($1) ORDER BY session_id, created_at ASC`,
+      [sessionIds]
+    );
+
+    // Group messages by session_id
+    const messagesBySession = new Map<string, Array<{ role: string; content: string }>>();
+    for (const row of allMessages.rows) {
+      if (!messagesBySession.has(row.session_id)) messagesBySession.set(row.session_id, []);
+      messagesBySession.get(row.session_id)!.push({ role: row.role, content: row.content });
+    }
+
     let finalized = 0;
     for (const { sessionId } of idleLogs) {
       try {
-        // Get session messages for analysis
-        const messagesResult = await pool.query(
-          `SELECT role, content FROM messages WHERE session_id = $1 ORDER BY created_at ASC`,
-          [sessionId]
-        );
+        const messages = messagesBySession.get(sessionId) || [];
 
-        if (messagesResult.rows.length < 2) {
-          // Not enough messages to analyze, just mark as ended
+        if (messages.length < 2) {
           await sessionLogService.finalizeSessionLog(sessionId, 'Brief session', 'neutral', 'medium', []);
           finalized++;
           continue;
         }
 
-        // Analyze session for summary, mood, and energy
-        const analysis = await sessionLogService.analyzeSession(messagesResult.rows);
+        const analysis = await sessionLogService.analyzeSession(messages);
 
         await sessionLogService.finalizeSessionLog(
           sessionId,
@@ -1116,35 +1121,48 @@ async function generateContextSummaries(): Promise<void> {
       return;
     }
 
+    // Batch fetch messages and intents for all sessions
+    const sessionIds = result.rows.map((r: { session_id: string }) => r.session_id);
+    const [allMsgs, allIntents] = await Promise.all([
+      pool.query(
+        `SELECT session_id, role, content FROM messages
+         WHERE session_id = ANY($1) ORDER BY session_id, created_at ASC`,
+        [sessionIds]
+      ),
+      pool.query(
+        `SELECT DISTINCT session_id, intent_id FROM intent_touches
+         WHERE session_id = ANY($1)`,
+        [sessionIds]
+      ),
+    ]);
+
+    // Group by session_id
+    const msgsBySession = new Map<string, Array<{ role: string; content: string }>>();
+    for (const row of allMsgs.rows) {
+      if (!msgsBySession.has(row.session_id)) msgsBySession.set(row.session_id, []);
+      msgsBySession.get(row.session_id)!.push({ role: row.role, content: row.content });
+    }
+    const intentsBySession = new Map<string, string[]>();
+    for (const row of allIntents.rows) {
+      if (!intentsBySession.has(row.session_id)) intentsBySession.set(row.session_id, []);
+      intentsBySession.get(row.session_id)!.push(row.intent_id);
+    }
+
     let generated = 0;
 
     for (const row of result.rows) {
       try {
-        // Get messages for this session
-        const messagesResult = await pool.query(
-          `SELECT role, content FROM messages
-           WHERE session_id = $1
-           ORDER BY created_at ASC`,
-          [row.session_id]
-        );
+        const messages = msgsBySession.get(row.session_id) || [];
+        if (messages.length < 2) continue;
 
-        if (messagesResult.rows.length < 2) continue;
+        const intentIds = intentsBySession.get(row.session_id) || [];
 
-        // Get active intents for this session
-        const intentsResult = await pool.query(
-          `SELECT DISTINCT intent_id FROM intent_touches
-           WHERE session_id = $1`,
-          [row.session_id]
-        );
-        const intentIds = intentsResult.rows.map(r => r.intent_id);
-
-        // Generate detailed summary
         await sessionLogService.generateDetailedSessionSummary(
           row.session_id,
           row.user_id,
-          messagesResult.rows,
+          messages,
           intentIds,
-          [], // Resolved intents - would need additional query
+          [],
           row.tools_used || [],
           new Date(row.started_at),
           new Date(row.ended_at)

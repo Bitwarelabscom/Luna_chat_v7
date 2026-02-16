@@ -527,7 +527,7 @@ function CreateRuleModal({ onClose, onCreated, symbols }: CreateRuleModalProps) 
   );
 }
 
-export default function RulesTab() {
+function RulesTab() {
   const [rules, setRules] = useState<ConditionalOrder[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -898,3 +898,5 @@ export default function RulesTab() {
     </div>
   );
 }
+
+export default React.memo(RulesTab);

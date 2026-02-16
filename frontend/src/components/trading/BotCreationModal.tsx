@@ -16,7 +16,7 @@ interface BotCreationModalProps {
   preselectedSymbol?: string;
 }
 
-export default function BotCreationModal({
+function BotCreationModal({
   isOpen,
   onClose,
   onCreated,
@@ -780,3 +780,5 @@ function Step3Review({
     </div>
   );
 }
+
+export default React.memo(BotCreationModal);

@@ -985,7 +985,7 @@ const TradeRow = React.memo(function TradeRow({ trade, onStop, onEdit, onPartial
 });
 
 // Main Component
-export default function ActiveTab() {
+function ActiveTab() {
   const [data, setData] = useState<ActiveTradesResponse>({ openPositions: [], pendingOrders: [] });
   const [conditionalOrders, setConditionalOrders] = useState<ConditionalOrder[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -1425,3 +1425,5 @@ export default function ActiveTab() {
     </div>
   );
 }
+
+export default React.memo(ActiveTab);

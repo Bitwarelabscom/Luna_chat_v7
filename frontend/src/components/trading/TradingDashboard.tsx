@@ -21,7 +21,7 @@ import { useTradingWebSocket, type PriceUpdate } from '@/hooks/useTradingWebSock
 
 type TabType = 'active' | 'chart' | 'portfolio' | 'trades' | 'bots' | 'rules' | 'research' | 'auto' | 'settings';
 
-export default function TradingDashboard() {
+function TradingDashboard() {
   const [settings, setSettings] = useState<TradingSettings | null>(null);
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [prices, setPrices] = useState<PriceData[]>([]);
@@ -806,3 +806,5 @@ export default function TradingDashboard() {
     </div>
   );
 }
+
+export default React.memo(TradingDashboard);

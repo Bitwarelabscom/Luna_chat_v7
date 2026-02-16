@@ -2,6 +2,11 @@ import { config } from '../config/index.js';
 import * as layeredAgent from '../layered-agent/index.js';
 import {
   createChatCompletion,
+  formatSearchResultsForContext,
+  formatAgentResultForContext,
+  type ChatMessage,
+} from '../llm/openai.client.js';
+import {
   searchTool,
   youtubeSearchTool,
   localMediaSearchTool,
@@ -54,10 +59,7 @@ import {
   listArtifactsTool,
   loadArtifactTool,
   getArtifactDownloadLinkTool,
-  formatSearchResultsForContext,
-  formatAgentResultForContext,
-  type ChatMessage,
-} from '../llm/openai.client.js';
+} from '../llm/tools/index.js';
 import * as loadContextHandler from '../context/load-context.handler.js';
 import * as browserScreencast from '../abilities/browser-screencast.service.js';
 
@@ -144,7 +146,6 @@ import * as memorycoreClient from '../memory/memorycore.client.js';
 import * as preferencesService from '../memory/preferences.service.js';
 import * as abilities from '../abilities/orchestrator.js';
 import { buildContextualPrompt } from '../persona/luna.persona.js';
-// Note: buildCacheOptimizedPrompt available for Anthropic cache blocks via router
 import * as sessionService from './session.service.js';
 import * as contextCompression from './context-compression.service.js';
 import * as backgroundSummarization from './background-summarization.service.js';
@@ -169,6 +170,14 @@ import type { InteractionEnrichment } from '../memory/memorycore.client.js';
 // Per-session tracking for enrichment pipeline
 const sessionLastEmbedding = new Map<string, number[]>();
 const sessionLastMessageTime = new Map<string, number>();
+
+function boundedSet<K, V>(map: Map<K, V>, key: K, value: V, maxSize = 500): void {
+  if (map.size >= maxSize) {
+    const firstKey = map.keys().next().value;
+    if (firstKey !== undefined) map.delete(firstKey);
+  }
+  map.set(key, value);
+}
 
 /**
  * Convert local time to UTC Date considering user's timezone
@@ -213,12 +222,12 @@ async function computeEnrichment(
   const now = Date.now();
   const lastTime = sessionLastMessageTime.get(sessionId) || now;
   const interMessageMs = now - lastTime;
-  sessionLastMessageTime.set(sessionId, now);
+  boundedSet(sessionLastMessageTime, sessionId, now);
 
   try {
     const { embedding } = await embeddingService.generateEmbedding(message);
     const prevEmbedding = sessionLastEmbedding.get(sessionId) || null;
-    sessionLastEmbedding.set(sessionId, embedding);
+    boundedSet(sessionLastEmbedding, sessionId, embedding);
 
     // Run sentiment, centroid, and attention in parallel
     const [sentiment, centroid, attention] = await Promise.all([
@@ -325,10 +334,10 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   }));
 
   // Record enriched user message to MemoryCore (async, non-blocking)
-  memorycoreClient.recordChatInteraction(sessionId, 'message', message, { mode, source }, pmEnrichment).catch(() => {});
+  memorycoreClient.recordChatInteraction(sessionId, 'message', message, { mode, source }, pmEnrichment).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
 
   // Track session activity for automatic consolidation after inactivity
-  sessionActivityService.recordActivity(sessionId, userId).catch(() => {});
+  sessionActivityService.recordActivity(sessionId, userId).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
 
   // Router-First Architecture: Route decision before any processing
   let routerDecision: RouterDecision | null = null;
@@ -539,7 +548,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   // Detect and learn from feedback signals
   const feedbackSignal = preferencesService.detectFeedbackSignals(message);
   if (feedbackSignal.type && feedbackSignal.confidence >= 0.6) {
-    preferencesService.learnFromFeedback(userId, sessionId, feedbackSignal.type, message).catch(() => {});
+    preferencesService.learnFromFeedback(userId, sessionId, feedbackSignal.type, message).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
   }
 
   // Detect ability intent and execute if confident
@@ -569,7 +578,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     sessionHistoryContext = sessionLogService.formatLogsForContext(recentLogs);
 
     // Create new session log entry (async, don't block)
-    sessionLogService.createSessionLog(userId, sessionId, mode).catch(() => {});
+    sessionLogService.createSessionLog(userId, sessionId, mode).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
   }
 
   // Fetch canvas style rules for artifact generation
@@ -2107,7 +2116,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
       provider: modelConfig.provider,
       tokensUsed: completion.tokensUsed,
     }, enrichment);
-  }).catch(() => {});
+  }).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
 
   // Process facts from conversation (async, every few messages)
   const totalMessages = rawHistory.length + 2; // +2 for this exchange
@@ -2117,9 +2126,9 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
       { id: userMessage.id, role: 'user', content: message },
       { id: assistantMessage.id, role: 'assistant', content: completion.content },
     ];
-    memoryService.processConversationMemory(userId, sessionId, allMessages).catch(() => {});
+    memoryService.processConversationMemory(userId, sessionId, allMessages).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
     // Also learn preferences from conversation
-    preferencesService.learnFromConversation(userId, sessionId, allMessages).catch(() => {});
+    preferencesService.learnFromConversation(userId, sessionId, allMessages).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
   }
 
   // Trigger background summarization if threshold met (non-blocking)
@@ -2147,7 +2156,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     message,
     completion.content,
     intentContext
-  ).catch(() => {});
+  ).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
 
   return {
     messageId: assistantMessage.id,
@@ -2304,7 +2313,7 @@ file content here
   // Record enriched response to MemoryCore for consolidation (async, non-blocking)
   computeEnrichment(sessionId, responseContent).then(({ enrichment }) =>
     memorycoreClient.recordChatInteraction(sessionId, 'response', responseContent, undefined, enrichment)
-  ).catch(() => {});
+  ).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
 
   yield {
     type: 'done',
@@ -2474,7 +2483,7 @@ Step types: generate_file, generate_image, execute, preview
   // Record enriched response to MemoryCore for consolidation (async, non-blocking)
   computeEnrichment(sessionId, planDisplay).then(({ enrichment }) =>
     memorycoreClient.recordChatInteraction(sessionId, 'response', planDisplay, undefined, enrichment)
-  ).catch(() => {});
+  ).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
 
   yield {
     type: 'done',
@@ -2635,7 +2644,7 @@ content here
   // Record enriched response to MemoryCore for consolidation (async, non-blocking)
   computeEnrichment(sessionId, responseContent).then(({ enrichment }) =>
     memorycoreClient.recordChatInteraction(sessionId, 'response', responseContent, undefined, enrichment)
-  ).catch(() => {});
+  ).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
 
   yield {
     type: 'done',
@@ -2759,7 +2768,7 @@ Questions should cover: visual style, specific features, content requirements, a
   // Record enriched response to MemoryCore for consolidation (async, non-blocking)
   computeEnrichment(sessionId, responseContent).then(({ enrichment }) =>
     memorycoreClient.recordChatInteraction(sessionId, 'response', responseContent, undefined, enrichment)
-  ).catch(() => {});
+  ).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
 
   yield {
     type: 'done',
@@ -2820,10 +2829,10 @@ export async function* streamMessage(
   }));
 
   // Record enriched user message to MemoryCore (async, non-blocking)
-  memorycoreClient.recordChatInteraction(sessionId, 'message', message, { mode, source }, smEnrichment).catch(() => {});
+  memorycoreClient.recordChatInteraction(sessionId, 'message', message, { mode, source }, smEnrichment).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
 
   // Track session activity for automatic consolidation after inactivity
-  sessionActivityService.recordActivity(sessionId, userId).catch(() => {});
+  sessionActivityService.recordActivity(sessionId, userId).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
 
   // Router-First Architecture: Route decision before any processing
   let routerDecision: RouterDecision | null = null;
@@ -3199,7 +3208,7 @@ export async function* streamMessage(
     // Record enriched response to MemoryCore for consolidation (async, non-blocking)
     computeEnrichment(sessionId, responseContent).then(({ enrichment }) =>
       memorycoreClient.recordChatInteraction(sessionId, 'response', responseContent, undefined, enrichment)
-    ).catch(() => {});
+    ).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
 
     // Update session title if first message
     const history = await sessionService.getSessionMessages(sessionId, { limit: 1 });
@@ -3305,7 +3314,7 @@ export async function* streamMessage(
   // Detect and learn from feedback signals
   const feedbackSignal = preferencesService.detectFeedbackSignals(message);
   if (feedbackSignal.type && feedbackSignal.confidence >= 0.6) {
-    preferencesService.learnFromFeedback(userId, sessionId, feedbackSignal.type, message).catch(() => {});
+    preferencesService.learnFromFeedback(userId, sessionId, feedbackSignal.type, message).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
   }
 
   // Detect ability intent and execute if confident
@@ -3334,7 +3343,7 @@ export async function* streamMessage(
     sessionHistoryContext = sessionLogService.formatLogsForContext(recentLogs);
 
     // Create new session log entry (async, don't block)
-    sessionLogService.createSessionLog(userId, sessionId, mode).catch(() => {});
+    sessionLogService.createSessionLog(userId, sessionId, mode).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
   }
 
   // Fetch canvas style rules for artifact generation
@@ -5233,7 +5242,7 @@ export async function* streamMessage(
       provider: modelConfig.provider,
       tokensUsed,
     }, enrichment)
-  ).catch(() => {});
+  ).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
 
   // Process facts from conversation (async, every few messages)
   const totalMessages = rawHistory.length + 2;
@@ -5243,9 +5252,9 @@ export async function* streamMessage(
       { id: userMessage.id, role: 'user', content: message },
       { id: assistantMessage.id, role: 'assistant', content: fullContent },
     ];
-    memoryService.processConversationMemory(userId, sessionId, allMessages).catch(() => {});
+    memoryService.processConversationMemory(userId, sessionId, allMessages).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
     // Also learn preferences from conversation
-    preferencesService.learnFromConversation(userId, sessionId, allMessages).catch(() => {});
+    preferencesService.learnFromConversation(userId, sessionId, allMessages).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
   }
 
   // Trigger background summarization if threshold met (non-blocking)
@@ -5268,7 +5277,7 @@ export async function* streamMessage(
   // Update session log with tools used (for layered agent context continuity)
   const uniqueToolsUsed = [...new Set(toolsUsed)];
   if (uniqueToolsUsed.length > 0) {
-    sessionLogService.updateSessionLog(sessionId, { toolsUsed: uniqueToolsUsed }).catch(() => {});
+    sessionLogService.updateSessionLog(sessionId, { toolsUsed: uniqueToolsUsed }).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
   }
 
   // Process message for intent updates (async, non-blocking)
@@ -5278,7 +5287,7 @@ export async function* streamMessage(
     message,
     fullContent,
     intentContext
-  ).catch(() => {});
+  ).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
 
   yield {
     type: 'done',
