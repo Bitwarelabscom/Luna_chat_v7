@@ -1423,10 +1423,19 @@ async function executeAutoTrade(
     });
 
     // Mark as auto trade with position side
-    await pool.query(
-      `UPDATE trades SET auto_trade = true, position_side = 'long' WHERE id = $1`,
-      [trade.id]
-    );
+    // Paper trades go to paper_trades table, real trades go to trades table
+    const tradingSettings = await tradingService.getSettings(userId);
+    if (tradingSettings.paperMode) {
+      await pool.query(
+        `UPDATE paper_trades SET source = 'auto' WHERE id = $1`,
+        [trade.id]
+      );
+    } else {
+      await pool.query(
+        `UPDATE trades SET auto_trade = true, position_side = 'long' WHERE id = $1`,
+        [trade.id]
+      );
+    }
 
     // Update state
     await pool.query(
