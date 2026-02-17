@@ -67,7 +67,7 @@ export const appConfig: Record<AppId, AppConfig> = {
     color: 'from-cyan-400 to-blue-500',
     defaultSize: { width: 700, height: 500 },
     keepAlive: true,
-    showInDock: true,
+    showInDock: false,
   },
   irc: {
     id: 'irc',
@@ -242,7 +242,6 @@ export const appConfig: Record<AppId, AppConfig> = {
 
 // Apps to show in the dock (in order)
 export const dockApps: AppId[] = [
-  'chat',
   'irc',
   'voice',
   'files',

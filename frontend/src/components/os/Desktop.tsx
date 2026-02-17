@@ -1,19 +1,22 @@
 'use client';
 
 import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
+import { AnimatePresence } from 'framer-motion';
 import { SystemBar } from './SystemBar';
 import { Spotlight } from './Spotlight';
 import { Window } from './Window';
 import { NewFileDialog } from './NewFileDialog';
+import { ChatPanel } from './ChatPanel';
+import { ChatFloatingButton } from './ChatFloatingButton';
+import { Taskbar } from './Taskbar';
 import { useWindowStore } from '@/lib/window-store';
+import { useLayoutStore } from '@/lib/layout-store';
 import { useChatStore } from '@/lib/store';
 import { useBackgroundStore } from '@/lib/background-store';
 import { getMediaUrl, backgroundApi } from '@/lib/api';
 import { type AppId, appConfig } from './app-registry';
 
-// ChatWindow loaded eagerly (always visible)
-import ChatWindow from './apps/ChatWindow';
-// All other windows loaded on-demand
+// All windows loaded on-demand
 const BrowserWindow = lazy(() => import('./apps/BrowserWindow'));
 const EditorWindow = lazy(() => import('./apps/EditorWindow'));
 const VoiceWindow = lazy(() => import('./apps/VoiceWindow'));
@@ -40,8 +43,6 @@ const GamesWindow = lazy(() => import('./apps/GamesWindow'));
 // Map appId to component
 function getAppComponent(appId: AppId): React.ReactNode {
   switch (appId) {
-    case 'chat':
-      return <ChatWindow />;
     case 'irc':
       return <IRCWindow />;
     case 'voice':
@@ -100,6 +101,8 @@ export function Desktop() {
     setPendingBrowserUrl,
   } = useWindowStore();
 
+  const toggleChatPanel = useLayoutStore((s) => s.toggleChatPanel);
+
   const browserAction = useChatStore((state) => state.browserAction);
   const setBrowserAction = useChatStore((state) => state.setBrowserAction);
   const videoAction = useChatStore((state) => state.videoAction);
@@ -143,23 +146,13 @@ export function Desktop() {
     };
   }, [fetchActiveBackground]);
 
-  // Open chat by default on first load
-  useEffect(() => {
-    if (windows.length === 0) {
-      openApp('chat');
-    }
-  }, []);
-
   // Auto-open browser when browserAction is triggered (visual browsing)
   useEffect(() => {
     if (browserAction?.type === 'open') {
-      // Set the pending URL for the browser to navigate to
       if (browserAction.url) {
         setPendingBrowserUrl(browserAction.url);
       }
-      // Open the browser app
       openApp('browser');
-      // Clear the action
       setBrowserAction(null);
     }
   }, [browserAction, openApp, setBrowserAction, setPendingBrowserUrl]);
@@ -222,33 +215,33 @@ export function Desktop() {
         if (e.key === ' ') {
           e.preventDefault();
           setSpotlightOpen((prev) => !prev);
-        } else if (e.key >= '1' && e.key <= '5') {
+        } else if (e.key === '1') {
           e.preventDefault();
-          const apps: AppId[] = ['chat', 'voice', 'files', 'terminal', 'browser'];
-          openApp(apps[parseInt(e.key) - 1]);
+          toggleChatPanel();
+        } else if (e.key >= '2' && e.key <= '5') {
+          e.preventDefault();
+          const apps: AppId[] = ['voice', 'files', 'terminal', 'browser'];
+          openApp(apps[parseInt(e.key) - 2]);
         }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [openApp]);
+  }, [openApp, toggleChatPanel]);
 
   const handleAppClick = useCallback((appId: AppId) => {
     openApp(appId);
   }, [openApp]);
 
   const handleSpotlightCommand = useCallback((command: string) => {
-    // Handle commands like 'new-chat', 'search-files', etc.
     if (command === 'settings') {
       openApp('settings');
     }
   }, [openApp]);
 
   const handleNewFile = useCallback((filename: string) => {
-    // Open editor with the new file
     openApp('editor');
-    // TODO: Pass filename to editor - for now just opens editor
     console.log('Creating new file:', filename);
   }, [openApp]);
 
@@ -292,41 +285,51 @@ export function Desktop() {
         onNewFile={() => setNewFileDialogOpen(true)}
       />
 
-      {/* Desktop Area */}
-      <div className="flex-1 relative">
+      {/* Main Area: Desktop + Chat Panel Overlay */}
+      <div className="flex-1 relative overflow-hidden">
         {/* Windows */}
-        {windows.map((windowState) => {
-          if (windowState.isMinimized) return null;
+        <AnimatePresence>
+          {windows.map((windowState) => {
+            if (windowState.isMinimized) return null;
 
-          const config = appConfig[windowState.appId];
-          const Icon = config.icon;
+            const config = appConfig[windowState.appId];
+            const Icon = config.icon;
 
-          return (
-            <Window
-              key={windowState.id}
-              id={windowState.id}
-              title={config.title}
-              icon={<Icon className="w-4 h-4" style={{ color: 'var(--theme-text-secondary)' }} />}
-              isActive={focusedWindow === windowState.id}
-              onClose={() => closeApp(windowState.id)}
-              onFocus={() => focusWindow(windowState.id)}
-              onMinimize={() => minimizeApp(windowState.id)}
-              initialPosition={windowState.position}
-              initialSize={windowState.size}
-              zIndex={windowState.zIndex}
-            >
-              <Suspense fallback={
-                <div className="flex items-center justify-center h-full w-full" style={{ color: 'var(--theme-text-secondary)' }}>
-                  <div className="animate-pulse text-sm">Loading...</div>
-                </div>
-              }>
-                {getAppComponent(windowState.appId)}
-              </Suspense>
-            </Window>
-          );
-        })}
+            return (
+              <Window
+                key={windowState.id}
+                id={windowState.id}
+                title={config.title}
+                icon={<Icon className="w-4 h-4" style={{ color: 'var(--theme-text-secondary)' }} />}
+                isActive={focusedWindow === windowState.id}
+                onClose={() => closeApp(windowState.id)}
+                onFocus={() => focusWindow(windowState.id)}
+                onMinimize={() => minimizeApp(windowState.id)}
+                initialPosition={windowState.position}
+                initialSize={windowState.size}
+                zIndex={windowState.zIndex}
+              >
+                <Suspense fallback={
+                  <div className="flex items-center justify-center h-full w-full" style={{ color: 'var(--theme-text-secondary)' }}>
+                    <div className="animate-pulse text-sm">Loading...</div>
+                  </div>
+                }>
+                  {getAppComponent(windowState.appId)}
+                </Suspense>
+              </Window>
+            );
+          })}
+        </AnimatePresence>
 
+        {/* Chat Panel Overlay */}
+        <ChatPanel />
       </div>
+
+      {/* Floating Chat Button (when panel closed) */}
+      <ChatFloatingButton />
+
+      {/* Bottom Taskbar */}
+      <Taskbar />
 
       {/* Spotlight */}
       <Spotlight

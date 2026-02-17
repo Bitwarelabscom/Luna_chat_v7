@@ -162,6 +162,14 @@ export async function deleteSession(sessionId: string, userId: string): Promise<
     logger.warn('Failed to end MemoryCore session on delete', { sessionId, error: (err as Error).message });
   });
 
+  // Clean up filesystem-stored artifact files before cascade delete removes DB rows
+  try {
+    const { cleanupSessionArtifactFiles } = await import('../canvas/canvas.service.js');
+    await cleanupSessionArtifactFiles(sessionId);
+  } catch (err) {
+    logger.warn('Failed to cleanup artifact files on session delete', { sessionId, error: (err as Error).message });
+  }
+
   const result = await query(
     'DELETE FROM sessions WHERE id = $1 AND user_id = $2 RETURNING id',
     [sessionId, userId]

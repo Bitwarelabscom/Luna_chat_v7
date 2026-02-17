@@ -3,6 +3,7 @@ import { createCompletion } from '../llm/router.js';
 import { config } from '../config/index.js';
 import * as knowledgeGraphService from '../graph/knowledge-graph.service.js';
 import logger from '../utils/logger.js';
+import { formatRelativeTime } from './time-utils.js';
 
 export interface UserFact {
   id: string;
@@ -224,13 +225,22 @@ export async function getUserFacts(
 /**
  * Format facts for inclusion in prompt
  * Uses deterministic ordering (sorted by category and key) for cache optimization
+ * @param includeTimestamps - When true, appends mention count and relative time to each fact
  */
-export function formatFactsForPrompt(facts: UserFact[]): string {
+export function formatFactsForPrompt(facts: UserFact[], includeTimestamps = false): string {
   if (facts.length === 0) return '';
 
   const grouped = facts.reduce((acc, fact) => {
     if (!acc[fact.category]) acc[fact.category] = [];
-    acc[fact.category].push(`${fact.factKey}: ${fact.factValue}`);
+    let line = `${fact.factKey}: ${fact.factValue}`;
+    if (includeTimestamps) {
+      const timeParts: string[] = [];
+      if (fact.mentionCount > 1) timeParts.push(`${fact.mentionCount}x`);
+      const relTime = formatRelativeTime(fact.lastMentioned);
+      if (relTime) timeParts.push(relTime);
+      if (timeParts.length > 0) line += ` (${timeParts.join(', ')})`;
+    }
+    acc[fact.category].push(line);
     return acc;
   }, {} as Record<string, string[]>);
 

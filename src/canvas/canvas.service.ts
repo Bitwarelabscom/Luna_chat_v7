@@ -1,4 +1,5 @@
 import { query } from '../db/postgres.js';
+import { redis } from '../db/redis.js';
 import logger from '../utils/logger.js';
 import fs from 'fs';
 import fsp from 'fs/promises';
@@ -37,6 +38,11 @@ export interface PatternDetection {
 // Validation & Error Handling
 // ============================================
 
+const VALID_LANGUAGES = [
+  'typescript', 'javascript', 'python', 'html', 'css',
+  'markdown', 'json', 'sql', 'rust', 'cpp', 'java'
+];
+
 export class CanvasError extends Error {
   constructor(
     message: string,
@@ -73,12 +79,8 @@ function validateArtifactInput(
   }
 
   if (type === 'code' && language) {
-    const validLanguages = [
-      'typescript', 'javascript', 'python', 'html', 'css',
-      'markdown', 'json', 'sql', 'rust', 'cpp', 'java'
-    ];
-    if (!validLanguages.includes(language)) {
-      throw new CanvasError(`Invalid language. Must be one of: ${validLanguages.join(', ')}`, 'INVALID_INPUT');
+    if (!VALID_LANGUAGES.includes(language)) {
+      throw new CanvasError(`Invalid language. Must be one of: ${VALID_LANGUAGES.join(', ')}`, 'INVALID_INPUT');
     }
   }
 }
@@ -279,16 +281,20 @@ async function createArtifactSnapshot(
 
   const snapshotId = snapshotRows[0].id;
   await query(
-    `DELETE FROM artifact_snapshot_files WHERE snapshot_id = $1`,
-    [snapshotId]
-  );
-
-  await query(
     `INSERT INTO artifact_snapshot_files
       (snapshot_id, path, file_type, language, storage, content, fs_path, mime_type, size_bytes)
      SELECT $1, path, file_type, language, storage, content, fs_path, mime_type, size_bytes
      FROM artifact_files
-     WHERE artifact_id = $2`,
+     WHERE artifact_id = $2
+     ON CONFLICT (snapshot_id, path)
+     DO UPDATE SET
+       file_type = EXCLUDED.file_type,
+       language = EXCLUDED.language,
+       storage = EXCLUDED.storage,
+       content = EXCLUDED.content,
+       fs_path = EXCLUDED.fs_path,
+       mime_type = EXCLUDED.mime_type,
+       size_bytes = EXCLUDED.size_bytes`,
     [snapshotId, artifactId]
   );
 }
@@ -488,11 +494,11 @@ export async function updateHighlighted(
   );
 
   if (artifactResult.length === 0) {
-    throw new Error('Artifact not found');
+    throw new CanvasError('Artifact not found', 'NOT_FOUND');
   }
 
   if (artifactResult[0].user_id !== userId) {
-    throw new Error('Unauthorized');
+    throw new CanvasError('Unauthorized', 'UNAUTHORIZED');
   }
 
   const currentContent = artifactResult[0].content;
@@ -515,13 +521,21 @@ export async function getLatestArtifactIdForSession(
     `SELECT id
      FROM artifacts
      WHERE user_id = $1 AND session_id = $2
-     ORDER BY updated_at DESC
-     LIMIT 1`,
+     ORDER BY updated_at DESC`,
     [userId, sessionId]
   );
 
   if (!result || result.length === 0) {
     return null;
+  }
+
+  if (result.length > 1) {
+    logger.warn('Multiple artifacts in session - resolving to most recent', {
+      sessionId,
+      userId,
+      artifactCount: result.length,
+      resolvedArtifactId: result[0].id,
+    });
   }
 
   return result[0].id;
@@ -738,6 +752,9 @@ export async function saveArtifactFile(
   if (typeof content !== 'string') {
     throw new CanvasError('File content is required', 'INVALID_INPUT');
   }
+  if (language && !VALID_LANGUAGES.includes(language)) {
+    throw new CanvasError(`Invalid language. Must be one of: ${VALID_LANGUAGES.join(', ')}`, 'INVALID_INPUT');
+  }
 
   const artifactRows: any = await query(
     `SELECT user_id, current_index FROM artifacts WHERE id = $1`,
@@ -855,7 +872,7 @@ export async function resolveArtifactAssetPath(
   userId: string,
   artifactId: string,
   requestedPath: string
-): Promise<{ absolutePath: string; mimeType?: string }> {
+): Promise<{ absolutePath?: string; mimeType?: string; content?: string }> {
   const cleanPath = sanitizeRelativeAssetPath(requestedPath);
   const artifactRows: any = await query(
     `SELECT user_id FROM artifacts WHERE id = $1`,
@@ -869,9 +886,9 @@ export async function resolveArtifactAssetPath(
   }
 
   const rows: any = await query(
-    `SELECT fs_path, mime_type
+    `SELECT storage, fs_path, mime_type, content
      FROM artifact_files
-     WHERE artifact_id = $1 AND path = $2 AND storage = 'fs'
+     WHERE artifact_id = $1 AND path = $2
      LIMIT 1`,
     [artifactId, cleanPath]
   );
@@ -879,11 +896,19 @@ export async function resolveArtifactAssetPath(
     throw new CanvasError('Asset not found', 'NOT_FOUND');
   }
 
-  const absolutePath = rows[0].fs_path;
-  if (!absolutePath || !fs.existsSync(absolutePath)) {
-    throw new CanvasError('Asset file missing', 'NOT_FOUND');
+  const row = rows[0];
+
+  // Try filesystem first
+  if (row.storage === 'fs' && row.fs_path && fs.existsSync(row.fs_path)) {
+    return { absolutePath: row.fs_path, mimeType: row.mime_type || undefined };
   }
-  return { absolutePath, mimeType: rows[0].mime_type || undefined };
+
+  // Fall back to DB content
+  if (row.content != null) {
+    return { content: row.content, mimeType: row.mime_type || undefined };
+  }
+
+  throw new CanvasError('Asset file missing', 'NOT_FOUND');
 }
 
 export async function buildArtifactExportZip(
@@ -925,11 +950,11 @@ export async function getArtifact(userId: string, artifactId: string): Promise<A
   );
 
   if (artifactResult.length === 0) {
-    throw new Error('Artifact not found');
+    throw new CanvasError('Artifact not found', 'NOT_FOUND');
   }
 
   if (artifactResult[0].user_id !== userId) {
-    throw new Error('Unauthorized');
+    throw new CanvasError('Unauthorized', 'UNAUTHORIZED');
   }
 
   // Get all versions
@@ -977,11 +1002,11 @@ export async function navigateToVersion(
   );
 
   if (artifactResult.length === 0) {
-    throw new Error('Artifact not found');
+    throw new CanvasError('Artifact not found', 'NOT_FOUND');
   }
 
   if (artifactResult[0].user_id !== userId) {
-    throw new Error('Unauthorized');
+    throw new CanvasError('Unauthorized', 'UNAUTHORIZED');
   }
 
   // Get content at specified index
@@ -993,7 +1018,7 @@ export async function navigateToVersion(
   );
 
   if (contentResult.length === 0) {
-    throw new Error('Version not found');
+    throw new CanvasError('Version not found', 'NOT_FOUND');
   }
 
   // Update current_index
@@ -1519,7 +1544,13 @@ export async function analyzeArtifactEdit(
           artifactId,
           promotedRules
         });
-        // TODO: Notify user via WebSocket or next chat response
+        // Store notification for consumption in next chat response
+        try {
+          const key = `user:pattern_notification:${userId}`;
+          await redis.set(key, JSON.stringify(promotedRules), 'EX', 3600);
+        } catch (redisErr) {
+          logger.error('Failed to store pattern notification', { error: (redisErr as Error).message });
+        }
       }
     } catch (error) {
       logger.error('Error analyzing artifact edit', {
@@ -1529,4 +1560,73 @@ export async function analyzeArtifactEdit(
       });
     }
   });
+}
+
+/**
+ * Clean up filesystem-stored artifact files for a session.
+ * Call before deleting a session to prevent orphaned files.
+ */
+export async function cleanupSessionArtifactFiles(sessionId: string): Promise<void> {
+  const rows: any = await query(
+    `SELECT af.fs_path
+     FROM artifact_files af
+     JOIN artifacts a ON a.id = af.artifact_id
+     WHERE a.session_id = $1 AND af.storage = 'fs' AND af.fs_path IS NOT NULL
+     UNION
+     SELECT asf.fs_path
+     FROM artifact_snapshot_files asf
+     JOIN artifact_snapshots s ON s.id = asf.snapshot_id
+     JOIN artifacts a ON a.id = s.artifact_id
+     WHERE a.session_id = $1 AND asf.storage = 'fs' AND asf.fs_path IS NOT NULL`,
+    [sessionId]
+  );
+
+  let cleaned = 0;
+  for (const row of rows) {
+    try {
+      if (row.fs_path && fs.existsSync(row.fs_path)) {
+        await fsp.unlink(row.fs_path);
+        cleaned++;
+      }
+    } catch (err) {
+      logger.warn('Failed to delete artifact file', { fsPath: row.fs_path, error: (err as Error).message });
+    }
+  }
+
+  // Also try to remove artifact workspace directories for this session
+  const artifactRows: any = await query(
+    `SELECT id, user_id FROM artifacts WHERE session_id = $1`,
+    [sessionId]
+  );
+  for (const artifact of artifactRows) {
+    try {
+      const dir = getArtifactWorkspaceDir(artifact.user_id, artifact.id);
+      if (fs.existsSync(dir)) {
+        await fsp.rm(dir, { recursive: true, force: true });
+        cleaned++;
+      }
+    } catch (err) {
+      logger.warn('Failed to remove artifact workspace dir', { artifactId: artifact.id, error: (err as Error).message });
+    }
+  }
+
+  if (cleaned > 0) {
+    logger.info('Cleaned up artifact files for session', { sessionId, filesRemoved: cleaned });
+  }
+}
+
+/**
+ * Consume pending pattern promotion notification for a user.
+ * Returns the promoted rules (if any) and deletes the notification.
+ */
+export async function consumePatternNotification(userId: string): Promise<string[] | null> {
+  try {
+    const key = `user:pattern_notification:${userId}`;
+    const data = await redis.get(key);
+    if (!data) return null;
+    await redis.del(key);
+    return JSON.parse(data) as string[];
+  } catch {
+    return null;
+  }
 }

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
   Bell,
   Search,
@@ -21,13 +22,29 @@ import {
   MessageSquare,
   Coins,
   Mic,
+  Hash,
+  Folder,
+  Mail,
+  Users,
+  Music,
+  Video,
+  TrendingUp,
+  Activity,
+  Brain,
+  CheckSquare,
+  Calendar,
+  GitBranch,
+  Newspaper,
+  Gamepad2,
 } from 'lucide-react';
 import { useAuthStore } from '@/lib/store';
 import { useNotificationStore } from '@/lib/notification-store';
 import { useNotificationStream } from '@/hooks/useNotificationStream';
 import { NotificationDropdown } from './NotificationDropdown';
 import { settingsApi, spotifyApi, type SystemMetrics, type SpotifyPlaybackState, type DailyTokenStats } from '@/lib/api';
-import { appConfig, dockApps, type AppId } from './app-registry';
+import { type AppId } from './app-registry';
+import { useLayoutStore } from '@/lib/layout-store';
+import { menuVariants, menuTransition } from '@/lib/animations';
 
 interface SystemBarProps {
   onSpotlightOpen: () => void;
@@ -204,7 +221,7 @@ export function SystemBar({ onSpotlightOpen, onSettingsOpen, onAppOpen, onNewFil
     window.location.href = '/login';
   };
 
-  // Menu definitions
+  // Categorized menu definitions
   const menus = {
     file: {
       label: 'File',
@@ -212,21 +229,49 @@ export function SystemBar({ onSpotlightOpen, onSettingsOpen, onAppOpen, onNewFil
         { label: 'New File...', icon: FilePlus, action: () => { onNewFile(); setActiveMenu(null); } },
       ],
     },
-    apps: {
-      label: 'Apps',
-      items: dockApps.map((appId) => ({
-        label: appConfig[appId].title,
-        icon: appConfig[appId].icon,
-        action: () => { onAppOpen(appId); setActiveMenu(null); },
-      })),
+    communication: {
+      label: 'Communication',
+      items: [
+        { label: 'Chat', icon: MessageSquare, action: () => { useLayoutStore.getState().setChatPanelOpen(true); setActiveMenu(null); } },
+        { label: 'IRC', icon: Hash, action: () => { onAppOpen('irc'); setActiveMenu(null); } },
+        { label: 'Email', icon: Mail, action: () => { onAppOpen('email'); setActiveMenu(null); } },
+        { label: 'Voice', icon: Mic, action: () => { onAppOpen('voice'); setActiveMenu(null); } },
+        { label: 'Friends', icon: Users, action: () => { onAppOpen('friends'); setActiveMenu(null); } },
+      ],
+    },
+    productivity: {
+      label: 'Productivity',
+      items: [
+        { label: 'Files', icon: Folder, action: () => { onAppOpen('files'); setActiveMenu(null); } },
+        { label: 'Editor', icon: FileText, action: () => { onAppOpen('editor'); setActiveMenu(null); } },
+        { label: 'Projects', icon: GitBranch, action: () => { onAppOpen('planner'); setActiveMenu(null); } },
+        { label: 'Tasks', icon: CheckSquare, action: () => { onAppOpen('todo'); setActiveMenu(null); } },
+        { label: 'Calendar', icon: Calendar, action: () => { onAppOpen('calendar'); setActiveMenu(null); } },
+      ],
+    },
+    media: {
+      label: 'Media',
+      items: [
+        { label: 'Music', icon: Music, action: () => { onAppOpen('music'); setActiveMenu(null); } },
+        { label: 'Videos', icon: Video, action: () => { onAppOpen('videos'); setActiveMenu(null); } },
+        { label: 'Games', icon: Gamepad2, action: () => { onAppOpen('games'); setActiveMenu(null); } },
+      ],
     },
     tools: {
       label: 'Tools',
       items: [
-        { label: 'Voice Chat', icon: Mic, action: () => { onAppOpen('voice'); setActiveMenu(null); } },
         { label: 'Terminal', icon: Terminal, action: () => { onAppOpen('terminal'); setActiveMenu(null); } },
         { label: 'Browser', icon: Globe, action: () => { onAppOpen('browser'); setActiveMenu(null); } },
-        { label: 'Editor', icon: FileText, action: () => { onAppOpen('editor'); setActiveMenu(null); } },
+      ],
+    },
+    analytics: {
+      label: 'Analytics',
+      items: [
+        { label: 'Trading', icon: TrendingUp, action: () => { onAppOpen('trading'); setActiveMenu(null); } },
+        { label: 'Activity', icon: Activity, action: () => { onAppOpen('activity'); setActiveMenu(null); } },
+        { label: 'Consciousness', icon: Brain, action: () => { onAppOpen('consciousness'); setActiveMenu(null); } },
+        { label: 'Learning', icon: Brain, action: () => { onAppOpen('autonomous-learning'); setActiveMenu(null); } },
+        { label: 'News', icon: Newspaper, action: () => { onAppOpen('news'); setActiveMenu(null); } },
       ],
     },
     help: {
@@ -234,7 +279,7 @@ export function SystemBar({ onSpotlightOpen, onSettingsOpen, onAppOpen, onNewFil
       items: [
         { label: 'About Luna', icon: Info, action: () => { setActiveMenu(null); } },
         { label: 'Documentation', icon: BookOpen, action: () => { window.open('https://github.com/anthropics/claude-code', '_blank'); setActiveMenu(null); } },
-        { label: 'Send Feedback', icon: MessageSquare, action: () => { onAppOpen('chat'); setActiveMenu(null); } },
+        { label: 'Send Feedback', icon: MessageSquare, action: () => { useLayoutStore.getState().setChatPanelOpen(true); setActiveMenu(null); } },
       ],
     },
   };
@@ -271,29 +316,33 @@ export function SystemBar({ onSpotlightOpen, onSettingsOpen, onAppOpen, onNewFil
                 {menu.label}
                 <ChevronDown className="w-3 h-3" />
               </button>
-              {activeMenu === key && (
-                <div
-                  className={`absolute left-0 top-full mt-1 min-w-[180px] backdrop-blur-xl border rounded-lg shadow-2xl z-[9999] ${
-                    key === 'apps' ? 'max-h-[70vh] overflow-y-auto' : 'overflow-hidden'
-                  }`}
-                  style={{
-                    background: 'var(--theme-bg-secondary)',
-                    borderColor: 'var(--theme-border)',
-                  }}
-                >
-                  {menu.items.map((item, idx) => (
-                    <button
-                      key={idx}
-                      onClick={item.action}
-                      className="w-full flex items-center gap-2 px-3 py-2 hover:bg-white/5 transition-colors text-left"
-                      style={{ color: 'var(--theme-text-primary)' }}
-                    >
-                      <item.icon className="w-4 h-4" style={{ color: 'var(--theme-text-secondary)' }} />
-                      <span className="text-sm">{item.label}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
+              <AnimatePresence>
+                {activeMenu === key && (
+                  <motion.div
+                    initial={menuVariants.initial}
+                    animate={menuVariants.animate}
+                    exit={menuVariants.exit}
+                    transition={menuTransition}
+                    className="absolute left-0 top-full mt-1 min-w-[180px] backdrop-blur-xl border rounded-lg shadow-2xl z-[9999] overflow-hidden"
+                    style={{
+                      background: 'var(--theme-bg-secondary)',
+                      borderColor: 'var(--theme-border)',
+                    }}
+                  >
+                    {menu.items.map((item, idx) => (
+                      <button
+                        key={idx}
+                        onClick={item.action}
+                        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-white/5 transition-colors text-left"
+                        style={{ color: 'var(--theme-text-primary)' }}
+                      >
+                        <item.icon className="w-4 h-4" style={{ color: 'var(--theme-text-secondary)' }} />
+                        <span className="text-sm">{item.label}</span>
+                      </button>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           ))}
         </nav>

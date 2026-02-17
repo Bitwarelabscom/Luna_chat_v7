@@ -325,6 +325,7 @@ export async function searchSimilarConversations(
   summary: string;
   topics: string[];
   similarity: number;
+  updatedAt: Date;
 }>> {
   try {
     const { embedding } = await generateEmbedding(query);
@@ -335,7 +336,8 @@ export async function searchSimilarConversations(
         session_id,
         summary,
         topics,
-        1 - (embedding <=> $1::vector) as similarity
+        1 - (embedding <=> $1::vector) as similarity,
+        updated_at
       FROM conversation_summaries
       WHERE user_id = $2
         AND 1 - (embedding <=> $1::vector) > 0.6
@@ -359,6 +361,7 @@ export async function searchSimilarConversations(
       summary: row.summary as string,
       topics: (row.topics as string[]) || [],
       similarity: parseFloat(row.similarity as string),
+      updatedAt: row.updated_at as Date,
     }));
   } catch (error) {
     logger.error('Failed to search similar conversations', {

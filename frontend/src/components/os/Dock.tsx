@@ -14,16 +14,19 @@ interface DockProps {
 export function Dock({ activeApps, onAppClick, focusedApp }: DockProps) {
   const [hoveredApp, setHoveredApp] = useState<AppId | null>(null);
 
+  // Filter out chat (it's a sidebar now) and any apps not shown in dock
+  const visibleApps = dockApps.filter((id) => id !== 'chat' && appConfig[id].showInDock !== false);
+
   return (
-    <div className="fixed right-4 top-1/2 -translate-y-1/2 z-40">
+    <div className="flex-shrink-0 flex items-center z-40 py-2 pr-2">
       <div
-        className="flex flex-col items-center gap-1 py-3 px-2 backdrop-blur-2xl border rounded-2xl shadow-2xl"
+        className="flex flex-col items-center gap-1 py-3 px-2 backdrop-blur-2xl border rounded-2xl shadow-2xl max-h-full overflow-y-auto"
         style={{
           background: 'rgba(255, 255, 255, 0.1)',
           borderColor: 'rgba(255, 255, 255, 0.2)',
         }}
       >
-        {dockApps.map((appId, index) => {
+        {visibleApps.map((appId) => {
           const app = appConfig[appId];
           const Icon = app.icon;
           const isActive = activeApps.includes(appId);
@@ -53,18 +56,15 @@ export function Dock({ activeApps, onAppClick, focusedApp }: DockProps) {
                 onMouseEnter={() => setHoveredApp(appId)}
                 onMouseLeave={() => setHoveredApp(null)}
                 className={cn(
-                  'relative w-12 h-12 rounded-xl flex items-center justify-center transition-all duration-300 ease-out',
+                  'relative w-11 h-11 rounded-xl flex items-center justify-center transition-all duration-300 ease-out',
                   'bg-gradient-to-br shadow-lg',
                   app.color,
                   isHovered && 'scale-125 -translate-x-3',
                   isFocused && !isHovered && 'scale-110 -translate-x-1',
                   'hover:shadow-xl'
                 )}
-                style={{
-                  transitionDelay: isHovered ? '0ms' : `${index * 20}ms`,
-                }}
               >
-                <Icon className="w-6 h-6 text-white drop-shadow-md" />
+                <Icon className="w-5 h-5 text-white drop-shadow-md" />
               </button>
 
               {/* Active Indicator */}
@@ -81,13 +81,13 @@ export function Dock({ activeApps, onAppClick, focusedApp }: DockProps) {
         })}
 
         {/* Separator */}
-        <div className="h-px w-10 bg-white/20 my-2" />
+        <div className="h-px w-9 bg-white/20 my-1" />
 
         {/* Trash / Downloads */}
         <button
-          className="w-12 h-12 rounded-xl flex items-center justify-center bg-white/5 hover:bg-white/10 transition-colors"
+          className="w-11 h-11 rounded-xl flex items-center justify-center bg-white/5 hover:bg-white/10 transition-colors"
         >
-          <Folder className="w-6 h-6 text-white/40" />
+          <Folder className="w-5 h-5 text-white/40" />
         </button>
       </div>
     </div>

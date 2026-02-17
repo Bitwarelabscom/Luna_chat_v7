@@ -1,8 +1,10 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import { motion } from 'framer-motion';
 import { X, Minus, Maximize2, Minimize2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { windowVariants, windowTransition } from '@/lib/animations';
 
 interface WindowProps {
   id: string;
@@ -59,9 +61,13 @@ export function Window({
       setSize(preMaximizeState.current.size);
     } else {
       preMaximizeState.current = { position, size };
+      // Account for taskbar (panel is overlay, doesn't affect window layout)
+      const taskbarH = 64;
       setPosition({ x: 0, y: 0 });
-      // Account for SystemBar (28px) and Dock (80px)
-      setSize({ width: window.innerWidth, height: window.innerHeight - 28 - 80 });
+      setSize({
+        width: window.innerWidth,
+        height: window.innerHeight - 28 - taskbarH,
+      });
     }
     setIsMaximized(!isMaximized);
   };
@@ -144,11 +150,10 @@ export function Window({
   }, [isDragging, isResizing, resizeDirection]);
 
   return (
-    <div
+    <motion.div
       ref={windowRef}
       className={cn(
-        'absolute rounded-xl overflow-hidden shadow-2xl flex flex-col transition-shadow duration-200',
-        isActive ? 'shadow-black/50 ring-1 ring-white/10' : 'shadow-black/30',
+        'absolute rounded-xl overflow-hidden flex flex-col',
         isDragging && 'cursor-grabbing',
         isMaximized && 'rounded-none'
       )}
@@ -159,65 +164,80 @@ export function Window({
         height: size.height,
         zIndex,
         background: 'var(--theme-bg-primary)',
+        boxShadow: isActive
+          ? '0 0 20px 2px color-mix(in srgb, var(--theme-accent-primary) 30%, transparent), 0 25px 50px -12px rgba(0, 0, 0, 0.5)'
+          : '0 10px 25px -5px rgba(0, 0, 0, 0.3)',
+        border: isActive
+          ? '1px solid color-mix(in srgb, var(--theme-accent-primary) 40%, transparent)'
+          : '1px solid rgba(255, 255, 255, 0.05)',
       }}
+      initial={windowVariants.initial}
+      animate={windowVariants.animate}
+      exit={windowVariants.exit}
+      transition={windowTransition.enter}
       onMouseDown={onFocus}
+      layout={false}
     >
       {/* Title Bar */}
       <div
         className={cn(
-          'h-10 flex items-center justify-between px-3 select-none border-b',
-          isActive ? 'bg-[var(--theme-bg-secondary)]' : 'bg-[var(--theme-bg-secondary)]/80',
+          'h-10 flex items-center px-3 select-none border-b',
           'border-[var(--theme-border)]',
           !isMaximized && 'cursor-grab'
         )}
+        style={{
+          background: isActive
+            ? 'linear-gradient(to right, rgba(255,255,255,0.08), rgba(255,255,255,0.02))'
+            : 'rgba(0,0,0,0.3)',
+        }}
         onMouseDown={handleMouseDown}
         onDoubleClick={handleMaximize}
       >
-        {/* Traffic Lights */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onClose();
-            }}
-            className="w-3 h-3 rounded-full bg-red-500 hover:bg-red-400 transition-colors flex items-center justify-center group"
-          >
-            <X className="w-2 h-2 text-red-900 opacity-0 group-hover:opacity-100 transition-opacity" />
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onMinimize();
-            }}
-            className="w-3 h-3 rounded-full bg-yellow-500 hover:bg-yellow-400 transition-colors flex items-center justify-center group"
-          >
-            <Minus className="w-2 h-2 text-yellow-900 opacity-0 group-hover:opacity-100 transition-opacity" />
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              handleMaximize();
-            }}
-            className="w-3 h-3 rounded-full bg-green-500 hover:bg-green-400 transition-colors flex items-center justify-center group"
-          >
-            {isMaximized ? (
-              <Minimize2 className="w-2 h-2 text-green-900 opacity-0 group-hover:opacity-100 transition-opacity" />
-            ) : (
-              <Maximize2 className="w-2 h-2 text-green-900 opacity-0 group-hover:opacity-100 transition-opacity" />
-            )}
-          </button>
-        </div>
-
-        {/* Title */}
-        <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-2">
+        {/* Title - centered */}
+        <div className="flex-1 flex items-center justify-center gap-2">
           {icon}
           <span className={cn('text-sm font-medium', isActive ? 'text-[var(--theme-text-primary)]' : 'text-[var(--theme-text-secondary)]')}>
             {title}
           </span>
         </div>
 
-        {/* Spacer */}
-        <div className="w-16" />
+        {/* Window Controls - right side */}
+        <div className="flex items-center gap-1.5 ml-auto">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onMinimize();
+            }}
+            className="w-7 h-5 rounded-sm flex items-center justify-center bg-white/5 border border-white/10 hover:bg-yellow-500/20 hover:border-yellow-500/40 transition-all group"
+            style={{ cursor: 'pointer' }}
+          >
+            <Minus className="w-3 h-3 text-white/40 group-hover:text-yellow-400 transition-colors" />
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleMaximize();
+            }}
+            className="w-7 h-5 rounded-sm flex items-center justify-center bg-white/5 border border-white/10 hover:bg-green-500/20 hover:border-green-500/40 transition-all group"
+            style={{ cursor: 'pointer' }}
+          >
+            {isMaximized ? (
+              <Minimize2 className="w-3 h-3 text-white/40 group-hover:text-green-400 transition-colors" />
+            ) : (
+              <Maximize2 className="w-3 h-3 text-white/40 group-hover:text-green-400 transition-colors" />
+            )}
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose();
+            }}
+            className="w-7 h-5 rounded-sm flex items-center justify-center bg-white/5 border border-white/10 hover:bg-red-500/20 hover:border-red-500/40 transition-all group"
+            style={{ cursor: 'pointer' }}
+          >
+            <X className="w-3 h-3 text-white/40 group-hover:text-red-400 transition-colors" />
+          </button>
+        </div>
       </div>
 
       {/* Content */}
@@ -260,7 +280,7 @@ export function Window({
           />
         </>
       )}
-    </div>
+    </motion.div>
   );
 }
 

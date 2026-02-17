@@ -371,13 +371,13 @@ export async function selectRelevantHistory(
     // Filter out messages from the recent window
     const filtered = similar.filter(m => !excludeRecentIds.includes(m.messageId));
 
-    // Sort by a combination of similarity and recency (slight recency boost)
+    // Sort by a combination of similarity and recency (logarithmic decay)
     const now = Date.now();
     const scored = filtered.map(m => {
       const ageMs = now - new Date(m.createdAt).getTime();
-      const ageHours = ageMs / (1000 * 60 * 60);
-      // Recency boost: reduce score slightly for very old messages (older than 24h)
-      const recencyPenalty = ageHours > 24 ? Math.min(0.1, ageHours / 240) : 0;
+      const ageDays = ageMs / (1000 * 60 * 60 * 24);
+      // Logarithmic decay: Day 0-1: 0.00, Day 7: ~0.13, Day 30: ~0.22, Day 365: 0.30 (max)
+      const recencyPenalty = ageDays < 1 ? 0 : Math.min(0.30, Math.log10(ageDays + 1) * 0.12);
       return { ...m, adjustedScore: m.similarity - recencyPenalty };
     });
 

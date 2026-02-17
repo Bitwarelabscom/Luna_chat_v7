@@ -7,6 +7,8 @@ import { queryOne } from '../db/postgres.js';
 import logger from '../utils/logger.js';
 import type { Session } from '../types/index.js';
 import { UNTRUSTED_EMAIL_FRAME } from '../email/email-gatekeeper.service.js';
+import { formatRelativeTime } from './time-utils.js';
+import { scoreMessageComplexity, curateMemory } from './memory-curation.service.js';
 
 /**
  * Memory context split into stable (cacheable) and volatile (per-query) parts
@@ -32,6 +34,7 @@ export interface MemoryContext {
   volatile: {
     relevantHistory: string;      // Semantic search results
     conversationContext: string;  // Similar conversation summaries
+    curationReasoning?: string;   // Debug: why curation selected these memories
   };
 }
 
@@ -154,33 +157,8 @@ export async function buildMemoryContext(
       memorycoreClient.getSemanticMemory(userId),
     ]);
 
-    // Format facts with alphabetical sorting for cache determinism
-    const factsPrompt = factsService.formatFactsForPrompt(facts);
-
-    // Format learnings (stable)
-    let learnings = '';
-    if (learningsContext) {
-      learnings = `[Luna's Learnings - Apply these insights to personalize responses]\n${learningsContext}`;
-    }
-
-    // Format relevant history (volatile - changes per query)
-    let relevantHistory = '';
-    if (similarMessages.length > 0) {
-      const historyItems = similarMessages.map(m => {
-        const role = m.role === 'user' ? 'User' : 'Luna';
-        return `[${role}]: ${m.content.slice(0, 200)}${m.content.length > 200 ? '...' : ''}`;
-      });
-      relevantHistory = `[Relevant Past Conversations]\n${historyItems.join('\n')}`;
-    }
-
-    // Format conversation context (volatile - changes per query)
-    let conversationContext = '';
-    if (similarConversations.length > 0) {
-      const contextItems = similarConversations.map(c =>
-        `- ${c.summary} (Topics: ${c.topics.join(', ')})`
-      );
-      conversationContext = `[Related Past Topics]\n${contextItems.join('\n')}`;
-    }
+    // Score message complexity to decide whether to curate
+    const complexity = scoreMessageComplexity(currentMessage);
 
     // Build consciousness context if metrics available
     const consciousness = consciousnessMetrics ? {
@@ -239,6 +217,46 @@ export async function buildMemoryContext(
     // Get local graph memory (Neo4j - fallback/supplement)
     const localGraphMemory = neo4jService.formatLocalGraphContext(localGraphContext);
 
+    // Attempt curation for non-trivial messages
+    let factsPrompt: string;
+    let learnings: string;
+    let relevantHistory: string;
+    let conversationContext: string;
+    let curationReasoning: string | undefined;
+
+    if (!complexity.isTrivial) {
+      // Try LLM-based curation
+      const curationResult = await curateMemory(
+        currentMessage,
+        {
+          facts,
+          similarMessages,
+          similarConversations,
+          learnings: learningsContext,
+        },
+        complexity.score,
+        userId,
+        currentSessionId,
+      );
+
+      if (!curationResult.skipped && (curationResult.factsPrompt || facts.length === 0)) {
+        // Use curated results (but fall back if curation returned 0 facts when we have some)
+        factsPrompt = curationResult.factsPrompt;
+        learnings = curationResult.learningsPrompt;
+        relevantHistory = curationResult.relevantHistory;
+        conversationContext = curationResult.conversationContext;
+        curationReasoning = curationResult.reasoning;
+      } else {
+        // Curation failed - fall back to timestamp-enriched direct formatting
+        ({ factsPrompt, learnings, relevantHistory, conversationContext } =
+          formatDirectWithTimestamps(facts, similarMessages, similarConversations, learningsContext));
+      }
+    } else {
+      // Trivial message - skip curation, use timestamp-enriched direct formatting
+      ({ factsPrompt, learnings, relevantHistory, conversationContext } =
+        formatDirectWithTimestamps(facts, similarMessages, similarConversations, learningsContext));
+    }
+
     return {
       stable: {
         facts: factsPrompt,
@@ -253,6 +271,7 @@ export async function buildMemoryContext(
       volatile: {
         relevantHistory,
         conversationContext,
+        curationReasoning,
       },
     };
   } catch (error) {
@@ -284,7 +303,8 @@ export async function buildStableMemoryOnly(userId: string): Promise<MemoryConte
       memorycoreClient.getSemanticMemory(userId),
     ]);
 
-    const factsPrompt = factsService.formatFactsForPrompt(facts);
+    // Use timestamps in stable-only mode (learnings already have timestamps from insights service)
+    const factsPrompt = factsService.formatFactsForPrompt(facts, true);
 
     let learnings = '';
     if (learningsContext) {
@@ -438,6 +458,51 @@ export function formatMemoryForPrompt(context: MemoryContext): string {
   if (parts.length === 0) return '';
 
   return parts.join('\n\n');
+}
+
+/**
+ * Format memories directly with timestamps (no curation).
+ * Used as fallback when curation is skipped or fails.
+ */
+function formatDirectWithTimestamps(
+  facts: factsService.UserFact[],
+  similarMessages: embeddingService.SimilarMessage[],
+  similarConversations: Array<{ sessionId: string; summary: string; topics: string[]; similarity: number; updatedAt: Date }>,
+  learningsContext: string,
+): { factsPrompt: string; learnings: string; relevantHistory: string; conversationContext: string } {
+  // Format facts with timestamps
+  const factsPrompt = factsService.formatFactsForPrompt(facts, true);
+
+  // Format learnings (timestamps already added by insights service)
+  let learnings = '';
+  if (learningsContext) {
+    learnings = `[Luna's Learnings - Apply these insights to personalize responses]\n${learningsContext}`;
+  }
+
+  // Format relevant history with timestamps
+  let relevantHistory = '';
+  if (similarMessages.length > 0) {
+    const historyItems = similarMessages.map(m => {
+      const relTime = formatRelativeTime(m.createdAt);
+      const role = m.role === 'user' ? 'User' : 'Luna';
+      const timePrefix = relTime ? `[${relTime}] ` : '';
+      return `${timePrefix}[${role}]: ${m.content.slice(0, 200)}${m.content.length > 200 ? '...' : ''}`;
+    });
+    relevantHistory = `[Relevant Past Conversations]\n${historyItems.join('\n')}`;
+  }
+
+  // Format conversation context with timestamps
+  let conversationContext = '';
+  if (similarConversations.length > 0) {
+    const contextItems = similarConversations.map(c => {
+      const relTime = formatRelativeTime(c.updatedAt);
+      const timePrefix = relTime ? `[${relTime}] ` : '';
+      return `- ${timePrefix}${c.summary} (Topics: ${c.topics.join(', ')})`;
+    });
+    conversationContext = `[Related Past Topics]\n${contextItems.join('\n')}`;
+  }
+
+  return { factsPrompt, learnings, relevantHistory, conversationContext };
 }
 
 /**

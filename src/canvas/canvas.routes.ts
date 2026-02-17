@@ -225,7 +225,13 @@ router.get('/artifacts/:id/assets/*', authenticate, async (req: Request, res: Re
     if (resolved.mimeType) {
       res.type(resolved.mimeType);
     }
-    res.sendFile(resolved.absolutePath);
+    if (resolved.absolutePath) {
+      res.sendFile(resolved.absolutePath);
+    } else if (resolved.content != null) {
+      res.send(resolved.content);
+    } else {
+      res.status(404).json({ error: 'Asset not found' });
+    }
   } catch (error) {
     handleCanvasError(error, res);
   }
@@ -277,15 +283,8 @@ router.post('/artifacts/:id/navigate', authenticate, async (req: Request, res: R
 
     const result = await canvasService.navigateToVersion(userId, artifactId, index);
     res.json(result);
-  } catch (error: any) {
-    console.error('Error navigating to version:', error);
-    if (error.message === 'Artifact not found' || error.message === 'Version not found') {
-      res.status(404).json({ error: error.message });
-    } else if (error.message === 'Unauthorized') {
-      res.status(403).json({ error: 'Unauthorized' });
-    } else {
-      res.status(500).json({ error: 'Internal server error' });
-    }
+  } catch (error) {
+    handleCanvasError(error, res);
   }
 });
 

@@ -127,6 +127,13 @@ export const useWindowStore = create<WindowStore>((set, get) => ({
   pendingCanvasData: null,
 
   openApp: (appId: AppId) => {
+    // Chat is a permanent sidebar, not a window
+    if (appId === 'chat') {
+      const { useLayoutStore } = require('@/lib/layout-store');
+      useLayoutStore.getState().setChatPanelOpen(true);
+      return;
+    }
+
     const { windows, maxZIndex } = get();
     const config = appConfig[appId];
 

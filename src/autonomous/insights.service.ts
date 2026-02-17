@@ -1,5 +1,6 @@
 import { pool } from '../db/index.js';
 import logger from '../utils/logger.js';
+import { formatRelativeTime } from '../memory/time-utils.js';
 
 // ============================================
 // Types
@@ -235,7 +236,9 @@ export async function getActiveLearningsForContext(userId: string, limit = 10): 
 
   const formatted = learnings.map(l => {
     const typeLabel = l.learningType.replace('_', ' ');
-    return `- [${typeLabel}] ${l.learningContent} (confidence: ${(l.confidence * 100).toFixed(0)}%)`;
+    const relTime = formatRelativeTime(l.updatedAt);
+    const timeSuffix = relTime ? `, ${relTime}` : '';
+    return `- [${typeLabel}] ${l.learningContent} (confidence: ${(l.confidence * 100).toFixed(0)}%${timeSuffix})`;
   });
 
   return formatted.join('\n');
