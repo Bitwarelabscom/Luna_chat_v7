@@ -15,6 +15,7 @@ import ImageEmbed from './ImageEmbed';
 import { AttachmentCard } from './AttachmentCard';
 import { FileChip } from './FileChip';
 import { useThinkingMessage } from './ThinkingStatus';
+import { ModelSelector } from './os/ModelSelector';
 import dynamic from 'next/dynamic';
 
 const VoiceChatArea = dynamic(() => import('./VoiceChatArea'), {
@@ -663,6 +664,8 @@ function StandardChatArea() {
                   setNovaMode(!novaMode);
                 }}
               />
+              <div className="w-px h-4 bg-theme-border mx-1" />
+              <ModelSelector />
               <span className="ml-auto text-xs text-theme-text-muted">
                 Luna can make mistakes.
               </span>

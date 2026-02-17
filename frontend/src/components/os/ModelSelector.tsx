@@ -86,7 +86,7 @@ export function ModelSelector() {
 
       {isOpen && (
         <div
-          className="absolute left-0 top-full mt-1 z-50 rounded-xl shadow-2xl border overflow-hidden min-w-[280px] max-h-[400px] overflow-y-auto"
+          className="absolute left-0 bottom-full mb-1 z-50 rounded-xl shadow-2xl border overflow-hidden min-w-[280px] max-h-[400px] overflow-y-auto"
           style={{ background: 'var(--theme-bg-tertiary)', borderColor: 'var(--theme-border)' }}
         >
           {isLoading ? (
@@ -133,9 +133,9 @@ export function ModelSelector() {
                               <span className="w-1.5 h-1.5 rounded-full bg-green-400 flex-shrink-0" />
                             )}
                           </div>
-                          {model.bestFor.length > 0 && (
+                          {model.bestFor?.length > 0 && (
                             <div className="flex flex-wrap gap-1 mt-0.5">
-                              {model.bestFor.slice(0, 3).map((tag) => (
+                              {model.bestFor.slice(0, 3).map((tag: string) => (
                                 <span
                                   key={tag}
                                   className="text-[10px] px-1.5 py-0.5 rounded-full"
