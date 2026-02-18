@@ -348,18 +348,43 @@ export async function createChatCompletion(
       return { role: m.role, content: m.content };
     });
 
-    const response = await client.chat.completions.create({
+    const baseRequest = {
       model: modelToUse,
       messages: formattedMessages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
-      tools,
+      ...(tools ? { tools } : {}),
       ...(skipTemperature ? {} : { temperature }),
       ...tokenParam,
       response_format,
       // Add reasoning for xAI fast/reasoning models (enabled by default, can be disabled)
       ...(isXAIReasoning && { reasoning: { enabled: reasoning !== false } }),
-    } as any);
+    } as any;
 
-    const choice = response.choices[0];
+    let response = await client.chat.completions.create(baseRequest);
+    let choice = (response as any)?.choices?.[0];
+
+    // OpenRouter can occasionally return malformed/empty completion payloads for free models.
+    // Retry once without tools to avoid hard-failing the chat turn.
+    if (!choice && provider === 'openrouter' && modelToUse.includes(':free') && tools && tools.length > 0) {
+      logger.warn('OpenRouter returned no choices, retrying completion without tools', {
+        provider,
+        model: modelToUse,
+        toolsCount: tools.length,
+      });
+      response = await client.chat.completions.create({
+        ...baseRequest,
+        tools: undefined,
+      });
+      choice = (response as any)?.choices?.[0];
+    }
+
+    if (!choice || !choice.message) {
+      const providerError = (response as any)?.error?.message;
+      throw new Error(
+        providerError
+          ? `${provider} completion returned invalid response: ${providerError}`
+          : `${provider} completion returned invalid response (missing choices[0])`
+      );
+    }
 
     const completionResult: ChatCompletionResult = {
       content: choice.message.content || '',
@@ -373,8 +398,42 @@ export async function createChatCompletion(
     logActivity(completionResult);
     return completionResult;
   } catch (error) {
+    const err = error as any;
+    const errorMessage = String(err.message || '');
+
+    // OpenRouter free models can intermittently fail with upstream endpoint errors.
+    // Fall back to a reliable OpenAI model so chat requests do not hard-fail.
+    const shouldFallbackFromOpenRouter =
+      provider === 'openrouter' &&
+      modelToUse.includes(':free') &&
+      (
+        errorMessage.includes('No endpoints found matching your data policy') ||
+        errorMessage.includes('Upstream error from OpenInference') ||
+        errorMessage.includes('Error from model endpoint') ||
+        errorMessage.includes('missing choices[0]')
+      );
+
+    if (shouldFallbackFromOpenRouter) {
+      const fallbackModel = 'gpt-5-nano';
+      logger.warn('OpenRouter free model failed, falling back to OpenAI', {
+        fromProvider: provider,
+        fromModel: modelToUse,
+        toProvider: 'openai',
+        toModel: fallbackModel,
+        error: errorMessage,
+      });
+      return createChatCompletion({
+        ...options,
+        provider: 'openai',
+        model: fallbackModel,
+      });
+    }
+
     logger.error('Chat completion error', {
-      error: (error as Error).message,
+      error: errorMessage,
+      status: err.status,
+      code: err.code,
+      type: err.type,
       provider,
       model: modelToUse,
     });
