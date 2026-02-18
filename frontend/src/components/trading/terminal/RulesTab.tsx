@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { FileCode2, Plus, Play, Square, Trash2, Zap, Clock, AlertTriangle, Edit2 } from 'lucide-react';
+import { FileCode2, Plus, Play, Square, Trash2, Zap, Clock, AlertTriangle, Edit2, RefreshCw } from 'lucide-react';
 import { RuleBuilder, type TradingRule } from './rules';
 import { tradingApi, type TradingRuleRecord } from '@/lib/api';
 
@@ -27,6 +27,7 @@ interface RulesTabProps {
 export default function RulesTab({ onRuleCreated }: RulesTabProps) {
   const [rules, setRules] = useState<DisplayRule[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [showBuilder, setShowBuilder] = useState(false);
   const [editingRule, setEditingRule] = useState<TradingRule | undefined>(undefined);
 
@@ -137,41 +138,12 @@ export default function RulesTab({ onRuleCreated }: RulesTabProps) {
   const loadRules = useCallback(async () => {
     try {
       setLoading(true);
-      // Try to load from API
-      const response = await tradingApi.getTradingRules().catch(() => null);
-
-      if (response?.rules) {
-        setRules(response.rules.map(r => convertToDisplayRule(r)));
-      } else {
-        // Mock data for demo
-        setRules([
-          {
-            id: '1',
-            name: 'RSI Oversold Buy',
-            description: 'Buy when RSI drops below 30 on 5m timeframe',
-            type: 'indicator',
-            enabled: true,
-            conditions: ['RSI(5m) < 30'],
-            actions: ['Market BUY $50'],
-            lastTriggered: new Date(Date.now() - 3600000).toISOString(),
-            triggerCount: 12,
-            createdBy: 'ai',
-          },
-          {
-            id: '2',
-            name: 'BTC Dip Buy',
-            description: 'Buy BTC when price drops 5% in 1 hour',
-            type: 'price',
-            enabled: true,
-            conditions: ['BTC Change < -5%'],
-            actions: ['Market BUY $100'],
-            triggerCount: 3,
-            createdBy: 'user',
-          },
-        ]);
-      }
+      setLoadError(false);
+      const response = await tradingApi.getTradingRules();
+      setRules(response.rules.map(r => convertToDisplayRule(r)));
     } catch (err) {
       console.error('Failed to load rules:', err);
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -275,6 +247,19 @@ export default function RulesTab({ onRuleCreated }: RulesTabProps) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
         <div style={{ color: 'var(--terminal-text-muted)' }}>Loading...</div>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: '1rem' }}>
+        <AlertTriangle size={40} style={{ color: 'var(--terminal-warning)', opacity: 0.7 }} />
+        <p style={{ color: 'var(--terminal-text-muted)', fontSize: '0.9rem' }}>Failed to load trading rules</p>
+        <button onClick={loadRules} className="terminal-btn terminal-btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <RefreshCw size={14} />
+          <span>Retry</span>
+        </button>
       </div>
     );
   }

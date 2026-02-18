@@ -125,7 +125,7 @@ router.get('/portfolio', async (req: Request, res: Response) => {
   try {
     const portfolio = await tradingService.getPortfolio(getUserId(req));
     if (!portfolio) {
-      res.status(400).json({ error: 'Binance not connected' });
+      res.status(400).json({ error: 'Exchange not connected' });
       return;
     }
     res.json(portfolio);

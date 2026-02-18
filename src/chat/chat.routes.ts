@@ -5,6 +5,7 @@ import { authenticate } from '../auth/auth.middleware.js';
 import * as sessionService from './session.service.js';
 import * as chatService from './chat.service.js';
 import * as startupService from './startup.service.js';
+import * as suggestionService from './suggestion.service.js';
 import * as sessionActivityService from './session-activity.service.js';
 import * as ttsService from '../llm/tts.service.js';
 import * as documentsService from '../abilities/documents.service.js';
@@ -63,6 +64,10 @@ const updateSessionSchema = z.object({
   title: z.string().min(1).max(255).optional(),
   mode: z.enum(['assistant', 'companion', 'voice', 'dj_luna']).optional(),
   isArchived: z.boolean().optional(),
+});
+
+const getSuggestionsSchema = z.object({
+  mode: z.enum(['assistant', 'companion']).default('companion'),
 });
 
 // POST /api/chat/sessions - Create new session
@@ -227,6 +232,22 @@ router.post('/sessions/:id/startup', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Startup generation failed', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to generate startup message' });
+  }
+});
+
+// GET /api/chat/suggestions - Fetch startup suggestions for current user
+router.get('/suggestions', async (req: Request, res: Response) => {
+  try {
+    const { mode } = getSuggestionsSchema.parse(req.query);
+    const suggestions = await suggestionService.getSuggestions(req.user!.userId, mode);
+    res.json({ suggestions });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: 'Validation error', details: error.errors });
+      return;
+    }
+    logger.error('Fetch suggestions failed', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to fetch suggestions' });
   }
 });
 

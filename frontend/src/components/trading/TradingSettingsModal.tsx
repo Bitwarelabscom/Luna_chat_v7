@@ -382,7 +382,7 @@ function TradingSettingsModal({
 
           {tab === 'connect' && (
             <div>
-              {settings?.exchangeConnected || settings?.binanceConnected ? (
+              {settings?.exchangeConnected ? (
                 <div>
                   <div style={{
                     background: 'rgba(16, 185, 129, 0.1)',

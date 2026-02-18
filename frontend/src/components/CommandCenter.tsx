@@ -34,7 +34,7 @@ import MemoryTab from './settings/MemoryTab';
 import TriggersTab from './settings/TriggersTab';
 import McpTab from './settings/McpTab';
 import QuestionNotification from './QuestionNotification';
-import TradingDashboard from './trading/TradingDashboard';
+import TradingTerminal from './trading/terminal/TradingTerminal';
 
 interface ActivityLog {
   time: string;
@@ -1970,7 +1970,7 @@ const CommandCenter = () => {
         {/* Trading Tab */}
         {activeTab === 'trading' && (
           <div style={{ flex: 1, overflow: 'hidden' }}>
-            <TradingDashboard />
+            <TradingTerminal />
           </div>
         )}
 

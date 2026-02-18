@@ -1,8 +1,9 @@
 'use client';
 
-import React from 'react';
-import { TrendingUp, TrendingDown, Activity, Bot, BarChart2 } from 'lucide-react';
-import type { Portfolio, PriceData, TradeRecord, BotConfig } from '@/lib/api';
+import React, { useState, useEffect, useCallback } from 'react';
+import { TrendingUp, TrendingDown, Activity, Bot, BarChart2, RefreshCw } from 'lucide-react';
+import type { Portfolio, PriceData, TradeRecord, BotConfig, ResearchSignal } from '@/lib/api';
+import { tradingApi } from '@/lib/api';
 
 interface OverviewTabProps {
   prices: PriceData[];
@@ -13,23 +14,47 @@ interface OverviewTabProps {
 }
 
 export default function OverviewTab({ prices, portfolio, bots, trades, loading }: OverviewTabProps) {
+  const [signals, setSignals] = useState<ResearchSignal[]>([]);
+  const [signalsLoading, setSignalsLoading] = useState(true);
+  const [signalsError, setSignalsError] = useState(false);
+
+  const loadSignals = useCallback(async () => {
+    try {
+      setSignalsLoading(true);
+      setSignalsError(false);
+      const data = await tradingApi.getResearchSignals(5);
+      setSignals(data);
+    } catch {
+      setSignalsError(true);
+    } finally {
+      setSignalsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSignals();
+  }, [loadSignals]);
+
   // Top gainers and losers
   const sorted = [...prices].sort((a, b) => b.change24h - a.change24h);
   const topGainers = sorted.slice(0, 5);
   const topLosers = sorted.slice(-5).reverse();
-
-  // Recent signals (mock for now - will integrate with Redis)
-  const recentSignals = [
-    { symbol: 'SOLUSDT', type: 'buy', strength: 'strong', reason: 'RSI oversold + MACD bullish cross' },
-    { symbol: 'ETHUSDT', type: 'buy', strength: 'medium', reason: 'Bollinger Band bounce' },
-    { symbol: 'XRPUSDT', type: 'neutral', strength: 'weak', reason: 'Consolidating near support' },
-  ];
 
   // Active bots
   const runningBots = bots.filter(b => b.status === 'running');
 
   // Recent trades
   const recentTrades = trades.slice(0, 5);
+
+  const getSignalColor = (status: string) => {
+    switch (status) {
+      case 'executed': return 'var(--terminal-positive)';
+      case 'pending': return 'var(--terminal-accent)';
+      case 'skipped': return 'var(--terminal-text-muted)';
+      case 'expired': return 'var(--terminal-text-dim)';
+      default: return 'var(--terminal-text-muted)';
+    }
+  };
 
   if (loading) {
     return (
@@ -83,43 +108,75 @@ export default function OverviewTab({ prices, portfolio, bots, trades, loading }
         </div>
       </div>
 
-      {/* Active Signals */}
+      {/* Recent Signals */}
       <div className="terminal-card">
         <div className="terminal-card-header">
           <span className="terminal-card-title">Recent Signals</span>
-          <Activity size={14} style={{ color: 'var(--terminal-accent)' }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Activity size={14} style={{ color: 'var(--terminal-accent)' }} />
+            <button
+              onClick={loadSignals}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'var(--terminal-text-muted)' }}
+              title="Refresh signals"
+            >
+              <RefreshCw size={12} />
+            </button>
+          </div>
         </div>
         <div className="terminal-card-body" style={{ padding: 0 }}>
-          <table className="terminal-table">
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Signal</th>
-                <th>Reason</th>
-              </tr>
-            </thead>
-            <tbody>
-              {recentSignals.map((signal, i) => (
-                <tr key={i}>
-                  <td style={{ fontFamily: 'IBM Plex Mono', fontWeight: 500 }}>
-                    {signal.symbol.replace('USDT', '')}
-                  </td>
-                  <td>
-                    <span className={`terminal-signal terminal-signal-${signal.type}`}>
-                      {signal.type.toUpperCase()}
-                    </span>
-                  </td>
-                  <td style={{ fontSize: '0.75rem', color: 'var(--terminal-text-muted)' }}>
-                    {signal.reason}
-                  </td>
+          {signalsLoading ? (
+            <div style={{ padding: '1rem', color: 'var(--terminal-text-muted)', fontSize: '0.8rem', textAlign: 'center' }}>
+              Loading signals...
+            </div>
+          ) : signalsError ? (
+            <div style={{ padding: '1rem', textAlign: 'center' }}>
+              <div style={{ color: 'var(--terminal-text-muted)', fontSize: '0.8rem', marginBottom: '0.5rem' }}>
+                No signals available
+              </div>
+              <button onClick={loadSignals} className="terminal-btn terminal-btn-secondary" style={{ fontSize: '0.75rem' }}>
+                Retry
+              </button>
+            </div>
+          ) : signals.length === 0 ? (
+            <div style={{ padding: '1rem', color: 'var(--terminal-text-dim)', fontSize: '0.8rem', textAlign: 'center' }}>
+              No recent signals
+            </div>
+          ) : (
+            <table className="terminal-table">
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Confidence</th>
+                  <th>Status</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {signals.map((signal) => (
+                  <tr key={signal.id}>
+                    <td style={{ fontFamily: 'IBM Plex Mono', fontWeight: 500 }}>
+                      {signal.symbol.replace('USDT', '').replace('_USD', '')}
+                    </td>
+                    <td style={{ fontFamily: 'IBM Plex Mono' }}>
+                      {(signal.confidence * 100).toFixed(0)}%
+                    </td>
+                    <td>
+                      <span style={{
+                        color: getSignalColor(signal.status),
+                        fontSize: '0.75rem',
+                        fontWeight: 500,
+                      }}>
+                        {signal.status.toUpperCase()}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
 
-      {/* Top Movers */}
+      {/* Top Gainers */}
       <div className="terminal-card">
         <div className="terminal-card-header">
           <span className="terminal-card-title">Top Gainers</span>

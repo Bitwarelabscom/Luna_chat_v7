@@ -727,13 +727,13 @@ body {
   width: 48px;
 }
 
-/* Terminal bottom ticker */
+/* Terminal ticker strip */
 .terminal-ticker {
   display: flex;
   align-items: center;
   height: 36px;
   background: var(--terminal-ticker-bg);
-  border-top: 1px solid var(--terminal-border);
+  border-bottom: 1px solid var(--terminal-border);
   overflow-x: auto;
   scrollbar-width: none;
 }

@@ -6,7 +6,6 @@ export type ExchangeType = 'binance' | 'crypto_com';
 
 export interface TradingSettings {
   userId: string;
-  binanceConnected: boolean; // Deprecated - use exchangeConnected
   exchangeConnected: boolean;
   activeExchange: ExchangeType | null;
   maxPositionPct: number;
@@ -626,7 +625,7 @@ export const tradingApi = {
   getSettings: () =>
     api<TradingSettings>('/api/trading/settings'),
 
-  updateSettings: (updates: Partial<Omit<TradingSettings, 'userId' | 'binanceConnected'>>) =>
+  updateSettings: (updates: Partial<Omit<TradingSettings, 'userId'>>) =>
     api<TradingSettings>('/api/trading/settings', { method: 'PUT', body: updates }),
 
   // Portfolio & Prices

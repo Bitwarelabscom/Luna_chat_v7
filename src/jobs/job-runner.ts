@@ -19,6 +19,7 @@ import * as reminderService from '../abilities/reminder.service.js';
 import * as hintInjection from '../layered-agent/services/hint-injection.service.js';
 import * as selfCorrection from '../layered-agent/services/self-correction.service.js';
 import * as sessionActivityService from '../chat/session-activity.service.js';
+import * as suggestionService from '../chat/suggestion.service.js';
 import * as intentService from '../intents/intent.service.js';
 import * as contextSummaryService from '../context/context-summary.service.js';
 import * as intentSummaryGenerator from '../context/intent-summary-generator.service.js';
@@ -75,6 +76,13 @@ const jobs: Job[] = [
     enabled: true,
     running: false,
     handler: cleanupExpiredStates,
+  },
+  {
+    name: 'suggestionRefresher',
+    intervalMs: 15 * 60 * 1000, // Every 15 minutes
+    enabled: true,
+    running: false,
+    handler: refreshSuggestions,
   },
   {
     name: 'eventLogCleanup',
@@ -478,6 +486,19 @@ async function cleanupOldEventLogs(): Promise<void> {
   } catch (error) {
     logger.error('Event log cleanup job failed', {
       error: (error as Error).message
+    });
+  }
+}
+
+/**
+ * Refresh per-user startup suggestions in the background
+ */
+async function refreshSuggestions(): Promise<void> {
+  try {
+    await suggestionService.generateForAllActiveUsers();
+  } catch (error) {
+    logger.error('Suggestion refresh job failed', {
+      error: (error as Error).message,
     });
   }
 }

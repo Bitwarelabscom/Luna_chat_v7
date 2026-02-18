@@ -69,6 +69,10 @@ export interface StartupResponse {
   suggestions: string[];
 }
 
+export interface SuggestionsResponse {
+  suggestions: string[];
+}
+
 export const chatApi = {
   getSessions: (params?: { limit?: number; offset?: number; archived?: boolean }) => {
     const searchParams = new URLSearchParams();
@@ -109,6 +113,9 @@ export const chatApi = {
 
   getSessionStartup: (sessionId: string) =>
     api<StartupResponse>(`/api/chat/sessions/${sessionId}/startup`, { method: 'POST' }),
+
+  getSuggestions: (mode: 'assistant' | 'companion') =>
+    api<SuggestionsResponse>(`/api/chat/suggestions?mode=${encodeURIComponent(mode)}`),
 };
 
 // Streaming helper

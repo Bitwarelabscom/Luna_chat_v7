@@ -130,6 +130,7 @@ interface ChatState {
   setStartupSuggestions: (suggestions: string[]) => void;
   clearStartupSuggestions: () => void;
   setIsLoadingStartup: (loading: boolean) => void;
+  fetchSuggestions: (mode: 'assistant' | 'companion' | 'voice' | 'dj_luna') => Promise<void>;
   // Browser action
   setBrowserAction: (action: BrowserAction | null) => void;
   // Video action
@@ -311,6 +312,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setStartupSuggestions: (suggestions) => set({ startupSuggestions: suggestions }),
   clearStartupSuggestions: () => set({ startupSuggestions: [] }),
   setIsLoadingStartup: (loading) => set({ isLoadingStartup: loading }),
+  fetchSuggestions: async (mode) => {
+    const suggestionMode = mode === 'assistant' ? 'assistant' : 'companion';
+    try {
+      const result = await chatApi.getSuggestions(suggestionMode);
+      set({ startupSuggestions: result.suggestions });
+    } catch {
+      // Graceful no-op
+    }
+  },
   // Browser action
   setBrowserAction: (action) => set({ browserAction: action }),
   // Video action

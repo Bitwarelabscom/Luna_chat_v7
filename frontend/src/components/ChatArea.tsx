@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, ChangeEvent } from 'react';
+import { useState, useRef, useEffect, useMemo, ChangeEvent } from 'react';
 import { useChatStore } from '@/lib/store';
 import { useActivityStore } from '@/lib/activity-store';
 import { streamMessage, streamMessageWithFiles, regenerateMessage, chatApi } from '@/lib/api';
@@ -17,6 +17,7 @@ import { FileChip } from './FileChip';
 import { useThinkingMessage } from './ThinkingStatus';
 import { ModelSelector } from './os/ModelSelector';
 import dynamic from 'next/dynamic';
+import SuggestionChips from './SuggestionChips';
 
 const VoiceChatArea = dynamic(() => import('./VoiceChatArea'), {
   ssr: false,
@@ -50,6 +51,12 @@ function TogglePill({ label, active, onToggle }: { label: string; active: boolea
   );
 }
 
+function pickRandomSuggestions(suggestions: string[], count: number): string[] {
+  if (suggestions.length <= count) return suggestions;
+  const shuffled = [...suggestions].sort(() => Math.random() - 0.5);
+  return shuffled.slice(0, count);
+}
+
 function StandardChatArea() {
   const {
     currentSession,
@@ -59,6 +66,7 @@ function StandardChatArea() {
     reasoningContent,
     statusMessage,
     isLoadingStartup,
+    startupSuggestions,
     loadSessions,
     createSession,
     loadSession,
@@ -73,6 +81,8 @@ function StandardChatArea() {
     setReasoningContent,
     setStatusMessage,
     setIsLoadingStartup,
+    fetchSuggestions,
+    clearStartupSuggestions,
     setBrowserAction,
     setVideoAction,
     setMediaAction,
@@ -164,6 +174,19 @@ function StandardChatArea() {
   useEffect(() => {
     textareaRef.current?.focus();
   }, [currentSession?.id]);
+
+  useEffect(() => {
+    const session = currentSession;
+    if (!session || isLoadingMessages) return;
+    if (session.messages.length > 0) return;
+    fetchSuggestions(session.mode);
+  }, [currentSession?.id, currentSession?.mode, currentSession?.messages?.length, isLoadingMessages, fetchSuggestions]);
+
+  useEffect(() => {
+    if (isSending) {
+      clearStartupSuggestions();
+    }
+  }, [isSending, clearStartupSuggestions]);
 
   // End session on browser close/tab close to trigger memory consolidation
   useEffect(() => {
@@ -397,6 +420,10 @@ function StandardChatArea() {
 
   const messages = currentSession?.messages || [];
   const hasMessages = messages.length > 0 || streamingContent;
+  const cardSuggestions = useMemo(
+    () => pickRandomSuggestions(startupSuggestions, 3),
+    [startupSuggestions]
+  );
 
   return (
     <main className="flex-1 flex flex-col h-full overflow-hidden">
@@ -437,6 +464,22 @@ function StandardChatArea() {
                 <p className="text-theme-text-muted text-center max-w-md">
                   Your AI personal assistant and conversation companion. How can I help you today?
                 </p>
+                {startupSuggestions.length > 0 && (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-6 max-w-3xl w-full">
+                    {cardSuggestions.map((suggestion, index) => (
+                      <button
+                        key={`${suggestion}-${index}`}
+                        onClick={() => {
+                          setInput(suggestion);
+                          clearStartupSuggestions();
+                        }}
+                        className="p-3 rounded-xl bg-theme-bg-tertiary border border-theme-border hover:border-theme-accent-primary/50 text-sm text-theme-text-secondary hover:text-theme-text-primary text-left transition-colors"
+                      >
+                        {suggestion}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -582,6 +625,15 @@ function StandardChatArea() {
       {currentSession && (
         <div className="border-t border-theme-border p-4">
           <div className="max-w-3xl mx-auto">
+            {!hasMessages && !input && startupSuggestions.length > 0 && (
+              <SuggestionChips
+                suggestions={startupSuggestions.slice(0, 4)}
+                onSelect={(suggestion) => {
+                  setInput(suggestion);
+                  clearStartupSuggestions();
+                }}
+              />
+            )}
             {/* File chips preview */}
             {attachedFiles.length > 0 && (
               <div className="flex flex-wrap gap-2 mb-3">
