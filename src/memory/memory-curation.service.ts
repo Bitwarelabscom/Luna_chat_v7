@@ -224,7 +224,7 @@ ${candidateLines.join('\n')}`;
         { role: 'user', content: userPrompt },
       ],
       {
-        maxTokens: 20000,
+        maxTokens: 5000,
         loggingContext: {
           userId,
           sessionId: _sessionId,
