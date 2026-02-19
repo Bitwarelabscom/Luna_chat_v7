@@ -61,12 +61,12 @@ export function Window({
       setSize(preMaximizeState.current.size);
     } else {
       preMaximizeState.current = { position, size };
-      // Account for taskbar (panel is overlay, doesn't affect window layout)
-      const taskbarH = 64;
+      // Account for header (28px) and footer bar (40px)
+      const footerH = 40;
       setPosition({ x: 0, y: 0 });
       setSize({
         width: window.innerWidth,
-        height: window.innerHeight - 28 - taskbarH,
+        height: window.innerHeight - 28 - footerH,
       });
     }
     setIsMaximized(!isMaximized);

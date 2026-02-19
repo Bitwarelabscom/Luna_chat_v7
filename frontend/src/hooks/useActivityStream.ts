@@ -39,7 +39,7 @@ export function useActivityStream(options: UseActivityStreamOptions = {}) {
   const {
     autoConnect = true,
     fetchHistory = true,
-    historyLimit = 200, // Increased from 50 for better history visibility
+    historyLimit = 1000,
   } = options;
 
   const {
@@ -56,11 +56,12 @@ export function useActivityStream(options: UseActivityStreamOptions = {}) {
   const isConnectingRef = useRef(false);
   const [isLoading, setIsLoading] = useState(false);
 
-  // Fetch historical activities from API
+  // Fetch historical activities from API (last 24 hours)
   const fetchActivities = useCallback(async () => {
     setIsLoading(true);
     try {
-      const response = await fetch(`${API_BASE}/activity?limit=${historyLimit}`, {
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const response = await fetch(`${API_BASE}/activity?limit=${historyLimit}&after=${encodeURIComponent(since)}`, {
         credentials: 'include',
       });
 
@@ -70,8 +71,9 @@ export function useActivityStream(options: UseActivityStreamOptions = {}) {
 
       const data = await response.json();
 
-      if (data.activities) {
-        const normalized: Activity[] = data.activities.map((a: Activity) => ({
+      const items = data.logs ?? data.activities;
+      if (items) {
+        const normalized: Activity[] = items.map((a: Activity) => ({
           ...a,
           createdAt: new Date(a.createdAt),
         }));

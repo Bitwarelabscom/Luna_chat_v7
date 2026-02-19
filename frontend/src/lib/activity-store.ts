@@ -93,7 +93,7 @@ function generateId(): string {
 
 export const useActivityStore = create<ActivityState>((set, get) => ({
   activities: [],
-  maxItems: 200,
+  maxItems: 1000,
   sseConnected: false,
   sseError: null,
   activeFilter: 'all',
