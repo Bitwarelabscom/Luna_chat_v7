@@ -6,11 +6,8 @@ import { SystemBar } from './SystemBar';
 import { Spotlight } from './Spotlight';
 import { Window } from './Window';
 import { NewFileDialog } from './NewFileDialog';
-import { ChatPanel } from './ChatPanel';
-import { ChatFloatingButton } from './ChatFloatingButton';
-import { Taskbar } from './Taskbar';
+import { FooterBar } from './FooterBar';
 import { useWindowStore } from '@/lib/window-store';
-import { useLayoutStore } from '@/lib/layout-store';
 import { useChatStore } from '@/lib/store';
 import { useBackgroundStore } from '@/lib/background-store';
 import { getMediaUrl, backgroundApi } from '@/lib/api';
@@ -39,10 +36,13 @@ const IRCWindow = lazy(() => import('./apps/IRCWindow'));
 const PlaceholderWindow = lazy(() => import('./apps/PlaceholderWindow'));
 const LazyCanvasWindow = lazy(() => import('./apps/CanvasWindow').then(m => ({ default: m.CanvasWindow })));
 const GamesWindow = lazy(() => import('./apps/GamesWindow'));
+const ChatWindow = lazy(() => import('./apps/ChatWindow'));
 
 // Map appId to component
 function getAppComponent(appId: AppId): React.ReactNode {
   switch (appId) {
+    case 'chat':
+      return <ChatWindow />;
     case 'irc':
       return <IRCWindow />;
     case 'voice':
@@ -100,8 +100,6 @@ export function Desktop() {
     focusWindow,
     setPendingBrowserUrl,
   } = useWindowStore();
-
-  const toggleChatPanel = useLayoutStore((s) => s.toggleChatPanel);
 
   const browserAction = useChatStore((state) => state.browserAction);
   const setBrowserAction = useChatStore((state) => state.setBrowserAction);
@@ -217,7 +215,7 @@ export function Desktop() {
           setSpotlightOpen((prev) => !prev);
         } else if (e.key === '1') {
           e.preventDefault();
-          toggleChatPanel();
+          openApp('chat');
         } else if (e.key >= '2' && e.key <= '5') {
           e.preventDefault();
           const apps: AppId[] = ['voice', 'files', 'terminal', 'browser'];
@@ -228,7 +226,11 @@ export function Desktop() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [openApp, toggleChatPanel]);
+  }, [openApp]);
+
+  useEffect(() => {
+    openApp('chat');
+  }, [openApp]);
 
   const handleAppClick = useCallback((appId: AppId) => {
     openApp(appId);
@@ -237,6 +239,18 @@ export function Desktop() {
   const handleSpotlightCommand = useCallback((command: string) => {
     if (command === 'settings') {
       openApp('settings');
+      return;
+    }
+    if (command === 'new-chat' || command === 'ask-luna') {
+      openApp('chat');
+      return;
+    }
+    if (command === 'browse') {
+      openApp('browser');
+      return;
+    }
+    if (command === 'run-code') {
+      openApp('terminal');
     }
   }, [openApp]);
 
@@ -280,12 +294,11 @@ export function Desktop() {
       {/* System Bar */}
       <SystemBar
         onSpotlightOpen={() => setSpotlightOpen(true)}
-        onSettingsOpen={() => openApp('settings')}
         onAppOpen={handleAppClick}
         onNewFile={() => setNewFileDialogOpen(true)}
       />
 
-      {/* Main Area: Desktop + Chat Panel Overlay */}
+      {/* Main Area: Desktop Windows */}
       <div className="flex-1 relative overflow-hidden">
         {/* Windows */}
         <AnimatePresence>
@@ -320,16 +333,13 @@ export function Desktop() {
             );
           })}
         </AnimatePresence>
-
-        {/* Chat Panel Overlay */}
-        <ChatPanel />
       </div>
 
-      {/* Floating Chat Button (when panel closed) */}
-      <ChatFloatingButton />
-
-      {/* Bottom Taskbar */}
-      <Taskbar />
+      {/* Footer Bar */}
+      <FooterBar
+        onSettingsOpen={() => openApp('settings')}
+        onAppOpen={handleAppClick}
+      />
 
       {/* Spotlight */}
       <Spotlight

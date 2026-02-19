@@ -542,6 +542,26 @@ export async function getLatestArtifactIdForSession(
 }
 
 /**
+ * Get the most recently updated artifact ID for a user across all sessions
+ */
+export async function getLatestArtifactIdForUser(userId: string): Promise<string | null> {
+  const result: any = await query(
+    `SELECT id
+     FROM artifacts
+     WHERE user_id = $1
+     ORDER BY updated_at DESC
+     LIMIT 1`,
+    [userId]
+  );
+
+  if (!result || result.length === 0) {
+    return null;
+  }
+
+  return result[0].id;
+}
+
+/**
  * List artifact summaries for a user, optionally scoped to a session
  */
 export async function listArtifacts(

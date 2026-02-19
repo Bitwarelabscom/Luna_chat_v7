@@ -14,8 +14,8 @@ interface DockProps {
 export function Dock({ activeApps, onAppClick, focusedApp }: DockProps) {
   const [hoveredApp, setHoveredApp] = useState<AppId | null>(null);
 
-  // Filter out chat (it's a sidebar now) and any apps not shown in dock
-  const visibleApps = dockApps.filter((id) => id !== 'chat' && appConfig[id].showInDock !== false);
+  // Show dock-enabled apps in configured order
+  const visibleApps = dockApps.filter((id) => appConfig[id].showInDock !== false);
 
   return (
     <div className="flex-shrink-0 flex items-center z-40 py-2 pr-2">

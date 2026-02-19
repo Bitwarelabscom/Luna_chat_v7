@@ -7,7 +7,10 @@ export function isUuid(value: unknown): value is string {
 }
 
 export async function resolveArtifactIdForSession(
-  canvasService: { getLatestArtifactIdForSession: (userId: string, sessionId: string) => Promise<string | null> },
+  canvasService: {
+    getLatestArtifactIdForSession: (userId: string, sessionId: string) => Promise<string | null>;
+    getLatestArtifactIdForUser?: (userId: string) => Promise<string | null>;
+  },
   userId: string,
   sessionId: string,
   requestedArtifactId: unknown
@@ -25,6 +28,19 @@ export async function resolveArtifactIdForSession(
       userId,
     });
     return fallbackArtifactId;
+  }
+
+  if (canvasService.getLatestArtifactIdForUser) {
+    const crossSessionFallbackArtifactId = await canvasService.getLatestArtifactIdForUser(userId);
+    if (crossSessionFallbackArtifactId) {
+      logger.warn('Resolved non-UUID artifact ID to latest user artifact from another session', {
+        requestedArtifactId,
+        resolvedArtifactId: crossSessionFallbackArtifactId,
+        sessionId,
+        userId,
+      });
+      return crossSessionFallbackArtifactId;
+    }
   }
 
   logger.warn('Unable to resolve artifact ID for session', {
@@ -173,10 +189,17 @@ export async function handleArtifactToolCall(
 
     case 'list_artifacts': {
       emitReasoning(`> Listing recent artifacts...\n`);
-      logger.info('Listing artifacts', { requestedSessionId: args.sessionId, limit: args.limit });
+      const requestedSessionId = typeof args.sessionId === 'string' && args.sessionId.trim().length > 0
+        ? args.sessionId
+        : undefined;
+      logger.info('Listing artifacts', {
+        requestedSessionId: args.sessionId,
+        effectiveSessionId: requestedSessionId || null,
+        limit: args.limit,
+      });
 
       const artifacts = await canvasService.listArtifacts(userId, {
-        sessionId: typeof args.sessionId === 'string' ? args.sessionId : sessionId,
+        sessionId: requestedSessionId,
         limit: typeof args.limit === 'number' ? args.limit : 15,
       });
 

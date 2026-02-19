@@ -10,7 +10,6 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { type AppId, appConfig, dockApps } from './app-registry';
-import { useLayoutStore } from '@/lib/layout-store';
 
 interface SpotlightProps {
   isOpen: boolean;
@@ -92,11 +91,7 @@ export function Spotlight({ isOpen, onClose, onAppOpen, onCommand }: SpotlightPr
         const selected = filteredSuggestions[selectedIndex];
         if (selected) {
           if (selected.type === 'app') {
-            if (selected.id === 'chat') {
-              useLayoutStore.getState().setChatPanelOpen(true);
-            } else {
-              onAppOpen(selected.id as AppId);
-            }
+            onAppOpen(selected.id as AppId);
           } else {
             onCommand(selected.id);
           }
@@ -205,11 +200,7 @@ export function Spotlight({ isOpen, onClose, onAppOpen, onCommand }: SpotlightPr
                   key={item.id}
                   onClick={() => {
                     if (item.type === 'app') {
-                      if (item.id === 'chat') {
-                        useLayoutStore.getState().setChatPanelOpen(true);
-                      } else {
-                        onAppOpen(item.id as AppId);
-                      }
+                      onAppOpen(item.id as AppId);
                     } else {
                       onCommand(item.id);
                     }
