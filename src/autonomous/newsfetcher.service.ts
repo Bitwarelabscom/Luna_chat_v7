@@ -255,7 +255,7 @@ export async function enrichArticleById(articleId: number, userId: string): Prom
     .map(f => f.factValue);
 
   // Run Qwen filter
-  const result = await filterArticle(article.title, null, interests);
+  const result = await filterArticle(article.title, null, interests, userId);
 
   // Cache in Redis
   await setCachedEnrichment(articleId, result);
@@ -288,7 +288,7 @@ export async function batchEnrichArticles(userId: string, limit = 25): Promise<n
     if (article.signal !== null) continue;
 
     try {
-      const result = await filterArticle(article.title, null, interests);
+      const result = await filterArticle(article.title, null, interests, userId);
       await setCachedEnrichment(article.id, result);
       enrichedCount++;
 

@@ -10,7 +10,6 @@ import { logActivityAndBroadcast } from '../activity/activity.service.js';
 import { getVoicePrompt } from '../persona/voice.persona.js';
 
 // Configuration
-let currentSampleRate = 24000; // Default, can be updated by client
 const CHANNELS = 1;
 const BIT_DEPTH = 16;
 const VAD_THRESHOLD_DB = config.stt.silenceThreshold; // -50dB
@@ -26,6 +25,7 @@ interface VADState {
 
 export function handleVoiceWsConnection(ws: WebSocket, req: IncomingMessage) {
   const userId = (req as any).user?.userId;
+  let currentSampleRate = 24000; // Connection-local default, updated by client config.
   
   if (!userId) {
     logger.warn('Voice WebSocket connection rejected: Unauthorized');
@@ -36,7 +36,7 @@ export function handleVoiceWsConnection(ws: WebSocket, req: IncomingMessage) {
 
   logger.info('Voice WebSocket connected', { userId });
 
-  let vadState: VADState = {
+  const vadState: VADState = {
     isSpeaking: false,
     silenceStart: null,
     buffer: [],
@@ -73,7 +73,7 @@ export function handleVoiceWsConnection(ws: WebSocket, req: IncomingMessage) {
     }
 
     const pcmData = data as Buffer;
-    processAudioChunk(ws, userId || 'anonymous', pcmData, vadState, sessionId);
+    processAudioChunk(ws, userId || 'anonymous', pcmData, vadState, sessionId, currentSampleRate);
   });
 
   ws.on('close', () => {
@@ -91,7 +91,8 @@ async function processAudioChunk(
   userId: string,
   chunk: Buffer,
   state: VADState,
-  sessionId: string | null
+  sessionId: string | null,
+  sampleRate: number
 ) {
   // 1. Calculate RMS
   const rms = calculateRMS(chunk);
@@ -128,11 +129,11 @@ async function processAudioChunk(
         state.buffer = []; // Clear buffer
         
         // Don't process extremely short blips (< 200ms)
-        if (audioBuffer.length < currentSampleRate * 2 * 0.2) { 
+        if (audioBuffer.length < sampleRate * 2 * 0.2) {
             return; 
         }
 
-        await processUtterance(ws, userId, audioBuffer, sessionId);
+        await processUtterance(ws, userId, audioBuffer, sessionId, sampleRate);
       }
     } else {
         // Not speaking, just silence. 
@@ -251,7 +252,8 @@ async function processUtterance(
   ws: WebSocket, 
   userId: string, 
   pcmBuffer: Buffer,
-  sessionId: string | null
+  sessionId: string | null,
+  sampleRate: number
 ) {
   if (!sessionId) {
      sessionId = await voiceChat.getOrCreateVoiceSession(userId);
@@ -259,7 +261,7 @@ async function processUtterance(
 
   // 1. Transcribe (Whisper)
   // Wrap in WAV
-  const wavBuffer = createWavHeader(pcmBuffer, currentSampleRate);
+  const wavBuffer = createWavHeader(pcmBuffer, sampleRate);
   const file = new File([wavBuffer], 'input.wav', { type: 'audio/wav' });
 
   // Inform client: Thinking

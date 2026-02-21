@@ -4,110 +4,125 @@ import logger from '../utils/logger.js';
 
 // Vision-capable models by provider
 const VISION_MODELS = {
-  openai: 'gpt-4o',
-  openrouter: 'google/gemini-2.0-flash-exp:free', // Free vision model
+  ollama: 'qwen3-vl:8b',
+  xai: 'grok-4.1-fast',
 };
 
-let openaiClient: OpenAI | null = null;
-let openrouterClient: OpenAI | null = null;
+let xaiClient: OpenAI | null = null;
 
-function getOpenAIClient(): OpenAI | null {
-  if (!config.openai.apiKey) return null;
-  if (!openaiClient) {
-    openaiClient = new OpenAI({ apiKey: config.openai.apiKey });
-  }
-  return openaiClient;
-}
-
-function getOpenRouterClient(): OpenAI | null {
-  if (!config.openrouter?.apiKey) return null;
-  if (!openrouterClient) {
-    openrouterClient = new OpenAI({
-      apiKey: config.openrouter.apiKey,
-      baseURL: 'https://openrouter.ai/api/v1',
-      defaultHeaders: {
-        'HTTP-Referer': 'https://luna-chat.bitwarelabs.com',
-        'X-Title': 'Luna Chat',
-      },
+function getXaiClient(): OpenAI | null {
+  if (!config.xai?.apiKey) return null;
+  if (!xaiClient) {
+    xaiClient = new OpenAI({
+      apiKey: config.xai.apiKey,
+      baseURL: 'https://api.x.ai/v1',
     });
   }
-  return openrouterClient;
+  return xaiClient;
 }
 
 export interface VisionAnalysisResult {
   description: string;
-  provider: 'openai' | 'openrouter';
+  provider: 'openai' | 'openrouter' | 'ollama' | 'xai';
   model: string;
 }
 
 /**
- * Analyze an image and return a detailed text description
+ * Analyze an image using Ollama (qwen3-vl:8b) with Grok (xAI) as fallback
  */
 export async function analyzeImage(
   imageBuffer: Buffer,
   mimeType: string,
   options: {
     prompt?: string;
-    preferFree?: boolean;
   } = {}
 ): Promise<VisionAnalysisResult> {
   const {
     prompt = 'Analyze this image in detail. Describe what you see, including any text, objects, people, colors, composition, and context. Be thorough and specific.',
-    preferFree = true
   } = options;
 
-  // Convert buffer to base64 data URL
+  // Convert buffer to base64
   const base64Image = imageBuffer.toString('base64');
-  const dataUrl = `data:${mimeType};base64,${base64Image}`;
 
-  // Try OpenRouter first if preferFree is true (free vision models)
-  if (preferFree) {
-    const openrouterClient = getOpenRouterClient();
-    if (openrouterClient) {
-      try {
-        const result = await analyzeWithClient(
-          openrouterClient,
-          VISION_MODELS.openrouter,
-          dataUrl,
-          prompt
-        );
-        logger.info('Image analyzed with OpenRouter', { model: VISION_MODELS.openrouter });
-        return {
-          description: result,
-          provider: 'openrouter',
-          model: VISION_MODELS.openrouter,
-        };
-      } catch (error) {
-        logger.warn('OpenRouter vision failed, falling back to OpenAI', {
-          error: (error as Error).message
-        });
-      }
-    }
+  // Try Ollama first (local vision model)
+  const ollamaUrl = config.ollamaTertiary?.url || 'http://10.0.0.30:11434';
+  try {
+    const result = await analyzeWithOllama(ollamaUrl, base64Image, prompt);
+    logger.info('Image analyzed with Ollama', { model: VISION_MODELS.ollama, url: ollamaUrl });
+    return {
+      description: result,
+      provider: 'ollama',
+      model: VISION_MODELS.ollama,
+    };
+  } catch (ollamaError) {
+    logger.warn('Ollama vision failed, falling back to xAI Grok', {
+      error: (ollamaError as Error).message,
+    });
   }
 
-  // Fallback to OpenAI
-  const openai = getOpenAIClient();
-  if (openai) {
+  // Fallback to xAI Grok
+  const xai = getXaiClient();
+  if (xai) {
     try {
-      const result = await analyzeWithClient(
-        openai,
-        VISION_MODELS.openai,
-        dataUrl,
-        prompt
-      );
-      logger.info('Image analyzed with OpenAI', { model: VISION_MODELS.openai });
+      const dataUrl = `data:${mimeType};base64,${base64Image}`;
+      const result = await analyzeWithClient(xai, VISION_MODELS.xai, dataUrl, prompt);
+      logger.info('Image analyzed with xAI', { model: VISION_MODELS.xai });
       return {
         description: result,
-        provider: 'openai',
-        model: VISION_MODELS.openai,
+        provider: 'xai',
+        model: VISION_MODELS.xai,
       };
-    } catch (error) {
-      logger.error('OpenAI vision failed', { error: (error as Error).message });
-      throw error;
+    } catch (xaiError) {
+      logger.error('xAI vision failed', { error: (xaiError as Error).message });
+      throw xaiError;
     }
   }
 
-  throw new Error('No vision-capable provider available. Please configure OpenAI or OpenRouter API key.');
+  throw new Error('No vision-capable provider available. Ollama failed and xAI API key not configured.');
+}
+
+/**
+ * Analyze image using Ollama API format (images as raw base64 in messages)
+ */
+async function analyzeWithOllama(
+  baseUrl: string,
+  base64Image: string,
+  prompt: string
+): Promise<string> {
+  const response = await fetch(`${baseUrl}/api/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: VISION_MODELS.ollama,
+      stream: false,
+      messages: [
+        {
+          role: 'user',
+          content: prompt,
+          images: [base64Image],
+        },
+      ],
+    }),
+    signal: AbortSignal.timeout(60000),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Ollama vision request failed: ${response.status} ${text}`);
+  }
+
+  const data = await response.json() as { message?: { content?: string }; error?: string };
+
+  if (data.error) {
+    throw new Error(`Ollama error: ${data.error}`);
+  }
+
+  const content = data.message?.content;
+  if (!content) {
+    throw new Error('No description generated from Ollama vision model');
+  }
+
+  return content;
 }
 
 async function analyzeWithClient(

@@ -325,55 +325,73 @@ function convertToolsToAnthropic(tools: OpenAITool[]): Anthropic.Tool[] {
 }
 
 /**
- * Convert messages with tool calls/results to Anthropic format
+ * Convert messages with tool calls/results to Anthropic format.
+ *
+ * Critical: when the LLM returns multiple parallel tool calls in one turn,
+ * the caller adds a separate role:'tool' message for each result. Anthropic
+ * rejects consecutive user messages, so consecutive tool results must be
+ * batched into ONE user message with multiple tool_result content blocks.
  */
 function convertToolMessagesToAnthropic(
   messages: ToolMessage[]
 ): Anthropic.MessageParam[] {
   const converted: Anthropic.MessageParam[] = [];
+  let pendingToolResults: Anthropic.ToolResultBlockParam[] = [];
+
+  const flushToolResults = () => {
+    if (pendingToolResults.length > 0) {
+      converted.push({ role: 'user', content: pendingToolResults });
+      pendingToolResults = [];
+    }
+  };
 
   for (const msg of messages) {
     // Skip system messages (handled separately)
     if (msg.role === 'system') continue;
 
     if (msg.role === 'tool') {
-      // Tool result - Anthropic expects this as a user message with tool_result block
-      converted.push({
-        role: 'user',
-        content: [{
-          type: 'tool_result',
-          tool_use_id: msg.tool_call_id!,
-          content: msg.content,
-        }],
-      });
-    } else if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
-      // Assistant message with tool calls
-      const content: Anthropic.ContentBlockParam[] = [];
-
-      // Add text content if present
-      if (msg.content) {
-        content.push({ type: 'text', text: msg.content });
-      }
-
-      // Add tool use blocks
-      for (const toolCall of msg.tool_calls) {
-        content.push({
-          type: 'tool_use',
-          id: toolCall.id,
-          name: toolCall.function.name,
-          input: JSON.parse(toolCall.function.arguments || '{}'),
-        });
-      }
-
-      converted.push({ role: 'assistant', content });
-    } else {
-      // Regular message
-      converted.push({
-        role: msg.role as 'user' | 'assistant',
+      // Accumulate tool results - don't flush yet, more may follow from the same parallel batch
+      pendingToolResults.push({
+        type: 'tool_result',
+        tool_use_id: msg.tool_call_id!,
         content: msg.content,
       });
+    } else {
+      // Non-tool message - flush any accumulated tool results first
+      flushToolResults();
+
+      if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
+        // Assistant message with tool calls
+        const content: Anthropic.ContentBlockParam[] = [];
+
+        // Add text content if present
+        if (msg.content) {
+          content.push({ type: 'text', text: msg.content });
+        }
+
+        // Add tool use blocks
+        for (const toolCall of msg.tool_calls) {
+          content.push({
+            type: 'tool_use',
+            id: toolCall.id,
+            name: toolCall.function.name,
+            input: JSON.parse(toolCall.function.arguments || '{}'),
+          });
+        }
+
+        converted.push({ role: 'assistant', content });
+      } else {
+        // Regular user or assistant message
+        converted.push({
+          role: msg.role as 'user' | 'assistant',
+          content: msg.content,
+        });
+      }
     }
   }
+
+  // Flush any remaining tool results at end of message list
+  flushToolResults();
 
   return converted;
 }

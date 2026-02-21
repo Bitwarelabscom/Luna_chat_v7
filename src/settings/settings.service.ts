@@ -475,32 +475,61 @@ export async function getEnhancedStats(userId: string): Promise<EnhancedStats> {
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
   // Get detailed token stats by model and time period (excluding Ollama for cost calculations)
-  const modelStatsQuery = await pool.query(
-    `SELECT
-       m.model,
-       m.provider,
-       COALESCE(SUM(m.input_tokens), 0) as input_tokens,
-       COALESCE(SUM(m.output_tokens), 0) as output_tokens,
-       COALESCE(SUM(m.cache_tokens), 0) as cache_tokens,
-       COALESCE(SUM(m.tokens_used), 0) as total_tokens,
-       COALESCE(SUM(CASE WHEN m.created_at >= $2 THEN m.input_tokens ELSE 0 END), 0) as today_input,
-       COALESCE(SUM(CASE WHEN m.created_at >= $2 THEN m.output_tokens ELSE 0 END), 0) as today_output,
-       COALESCE(SUM(CASE WHEN m.created_at >= $2 THEN m.cache_tokens ELSE 0 END), 0) as today_cache,
-       COALESCE(SUM(CASE WHEN m.created_at >= $2 THEN m.tokens_used ELSE 0 END), 0) as today_total,
-       COALESCE(SUM(CASE WHEN m.created_at >= $3 THEN m.input_tokens ELSE 0 END), 0) as week_input,
-       COALESCE(SUM(CASE WHEN m.created_at >= $3 THEN m.output_tokens ELSE 0 END), 0) as week_output,
-       COALESCE(SUM(CASE WHEN m.created_at >= $3 THEN m.cache_tokens ELSE 0 END), 0) as week_cache,
-       COALESCE(SUM(CASE WHEN m.created_at >= $3 THEN m.tokens_used ELSE 0 END), 0) as week_total,
-       COALESCE(SUM(CASE WHEN m.created_at >= $4 THEN m.input_tokens ELSE 0 END), 0) as month_input,
-       COALESCE(SUM(CASE WHEN m.created_at >= $4 THEN m.output_tokens ELSE 0 END), 0) as month_output,
-       COALESCE(SUM(CASE WHEN m.created_at >= $4 THEN m.cache_tokens ELSE 0 END), 0) as month_cache,
-       COALESCE(SUM(CASE WHEN m.created_at >= $4 THEN m.tokens_used ELSE 0 END), 0) as month_total
-     FROM messages m
-     JOIN sessions s ON m.session_id = s.id
-     WHERE s.user_id = $1 AND m.model IS NOT NULL
-     GROUP BY m.model, m.provider`,
-    [userId, startOfToday, startOfWeek, startOfMonth]
-  );
+  const [modelStatsQuery, bgStatsQuery] = await Promise.all([
+    pool.query(
+      `SELECT
+         m.model,
+         m.provider,
+         COALESCE(SUM(m.input_tokens), 0) as input_tokens,
+         COALESCE(SUM(m.output_tokens), 0) as output_tokens,
+         COALESCE(SUM(m.cache_tokens), 0) as cache_tokens,
+         COALESCE(SUM(m.tokens_used), 0) as total_tokens,
+         COALESCE(SUM(CASE WHEN m.created_at >= $2 THEN m.input_tokens ELSE 0 END), 0) as today_input,
+         COALESCE(SUM(CASE WHEN m.created_at >= $2 THEN m.output_tokens ELSE 0 END), 0) as today_output,
+         COALESCE(SUM(CASE WHEN m.created_at >= $2 THEN m.cache_tokens ELSE 0 END), 0) as today_cache,
+         COALESCE(SUM(CASE WHEN m.created_at >= $2 THEN m.tokens_used ELSE 0 END), 0) as today_total,
+         COALESCE(SUM(CASE WHEN m.created_at >= $3 THEN m.input_tokens ELSE 0 END), 0) as week_input,
+         COALESCE(SUM(CASE WHEN m.created_at >= $3 THEN m.output_tokens ELSE 0 END), 0) as week_output,
+         COALESCE(SUM(CASE WHEN m.created_at >= $3 THEN m.cache_tokens ELSE 0 END), 0) as week_cache,
+         COALESCE(SUM(CASE WHEN m.created_at >= $3 THEN m.tokens_used ELSE 0 END), 0) as week_total,
+         COALESCE(SUM(CASE WHEN m.created_at >= $4 THEN m.input_tokens ELSE 0 END), 0) as month_input,
+         COALESCE(SUM(CASE WHEN m.created_at >= $4 THEN m.output_tokens ELSE 0 END), 0) as month_output,
+         COALESCE(SUM(CASE WHEN m.created_at >= $4 THEN m.cache_tokens ELSE 0 END), 0) as month_cache,
+         COALESCE(SUM(CASE WHEN m.created_at >= $4 THEN m.tokens_used ELSE 0 END), 0) as month_total
+       FROM messages m
+       JOIN sessions s ON m.session_id = s.id
+       WHERE s.user_id = $1 AND m.model IS NOT NULL
+       GROUP BY m.model, m.provider`,
+      [userId, startOfToday, startOfWeek, startOfMonth]
+    ),
+    pool.query(
+      `SELECT
+         model,
+         provider,
+         COALESCE(SUM(input_tokens), 0) as input_tokens,
+         COALESCE(SUM(output_tokens), 0) as output_tokens,
+         COALESCE(SUM(cache_tokens), 0) as cache_tokens,
+         COALESCE(SUM(input_tokens + output_tokens), 0) as total_tokens,
+         COALESCE(SUM(CASE WHEN created_at >= $2 THEN input_tokens ELSE 0 END), 0) as today_input,
+         COALESCE(SUM(CASE WHEN created_at >= $2 THEN output_tokens ELSE 0 END), 0) as today_output,
+         COALESCE(SUM(CASE WHEN created_at >= $2 THEN cache_tokens ELSE 0 END), 0) as today_cache,
+         COALESCE(SUM(CASE WHEN created_at >= $2 THEN input_tokens + output_tokens ELSE 0 END), 0) as today_total,
+         COALESCE(SUM(CASE WHEN created_at >= $3 THEN input_tokens ELSE 0 END), 0) as week_input,
+         COALESCE(SUM(CASE WHEN created_at >= $3 THEN output_tokens ELSE 0 END), 0) as week_output,
+         COALESCE(SUM(CASE WHEN created_at >= $3 THEN cache_tokens ELSE 0 END), 0) as week_cache,
+         COALESCE(SUM(CASE WHEN created_at >= $3 THEN input_tokens + output_tokens ELSE 0 END), 0) as week_total,
+         COALESCE(SUM(CASE WHEN created_at >= $4 THEN input_tokens ELSE 0 END), 0) as month_input,
+         COALESCE(SUM(CASE WHEN created_at >= $4 THEN output_tokens ELSE 0 END), 0) as month_output,
+         COALESCE(SUM(CASE WHEN created_at >= $4 THEN cache_tokens ELSE 0 END), 0) as month_cache,
+         COALESCE(SUM(CASE WHEN created_at >= $4 THEN input_tokens + output_tokens ELSE 0 END), 0) as month_total
+       FROM llm_call_logs
+       WHERE user_id = $1
+         AND success = true
+         AND provider NOT IN ('ollama', 'ollama_secondary', 'ollama_tertiary', 'sanhedrin')
+       GROUP BY model, provider`,
+      [userId, startOfToday, startOfWeek, startOfMonth]
+    ),
+  ]);
 
   // Initialize totals
   const totals = {
@@ -512,9 +541,9 @@ export async function getEnhancedStats(userId: string): Promise<EnhancedStats> {
 
   const byModel: EnhancedStats['byModel'] = {};
 
-  for (const row of modelStatsQuery.rows) {
+  for (const row of [...modelStatsQuery.rows, ...bgStatsQuery.rows]) {
     const model = row.model;
-    const isOllama = row.provider === 'ollama';
+    const isOllama = ['ollama', 'ollama_secondary', 'ollama_tertiary', 'sanhedrin'].includes(row.provider);
 
     // Parse values
     const todayStats = {
@@ -546,9 +575,33 @@ export async function getEnhancedStats(userId: string): Promise<EnhancedStats> {
       cost: isOllama ? 0 : calculateCost(model, parseInt(row.input_tokens) || 0, parseInt(row.output_tokens) || 0),
     };
 
-    byModel[model] = { today: todayStats, thisWeek: weekStats, thisMonth: monthStats, total: totalStats };
+    if (byModel[model]) {
+      // Merge into existing entry (may appear in both session and bg queries)
+      byModel[model].today.inputTokens += todayStats.inputTokens;
+      byModel[model].today.outputTokens += todayStats.outputTokens;
+      byModel[model].today.cacheTokens += todayStats.cacheTokens;
+      byModel[model].today.totalTokens += todayStats.totalTokens;
+      byModel[model].today.cost += todayStats.cost;
+      byModel[model].thisWeek.inputTokens += weekStats.inputTokens;
+      byModel[model].thisWeek.outputTokens += weekStats.outputTokens;
+      byModel[model].thisWeek.cacheTokens += weekStats.cacheTokens;
+      byModel[model].thisWeek.totalTokens += weekStats.totalTokens;
+      byModel[model].thisWeek.cost += weekStats.cost;
+      byModel[model].thisMonth.inputTokens += monthStats.inputTokens;
+      byModel[model].thisMonth.outputTokens += monthStats.outputTokens;
+      byModel[model].thisMonth.cacheTokens += monthStats.cacheTokens;
+      byModel[model].thisMonth.totalTokens += monthStats.totalTokens;
+      byModel[model].thisMonth.cost += monthStats.cost;
+      byModel[model].total.inputTokens += totalStats.inputTokens;
+      byModel[model].total.outputTokens += totalStats.outputTokens;
+      byModel[model].total.cacheTokens += totalStats.cacheTokens;
+      byModel[model].total.totalTokens += totalStats.totalTokens;
+      byModel[model].total.cost += totalStats.cost;
+    } else {
+      byModel[model] = { today: todayStats, thisWeek: weekStats, thisMonth: monthStats, total: totalStats };
+    }
 
-    // Only add to totals if not Ollama (for cost tracking)
+    // Only add to totals if not Ollama/sanhedrin (for cost tracking)
     if (!isOllama) {
       totals.today.inputTokens += todayStats.inputTokens;
       totals.today.outputTokens += todayStats.outputTokens;
@@ -749,23 +802,40 @@ export async function getDailyTokenStats(userId: string): Promise<DailyTokenStat
   const now = new Date();
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-  // Get token breakdown by model for today, excluding Ollama
-  const result = await pool.query(
-    `SELECT
-       m.model,
-       COALESCE(SUM(m.input_tokens), 0) as input_tokens,
-       COALESCE(SUM(m.output_tokens), 0) as output_tokens,
-       COALESCE(SUM(m.cache_tokens), 0) as cache_tokens,
-       COALESCE(SUM(m.tokens_used), 0) as total_tokens
-     FROM messages m
-     JOIN sessions s ON m.session_id = s.id
-     WHERE s.user_id = $1
-       AND m.created_at >= $2
-       AND m.model IS NOT NULL
-       AND (m.provider IS NULL OR m.provider != 'ollama')
-     GROUP BY m.model`,
-    [userId, startOfToday]
-  );
+  // Get token breakdown by model for today, excluding Ollama (from chat sessions)
+  const [sessionResult, bgResult] = await Promise.all([
+    pool.query(
+      `SELECT
+         m.model,
+         COALESCE(SUM(m.input_tokens), 0) as input_tokens,
+         COALESCE(SUM(m.output_tokens), 0) as output_tokens,
+         COALESCE(SUM(m.cache_tokens), 0) as cache_tokens,
+         COALESCE(SUM(m.tokens_used), 0) as total_tokens
+       FROM messages m
+       JOIN sessions s ON m.session_id = s.id
+       WHERE s.user_id = $1
+         AND m.created_at >= $2
+         AND m.model IS NOT NULL
+         AND (m.provider IS NULL OR m.provider NOT IN ('ollama', 'ollama_secondary', 'ollama_tertiary', 'sanhedrin'))
+       GROUP BY m.model`,
+      [userId, startOfToday]
+    ),
+    pool.query(
+      `SELECT
+         model,
+         COALESCE(SUM(input_tokens), 0) as input_tokens,
+         COALESCE(SUM(output_tokens), 0) as output_tokens,
+         COALESCE(SUM(cache_tokens), 0) as cache_tokens,
+         COALESCE(SUM(input_tokens + output_tokens), 0) as total_tokens
+       FROM llm_call_logs
+       WHERE user_id = $1
+         AND created_at >= $2
+         AND success = true
+         AND provider NOT IN ('ollama', 'ollama_secondary', 'ollama_tertiary', 'sanhedrin')
+       GROUP BY model`,
+      [userId, startOfToday]
+    ),
+  ]);
 
   let totalInput = 0;
   let totalOutput = 0;
@@ -774,7 +844,7 @@ export async function getDailyTokenStats(userId: string): Promise<DailyTokenStat
   let totalCost = 0;
   const byModel: DailyTokenStats['byModel'] = {};
 
-  for (const row of result.rows) {
+  for (const row of [...sessionResult.rows, ...bgResult.rows]) {
     const input = parseInt(row.input_tokens) || 0;
     const output = parseInt(row.output_tokens) || 0;
     const cache = parseInt(row.cache_tokens) || 0;
@@ -787,7 +857,15 @@ export async function getDailyTokenStats(userId: string): Promise<DailyTokenStat
     totalTokens += total;
     totalCost += cost;
 
-    byModel[row.model] = { input, output, cache, total, cost };
+    if (byModel[row.model]) {
+      byModel[row.model].input += input;
+      byModel[row.model].output += output;
+      byModel[row.model].cache += cache;
+      byModel[row.model].total += total;
+      byModel[row.model].cost += cost;
+    } else {
+      byModel[row.model] = { input, output, cache, total, cost };
+    }
   }
 
   return {
@@ -795,7 +873,7 @@ export async function getDailyTokenStats(userId: string): Promise<DailyTokenStat
     outputTokens: totalOutput,
     cacheTokens: totalCache,
     totalTokens,
-    estimatedCost: Math.round(totalCost * 10000) / 10000, // Round to 4 decimal places
+    estimatedCost: Math.round(totalCost * 10000) / 10000,
     byModel,
   };
 }

@@ -1,6 +1,7 @@
 import { pool } from '../db/index.js';
 import { createCompletion } from '../llm/router.js';
 import type { ProviderId } from '../llm/types.js';
+import { createBackgroundCompletionWithFallback } from '../llm/background-completion.service.js';
 import { getUserModelConfig } from '../llm/model-config.service.js';
 import * as factsService from '../memory/facts.service.js';
 import * as sessionWorkspaceService from './session-workspace.service.js';
@@ -613,11 +614,11 @@ export async function startFriendDiscussion(
   }
 
   // Generate summary
-  const summary = await generateConversationSummary(provider, model, topic, friend.name, conversation.messages);
+  const summary = await generateConversationSummary(userId, topic, friend.name, conversation.messages);
   conversation.summary = summary;
 
   // Extract facts from the discussion
-  const extractedFacts = await extractFactsFromDiscussion(provider, model, userId, topic, conversation.messages);
+  const extractedFacts = await extractFactsFromDiscussion(userId, topic, conversation.messages);
   conversation.factsExtracted = extractedFacts;
 
   // Save to database
@@ -771,15 +772,15 @@ export async function startFriendDiscussionStreaming(
       onEvent({ type: 'round_complete', round: round + 1, totalRounds: rounds });
     }
 
-    // Generate summary using GPT-5-mini for efficiency
+    // Generate summary using configured background model with fallback
     onEvent({ type: 'generating_summary' });
-    const summary = await generateConversationSummary('openai', 'gpt-5-mini', topic, friend.name, conversation.messages);
+    const summary = await generateConversationSummary(userId, topic, friend.name, conversation.messages);
     conversation.summary = summary;
     onEvent({ type: 'summary', summary });
 
-    // Extract facts using GPT-5-mini for efficiency
+    // Extract facts using configured background model with fallback
     onEvent({ type: 'extracting_facts' });
-    const extractedFacts = await extractFactsFromDiscussion('openai', 'gpt-5-mini', userId, topic, conversation.messages);
+    const extractedFacts = await extractFactsFromDiscussion(userId, topic, conversation.messages);
     conversation.factsExtracted = extractedFacts;
     onEvent({ type: 'facts', facts: extractedFacts });
 
@@ -891,8 +892,7 @@ Respond to Luna's latest point. Ask probing questions, offer your perspective, o
 }
 
 async function generateConversationSummary(
-  provider: string,
-  model: string,
+  userId: string,
   topic: string,
   friendName: string,
   messages: ConversationMessage[]
@@ -910,20 +910,22 @@ ${conversationText}
 
 Summary:`;
 
-  // GPT-5-mini uses reasoning tokens, so we need higher maxTokens
-  const maxTokens = model.includes('gpt-5') ? 1000 : 200;
-
-  const result = await createCompletion(provider as ProviderId, model, [
-    { role: 'system', content: 'You are a helpful assistant that creates concise summaries.' },
-    { role: 'user', content: prompt },
-  ], { temperature: 0.3, maxTokens });
+  const result = await createBackgroundCompletionWithFallback({
+    userId,
+    feature: 'friend_summary',
+    messages: [
+      { role: 'system', content: 'You are a helpful assistant that creates concise summaries.' },
+      { role: 'user', content: prompt },
+    ],
+    temperature: 0.3,
+    maxTokens: 1000,
+    loggingContext: { userId, source: 'friend-discussion', nodeName: 'summary' },
+  });
 
   return result.content;
 }
 
 async function extractFactsFromDiscussion(
-  provider: string,
-  model: string,
   userId: string,
   topic: string,
   messages: ConversationMessage[]
@@ -945,13 +947,17 @@ ${conversationText}
 
 Return each insight on a new line, starting with "- ". Be specific and actionable.`;
 
-  // GPT-5-mini uses reasoning tokens, so we need higher maxTokens
-  const maxTokens = model.includes('gpt-5') ? 1500 : 300;
-
-  const result = await createCompletion(provider as ProviderId, model, [
-    { role: 'system', content: 'You extract useful insights from conversations. Be specific and concise.' },
-    { role: 'user', content: prompt },
-  ], { temperature: 0.3, maxTokens });
+  const result = await createBackgroundCompletionWithFallback({
+    userId,
+    feature: 'friend_fact_extraction',
+    messages: [
+      { role: 'system', content: 'You extract useful insights from conversations. Be specific and concise.' },
+      { role: 'user', content: prompt },
+    ],
+    temperature: 0.3,
+    maxTokens: 1500,
+    loggingContext: { userId, source: 'friend-discussion', nodeName: 'extract_facts' },
+  });
 
   // Parse the insights
   const insights = result.content

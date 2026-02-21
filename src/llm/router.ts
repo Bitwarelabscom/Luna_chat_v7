@@ -13,6 +13,49 @@ import * as sanhedrinProvider from './providers/sanhedrin.provider.js';
 import * as moonshotProvider from './providers/moonshot.provider.js';
 import logger from '../utils/logger.js';
 import { activityHelpers } from '../activity/activity.service.js';
+import { pool } from '../db/postgres.js';
+
+// Providers to skip for llm_call_logs (local/free, no per-token cost)
+const EXCLUDED_PROVIDERS: Set<ProviderId> = new Set(['ollama', 'ollama_secondary', 'ollama_tertiary', 'sanhedrin']);
+
+interface LLMCallLogData {
+  userId?: string;
+  sessionId?: string;
+  source: string;
+  provider: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheTokens: number;
+  reasoningTokens: number;
+  durationMs: number;
+  success: boolean;
+  errorMessage?: string;
+}
+
+function logToDb(data: LLMCallLogData): void {
+  pool.query(
+    `INSERT INTO llm_call_logs
+       (user_id, session_id, source, provider, model,
+        input_tokens, output_tokens, cache_tokens, reasoning_tokens,
+        duration_ms, success, error_message)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+    [
+      data.userId ?? null,
+      data.sessionId ?? null,
+      data.source,
+      data.provider,
+      data.model,
+      data.inputTokens,
+      data.outputTokens,
+      data.cacheTokens,
+      data.reasoningTokens,
+      data.durationMs,
+      data.success,
+      data.errorMessage ?? null,
+    ]
+  ).catch(() => {}); // Non-blocking, never throws
+}
 
 /**
  * Optional logging context for activity tracking
@@ -82,13 +125,53 @@ export async function createCompletion(
 
   logger.debug('LLM request', { provider: providerId, model, messageCount: messages.length });
 
-  const result = await provider.createCompletion(model, messages, options);
+  let result: CompletionResult;
+  try {
+    result = await provider.createCompletion(model, messages, options);
+  } catch (err) {
+    const durationMs = Date.now() - startTime;
+    if (!EXCLUDED_PROVIDERS.has(providerId)) {
+      logToDb({
+        userId: options.loggingContext?.userId,
+        sessionId: options.loggingContext?.sessionId,
+        source: options.loggingContext?.source ?? options.loggingContext?.nodeName ?? 'router',
+        provider: providerId,
+        model,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheTokens: 0,
+        reasoningTokens: 0,
+        durationMs,
+        success: false,
+        errorMessage: (err as Error).message?.slice(0, 500),
+      });
+    }
+    throw err;
+  }
 
   logger.debug('LLM response', { provider: providerId, model, tokensUsed: result.tokensUsed });
 
+  const durationMs = Date.now() - startTime;
+
+  // Log to llm_call_logs for all non-excluded providers (regardless of loggingContext)
+  if (!EXCLUDED_PROVIDERS.has(providerId)) {
+    logToDb({
+      userId: options.loggingContext?.userId,
+      sessionId: options.loggingContext?.sessionId,
+      source: options.loggingContext?.source ?? options.loggingContext?.nodeName ?? 'router',
+      provider: providerId,
+      model,
+      inputTokens: result.inputTokens ?? 0,
+      outputTokens: result.outputTokens ?? 0,
+      cacheTokens: result.cacheTokens ?? 0,
+      reasoningTokens: 0,
+      durationMs,
+      success: true,
+    });
+  }
+
   // Log to activity if context provided
   if (options.loggingContext) {
-    const durationMs = Date.now() - startTime;
     activityHelpers.logLLMCall(
       options.loggingContext.userId,
       options.loggingContext.sessionId,
@@ -130,13 +213,61 @@ export async function* streamCompletion(
   providerId: ProviderId,
   model: string,
   messages: ChatMessage[],
-  options: { temperature?: number; maxTokens?: number; systemBlocks?: CacheableSystemBlock[] } = {}
+  options: { temperature?: number; maxTokens?: number; systemBlocks?: CacheableSystemBlock[]; loggingContext?: LLMLoggingContext } = {}
 ): AsyncGenerator<StreamChunk> {
   const provider = getProvider(providerId);
 
   logger.debug('LLM stream request', { provider: providerId, model, messageCount: messages.length });
 
-  yield* provider.streamCompletion(model, messages, options);
+  const startTime = Date.now();
+  let totalInput = 0;
+  let totalOutput = 0;
+  let totalCache = 0;
+
+  try {
+    for await (const chunk of provider.streamCompletion(model, messages, options)) {
+      if (chunk.type === 'done') {
+        totalInput += chunk.inputTokens ?? 0;
+        totalOutput += chunk.outputTokens ?? 0;
+        totalCache += chunk.cacheTokens ?? 0;
+      }
+      yield chunk;
+    }
+  } catch (err) {
+    if (!EXCLUDED_PROVIDERS.has(providerId)) {
+      logToDb({
+        userId: options.loggingContext?.userId,
+        sessionId: options.loggingContext?.sessionId,
+        source: options.loggingContext?.source ?? options.loggingContext?.nodeName ?? 'router',
+        provider: providerId,
+        model,
+        inputTokens: totalInput,
+        outputTokens: totalOutput,
+        cacheTokens: totalCache,
+        reasoningTokens: 0,
+        durationMs: Date.now() - startTime,
+        success: false,
+        errorMessage: (err as Error).message?.slice(0, 500),
+      });
+    }
+    throw err;
+  }
+
+  if (!EXCLUDED_PROVIDERS.has(providerId)) {
+    logToDb({
+      userId: options.loggingContext?.userId,
+      sessionId: options.loggingContext?.sessionId,
+      source: options.loggingContext?.source ?? options.loggingContext?.nodeName ?? 'router',
+      provider: providerId,
+      model,
+      inputTokens: totalInput,
+      outputTokens: totalOutput,
+      cacheTokens: totalCache,
+      reasoningTokens: 0,
+      durationMs: Date.now() - startTime,
+      success: true,
+    });
+  }
 }
 
 /**

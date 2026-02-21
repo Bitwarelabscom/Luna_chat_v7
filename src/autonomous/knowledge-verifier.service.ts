@@ -1,11 +1,10 @@
 /**
  * Knowledge Verifier Service
- * Verifies research findings using Ollama for fact-checking
+ * Verifies research findings using configurable background LLM
  */
 
 import { query } from '../db/postgres.js';
-import axios from 'axios';
-import { config } from '../config/index.js';
+import { createBackgroundCompletionWithFallback } from '../llm/background-completion.service.js';
 import logger from '../utils/logger.js';
 import type { ResearchFindings } from './research-coordinator.service.js';
 
@@ -22,6 +21,7 @@ export interface VerificationResult {
  * Verify research findings for accuracy and consistency
  */
 export async function verifyFindings(
+  userId: string,
   topic: string,
   findings: ResearchFindings,
   trustScores: number[]
@@ -55,8 +55,7 @@ export async function verifyFindings(
       };
     }
 
-    // Use Ollama for fact-checking
-    const verificationResult = await verifyWithOllama(topic, findings, trustScores);
+    const verificationResult = await verifyWithModel(userId, topic, findings, trustScores);
 
     // Store verification result
     return verificationResult;
@@ -66,10 +65,8 @@ export async function verifyFindings(
   }
 }
 
-/**
- * Use Ollama qwen2.5:7b for verification
- */
-async function verifyWithOllama(
+async function verifyWithModel(
+  userId: string,
   topic: string,
   findings: ResearchFindings,
   trustScores: number[]
@@ -109,23 +106,20 @@ Output valid JSON only:
   "reasoning": "Brief explanation of verification decision"
 }`;
 
-    const response = await axios.post(
-      `${config.ollama.url}/api/generate`,
-      {
-        model: 'qwen2.5:7b',
-        prompt,
-        stream: false,
-        options: {
-          temperature: 0.1, // Low temperature for consistent verification
-          num_predict: 500,
-        },
+    const response = await createBackgroundCompletionWithFallback({
+      userId,
+      feature: 'knowledge_verification',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.1,
+      maxTokens: 1000,
+      loggingContext: {
+        userId,
+        source: 'autonomous_research',
+        nodeName: 'knowledge_verification',
       },
-      {
-        timeout: 120000, // Increased to 120 second timeout
-      }
-    );
+    });
 
-    const responseText = response.data.response.trim();
+    const responseText = response.content.trim();
 
     // Parse JSON response
     const jsonText = responseText
@@ -150,7 +144,7 @@ Output valid JSON only:
       sourceAgreement: result.sourceAgreement || false,
     };
   } catch (error) {
-    logger.error('Error in Ollama verification', { error });
+    logger.error('Error in model verification', { error });
 
     // Fallback verification based on simple heuristics
     const sourceCount = findings.sources.length;

@@ -1,5 +1,5 @@
 import { pool } from '../db/index.js';
-import { createCompletion } from '../llm/router.js';
+import { createBackgroundCompletionWithFallback } from '../llm/background-completion.service.js';
 import logger from '../utils/logger.js';
 
 export interface MoodEntry {
@@ -33,19 +33,20 @@ Only include emotions that are clearly present. Return JSON only.`;
 /**
  * Analyze mood from a message
  */
-export async function analyzeMood(message: string): Promise<Omit<MoodEntry, 'id' | 'sessionId' | 'detectedAt'> | null> {
+export async function analyzeMood(message: string, userId?: string): Promise<Omit<MoodEntry, 'id' | 'sessionId' | 'detectedAt'> | null> {
   try {
     // Use GPT-5-nano for accurate sentiment classification
     // Note: GPT-5-nano uses internal reasoning tokens, so we need higher maxTokens
-    const response = await createCompletion(
-      'openai',
-      'gpt-5-nano',
-      [
+    const response = await createBackgroundCompletionWithFallback({
+      userId,
+      feature: 'mood_analysis',
+      messages: [
         { role: 'system', content: MOOD_ANALYSIS_PROMPT },
         { role: 'user', content: message },
       ],
-      { maxTokens: 2000 }
-    );
+      maxTokens: 2000,
+      loggingContext: { userId: userId ?? '', source: 'mood', nodeName: 'mood_analysis' },
+    });
 
     const content = response.content || '';
     const jsonMatch = content.match(/\{[\s\S]*\}/);
@@ -292,7 +293,7 @@ export async function processMoodFromMessage(
   // Only analyze messages with enough content
   if (message.length < 20) return null;
 
-  const mood = await analyzeMood(message);
+  const mood = await analyzeMood(message, userId);
   if (!mood) return null;
 
   await storeMoodEntry(userId, sessionId, mood);

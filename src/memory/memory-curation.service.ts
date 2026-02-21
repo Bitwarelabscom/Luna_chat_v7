@@ -6,7 +6,7 @@
  * 2. curateMemory() - Uses gpt-5-nano to select relevant memories for injection
  */
 
-import { createCompletion } from '../llm/router.js';
+import { createBackgroundCompletionWithFallback } from '../llm/background-completion.service.js';
 import { formatRelativeTime } from './time-utils.js';
 import { formatFactsForPrompt, type UserFact } from './facts.service.js';
 import type { SimilarMessage } from './embedding.service.js';
@@ -216,23 +216,22 @@ Complexity score: ${complexityScore.toFixed(2)}
 Available memories:
 ${candidateLines.join('\n')}`;
 
-    const response = await createCompletion(
-      'openai',
-      'gpt-5-nano',
-      [
+    const response = await createBackgroundCompletionWithFallback({
+      userId,
+      sessionId: _sessionId,
+      feature: 'memory_curation',
+      messages: [
         { role: 'system', content: CURATION_SYSTEM_PROMPT },
         { role: 'user', content: userPrompt },
       ],
-      {
-        maxTokens: 5000,
-        loggingContext: {
-          userId,
-          sessionId: _sessionId,
-          source: 'memory-curation',
-          nodeName: 'curate',
-        },
-      }
-    );
+      maxTokens: 5000,
+      loggingContext: {
+        userId,
+        sessionId: _sessionId,
+        source: 'memory-curation',
+        nodeName: 'curate',
+      },
+    });
 
     const content = (response.content || '').trim();
 

@@ -16,17 +16,19 @@ import MemoryTab from './settings/MemoryTab';
 import TriggersTab from './settings/TriggersTab';
 import McpTab from './settings/McpTab';
 import BackgroundTab from './settings/BackgroundTab';
+import BackgroundModelsTab from './settings/BackgroundModelsTab';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-type TabId = 'appearance' | 'background' | 'prompts' | 'models' | 'coder' | 'integrations' | 'mcpconfig' | 'workspace' | 'tasks' | 'memory' | 'autonomous' | 'triggers' | 'stats' | 'data';
+type TabId = 'appearance' | 'background' | 'backgroundai' | 'prompts' | 'models' | 'coder' | 'integrations' | 'mcpconfig' | 'workspace' | 'tasks' | 'memory' | 'autonomous' | 'triggers' | 'stats' | 'data';
 
 const SETTINGS_TABS: Array<{ id: TabId; label: string; icon: typeof MessageSquare }> = [
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'background', label: 'Background', icon: Image },
+  { id: 'backgroundai', label: 'Background AI', icon: Cpu },
   { id: 'prompts', label: 'Prompts', icon: MessageSquare },
   { id: 'models', label: 'Models', icon: Cpu },
   { id: 'coder', label: 'Coder', icon: Code },
@@ -108,6 +110,7 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         <div className="flex-1 overflow-y-auto p-6">
           {activeTab === 'appearance' && <AppearanceTab />}
           {activeTab === 'background' && <BackgroundTab />}
+          {activeTab === 'backgroundai' && <BackgroundModelsTab />}
           {activeTab === 'prompts' && <PromptsTab />}
           {activeTab === 'models' && <ModelsTab />}
           {activeTab === 'coder' && <CoderTab />}

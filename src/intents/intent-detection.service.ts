@@ -6,6 +6,11 @@
 import logger from '../utils/logger.js';
 import { query } from '../db/postgres.js';
 import { createChatCompletion } from '../llm/openai.client.js';
+import type { ProviderId } from '../llm/types.js';
+import {
+  getBackgroundFeatureModelConfig,
+  DEFAULT_BACKGROUND_LLM_SETTINGS,
+} from '../settings/background-llm-settings.service.js';
 import {
   IntentSignal,
   IntentType,
@@ -478,46 +483,91 @@ Return JSON only:
 `;
 
   try {
-    const response = await createChatCompletion({
-      messages: [{ role: 'system', content: prompt }],
-      model: 'gpt-5-mini',
-      temperature: 0.1,
-      maxTokens: 1000,
-      response_format: { type: 'json_object' },
-      loggingContext: userId ? {
+    const config = userId
+      ? await getBackgroundFeatureModelConfig(userId, 'intent_detection')
+      : DEFAULT_BACKGROUND_LLM_SETTINGS.intent_detection;
+
+    const parseIntentSignal = (rawContent: string): IntentSignal | null => {
+      const content = rawContent.replace(/```json|```/g, '').trim();
+      if (!content) {
+        throw new Error('Empty response content');
+      }
+
+      const result = JSON.parse(content) as {
+        action?: 'create' | 'update' | 'ignore';
+        intent_id?: string;
+        label?: string;
+        type?: IntentType;
+        confidence?: number;
+      };
+
+      const confidence = typeof result.confidence === 'number' ? result.confidence : 0;
+      if (confidence < 0.7 || result.action === 'ignore') return null;
+
+      if (result.action === 'update' && result.intent_id) {
+        return {
+          action: 'update',
+          confidence,
+          matchedIntentId: result.intent_id,
+          triggerType: 'implicit',
+        };
+      }
+
+      if (result.action === 'create' && result.label) {
+        return {
+          action: 'create',
+          confidence,
+          type: result.type || 'task',
+          label: result.label,
+          goal: result.label,
+          triggerType: 'implicit',
+        };
+      }
+
+      return null;
+    };
+
+    const detectWithModel = async (provider: ProviderId, model: string): Promise<IntentSignal | null> => {
+      const response = await createChatCompletion({
+        messages: [{ role: 'system', content: prompt }],
+        provider,
+        model,
+        temperature: 0.1,
+        maxTokens: 1000,
+        response_format: { type: 'json_object' },
+        loggingContext: userId ? {
+          userId,
+          sessionId,
+          source: 'intent-detection',
+          nodeName: 'detect_intent_llm'
+        } : undefined,
+      });
+      return parseIntentSignal(response.content);
+    };
+
+    try {
+      return await detectWithModel(config.primary.provider, config.primary.model);
+    } catch (primaryError) {
+      const primaryMessage = (primaryError as Error).message;
+      logger.warn('Primary intent-detection model failed, trying fallback', {
         userId,
         sessionId,
-        source: 'intent-detection',
-        nodeName: 'detect_intent_llm'
-      } : undefined,
-    });
+        primaryProvider: config.primary.provider,
+        primaryModel: config.primary.model,
+        fallbackProvider: config.fallback.provider,
+        fallbackModel: config.fallback.model,
+        error: primaryMessage,
+      });
 
-    const content = response.content.replace(/```json|```/g, '').trim();
-    const result = JSON.parse(content);
+      if (
+        config.primary.provider === config.fallback.provider &&
+        config.primary.model === config.fallback.model
+      ) {
+        throw primaryError;
+      }
 
-    if (result.confidence < 0.7 || result.action === 'ignore') return null;
-
-    if (result.action === 'update' && result.intent_id) {
-      return {
-        action: 'update',
-        confidence: result.confidence,
-        matchedIntentId: result.intent_id,
-        triggerType: 'implicit',
-      };
+      return await detectWithModel(config.fallback.provider, config.fallback.model);
     }
-
-    if (result.action === 'create' && result.label) {
-      return {
-        action: 'create',
-        confidence: result.confidence,
-        type: result.type || 'task',
-        label: result.label,
-        goal: result.label, // Simple goal
-        triggerType: 'implicit',
-      };
-    }
-
-    return null;
   } catch (error) {
     logger.warn('LLM intent detection failed', { error: (error as Error).message });
     return null;

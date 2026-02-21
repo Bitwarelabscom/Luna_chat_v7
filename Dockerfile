@@ -11,15 +11,32 @@ COPY src ./src
 # SECURITY: Use production build (no source maps)
 RUN npm run build:prod
 
-FROM node:20-alpine AS runner
+FROM node:20-bookworm-slim AS runner
 
 WORKDIR /app
 
-# Add docker-cli for sandbox proxy access (via docker-socket-proxy)
-# Add git for Claude CLI (required dependency)
-# Add yt-dlp, ffmpeg, and vlc for media management and streaming
-RUN apk add --no-cache wget docker-cli git ffmpeg vlc python3 py3-pip && \
-    pip3 install --break-system-packages yt-dlp
+# Add system dependencies for tooling, media, and Playwright runtime
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget git ffmpeg vlc python3 python3-pip ca-certificates curl gnupg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install docker-cli for sandbox proxy access (via docker-socket-proxy)
+RUN curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable" \
+    > /etc/apt/sources.list.d/docker.list && \
+    apt-get update && apt-get install -y --no-install-recommends docker-ce-cli && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install yt-dlp
+RUN pip3 install --break-system-packages yt-dlp
+
+# Ensure Playwright browsers are installed where the runtime user expects them.
+ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
+RUN mkdir -p /home/node/.cache/ms-playwright
+
+# Install Playwright Chromium + OS dependencies
+RUN npx -y playwright@latest install chromium --with-deps
+RUN chown -R node:node /home/node/.cache/ms-playwright
 
 # Install Claude CLI and Gemini CLI globally for coding agents
 RUN npm install -g @anthropic-ai/claude-code @google/gemini-cli
@@ -27,8 +44,8 @@ RUN npm install -g @anthropic-ai/claude-code @google/gemini-cli
 # Create credential directories for CLI tools (will be mounted)
 RUN mkdir -p /home/node/.claude /home/node/.gemini && chown node:node /home/node/.claude /home/node/.gemini
 
-# Create workspace, documents, images, and media directories with proper ownership
-RUN mkdir -p /app/workspace /app/documents /app/images/backgrounds/generated /app/images/backgrounds/uploaded /mnt/data/media/Videos /mnt/data/media/Music && chown -R node:node /app/workspace /app/documents /app/images /mnt/data/media
+# Create workspace, browser profile, documents, images, and media directories with proper ownership
+RUN mkdir -p /app/workspace /app/browser-profiles /app/documents /app/images/backgrounds/generated /app/images/backgrounds/uploaded /mnt/data/media/Videos /mnt/data/media/Music && chown -R node:node /app/workspace /app/browser-profiles /app/documents /app/images /mnt/data/media
 
 COPY package*.json ./
 RUN npm ci --only=production

@@ -1,14 +1,11 @@
 /**
  * Session Analyzer Service
- * Analyzes chat sessions for knowledge gaps using Groq API
+ * Analyzes chat sessions for knowledge gaps using configurable background LLM
  */
 
 import { query } from '../db/postgres.js';
-import Groq from 'groq-sdk';
-import { config } from '../config/index.js';
+import { createBackgroundCompletionWithFallback } from '../llm/background-completion.service.js';
 import logger from '../utils/logger.js';
-
-const groq = config.groq?.apiKey ? new Groq({ apiKey: config.groq.apiKey }) : null;
 
 export interface KnowledgeGap {
   description: string;
@@ -148,14 +145,9 @@ function prepareSessionSummary(sessions: any[], messages: any[]): string {
 }
 
 /**
- * Use Groq to analyze sessions and identify knowledge gaps
+ * Use configured background model to analyze sessions and identify knowledge gaps
  */
 async function analyzeWithGroq(sessionSummary: string, userId: string): Promise<KnowledgeGap[]> {
-  if (!groq) {
-    logger.warn('Groq API not configured, skipping analysis');
-    return [];
-  }
-
   try {
     const systemPrompt = `You are an AI session analyzer identifying knowledge gaps in user conversations.
 
@@ -185,17 +177,23 @@ Example output:
   }
 ]`;
 
-    const completion = await groq.chat.completions.create({
-      model: 'llama-3.1-8b-instant', // Faster model, higher rate limits
+    const completion = await createBackgroundCompletionWithFallback({
+      userId,
+      feature: 'session_gap_analysis',
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: sessionSummary },
       ],
       temperature: 0.3,
-      max_tokens: 5000,
+      maxTokens: 5000,
+      loggingContext: {
+        userId,
+        source: 'autonomous_research',
+        nodeName: 'session_gap_analysis',
+      },
     });
 
-    const responseText = completion.choices[0]?.message?.content?.trim() || '[]';
+    const responseText = completion.content.trim() || '[]';
 
     // Parse JSON response
     let gaps: KnowledgeGap[];
@@ -208,7 +206,7 @@ Example output:
 
       gaps = JSON.parse(jsonText);
     } catch (parseError) {
-      logger.error('Failed to parse Groq response as JSON', {
+      logger.error('Failed to parse session analysis response as JSON', {
         parseError,
         responseText,
       });
@@ -236,7 +234,7 @@ Example output:
 
     return validGaps;
   } catch (error) {
-    logger.error('Error analyzing with Groq', { error });
+    logger.error('Error analyzing session gaps', { error });
     throw error;
   }
 }

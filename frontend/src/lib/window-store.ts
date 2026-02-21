@@ -79,6 +79,8 @@ interface WindowStore {
   windows: WindowState[];
   focusedWindow: string | null;
   maxZIndex: number;
+  // Indicates that an LLM browser action is currently in progress
+  isLunaControlling: boolean;
   // Pending URL for browser window to navigate to on open
   pendingBrowserUrl: string | null;
   // Pending context for editor to open a file
@@ -97,6 +99,8 @@ interface WindowStore {
   focusWindow: (windowId: string) => void;
   updateWindowPosition: (windowId: string, position: { x: number; y: number }) => void;
   updateWindowSize: (windowId: string, size: { width: number; height: number }) => void;
+  setLunaControlling: (active: boolean) => void;
+  pulseLunaControl: (durationMs?: number) => void;
   // Browser URL actions
   setPendingBrowserUrl: (url: string | null) => void;
   consumePendingBrowserUrl: () => string | null;
@@ -115,11 +119,13 @@ interface WindowStore {
 }
 
 let windowIdCounter = 0;
+let lunaControlTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const useWindowStore = create<WindowStore>((set, get) => ({
   windows: [],
   focusedWindow: null,
   maxZIndex: 1,
+  isLunaControlling: false,
   pendingBrowserUrl: null,
   pendingEditorContext: null,
   pendingVideoResults: null,
@@ -240,6 +246,24 @@ export const useWindowStore = create<WindowStore>((set, get) => ({
         w.id === windowId ? { ...w, size } : w
       ),
     });
+  },
+
+  setLunaControlling: (active: boolean) => {
+    set({ isLunaControlling: active });
+  },
+
+  pulseLunaControl: (durationMs = 2500) => {
+    if (lunaControlTimer) {
+      clearTimeout(lunaControlTimer);
+      lunaControlTimer = null;
+    }
+
+    set({ isLunaControlling: true });
+
+    lunaControlTimer = setTimeout(() => {
+      set({ isLunaControlling: false });
+      lunaControlTimer = null;
+    }, durationMs);
   },
 
   setPendingBrowserUrl: (url: string | null) => {

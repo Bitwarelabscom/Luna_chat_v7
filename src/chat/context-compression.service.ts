@@ -8,7 +8,7 @@
  */
 
 import { query, queryOne } from '../db/postgres.js';
-import { createCompletion } from '../llm/router.js';
+import { createBackgroundCompletionWithFallback } from '../llm/background-completion.service.js';
 import { searchSimilarMessages, type SimilarMessage } from '../memory/embedding.service.js';
 import type { Message } from '../types/index.js';
 import logger from '../utils/logger.js';
@@ -267,23 +267,20 @@ export async function updateRollingSummary(
       .join('\n');
 
     // Generate summary using OpenAI gpt-5-nano (faster than local CPU)
-    const response = await createCompletion(
-      'openai',
-      'gpt-5-nano',
-      [
-        { role: 'user', content: SUMMARY_PROMPT + conversationText }
-      ],
-      {
-        temperature: 0.3,
-        maxTokens: 5000,
-        loggingContext: {
-          userId: _userId,
-          sessionId,
-          source: 'context-compression',
-          nodeName: 'summarize'
-        }
+    const response = await createBackgroundCompletionWithFallback({
+      userId: _userId,
+      sessionId,
+      feature: 'context_summary',
+      messages: [{ role: 'user', content: SUMMARY_PROMPT + conversationText }],
+      temperature: 0.3,
+      maxTokens: 5000,
+      loggingContext: {
+        userId: _userId,
+        sessionId,
+        source: 'context-compression',
+        nodeName: 'summarize'
       }
-    );
+    });
 
     const newSummary = (response.content || '').trim();
     if (!newSummary) {
@@ -299,23 +296,20 @@ export async function updateRollingSummary(
     // If combined summary is too long, re-summarize it
     let finalSummary = combinedSummary;
     if (combinedSummary.length > 800) {
-      const recompressResponse = await createCompletion(
-        'openai',
-        'gpt-5-nano',
-        [
-          { role: 'user', content: `Compress this conversation summary into 2-3 sentences, preserving the most important points:\n\n${combinedSummary}` }
-        ],
-        {
-          temperature: 0.3,
-          maxTokens: 5000,
-          loggingContext: {
-            userId: _userId,
-            sessionId,
-            source: 'context-compression',
-            nodeName: 'recompress'
-          }
+      const recompressResponse = await createBackgroundCompletionWithFallback({
+        userId: _userId,
+        sessionId,
+        feature: 'context_summary',
+        messages: [{ role: 'user', content: `Compress this conversation summary into 2-3 sentences, preserving the most important points:\n\n${combinedSummary}` }],
+        temperature: 0.3,
+        maxTokens: 5000,
+        loggingContext: {
+          userId: _userId,
+          sessionId,
+          source: 'context-compression',
+          nodeName: 'recompress'
         }
-      );
+      });
       finalSummary = (recompressResponse.content || combinedSummary).trim();
     }
 

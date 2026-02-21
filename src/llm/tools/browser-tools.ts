@@ -5,7 +5,7 @@ export const browserNavigateTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: 'function',
   function: {
     name: 'browser_navigate',
-    description: `Navigate a browser to a URL. Use this when you need to visit a webpage for interactive browsing, form filling, or when fetch_url doesn't work (JavaScript-heavy sites, SPAs). Returns page title and URL on success.`,
+    description: `Navigate the shared browser session to a URL. Use this to open a page before interacting with it. Works with the live browser window and persistent session state.`,
     parameters: {
       type: 'object',
       properties: {
@@ -54,20 +54,63 @@ export const browserClickTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: 'function',
   function: {
     name: 'browser_click',
-    description: `Click an element on a webpage by CSS selector. Use for buttons, links, or any clickable element.`,
+    description: `Click an element in the shared browser session by CSS selector. Use after browser_navigate or browser_get_page_content to act on a known selector.`,
     parameters: {
       type: 'object',
       properties: {
         url: {
           type: 'string',
-          description: 'The URL to navigate to first',
+          description: 'Optional URL to navigate to before clicking',
         },
         selector: {
           type: 'string',
           description: 'CSS selector for the element to click (e.g., "button.submit", "#login-btn", "a[href*=signup]")',
         },
       },
-      required: ['url', 'selector'],
+      required: ['selector'],
+    },
+  },
+};
+
+export const browserTypeTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'browser_type',
+    description: `Fill an input field in the shared browser session by CSS selector. Optionally submit with Enter after filling.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'Optional URL to navigate to before typing',
+        },
+        selector: {
+          type: 'string',
+          description: 'CSS selector for the input element (e.g., "input[name=q]", "textarea#message")',
+        },
+        text: {
+          type: 'string',
+          description: 'Text value to place into the input field',
+        },
+        submit: {
+          type: 'boolean',
+          description: 'If true, press Enter after filling. Default: false',
+        },
+      },
+      required: ['selector', 'text'],
+    },
+  },
+};
+
+export const browserGetPageContentTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'browser_get_page_content',
+    description: `Get DOM-based page understanding from the current shared browser tab: URL, title, visible text excerpt, and interactive elements with selectors.`,
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
     },
   },
 };

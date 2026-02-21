@@ -232,7 +232,10 @@ export async function createChatCompletion(
     return completionResult;
   }
 
-  // Route Ollama to native provider (only if no tools, as native doesn't support them)
+  // Route Ollama to native provider when no tools are needed.
+  // When tools ARE present, fall through to the OpenAI SDK path below --
+  // Ollama exposes an OpenAI-compatible API that supports tool calling for
+  // models like llama3.1, llama3.2, mistral-nemo, etc.
   if ((provider === 'ollama' || provider === 'ollama_secondary' || provider === 'ollama_tertiary') && (!tools || tools.length === 0)) {
     let ollamaProvider;
     if (provider === 'ollama') {

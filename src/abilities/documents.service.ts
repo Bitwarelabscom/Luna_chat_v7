@@ -194,7 +194,6 @@ async function processDocument(
 5. Any notable details or elements
 
 Be detailed and specific so this description can be used for search and reference.`,
-          preferFree: true, // Use free OpenRouter models first
         });
         text = `[Image Analysis by ${analysis.model}]\n\n${analysis.description}`;
         logger.info('Image analyzed successfully', { docId, provider: analysis.provider, model: analysis.model });
@@ -241,16 +240,27 @@ Be detailed and specific so this description can be used for search and referenc
     // Chunk the text
     const chunks = chunkText(text);
 
-    // Create embeddings for each chunk
+    // INSERT all chunks immediately (without embeddings) so the content is readable
+    // right after text extraction - critical for images where vision analysis is done
+    // but embedding generation still takes time
     for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      const { embedding } = await generateEmbedding(chunk);
-      const vectorString = `[${embedding.join(',')}]`;
-
       await pool.query(
-        `INSERT INTO document_chunks (document_id, chunk_index, content, embedding)
-         VALUES ($1, $2, $3, $4::vector)`,
-        [docId, i, chunk, vectorString]
+        `INSERT INTO document_chunks (document_id, chunk_index, content)
+         VALUES ($1, $2, $3)`,
+        [docId, i, chunks[i]]
+      );
+    }
+
+    logger.info('Document text extracted and chunks stored', { docId, chunks: chunks.length });
+
+    // Now generate embeddings for each chunk and update in place
+    for (let i = 0; i < chunks.length; i++) {
+      const { embedding } = await generateEmbedding(chunks[i]);
+      const vectorString = `[${embedding.join(',')}]`;
+      await pool.query(
+        `UPDATE document_chunks SET embedding = $1::vector
+         WHERE document_id = $2 AND chunk_index = $3`,
+        [vectorString, docId, i]
       );
     }
 
@@ -431,6 +441,78 @@ export function formatDocumentsForPrompt(chunks: DocumentChunk[]): string {
   return `[Relevant Document Excerpts]\n${formatted}`;
 }
 
+const INLINE_DOC_THRESHOLD = 2000; // chars - non-image docs smaller than this are injected inline
+
+/**
+ * Build a context block for the given document IDs.
+ * Images: always inject inline (vision analysis is the only way to access image content).
+ * Small docs (<= 2000 chars): inject inline.
+ * Large docs: mention with note to use search_documents tool.
+ * Still-processing docs: tell Luna the file is being analyzed so it can inform the user.
+ */
+export async function getDocumentContextBlock(
+  documentIds: string[],
+  userId: string
+): Promise<string> {
+  if (!documentIds || documentIds.length === 0) return '';
+
+  const sections: string[] = [];
+
+  for (const docId of documentIds) {
+    try {
+      // Fetch document metadata - include all statuses (not just 'ready') so we can
+      // handle processing/error states gracefully
+      const docResult = await pool.query(
+        `SELECT original_name, mime_type, status FROM documents WHERE id = $1 AND user_id = $2`,
+        [docId, userId]
+      );
+      if (docResult.rows.length === 0) continue;
+
+      const originalName = docResult.rows[0].original_name as string;
+      const mimeType = docResult.rows[0].mime_type as string;
+      const status = docResult.rows[0].status as string;
+
+      if (status === 'error') {
+        sections.push(`--- ${originalName} (analysis failed - could not extract content) ---`);
+        continue;
+      }
+
+      // Fetch all chunks ordered by index - chunks are inserted right after text
+      // extraction so they may exist even while status is still 'processing'
+      const chunkResult = await pool.query(
+        `SELECT content FROM document_chunks WHERE document_id = $1 ORDER BY chunk_index ASC`,
+        [docId]
+      );
+
+      const isImage = mimeType.startsWith('image/');
+
+      if (chunkResult.rows.length === 0) {
+        // No chunks yet - vision analysis still in progress
+        if (status === 'processing') {
+          sections.push(`--- ${originalName} (still being analyzed - let the user know and they can resend the message in a moment) ---`);
+        }
+        continue;
+      }
+
+      const fullContent = (chunkResult.rows as { content: string }[])
+        .map(r => r.content)
+        .join('\n');
+
+      if (isImage || fullContent.length <= INLINE_DOC_THRESHOLD) {
+        // Images always inline (vision analysis IS the content); small docs inline too
+        sections.push(`--- ${originalName} ---\n${fullContent}`);
+      } else {
+        sections.push(`--- ${originalName} (large file - use search_documents tool to search its contents) ---`);
+      }
+    } catch (err) {
+      logger.warn('Failed to fetch document for context block', { docId, error: (err as Error).message });
+    }
+  }
+
+  if (sections.length === 0) return '';
+  return `[Attached Files]\n${sections.join('\n\n')}`;
+}
+
 function mapRowToDocument(row: Record<string, unknown>): Document {
   const fileSize = row.file_size as number;
   const createdAt = row.created_at as Date;
@@ -455,4 +537,5 @@ export default {
   searchDocuments,
   deleteDocument,
   formatDocumentsForPrompt,
+  getDocumentContextBlock,
 };

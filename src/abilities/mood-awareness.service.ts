@@ -61,7 +61,7 @@ export async function initializeSessionMood(
 ): Promise<SessionMoodState> {
   try {
     // Analyze mood from first message
-    const mood = await moodService.analyzeMood(firstMessage);
+    const mood = await moodService.analyzeMood(firstMessage, userId);
 
     const initialMood: MoodSnapshot | undefined = mood ? {
       sentiment: mood.sentiment,
@@ -151,7 +151,7 @@ export async function updateSessionMood(
     }
 
     // Analyze current mood
-    const mood = await moodService.analyzeMood(message);
+    const mood = await moodService.analyzeMood(message, userId);
     const currentMood: MoodSnapshot | undefined = mood ? {
       sentiment: mood.sentiment,
       sentimentScore: mood.sentimentScore,

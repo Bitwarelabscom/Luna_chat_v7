@@ -7,12 +7,9 @@ import { query } from '../db/postgres.js';
 import * as sourceTrust from './source-trust.service.js';
 import * as searxngClient from '../search/searxng.client.js';
 import * as webfetchService from '../search/webfetch.service.js';
-import Groq from 'groq-sdk';
-import { config } from '../config/index.js';
+import { createBackgroundCompletionWithFallback } from '../llm/background-completion.service.js';
 import logger from '../utils/logger.js';
 import type { SearchResult } from '../types/index.js';
-
-const groq = config.groq?.apiKey ? new Groq({ apiKey: config.groq.apiKey }) : null;
 
 const TRUST_THRESHOLD = 0.8; // Only use sources with trust >= 0.8
 
@@ -110,7 +107,7 @@ export async function conductResearch(
     );
 
     // Generate overall summary using Ollama
-    const findings = await synthesizeFindings(topic, sources);
+    const findings = await synthesizeFindings(userId, topic, sources);
 
     // Store findings
     await query(
@@ -229,6 +226,7 @@ function extractKeyFacts(summary: string): string[] {
  * Synthesize findings from multiple sources
  */
 async function synthesizeFindings(
+  userId: string,
   topic: string,
   sources: ResearchSource[]
 ): Promise<{ keyFacts: string[]; summary: string; confidence: number }> {
@@ -240,16 +238,6 @@ async function synthesizeFindings(
     };
   }
 
-  if (!groq) {
-    logger.warn('Groq API not configured, using fallback synthesis');
-    const allFacts = sources.flatMap((s) => s.keyFacts || []);
-    return {
-      keyFacts: allFacts.slice(0, 10),
-      summary: `Research on ${topic} from ${sources.length} trusted sources.`,
-      confidence: 0.5,
-    };
-  }
-
   try {
     // Prepare sources text
     const sourcesText = sources
@@ -258,7 +246,6 @@ async function synthesizeFindings(
       })
       .join('\n');
 
-    // Use Groq for synthesis (free tier)
     const systemPrompt = `You are a research synthesizer. Analyze the following research sources and create a concise summary.
 
 Focus on:
@@ -273,20 +260,23 @@ Output valid JSON only:
   "confidence": 0.85
 }`;
 
-    const completion = await groq.chat.completions.create({
-      model: 'llama-3.1-8b-instant',
+    const completion = await createBackgroundCompletionWithFallback({
+      userId,
+      feature: 'research_synthesis',
       messages: [
         { role: 'system', content: systemPrompt },
-        {
-          role: 'user',
-          content: `Topic: ${topic}\n\nSources:\n${sourcesText}\n\nSynthesize these findings.`,
-        },
+        { role: 'user', content: `Topic: ${topic}\n\nSources:\n${sourcesText}\n\nSynthesize these findings.` },
       ],
       temperature: 0.2,
-      max_tokens: 5000,
+      maxTokens: 5000,
+      loggingContext: {
+        userId,
+        source: 'autonomous_research',
+        nodeName: 'synthesize_findings',
+      },
     });
 
-    const responseText = completion.choices[0]?.message?.content?.trim() || '{}';
+    const responseText = completion.content.trim() || '{}';
 
     // Parse JSON response
     const jsonText = responseText

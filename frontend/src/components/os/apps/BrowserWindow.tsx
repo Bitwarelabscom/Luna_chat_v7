@@ -4,6 +4,10 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Globe, RefreshCw, ArrowLeft, ArrowRight, Home, Lock, AlertCircle } from 'lucide-react';
 import { useWindowStore } from '@/lib/window-store';
 
+const BROWSER_VIEWPORT_WIDTH = 1280;
+const BROWSER_VIEWPORT_HEIGHT = 720;
+const BROWSER_ASPECT_RATIO = BROWSER_VIEWPORT_WIDTH / BROWSER_VIEWPORT_HEIGHT;
+
 interface BrowserWindowProps {
   initialUrl?: string;
 }
@@ -12,6 +16,7 @@ export function BrowserWindow({ initialUrl = 'https://www.google.com' }: Browser
   // Check for pending URL from visual browse action on mount
   const consumePendingBrowserUrl = useWindowStore((state) => state.consumePendingBrowserUrl);
   const pendingBrowserUrl = useWindowStore((state) => state.pendingBrowserUrl);
+  const isLunaControlling = useWindowStore((state) => state.isLunaControlling);
   const initialPendingUrl = useRef<string | null>(null);
 
   // Only consume on first render
@@ -26,10 +31,106 @@ export function BrowserWindow({ initialUrl = 'https://www.google.com' }: Browser
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [frame, setFrame] = useState<string | null>(null);
+  const [historyState, setHistoryState] = useState<{ entries: string[]; index: number }>(() => ({
+    entries: startUrl ? [startUrl] : [],
+    index: startUrl ? 0 : -1,
+  }));
 
   const wsRef = useRef<WebSocket | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const navigateRef = useRef<((url: string) => void) | null>(null);
+  const navigationIntentRef = useRef<'navigate' | 'back' | 'forward' | 'refresh' | null>(null);
+
+  const canGoBack = historyState.index > 0;
+  const canGoForward = historyState.index >= 0 && historyState.index < historyState.entries.length - 1;
+
+  const mapClientToBrowserCoordinates = useCallback((clientX: number, clientY: number) => {
+    if (!canvasRef.current) {
+      return null;
+    }
+
+    const rect = canvasRef.current.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      return null;
+    }
+
+    // The browser frame is rendered using object-contain, so account for letterboxing.
+    const renderedWidth = Math.min(rect.width, rect.height * BROWSER_ASPECT_RATIO);
+    const renderedHeight = renderedWidth / BROWSER_ASPECT_RATIO;
+    const offsetX = (rect.width - renderedWidth) / 2;
+    const offsetY = (rect.height - renderedHeight) / 2;
+
+    const localX = clientX - rect.left - offsetX;
+    const localY = clientY - rect.top - offsetY;
+
+    if (localX < 0 || localY < 0 || localX > renderedWidth || localY > renderedHeight) {
+      return null;
+    }
+
+    return {
+      x: Math.round((localX / renderedWidth) * BROWSER_VIEWPORT_WIDTH),
+      y: Math.round((localY / renderedHeight) * BROWSER_VIEWPORT_HEIGHT),
+    };
+  }, []);
+
+  const applyNavigationToHistory = useCallback((nextUrl: string) => {
+    setHistoryState((prev) => {
+      const intent = navigationIntentRef.current;
+      const { entries, index } = prev;
+
+      const appendAsNewEntry = () => {
+        const baseEntries = index >= 0 ? entries.slice(0, index + 1) : [];
+        baseEntries.push(nextUrl);
+        return {
+          entries: baseEntries,
+          index: baseEntries.length - 1,
+        };
+      };
+
+      if (intent === 'back') {
+        const expectedIndex = Math.max(index - 1, 0);
+        if (entries[expectedIndex] === nextUrl) {
+          return { entries, index: expectedIndex };
+        }
+
+        const existingIndex = entries.lastIndexOf(nextUrl);
+        if (existingIndex !== -1) {
+          return { entries, index: existingIndex };
+        }
+
+        return appendAsNewEntry();
+      }
+
+      if (intent === 'forward') {
+        const expectedIndex = Math.min(index + 1, entries.length - 1);
+        if (entries[expectedIndex] === nextUrl) {
+          return { entries, index: expectedIndex };
+        }
+
+        const existingIndex = entries.indexOf(nextUrl);
+        if (existingIndex !== -1) {
+          return { entries, index: existingIndex };
+        }
+
+        return appendAsNewEntry();
+      }
+
+      if (intent === 'refresh') {
+        if (index >= 0 && entries[index] === nextUrl) {
+          return prev;
+        }
+        return appendAsNewEntry();
+      }
+
+      if (index >= 0 && entries[index] === nextUrl) {
+        return prev;
+      }
+
+      return appendAsNewEntry();
+    });
+
+    navigationIntentRef.current = null;
+  }, []);
 
   // Connect to browser WebSocket
   useEffect(() => {
@@ -61,16 +162,17 @@ export function BrowserWindow({ initialUrl = 'https://www.google.com' }: Browser
         // Determine WebSocket URL
         // In production (via nginx), use same host
         // In development or direct access, use the API server
-        const isProduction = window.location.hostname === 'luna.bitwarelabs.com';
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL;
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 
         let wsUrl: string;
-        if (isProduction) {
-          // Production: WebSocket through nginx proxy
+        if (apiUrl) {
+          wsUrl = `${apiUrl.replace(/^http/, 'ws')}/ws/browser?token=${encodeURIComponent(token)}`;
+        } else if (window.location.hostname === 'luna.bitwarelabs.com') {
+          // Production via nginx proxy: use same host
           wsUrl = `${protocol}//${window.location.host}/ws/browser?token=${encodeURIComponent(token)}`;
         } else {
           // Development/direct access: Connect to API server directly
-          // API is on port 3005 on the same network
           const apiHost = window.location.hostname === 'localhost'
             ? 'localhost:3005'
             : `${window.location.hostname.replace(':3004', '')}:3005`;
@@ -106,6 +208,7 @@ export function BrowserWindow({ initialUrl = 'https://www.google.com' }: Browser
                 setUrl(msg.url);
                 setInputUrl(msg.url);
                 setIsLoading(false);
+                applyNavigationToHistory(msg.url);
                 break;
 
               case 'browser_error':
@@ -170,11 +273,12 @@ export function BrowserWindow({ initialUrl = 'https://www.google.com' }: Browser
       if (heartbeat) clearInterval(heartbeat);
       if (ws) ws.close();
     };
-  }, [startUrl]);
+  }, [startUrl, applyNavigationToHistory]);
 
   const navigate = useCallback((targetUrl: string) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
+    navigationIntentRef.current = 'navigate';
     setIsLoading(true);
     setError(null);
     wsRef.current.send(JSON.stringify({
@@ -209,22 +313,26 @@ export function BrowserWindow({ initialUrl = 'https://www.google.com' }: Browser
   };
 
   const handleClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !canvasRef.current) return;
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
-    const rect = canvasRef.current.getBoundingClientRect();
-    const x = Math.round((e.clientX - rect.left) * (1280 / rect.width));
-    const y = Math.round((e.clientY - rect.top) * (720 / rect.height));
+    const coords = mapClientToBrowserCoordinates(e.clientX, e.clientY);
+    if (!coords) {
+      return;
+    }
 
+    canvasRef.current?.focus();
     wsRef.current.send(JSON.stringify({
       type: 'click',
-      x,
-      y,
+      x: coords.x,
+      y: coords.y,
     }));
-  }, []);
+  }, [mapClientToBrowserCoordinates]);
 
   const handleScroll = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
+    e.preventDefault();
+    canvasRef.current?.focus();
     wsRef.current.send(JSON.stringify({
       type: 'scroll',
       deltaY: e.deltaY,
@@ -250,8 +358,28 @@ export function BrowserWindow({ initialUrl = 'https://www.google.com' }: Browser
     }
   }, []);
 
+  const handleBack = () => {
+    if (!canGoBack || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    navigationIntentRef.current = 'back';
+    setIsLoading(true);
+    setError(null);
+    wsRef.current.send(JSON.stringify({ type: 'back' }));
+  };
+
+  const handleForward = () => {
+    if (!canGoForward || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    navigationIntentRef.current = 'forward';
+    setIsLoading(true);
+    setError(null);
+    wsRef.current.send(JSON.stringify({ type: 'forward' }));
+  };
+
   const handleRefresh = () => {
-    navigate(url);
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    navigationIntentRef.current = 'refresh';
+    setIsLoading(true);
+    setError(null);
+    wsRef.current.send(JSON.stringify({ type: 'refresh' }));
   };
 
   const handleHome = () => {
@@ -270,15 +398,17 @@ export function BrowserWindow({ initialUrl = 'https://www.google.com' }: Browser
       >
         {/* Navigation Buttons */}
         <button
+          onClick={handleBack}
           className="p-1.5 rounded hover:bg-white/10 transition-colors disabled:opacity-50"
-          disabled
+          disabled={!canGoBack}
           title="Back"
         >
           <ArrowLeft className="w-4 h-4" style={{ color: 'var(--theme-text-secondary)' }} />
         </button>
         <button
+          onClick={handleForward}
           className="p-1.5 rounded hover:bg-white/10 transition-colors disabled:opacity-50"
-          disabled
+          disabled={!canGoForward}
           title="Forward"
         >
           <ArrowRight className="w-4 h-4" style={{ color: 'var(--theme-text-secondary)' }} />
@@ -327,7 +457,19 @@ export function BrowserWindow({ initialUrl = 'https://www.google.com' }: Browser
         </form>
 
         {/* Connection Status */}
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-2">
+          {isLunaControlling && (
+            <span
+              className="text-[11px] px-2 py-1 rounded-full animate-pulse"
+              style={{
+                background: 'rgba(59, 130, 246, 0.15)',
+                color: 'var(--theme-accent-primary)',
+                border: '1px solid rgba(59, 130, 246, 0.45)',
+              }}
+            >
+              Luna is controlling
+            </span>
+          )}
           <div
             className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}
           />

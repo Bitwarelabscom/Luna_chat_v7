@@ -5,7 +5,7 @@
  * Results are cached by content hash to prevent duplicate calls.
  */
 
-import * as groqProvider from '../llm/providers/groq.provider.js';
+import { createCompletion } from '../llm/router.js';
 import logger from '../utils/logger.js';
 
 export interface MessageSentiment {
@@ -51,9 +51,8 @@ function cleanCache(): void {
  * Analyze message sentiment using Groq for fast inference.
  * Returns VAD (Valence, Arousal, Dominance) scores.
  */
-export async function analyze(text: string): Promise<MessageSentiment> {
+export async function analyze(text: string, userId?: string): Promise<MessageSentiment> {
   if (!text || text.length < 3) return DEFAULT_SENTIMENT;
-  if (!groqProvider.isConfigured()) return DEFAULT_SENTIMENT;
 
   const cacheKey = getCacheKey(text);
   const now = Date.now();
@@ -65,7 +64,8 @@ export async function analyze(text: string): Promise<MessageSentiment> {
   }
 
   try {
-    const result = await groqProvider.createCompletion(
+    const result = await createCompletion(
+      'groq',
       'llama-3.1-8b-instant',
       [
         {
@@ -77,7 +77,11 @@ export async function analyze(text: string): Promise<MessageSentiment> {
           content: text.slice(0, 500),
         },
       ],
-      { temperature: 0.1, maxTokens: 60 }
+      {
+        temperature: 0.1,
+        maxTokens: 60,
+        loggingContext: { userId: userId ?? '', source: 'sentiment', nodeName: 'sentiment' },
+      }
     );
 
     const parsed = JSON.parse(result.content.trim());

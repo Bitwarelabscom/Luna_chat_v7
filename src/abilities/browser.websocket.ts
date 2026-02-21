@@ -16,6 +16,9 @@ interface BrowserMessage {
   deltaY?: number;
   text?: string;
   key?: string;
+  selector?: string;
+  value?: string;
+  timeout?: number;
 }
 
 /**
@@ -88,35 +91,89 @@ export function handleBrowserWsConnection(ws: WebSocket, request: IncomingMessag
   ws.on('message', (data) => {
     try {
       const message: BrowserMessage = JSON.parse(data.toString());
+      const queueCommand = (command: {
+        action: string;
+        url?: string;
+        x?: number;
+        y?: number;
+        deltaY?: number;
+        text?: string;
+        key?: string;
+        selector?: string;
+        value?: string;
+        timeout?: number;
+      }) => {
+        void sendBrowserCommand(userId, command).catch((error) => {
+          logger.warn('Browser command failed from websocket', {
+            userId,
+            action: command.action,
+            error: (error as Error).message,
+          });
+        });
+      };
 
       switch (message.type) {
         case 'navigate':
           if (message.url) {
-            sendBrowserCommand(userId, { action: 'navigate', url: message.url });
+            queueCommand({ action: 'navigate', url: message.url });
           }
           break;
 
         case 'click':
           if (message.x !== undefined && message.y !== undefined) {
-            sendBrowserCommand(userId, { action: 'click', x: message.x, y: message.y });
+            queueCommand({ action: 'click', x: message.x, y: message.y });
           }
           break;
 
         case 'scroll':
           if (message.deltaY !== undefined) {
-            sendBrowserCommand(userId, { action: 'scroll', deltaY: message.deltaY });
+            queueCommand({ action: 'scroll', deltaY: message.deltaY });
           }
           break;
 
         case 'type':
           if (message.text) {
-            sendBrowserCommand(userId, { action: 'type', text: message.text });
+            queueCommand({ action: 'type', text: message.text });
           }
           break;
 
         case 'keypress':
           if (message.key) {
-            sendBrowserCommand(userId, { action: 'keypress', key: message.key });
+            queueCommand({ action: 'keypress', key: message.key });
+          }
+          break;
+
+        case 'back':
+          queueCommand({ action: 'back' });
+          break;
+
+        case 'forward':
+          queueCommand({ action: 'forward' });
+          break;
+
+        case 'refresh':
+          queueCommand({ action: 'refresh' });
+          break;
+
+        case 'clickSelector':
+          if (message.selector) {
+            queueCommand({ action: 'clickSelector', selector: message.selector });
+          }
+          break;
+
+        case 'fillSelector':
+          if (message.selector && message.value !== undefined) {
+            queueCommand({ action: 'fillSelector', selector: message.selector, value: message.value });
+          }
+          break;
+
+        case 'waitForSelector':
+          if (message.selector) {
+            queueCommand({
+              action: 'waitForSelector',
+              selector: message.selector,
+              timeout: message.timeout,
+            });
           }
           break;
 
@@ -135,12 +192,12 @@ export function handleBrowserWsConnection(ws: WebSocket, request: IncomingMessag
   // Handle disconnect
   ws.on('close', () => {
     logger.info('Browser WebSocket disconnected', { userId });
-    closeBrowserSession(userId);
+    void closeBrowserSession(userId);
   });
 
   ws.on('error', (error) => {
     logger.error('Browser WebSocket error', { userId, error: error.message });
-    closeBrowserSession(userId);
+    void closeBrowserSession(userId);
   });
 }
 

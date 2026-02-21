@@ -144,6 +144,36 @@ export interface UserModelConfig {
   model: string;
 }
 
+export type BackgroundLlmFeatureId =
+  | 'mood_analysis'
+  | 'context_summary'
+  | 'memory_curation'
+  | 'friend_summary'
+  | 'friend_fact_extraction'
+  | 'intent_detection'
+  | 'news_filter'
+  | 'research_synthesis'
+  | 'session_gap_analysis'
+  | 'knowledge_verification';
+
+export interface BackgroundLlmFeatureMeta {
+  id: BackgroundLlmFeatureId;
+  label: string;
+  description: string;
+}
+
+export interface FeatureModelSelection {
+  provider: ProviderId;
+  model: string;
+}
+
+export interface BackgroundFeatureModelConfig {
+  primary: FeatureModelSelection;
+  fallback: FeatureModelSelection;
+}
+
+export type BackgroundLlmSettings = Record<BackgroundLlmFeatureId, BackgroundFeatureModelConfig>;
+
 // TTS Settings Types
 export type OpenAIVoice = 'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer';
 
@@ -307,6 +337,20 @@ export const settingsApi = {
 
   resetModelConfigs: () =>
     api<{ success: boolean }>('/api/settings/models', { method: 'DELETE' }),
+
+  // Background LLM Settings
+  getBackgroundLlmSettings: () =>
+    api<{
+      settings: BackgroundLlmSettings;
+      features: BackgroundLlmFeatureMeta[];
+      providers: LLMProvider[];
+    }>('/api/settings/background-llm'),
+
+  updateBackgroundLlmSettings: (settings: Partial<BackgroundLlmSettings>) =>
+    api<{ success: boolean; settings: BackgroundLlmSettings }>('/api/settings/background-llm', {
+      method: 'PUT',
+      body: { settings },
+    }),
 
   // TTS Settings
   getTtsSettings: () =>

@@ -148,7 +148,7 @@ export async function generateStartupMessage(
         { role: 'system', content: prompt },
         { role: 'user', content: 'Generate the greeting.' },
       ],
-      { temperature: 0.7, maxTokens: 150 }
+      { temperature: 0.7, maxTokens: 150, loggingContext: { userId, sessionId, source: 'startup', nodeName: 'startup_greeting' } }
     );
 
     content = (response.content || '').trim();

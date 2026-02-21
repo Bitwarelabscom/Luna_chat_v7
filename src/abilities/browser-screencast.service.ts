@@ -1,339 +1,123 @@
+import { chromium, type BrowserContext, type CDPSession, type Page } from 'playwright';
 import { WebSocket as WS } from 'ws';
-import { spawn } from 'child_process';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import logger from '../utils/logger.js';
 import { validateExternalUrl } from '../utils/url-validator.js';
 
-const SANDBOX_CONTAINER = process.env.SANDBOX_CONTAINER || 'luna-sandbox';
 const WORKSPACE_DIR = process.env.WORKSPACE_DIR || '/app/workspace';
-const DOCKER_HOST = process.env.DOCKER_HOST || 'http://docker-proxy:2375';
+const BROWSER_PROFILE_BASE_DIR = process.env.BROWSER_PROFILE_BASE_DIR || '/app/browser-profiles';
 const SESSION_TIMEOUT = 300000; // 5 minutes idle timeout
+const NAVIGATION_TIMEOUT_MS = 30000;
+const SELECTOR_TIMEOUT_MS = 10000;
 const SCREENCAST_QUALITY = 80;
 const SCREENCAST_MAX_WIDTH = 1280;
 const SCREENCAST_MAX_HEIGHT = 720;
 
+export interface BrowserPageElement {
+  tag: string;
+  text: string;
+  selector: string;
+  type?: string;
+}
+
+export interface BrowserPageContent {
+  url: string;
+  title: string;
+  text: string;
+  elements: BrowserPageElement[];
+}
+
 interface BrowserSession {
   userId: string;
-  wsClient: WS;
-  process: ReturnType<typeof spawn> | null;
-  cdpWs: WS | null;
-  pageId: string | null;
+  wsClient: WS | null;
+  context: BrowserContext;
+  page: Page;
+  cdpSession: CDPSession;
   currentUrl: string | null;
   lastActivityAt: Date;
   isActive: boolean;
   frameCount: number;
   lastFrameLogAt: number;
+  screencastStarted: boolean;
+  screencastHandler: ((frame: { data: string; metadata?: unknown; sessionId: number }) => Promise<void>) | null;
+}
+
+interface BrowserCommand {
+  action: string;
+  url?: string;
+  x?: number;
+  y?: number;
+  deltaY?: number;
+  text?: string;
+  key?: string;
+  selector?: string;
+  value?: string;
+  timeout?: number;
 }
 
 const activeSessions = new Map<string, BrowserSession>();
+const pendingSessionCreations = new Map<string, Promise<BrowserSession>>();
 
 // Cleanup idle sessions
-setInterval(() => {
+const cleanupTimer = setInterval(() => {
   const now = Date.now();
   for (const [userId, session] of activeSessions) {
     if (now - session.lastActivityAt.getTime() > SESSION_TIMEOUT) {
       logger.info('Cleaning up idle browser screencast session', { userId });
-      closeBrowserSession(userId);
+      void closeBrowserSession(userId);
     }
   }
 }, 60000);
 
-/**
- * Start a browser session for screencast
- */
-export async function startBrowserSession(userId: string, wsClient: WS): Promise<void> {
-  // Close any existing session
-  if (activeSessions.has(userId)) {
-    await closeBrowserSession(userId);
+cleanupTimer.unref?.();
+
+function sanitizeProfileKey(userId: string): string {
+  return userId.replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+async function ensureProfileDirectory(userId: string): Promise<string> {
+  const profileDir = path.join(BROWSER_PROFILE_BASE_DIR, sanitizeProfileKey(userId));
+  await fs.mkdir(profileDir, { recursive: true });
+  return profileDir;
+}
+
+function sendWsMessage(session: BrowserSession, payload: Record<string, unknown>): void {
+  if (!session.wsClient || session.wsClient.readyState !== WS.OPEN) {
+    return;
   }
 
-  const session: BrowserSession = {
-    userId,
-    wsClient,
-    process: null,
-    cdpWs: null,
-    pageId: null,
-    currentUrl: null,
-    lastActivityAt: new Date(),
-    isActive: false,
-    frameCount: 0,
-    lastFrameLogAt: 0,
-  };
-
-  activeSessions.set(userId, session);
-
   try {
-    // Start browser in sandbox container with remote debugging
-    const debugPort = 9222 + (Math.floor(Math.random() * 1000));
-
-    // Run a long-running browser process with CDP enabled
-    const script = `
-const { chromium } = require('/usr/lib/node_modules/playwright');
-
-(async () => {
-  const browser = await chromium.launch({
-    headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--remote-debugging-port=${debugPort}',
-      '--disable-blink-features=AutomationControlled',
-      '--window-size=1280,720',
-    ],
-  });
-
-  const context = await browser.newContext({
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-    viewport: { width: 1280, height: 720 },
-  });
-
-  const page = await context.newPage();
-
-  // Enable CDP session
-  const cdpSession = await page.context().newCDPSession(page);
-
-  // Start screencast
-  await cdpSession.send('Page.startScreencast', {
-    format: 'jpeg',
-    quality: ${SCREENCAST_QUALITY},
-    maxWidth: ${SCREENCAST_MAX_WIDTH},
-    maxHeight: ${SCREENCAST_MAX_HEIGHT},
-    everyNthFrame: 1,
-  });
-
-  cdpSession.on('Page.screencastFrame', async (frame) => {
-    // Output frame data to stdout for parent process
-    console.log(JSON.stringify({
-      type: 'frame',
-      data: frame.data,
-      metadata: frame.metadata,
-      sessionId: frame.sessionId,
-    }));
-
-    // Acknowledge frame
-    await cdpSession.send('Page.screencastFrameAck', {
-      sessionId: frame.sessionId,
-    });
-  });
-
-  // Navigate to blank page initially
-  await page.goto('about:blank');
-  console.log(JSON.stringify({ type: 'ready', debugPort: ${debugPort} }));
-
-  // Keep alive - listen for commands on stdin
-  let stdinBuffer = '';
-  process.stdin.setEncoding('utf8');
-  process.stdin.on('data', async (data) => {
-    stdinBuffer += data.toString();
-    const lines = stdinBuffer.split('\\n');
-    stdinBuffer = lines.pop() || '';
-
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const cmd = JSON.parse(line.trim());
-
-      if (cmd.action === 'navigate' && cmd.url) {
-        try {
-          await page.goto(cmd.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        } catch (navError) {
-          // Retry once if ERR_ABORTED (can happen if previous action was still processing)
-          if (navError.message.includes('ERR_ABORTED')) {
-            await page.waitForTimeout(1000);
-            await page.goto(cmd.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-          } else {
-            throw navError;
-          }
-        }
-        // Wait for page to render and screencast to capture frames
-        await page.waitForLoadState('networkidle').catch(() => {});
-        await page.waitForTimeout(500);
-        console.log(JSON.stringify({ type: 'navigated', url: page.url() }));
-      } else if (cmd.action === 'click' && cmd.x !== undefined && cmd.y !== undefined) {
-        const urlBefore = page.url();
-
-        // Click at coordinates
-        await page.mouse.click(cmd.x, cmd.y);
-
-        // Wait for potential navigation
-        await page.waitForTimeout(1000);
-        await page.waitForLoadState('domcontentloaded').catch(() => {});
-
-        // Check if URL changed
-        const urlAfter = page.url();
-        if (urlAfter !== urlBefore) {
-          console.log(JSON.stringify({ type: 'navigated', url: urlAfter }));
-        }
-
-        console.log(JSON.stringify({ type: 'clicked', x: cmd.x, y: cmd.y }));
-      } else if (cmd.action === 'scroll' && cmd.deltaY !== undefined) {
-        await page.mouse.wheel(0, cmd.deltaY);
-        console.log(JSON.stringify({ type: 'scrolled', deltaY: cmd.deltaY }));
-      } else if (cmd.action === 'type' && cmd.text) {
-        await page.keyboard.type(cmd.text);
-        console.log(JSON.stringify({ type: 'typed', text: cmd.text }));
-      } else if (cmd.action === 'keypress' && cmd.key) {
-        await page.keyboard.press(cmd.key);
-        console.log(JSON.stringify({ type: 'keypressed', key: cmd.key }));
-      } else if (cmd.action === 'clickSelector' && cmd.selector) {
-        // Click element by CSS selector
-        try {
-          const urlBefore = page.url();
-
-          // Click the element
-          await page.click(cmd.selector, { timeout: 10000 });
-
-          // Wait for potential navigation to complete
-          await page.waitForTimeout(2000);
-          await page.waitForLoadState('domcontentloaded').catch(() => {});
-
-          // Check if URL changed
-          const urlAfter = page.url();
-          if (urlAfter !== urlBefore) {
-            console.log(JSON.stringify({ type: 'navigated', url: urlAfter }));
-          }
-
-          console.log(JSON.stringify({ type: 'clicked', selector: cmd.selector }));
-        } catch (e) {
-          console.log(JSON.stringify({ type: 'error', error: 'Selector not found: ' + cmd.selector }));
-        }
-      } else if (cmd.action === 'fillSelector' && cmd.selector && cmd.value !== undefined) {
-        // Fill input by CSS selector
-        try {
-          await page.fill(cmd.selector, cmd.value, { timeout: 10000 });
-          console.log(JSON.stringify({ type: 'filled', selector: cmd.selector }));
-        } catch (e) {
-          console.log(JSON.stringify({ type: 'error', error: 'Selector not found: ' + cmd.selector }));
-        }
-      } else if (cmd.action === 'waitForSelector' && cmd.selector) {
-        // Wait for element to appear
-        try {
-          await page.waitForSelector(cmd.selector, { timeout: cmd.timeout || 10000 });
-          console.log(JSON.stringify({ type: 'found', selector: cmd.selector }));
-        } catch (e) {
-          console.log(JSON.stringify({ type: 'error', error: 'Timeout waiting for: ' + cmd.selector }));
-        }
-      } else if (cmd.action === 'getContent') {
-        // Get page content
-        const title = await page.title();
-        const url = page.url();
-        const content = await page.evaluate(() => document.body.innerText.slice(0, 5000));
-        console.log(JSON.stringify({ type: 'content', title, url, content }));
-      } else if (cmd.action === 'close') {
-        await browser.close();
-        process.exit(0);
-      }
-      } catch (error) {
-        console.log(JSON.stringify({ type: 'error', error: error.message }));
-      }
-    }
-  });
-
-  // Handle close
-  process.on('SIGTERM', async () => {
-    await browser.close();
-    process.exit(0);
-  });
-
-})();
-`;
-
-    const dockerArgs = ['exec', '-i', SANDBOX_CONTAINER, 'node', '-e', script];
-    const proc = spawn('docker', dockerArgs, {
-      env: { ...process.env, DOCKER_HOST },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    session.process = proc;
-    session.isActive = true;
-
-    // Handle stdout - browser events and frames
-    let buffer = '';
-    proc.stdout.on('data', (data) => {
-      buffer += data.toString();
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const msg = JSON.parse(line);
-          handleBrowserMessage(userId, msg);
-        } catch (e) {
-          logger.warn('Failed to parse browser message', { line, error: e });
-        }
-      }
-    });
-
-    proc.stderr.on('data', (data) => {
-      logger.warn('Browser stderr', { userId, data: data.toString() });
-    });
-
-    proc.on('close', (code) => {
-      logger.info('Browser process closed', { userId, code });
-      closeBrowserSession(userId);
-    });
-
-    proc.on('error', (error) => {
-      logger.error('Browser process error', { userId, error: error.message });
-      closeBrowserSession(userId);
-    });
-
+    session.wsClient.send(JSON.stringify({ ...payload, timestamp: Date.now() }));
   } catch (error) {
-    logger.error('Failed to start browser session', { userId, error });
-    throw error;
+    logger.warn('Failed to send browser websocket message', {
+      userId: session.userId,
+      error: (error as Error).message,
+      type: payload.type,
+    });
   }
 }
 
-/**
- * Handle messages from browser process
- */
-function handleBrowserMessage(userId: string, msg: { type: string; [key: string]: unknown }): void {
-  const session = activeSessions.get(userId);
-  if (!session || session.wsClient.readyState !== WS.OPEN) return;
-
-  session.lastActivityAt = new Date();
-
-  // Log non-frame messages for debugging
-  if (msg.type !== 'frame') {
-    logger.info('Browser message received', { userId, type: msg.type, url: msg.url, selector: msg.selector, error: msg.error });
+function updateNavigationState(session: BrowserSession, url: string): void {
+  if (!url) {
+    return;
   }
 
-  if (msg.type === 'frame') {
-    // Send frame to client
-    session.wsClient.send(JSON.stringify({
-      type: 'browser_frame',
-      data: msg.data,
-      metadata: msg.metadata,
-      timestamp: Date.now(),
-    }));
-    // Log frame count periodically
-    session.frameCount++;
-    const now = Date.now();
-    if (now - session.lastFrameLogAt > 5000) {
-      logger.info('Browser frames sent', { userId, frameCount: session.frameCount, currentUrl: session.currentUrl });
-      session.lastFrameLogAt = now;
-    }
-  } else if (msg.type === 'ready') {
-    session.wsClient.send(JSON.stringify({
-      type: 'browser_ready',
-      timestamp: Date.now(),
-    }));
-  } else if (msg.type === 'navigated') {
-    session.currentUrl = msg.url as string;
-    session.wsClient.send(JSON.stringify({
+  if (session.currentUrl !== url) {
+    session.currentUrl = url;
+    sendWsMessage(session, {
       type: 'browser_navigated',
-      url: msg.url,
-      timestamp: Date.now(),
-    }));
-  } else if (msg.type === 'error') {
-    session.wsClient.send(JSON.stringify({
-      type: 'browser_error',
-      error: msg.error,
-      timestamp: Date.now(),
-    }));
+      url,
+    });
+  }
+}
+
+function isLocalSandboxUrl(urlString: string): boolean {
+  try {
+    const parsed = new URL(urlString);
+    return ['localhost', '127.0.0.1'].includes(parsed.hostname);
+  } catch {
+    return false;
   }
 }
 
@@ -394,79 +178,578 @@ async function isAllowedFileUrl(urlString: string, userId: string): Promise<{ al
   }
 }
 
-/**
- * Send command to browser
- */
-export async function sendBrowserCommand(userId: string, command: {
-  action: string;
-  url?: string;
-  x?: number;
-  y?: number;
-  deltaY?: number;
-  text?: string;
-  key?: string;
-  selector?: string;
-  value?: string;
-  timeout?: number;
-}): Promise<void> {
-  const session = activeSessions.get(userId);
-  if (!session || !session.process || !session.isActive) {
-    throw new Error('No active browser session');
+async function normalizeNavigationUrl(userId: string, url: string): Promise<string> {
+  if (url.startsWith('file://')) {
+    const fileCheck = await isAllowedFileUrl(url, userId);
+    if (!fileCheck.allowed) {
+      throw new Error(fileCheck.error || 'File URL not allowed');
+    }
+
+    return `file://${fileCheck.sandboxPath}`;
   }
 
-  session.lastActivityAt = new Date();
+  if (isLocalSandboxUrl(url)) {
+    return url;
+  }
 
-  // Validate URL if navigating
-  if (command.action === 'navigate' && command.url) {
-    if (command.url.startsWith('file://')) {
-      // Validate file:// URLs are within user's workspace
-      const fileCheck = await isAllowedFileUrl(command.url, userId);
-      if (!fileCheck.allowed) {
-        throw new Error(fileCheck.error || 'File URL not allowed');
+  await validateExternalUrl(url, { allowHttp: true });
+  return url;
+}
+
+async function waitForPageSettle(page: Page): Promise<void> {
+  await page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => undefined);
+  await page.waitForTimeout(300);
+}
+
+async function startScreencast(session: BrowserSession): Promise<void> {
+  if (session.screencastStarted) {
+    return;
+  }
+
+  const frameHandler = async (frame: { data: string; metadata?: unknown; sessionId: number }): Promise<void> => {
+    try {
+      session.lastActivityAt = new Date();
+
+      if (session.wsClient && session.wsClient.readyState === WS.OPEN) {
+        session.wsClient.send(JSON.stringify({
+          type: 'browser_frame',
+          data: frame.data,
+          metadata: frame.metadata,
+          timestamp: Date.now(),
+        }));
+
+        session.frameCount += 1;
+        const now = Date.now();
+        if (now - session.lastFrameLogAt > 5000) {
+          logger.info('Browser frames sent', {
+            userId: session.userId,
+            frameCount: session.frameCount,
+            currentUrl: session.currentUrl,
+          });
+          session.lastFrameLogAt = now;
+        }
       }
-      // Use the validated sandbox path
-      command.url = `file://${fileCheck.sandboxPath}`;
-    } else {
-      // validateExternalUrl throws on invalid URL
-      await validateExternalUrl(command.url, { allowHttp: true });
+    } catch (error) {
+      logger.warn('Failed to process screencast frame', {
+        userId: session.userId,
+        error: (error as Error).message,
+      });
+    } finally {
+      try {
+        await session.cdpSession.send('Page.screencastFrameAck', {
+          sessionId: frame.sessionId,
+        });
+      } catch (error) {
+        logger.warn('Failed to acknowledge screencast frame', {
+          userId: session.userId,
+          error: (error as Error).message,
+        });
+      }
+    }
+  };
+
+  await session.cdpSession.send('Page.startScreencast', {
+    format: 'jpeg',
+    quality: SCREENCAST_QUALITY,
+    maxWidth: SCREENCAST_MAX_WIDTH,
+    maxHeight: SCREENCAST_MAX_HEIGHT,
+    everyNthFrame: 1,
+  });
+
+  session.cdpSession.on('Page.screencastFrame', frameHandler);
+  session.screencastStarted = true;
+  session.screencastHandler = frameHandler;
+}
+
+async function stopScreencast(session: BrowserSession): Promise<void> {
+  if (!session.screencastStarted) {
+    return;
+  }
+
+  if (session.screencastHandler) {
+    session.cdpSession.off('Page.screencastFrame', session.screencastHandler);
+  }
+
+  try {
+    await session.cdpSession.send('Page.stopScreencast');
+  } catch (error) {
+    logger.debug('Failed to stop screencast cleanly', {
+      userId: session.userId,
+      error: (error as Error).message,
+    });
+  }
+
+  session.screencastStarted = false;
+  session.screencastHandler = null;
+}
+
+async function createSession(userId: string): Promise<BrowserSession> {
+  const profileDir = await ensureProfileDirectory(userId);
+
+  const context = await chromium.launchPersistentContext(profileDir, {
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--window-size=1280,720',
+    ],
+    viewport: { width: 1280, height: 720 },
+  });
+
+  const page = context.pages()[0] || await context.newPage();
+  page.setDefaultTimeout(NAVIGATION_TIMEOUT_MS);
+
+  const cdpSession = await context.newCDPSession(page);
+
+  const session: BrowserSession = {
+    userId,
+    wsClient: null,
+    context,
+    page,
+    cdpSession,
+    currentUrl: page.url() || null,
+    lastActivityAt: new Date(),
+    isActive: true,
+    frameCount: 0,
+    lastFrameLogAt: 0,
+    screencastStarted: false,
+    screencastHandler: null,
+  };
+
+  page.on('framenavigated', (frame) => {
+    if (frame === page.mainFrame()) {
+      session.lastActivityAt = new Date();
+      updateNavigationState(session, frame.url());
+    }
+  });
+
+  context.on('close', () => {
+    const active = activeSessions.get(userId);
+    if (active === session) {
+      activeSessions.delete(userId);
+    }
+
+    session.isActive = false;
+  });
+
+  activeSessions.set(userId, session);
+
+  logger.info('Browser session created', { userId, profileDir });
+  return session;
+}
+
+async function ensureSession(userId: string): Promise<BrowserSession> {
+  const existing = activeSessions.get(userId);
+  if (existing && existing.isActive) {
+    return existing;
+  }
+
+  const pending = pendingSessionCreations.get(userId);
+  if (pending) {
+    return pending;
+  }
+
+  const createPromise = createSession(userId)
+    .finally(() => {
+      pendingSessionCreations.delete(userId);
+    });
+
+  pendingSessionCreations.set(userId, createPromise);
+  return createPromise;
+}
+
+/**
+ * Start or attach a browser session to a websocket client
+ */
+export async function startBrowserSession(userId: string, wsClient: WS): Promise<void> {
+  const session = await ensureSession(userId);
+
+  // Replace previous websocket if user re-opened browser window
+  if (session.wsClient && session.wsClient !== wsClient && session.wsClient.readyState === WS.OPEN) {
+    try {
+      session.wsClient.close(4000, 'Superseded by new browser connection');
+    } catch {
+      // Ignore close failures
     }
   }
 
-  if (session.process.stdin) {
-    session.process.stdin.write(JSON.stringify(command) + '\n');
+  session.wsClient = wsClient;
+  session.lastActivityAt = new Date();
+
+  await startScreencast(session);
+
+  sendWsMessage(session, { type: 'browser_ready' });
+
+  const currentUrl = session.page.url();
+  if (currentUrl && currentUrl !== 'about:blank') {
+    updateNavigationState(session, currentUrl);
   }
+}
+
+/**
+ * Send command to browser
+ */
+export async function sendBrowserCommand(userId: string, command: BrowserCommand): Promise<void> {
+  const session = await ensureSession(userId);
+  session.lastActivityAt = new Date();
+
+  const logMeta = {
+    userId,
+    action: command.action,
+    url: command.url,
+    selector: command.selector,
+  };
+
+  try {
+    if (command.action === 'close') {
+      await closeBrowserSession(userId);
+      return;
+    }
+
+    if (command.action === 'navigate') {
+      if (!command.url) {
+        throw new Error('navigate action requires url');
+      }
+
+      const safeUrl = await normalizeNavigationUrl(userId, command.url);
+
+      try {
+        await session.page.goto(safeUrl, {
+          waitUntil: 'domcontentloaded',
+          timeout: NAVIGATION_TIMEOUT_MS,
+        });
+      } catch (error) {
+        const message = (error as Error).message || '';
+        if (message.includes('ERR_ABORTED')) {
+          await session.page.waitForTimeout(1000);
+          await session.page.goto(safeUrl, {
+            waitUntil: 'domcontentloaded',
+            timeout: NAVIGATION_TIMEOUT_MS,
+          });
+        } else {
+          throw error;
+        }
+      }
+
+      await waitForPageSettle(session.page);
+      updateNavigationState(session, session.page.url());
+      return;
+    }
+
+    if (command.action === 'click') {
+      if (command.x === undefined || command.y === undefined) {
+        throw new Error('click action requires x and y coordinates');
+      }
+
+      const urlBefore = session.page.url();
+      await session.page.mouse.click(command.x, command.y);
+      await waitForPageSettle(session.page);
+      const urlAfter = session.page.url();
+      if (urlAfter !== urlBefore) {
+        updateNavigationState(session, urlAfter);
+      }
+      return;
+    }
+
+    if (command.action === 'scroll') {
+      if (command.deltaY === undefined) {
+        throw new Error('scroll action requires deltaY');
+      }
+
+      // Use both mouse wheel and direct window scroll to improve reliability across sites.
+      await session.page.mouse.wheel(0, command.deltaY).catch(() => undefined);
+      await session.page.evaluate((delta) => {
+        const maybeWindow = globalThis as unknown as { scrollBy?: (x: number, y: number) => void };
+        maybeWindow.scrollBy?.(0, delta);
+      }, command.deltaY).catch(() => undefined);
+      return;
+    }
+
+    if (command.action === 'type') {
+      if (!command.text) {
+        throw new Error('type action requires text');
+      }
+
+      await session.page.keyboard.type(command.text);
+      return;
+    }
+
+    if (command.action === 'keypress') {
+      if (!command.key) {
+        throw new Error('keypress action requires key');
+      }
+
+      const urlBefore = session.page.url();
+      await session.page.keyboard.press(command.key);
+      await waitForPageSettle(session.page);
+      const urlAfter = session.page.url();
+      if (urlAfter !== urlBefore) {
+        updateNavigationState(session, urlAfter);
+      }
+      return;
+    }
+
+    if (command.action === 'clickSelector') {
+      if (!command.selector) {
+        throw new Error('clickSelector action requires selector');
+      }
+
+      const urlBefore = session.page.url();
+      await session.page.click(command.selector, { timeout: SELECTOR_TIMEOUT_MS });
+      await waitForPageSettle(session.page);
+      const urlAfter = session.page.url();
+      if (urlAfter !== urlBefore) {
+        updateNavigationState(session, urlAfter);
+      }
+      return;
+    }
+
+    if (command.action === 'fillSelector') {
+      if (!command.selector) {
+        throw new Error('fillSelector action requires selector');
+      }
+
+      if (command.value === undefined) {
+        throw new Error('fillSelector action requires value');
+      }
+
+      await session.page.fill(command.selector, command.value, { timeout: SELECTOR_TIMEOUT_MS });
+      return;
+    }
+
+    if (command.action === 'waitForSelector') {
+      if (!command.selector) {
+        throw new Error('waitForSelector action requires selector');
+      }
+
+      await session.page.waitForSelector(command.selector, {
+        timeout: command.timeout ?? SELECTOR_TIMEOUT_MS,
+      });
+      return;
+    }
+
+    if (command.action === 'refresh') {
+      await session.page.reload({
+        waitUntil: 'domcontentloaded',
+        timeout: NAVIGATION_TIMEOUT_MS,
+      });
+      await waitForPageSettle(session.page);
+      updateNavigationState(session, session.page.url());
+      return;
+    }
+
+    if (command.action === 'back') {
+      await session.page.goBack({
+        waitUntil: 'domcontentloaded',
+        timeout: NAVIGATION_TIMEOUT_MS,
+      }).catch(() => null);
+      await waitForPageSettle(session.page);
+      updateNavigationState(session, session.page.url());
+      return;
+    }
+
+    if (command.action === 'forward') {
+      await session.page.goForward({
+        waitUntil: 'domcontentloaded',
+        timeout: NAVIGATION_TIMEOUT_MS,
+      }).catch(() => null);
+      await waitForPageSettle(session.page);
+      updateNavigationState(session, session.page.url());
+      return;
+    }
+
+    throw new Error(`Unknown browser action: ${command.action}`);
+  } catch (error) {
+    const message = (error as Error).message;
+    logger.error('Browser command failed', { ...logMeta, error: message });
+    sendWsMessage(session, {
+      type: 'browser_error',
+      error: message,
+    });
+    throw error;
+  }
+}
+
+/**
+ * Return DOM-based content for the current page to let the LLM reason
+ */
+export async function getPageContent(userId: string): Promise<BrowserPageContent> {
+  const session = await ensureSession(userId);
+  session.lastActivityAt = new Date();
+
+  const extracted = await session.page.evaluate(() => {
+    const MAX_TEXT_LENGTH = 5000;
+    const MAX_ELEMENTS = 120;
+
+    const documentAny = (globalThis as any).document;
+
+    const cssEscape = (value: string): string => {
+      const cssApi = (globalThis as any).CSS;
+      if (cssApi && typeof cssApi.escape === 'function') {
+        return cssApi.escape(value);
+      }
+
+      return value.replace(/[^a-zA-Z0-9_-]/g, (char) => `\\${char}`);
+    };
+
+    const isVisible = (element: any): boolean => {
+      const style = (globalThis as any).getComputedStyle(element);
+      if (!style) return false;
+
+      if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+        return false;
+      }
+
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    };
+
+    const buildSelector = (element: any): string => {
+      if (element.id) {
+        return `#${cssEscape(element.id)}`;
+      }
+
+      const parts: string[] = [];
+      let current = element;
+      let depth = 0;
+
+      while (current && depth < 6) {
+        const tagName = String(current.tagName || '').toLowerCase();
+        if (!tagName) break;
+
+        if (current.id) {
+          parts.unshift(`#${cssEscape(current.id)}`);
+          break;
+        }
+
+        let nth = 1;
+        let sibling = current.previousElementSibling;
+        while (sibling) {
+          if (String(sibling.tagName || '').toLowerCase() === tagName) {
+            nth += 1;
+          }
+          sibling = sibling.previousElementSibling;
+        }
+
+        parts.unshift(`${tagName}:nth-of-type(${nth})`);
+        current = current.parentElement;
+        depth += 1;
+      }
+
+      return parts.join(' > ');
+    };
+
+    const bodyText = String(documentAny?.body?.innerText || '')
+      .replace(/\s+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+      .slice(0, MAX_TEXT_LENGTH);
+
+    const candidates = Array.from(
+      documentAny.querySelectorAll(
+        'a, button, input, textarea, select, [role="button"], [role="link"], [contenteditable="true"], [onclick], [tabindex]'
+      )
+    ) as any[];
+
+    const seenSelectors = new Set<string>();
+    const elements: BrowserPageElement[] = [];
+
+    for (const candidate of candidates) {
+      const element = candidate as any;
+      if (elements.length >= MAX_ELEMENTS) {
+        break;
+      }
+
+      if (!isVisible(element)) {
+        continue;
+      }
+
+      const selector = buildSelector(element);
+      if (!selector || seenSelectors.has(selector)) {
+        continue;
+      }
+
+      seenSelectors.add(selector);
+
+      const tag = String(element.tagName || '').toLowerCase();
+      const text = (
+        String(element.innerText || '') ||
+        String(element.value || '') ||
+        String(element.getAttribute?.('aria-label') || '') ||
+        String(element.getAttribute?.('placeholder') || '')
+      )
+        .trim()
+        .slice(0, 200);
+
+      let type: string | undefined;
+      if (tag === 'input') {
+        type = String(element.type || 'text');
+      } else if (tag === 'button') {
+        type = 'button';
+      } else if (tag === 'a') {
+        type = 'link';
+      }
+
+      elements.push({
+        tag,
+        text,
+        selector,
+        type,
+      });
+    }
+
+    return {
+      text: bodyText,
+      elements,
+    };
+  });
+
+  const url = session.page.url();
+  const title = await session.page.title();
+
+  updateNavigationState(session, url);
+
+  return {
+    url,
+    title,
+    text: extracted.text,
+    elements: extracted.elements,
+  };
 }
 
 /**
  * Close browser session
  */
-export function closeBrowserSession(userId: string): void {
+export async function closeBrowserSession(userId: string): Promise<void> {
   const session = activeSessions.get(userId);
-  if (!session) return;
-
-  session.isActive = false;
-
-  if (session.process) {
-    try {
-      if (session.process.stdin) {
-        session.process.stdin.write(JSON.stringify({ action: 'close' }) + '\n');
-      }
-      setTimeout(() => {
-        if (session.process && !session.process.killed) {
-          session.process.kill('SIGKILL');
-        }
-      }, 5000);
-    } catch (e) {
-      logger.warn('Error closing browser process', { userId, error: e });
-      session.process.kill('SIGKILL');
-    }
-  }
-
-  if (session.cdpWs) {
-    session.cdpWs.close();
+  if (!session) {
+    return;
   }
 
   activeSessions.delete(userId);
+  session.isActive = false;
+
+  try {
+    await stopScreencast(session);
+  } catch (error) {
+    logger.warn('Error while stopping screencast during close', {
+      userId,
+      error: (error as Error).message,
+    });
+  }
+
+  try {
+    await session.context.close();
+  } catch (error) {
+    logger.warn('Error closing browser context', {
+      userId,
+      error: (error as Error).message,
+    });
+  }
+
+  session.wsClient = null;
+
   logger.info('Browser session closed', { userId });
 }
 
@@ -483,7 +766,10 @@ export function hasActiveSession(userId: string): boolean {
  */
 export function getSessionInfo(userId: string): { currentUrl: string | null } | null {
   const session = activeSessions.get(userId);
-  if (!session) return null;
+  if (!session) {
+    return null;
+  }
+
   return {
     currentUrl: session.currentUrl,
   };
@@ -519,6 +805,7 @@ const pendingVisualBrowse = new Map<string, { url: string; createdAt: Date }>();
  */
 export function setPendingVisualBrowse(userId: string, url: string): void {
   pendingVisualBrowse.set(userId, { url, createdAt: new Date() });
+
   // Clean up old pending requests after 30 seconds
   setTimeout(() => {
     const pending = pendingVisualBrowse.get(userId);
@@ -550,6 +837,7 @@ export function hasPendingVisualBrowse(userId: string): boolean {
 export default {
   startBrowserSession,
   sendBrowserCommand,
+  getPageContent,
   closeBrowserSession,
   hasActiveSession,
   getSessionInfo,

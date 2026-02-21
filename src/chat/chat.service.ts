@@ -42,6 +42,8 @@ import {
   browserNavigateTool,
   browserScreenshotTool,
   browserClickTool,
+  browserTypeTool,
+  browserGetPageContentTool,
   browserFillTool,
   browserExtractTool,
   browserWaitTool,
@@ -144,6 +146,146 @@ function boundedSet<K, V>(map: Map<K, V>, key: K, value: V, maxSize = 500): void
     if (firstKey !== undefined) map.delete(firstKey);
   }
   map.set(key, value);
+}
+
+function getBrowserOpenUrl(userId: string, fallback = 'https://www.google.com'): string {
+  return browserScreencast.getSessionInfo(userId)?.currentUrl || fallback;
+}
+
+function formatBrowserPageContentForTool(content: browserScreencast.BrowserPageContent): string {
+  return JSON.stringify(content, null, 2);
+}
+
+function getBrowserToolStatusLine(toolName: string, args: Record<string, any>): string {
+  if (toolName === 'browser_navigate') {
+    return `Navigating to ${args.url}`;
+  }
+  if (toolName === 'browser_click') {
+    return `Clicking ${args.selector}`;
+  }
+  if (toolName === 'browser_type') {
+    return `Typing into ${args.selector}`;
+  }
+  if (toolName === 'browser_get_page_content') {
+    return 'Reading page content';
+  }
+  return 'Running browser action';
+}
+
+async function executeSharedBrowserToolCall(
+  userId: string,
+  toolName: string,
+  args: Record<string, any>,
+): Promise<{ toolResponse: string; openUrl: string }> {
+  if (toolName === 'browser_navigate') {
+    if (!args.url || typeof args.url !== 'string') {
+      throw new Error('browser_navigate requires url');
+    }
+
+    await browserScreencast.sendBrowserCommand(userId, {
+      action: 'navigate',
+      url: args.url,
+    });
+
+    const pageContent = await browserScreencast.getPageContent(userId);
+    const openUrl = pageContent.url || args.url;
+
+    browserScreencast.setPendingVisualBrowse(userId, openUrl);
+
+    return {
+      openUrl,
+      toolResponse: `Navigated browser session.\n\n${formatBrowserPageContentForTool(pageContent)}`,
+    };
+  }
+
+  if (toolName === 'browser_click') {
+    if (args.url && typeof args.url === 'string') {
+      await browserScreencast.sendBrowserCommand(userId, {
+        action: 'navigate',
+        url: args.url,
+      });
+    }
+
+    if (!args.selector || typeof args.selector !== 'string') {
+      throw new Error('browser_click requires selector');
+    }
+
+    await browserScreencast.sendBrowserCommand(userId, {
+      action: 'clickSelector',
+      selector: args.selector,
+    });
+
+    const pageContent = await browserScreencast.getPageContent(userId);
+    const openUrl = pageContent.url || getBrowserOpenUrl(userId);
+
+    browserScreencast.setPendingVisualBrowse(userId, openUrl);
+
+    return {
+      openUrl,
+      toolResponse: `Clicked selector \"${args.selector}\".\n\n${formatBrowserPageContentForTool(pageContent)}`,
+    };
+  }
+
+  if (toolName === 'browser_type') {
+    if (args.url && typeof args.url === 'string') {
+      await browserScreencast.sendBrowserCommand(userId, {
+        action: 'navigate',
+        url: args.url,
+      });
+    }
+
+    if (!args.selector || typeof args.selector !== 'string') {
+      throw new Error('browser_type requires selector');
+    }
+    if (typeof args.text !== 'string') {
+      throw new Error('browser_type requires text');
+    }
+
+    await browserScreencast.sendBrowserCommand(userId, {
+      action: 'fillSelector',
+      selector: args.selector,
+      value: args.text,
+    });
+
+    if (args.submit === true) {
+      await browserScreencast.sendBrowserCommand(userId, {
+        action: 'keypress',
+        key: 'Enter',
+      });
+    }
+
+    const pageContent = await browserScreencast.getPageContent(userId);
+    const openUrl = pageContent.url || getBrowserOpenUrl(userId);
+
+    browserScreencast.setPendingVisualBrowse(userId, openUrl);
+
+    const submissionNote = args.submit === true ? '\nSubmitted with Enter.' : '';
+    return {
+      openUrl,
+      toolResponse: `Filled selector \"${args.selector}\".${submissionNote}\n\n${formatBrowserPageContentForTool(pageContent)}`,
+    };
+  }
+
+  if (toolName === 'browser_get_page_content') {
+    if (args.url && typeof args.url === 'string') {
+      await browserScreencast.sendBrowserCommand(userId, {
+        action: 'navigate',
+        url: args.url,
+      });
+    }
+
+    const pageContent = await browserScreencast.getPageContent(userId);
+    const openUrl = pageContent.url || getBrowserOpenUrl(userId);
+
+    browserScreencast.setPendingVisualBrowse(userId, openUrl);
+
+    return {
+      openUrl,
+      toolResponse: formatBrowserPageContentForTool(pageContent),
+    };
+  }
+
+  throw new Error(`Unsupported shared browser tool: ${toolName}`);
 }
 
 /**
@@ -607,10 +749,18 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     });
   }
 
-  // Add current message (full, not compressed)
-  messages.push({ role: 'user', content: message });
+  // Inject small attached documents inline; large ones are tool-accessible via search_documents
+  const pmDocContextBlock = documentIds && documentIds.length > 0
+    ? await documents.getDocumentContextBlock(documentIds, userId)
+    : '';
+  const pmEffectiveMessage = pmDocContextBlock
+    ? `${pmDocContextBlock}\n\n${message}`
+    : message;
 
-  // Save user message with optional attachments
+  // Add current message (full, not compressed)
+  messages.push({ role: 'user', content: pmEffectiveMessage });
+
+  // Save user message with optional attachments (raw message, no doc prefix)
   const userMessage = await sessionService.addMessage({
     sessionId,
     role: 'user',
@@ -637,7 +787,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     listTodosTool, createTodoTool, completeTodoTool, updateTodoTool,
     createCalendarEventTool, listCalendarEventsTool,
     sessionNoteTool, createReminderTool, listRemindersTool, cancelReminderTool,
-    browserNavigateTool, browserScreenshotTool, browserClickTool, browserFillTool,
+    browserNavigateTool, browserScreenshotTool, browserClickTool, browserTypeTool, browserGetPageContentTool, browserFillTool,
     browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool,
     generateImageTool, generateBackgroundTool, researchTool, delegateToAgentTool,
     loadContextTool, correctSummaryTool,
@@ -1426,21 +1576,33 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
             content: `Failed to cancel reminder: ${(error as Error).message}`,
           } as ChatMessage);
         }
-      } else if (toolCall.function.name === 'browser_navigate') {
-        // Browser navigate tool
-        const args = JSON.parse(toolCall.function.arguments);
-        logger.info('Browser navigate', { userId, url: args.url });
+      } else if (
+        toolCall.function.name === 'browser_navigate' ||
+        toolCall.function.name === 'browser_click' ||
+        toolCall.function.name === 'browser_type' ||
+        toolCall.function.name === 'browser_get_page_content'
+      ) {
+        const args = JSON.parse(toolCall.function.arguments || '{}');
+        logger.info('Shared browser tool', {
+          userId,
+          tool: toolCall.function.name,
+          url: args.url,
+          selector: args.selector,
+        });
+
         try {
-          const result = await browser.navigate(userId, args.url, {
-            waitUntil: args.waitUntil || 'domcontentloaded',
-          });
+          const result = await executeSharedBrowserToolCall(userId, toolCall.function.name, args);
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
-            content: browser.formatBrowserResultForPrompt(result),
+            content: result.toolResponse,
           } as ChatMessage);
         } catch (error) {
-          logger.error('Browser navigate failed', { error: (error as Error).message });
+          logger.error('Shared browser tool failed', {
+            userId,
+            tool: toolCall.function.name,
+            error: (error as Error).message,
+          });
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
@@ -1492,25 +1654,6 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
           }
         } catch (error) {
           logger.error('Browser screenshot failed', { error: (error as Error).message });
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Browser error: ${(error as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'browser_click') {
-        // Browser click tool
-        const args = JSON.parse(toolCall.function.arguments);
-        logger.info('Browser click', { userId, url: args.url, selector: args.selector });
-        try {
-          const result = await browser.click(userId, args.url, args.selector);
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: browser.formatBrowserResultForPrompt(result),
-          } as ChatMessage);
-        } catch (error) {
-          logger.error('Browser click failed', { error: (error as Error).message });
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
@@ -3184,10 +3327,18 @@ export async function* streamMessage(
     });
   }
 
-  // Add current message (full, not compressed)
-  messages.push({ role: 'user', content: message });
+  // Inject small attached documents inline; large ones are tool-accessible via search_documents
+  const smDocContextBlock = documentIds && documentIds.length > 0
+    ? await documents.getDocumentContextBlock(documentIds, userId)
+    : '';
+  const smEffectiveMessage = smDocContextBlock
+    ? `${smDocContextBlock}\n\n${message}`
+    : message;
 
-  // Save user message with optional attachments
+  // Add current message (full, not compressed)
+  messages.push({ role: 'user', content: smEffectiveMessage });
+
+  // Save user message with optional attachments (raw message, no doc prefix)
   const userMessage = await sessionService.addMessage({
     sessionId,
     role: 'user',
@@ -3979,24 +4130,45 @@ export async function* streamMessage(
             content: `Failed to cancel reminder: ${(error as Error).message}`,
           } as ChatMessage);
         }
-      } else if (toolCall.function.name === 'browser_navigate') {
-        // Browser navigate tool
-        const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'reasoning', content: `> Browser: Navigating to ${args.url}\n` };
-        // Signal frontend to open browser window
-        yield { type: 'browser_action', action: 'open', url: args.url };
-        logger.info('Browser navigate (stream)', { userId, url: args.url });
+      } else if (
+        toolCall.function.name === 'browser_navigate' ||
+        toolCall.function.name === 'browser_click' ||
+        toolCall.function.name === 'browser_type' ||
+        toolCall.function.name === 'browser_get_page_content'
+      ) {
+        const args = JSON.parse(toolCall.function.arguments || '{}');
+        const openUrl = typeof args.url === 'string' && args.url.length > 0
+          ? args.url
+          : getBrowserOpenUrl(userId);
+
+        yield { type: 'reasoning', content: `> Browser: ${getBrowserToolStatusLine(toolCall.function.name, args)}\n` };
+        yield { type: 'browser_action', action: 'open', url: openUrl };
+        yield { type: 'browser_action', action: toolCall.function.name, url: openUrl };
+        browserScreencast.setPendingVisualBrowse(userId, openUrl);
+
+        logger.info('Shared browser tool (stream)', {
+          userId,
+          tool: toolCall.function.name,
+          url: args.url,
+          selector: args.selector,
+        });
+
         try {
-          const result = await browser.navigate(userId, args.url, {
-            waitUntil: args.waitUntil || 'domcontentloaded',
-          });
+          const result = await executeSharedBrowserToolCall(userId, toolCall.function.name, args);
+          if (result.openUrl && result.openUrl !== openUrl) {
+            yield { type: 'browser_action', action: 'open', url: result.openUrl };
+          }
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
-            content: browser.formatBrowserResultForPrompt(result),
+            content: result.toolResponse,
           } as ChatMessage);
         } catch (error) {
-          logger.error('Browser navigate failed (stream)', { error: (error as Error).message });
+          logger.error('Shared browser tool failed (stream)', {
+            userId,
+            tool: toolCall.function.name,
+            error: (error as Error).message,
+          });
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
@@ -4051,28 +4223,6 @@ export async function* streamMessage(
           }
         } catch (error) {
           logger.error('Browser screenshot failed (stream)', { error: (error as Error).message });
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Browser error: ${(error as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'browser_click') {
-        // Browser click tool
-        const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'reasoning', content: '> Browser: Clicking element...\n' };
-        // Signal frontend to open browser window
-        yield { type: 'browser_action', action: 'open', url: args.url };
-        logger.info('Browser click (stream)', { userId, url: args.url, selector: args.selector });
-        try {
-          const result = await browser.click(userId, args.url, args.selector);
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: browser.formatBrowserResultForPrompt(result),
-          } as ChatMessage);
-        } catch (error) {
-          logger.error('Browser click failed (stream)', { error: (error as Error).message });
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
@@ -4558,6 +4708,51 @@ export async function* streamMessage(
             tool_call_id: toolCall.id,
             content: `Browser opened to ${searchUrl} for visual browsing.\n\nSearch results for context:\n${searchContext}`,
           } as ChatMessage);
+        } else if (
+          toolCall.function.name === 'browser_navigate' ||
+          toolCall.function.name === 'browser_click' ||
+          toolCall.function.name === 'browser_type' ||
+          toolCall.function.name === 'browser_get_page_content'
+        ) {
+          const args = JSON.parse(toolCall.function.arguments || '{}');
+          const openUrl = typeof args.url === 'string' && args.url.length > 0
+            ? args.url
+            : getBrowserOpenUrl(userId);
+
+          yield { type: 'status', status: `Browser: ${getBrowserToolStatusLine(toolCall.function.name, args)}` };
+          yield { type: 'browser_action', action: 'open', url: openUrl };
+          yield { type: 'browser_action', action: toolCall.function.name, url: openUrl };
+          browserScreencast.setPendingVisualBrowse(userId, openUrl);
+
+          logger.info('Shared browser tool (follow-up)', {
+            userId,
+            tool: toolCall.function.name,
+            url: args.url,
+            selector: args.selector,
+          });
+
+          try {
+            const result = await executeSharedBrowserToolCall(userId, toolCall.function.name, args);
+            if (result.openUrl && result.openUrl !== openUrl) {
+              yield { type: 'browser_action', action: 'open', url: result.openUrl };
+            }
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: result.toolResponse,
+            } as ChatMessage);
+          } catch (error) {
+            logger.error('Shared browser tool failed (follow-up)', {
+              userId,
+              tool: toolCall.function.name,
+              error: (error as Error).message,
+            });
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Browser error: ${(error as Error).message}`,
+            } as ChatMessage);
+          }
         } else if (toolCall.function.name === 'send_email') {
           const args = JSON.parse(toolCall.function.arguments);
           yield { type: 'status', status: `Sending email to ${args.to}...` };

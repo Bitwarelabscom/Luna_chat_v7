@@ -9,6 +9,7 @@ import * as ttsService from '../llm/tts.service.js';
 import { PROVIDERS, CONFIGURABLE_TASKS } from '../llm/types.js';
 import { getCachedModels, clearModelCache } from '../llm/model-fetcher.service.js';
 import * as coderSettingsService from '../abilities/coder-settings.service.js';
+import * as backgroundLlmSettingsService from './background-llm-settings.service.js';
 import { LUNA_BASE_PROMPT, ASSISTANT_MODE_PROMPT, COMPANION_MODE_PROMPT } from '../persona/luna.persona.js';
 import logger from '../utils/logger.js';
 
@@ -476,6 +477,31 @@ const updateModelConfigSchema = z.object({
   model: z.string().min(1),
 });
 
+const modelSelectorSchema = z.object({
+  provider: z.enum(['openai', 'groq', 'anthropic', 'xai', 'openrouter', 'ollama', 'ollama_secondary', 'ollama_tertiary', 'google', 'sanhedrin', 'moonshot']),
+  model: z.string().min(1),
+});
+
+const featureModelConfigSchema = z.object({
+  primary: modelSelectorSchema,
+  fallback: modelSelectorSchema,
+});
+
+const updateBackgroundLlmSettingsSchema = z.object({
+  settings: z.object({
+    mood_analysis: featureModelConfigSchema.optional(),
+    context_summary: featureModelConfigSchema.optional(),
+    memory_curation: featureModelConfigSchema.optional(),
+    friend_summary: featureModelConfigSchema.optional(),
+    friend_fact_extraction: featureModelConfigSchema.optional(),
+    intent_detection: featureModelConfigSchema.optional(),
+    news_filter: featureModelConfigSchema.optional(),
+    research_synthesis: featureModelConfigSchema.optional(),
+    session_gap_analysis: featureModelConfigSchema.optional(),
+    knowledge_verification: featureModelConfigSchema.optional(),
+  }),
+});
+
 router.put('/models/:taskType', async (req: Request, res: Response) => {
   try {
     const { taskType } = req.params;
@@ -501,6 +527,38 @@ router.delete('/models', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to reset model configs', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to reset model configurations' });
+  }
+});
+
+// === BACKGROUND LLM SETTINGS ===
+
+router.get('/background-llm', async (req: Request, res: Response) => {
+  try {
+    const settings = await backgroundLlmSettingsService.getBackgroundLlmSettings(req.user!.userId);
+    res.json({
+      settings,
+      features: backgroundLlmSettingsService.BACKGROUND_LLM_FEATURES,
+      defaults: backgroundLlmSettingsService.DEFAULT_BACKGROUND_LLM_SETTINGS,
+      providers: PROVIDERS,
+    });
+  } catch (error) {
+    logger.error('Failed to get background LLM settings', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get background LLM settings' });
+  }
+});
+
+router.put('/background-llm', async (req: Request, res: Response) => {
+  try {
+    const { settings: updates } = updateBackgroundLlmSettingsSchema.parse(req.body);
+    const settings = await backgroundLlmSettingsService.updateBackgroundLlmSettings(req.user!.userId, updates);
+    res.json({ success: true, settings });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: 'Validation error', details: error.errors });
+      return;
+    }
+    logger.error('Failed to update background LLM settings', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to update background LLM settings' });
   }
 });
 

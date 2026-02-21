@@ -150,6 +150,7 @@ export async function orchestrateAutonomousLearning(
           .filter((s): s is number => s !== null);
 
         const verificationResult = await knowledgeVerifier.verifyFindings(
+          userId,
           gap.gapDescription,
           findings,
           trustScores

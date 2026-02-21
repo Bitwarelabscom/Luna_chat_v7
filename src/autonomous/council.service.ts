@@ -186,6 +186,7 @@ DO NOT suggest "ask user" as an action. Find the information yourself using sear
   const result = await createCompletion(provider, model, messages, {
     temperature: 0.7,
     maxTokens: 500,
+    loggingContext: { userId, source: 'council', nodeName: `council_${phase}` },
   });
 
   const responseMessage = result.content;
@@ -564,6 +565,7 @@ export async function generateDeliberationSummary(deliberationId: string, userId
   const result = await createCompletion(provider, model, messages, {
     temperature: 0.3,
     maxTokens: 200,
+    loggingContext: { userId, source: 'council', nodeName: 'council_summary' },
   });
 
   // Store the summary

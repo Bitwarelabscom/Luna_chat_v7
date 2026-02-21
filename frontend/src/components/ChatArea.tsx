@@ -18,6 +18,7 @@ import { useThinkingMessage } from './ThinkingStatus';
 import { ModelSelector } from './os/ModelSelector';
 import dynamic from 'next/dynamic';
 import SuggestionChips from './SuggestionChips';
+import { useWindowStore } from '@/lib/window-store';
 
 const VoiceChatArea = dynamic(() => import('./VoiceChatArea'), {
   ssr: false,
@@ -58,6 +59,7 @@ function pickRandomSuggestions(suggestions: string[], count: number): string[] {
 }
 
 function StandardChatArea() {
+  const pulseLunaControl = useWindowStore((state) => state.pulseLunaControl);
   const {
     currentSession,
     isLoadingMessages,
@@ -284,8 +286,11 @@ function StandardChatArea() {
           accumulatedContent += chunk.content;
           appendStreamingContent(chunk.content);
         } else if (chunk.type === 'browser_action' && chunk.action === 'open') {
+          pulseLunaControl();
           // Signal to open browser window for visual browsing
           setBrowserAction({ type: 'open', url: chunk.url });
+        } else if (chunk.type === 'browser_action') {
+          pulseLunaControl();
         } else if (chunk.type === 'video_action' && chunk.videos && chunk.query) {
           // Signal to open videos window with YouTube search results
           setVideoAction({ type: 'open', videos: chunk.videos, query: chunk.query });

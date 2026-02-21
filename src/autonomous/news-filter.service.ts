@@ -1,4 +1,4 @@
-import { createCompletion } from '../llm/router.js';
+import { createBackgroundCompletionWithFallback } from '../llm/background-completion.service.js';
 import logger from '../utils/logger.js';
 
 export interface FilterResult {
@@ -15,7 +15,8 @@ export interface FilterResult {
 export async function filterArticle(
   title: string,
   summary: string | null,
-  userInterests: string[] = []
+  userInterests: string[] = [],
+  userId?: string
 ): Promise<FilterResult> {
   const prompt = `You are a "bullshit filter" for news. Your goal is to identify high-signal, actionable, or truly insightful information while filtering out noise.
 
@@ -49,14 +50,20 @@ Respond ONLY in JSON format:
 }`;
 
   try {
-    // We prefer a small, fast model for this (Qwen 2.5B/7B is ideal)
-    // If ollama is available, we use qwen2.5:7b
-    const response = await createCompletion('ollama', 'qwen2.5:7b', [
-      { role: 'system', content: 'You are a professional news analyst and filter.' },
-      { role: 'user', content: prompt }
-    ], {
+    const response = await createBackgroundCompletionWithFallback({
+      userId,
+      feature: 'news_filter',
+      messages: [
+        { role: 'system', content: 'You are a professional news analyst and filter.' },
+        { role: 'user', content: prompt }
+      ],
       temperature: 0.1,
-      maxTokens: 150
+      maxTokens: 150,
+      loggingContext: userId ? {
+        userId,
+        source: 'news-filter',
+        nodeName: 'filter_article',
+      } : undefined,
     });
 
     // Clean response if it contains markdown code blocks

@@ -55,6 +55,7 @@
     "openai": "^4.68.0",
     "pdf-parse": "^1.1.1",
     "pg": "^8.11.3",
+    "playwright": "^1.58.2",
     "rate-limit-redis": "^4.2.0",
     "socket.io": "^4.7.5",
     "systeminformation": "^5.27.11",

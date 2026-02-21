@@ -42,14 +42,14 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        - NEXT_PUBLIC_API_URL=https://api.chat.luna
+        - NEXT_PUBLIC_API_URL=http://10.0.0.2:3005
     container_name: luna-frontend
     restart: unless-stopped
     ports:
       - "127.0.0.1:3004:3000"
       - "10.0.0.2:3004:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=https://api.chat.luna
+      - NEXT_PUBLIC_API_URL=http://10.0.0.2:3005
     depends_on:
       - luna-api
     networks:
@@ -131,7 +131,7 @@ services:
       - SEARXNG_ENABLED=${SEARXNG_ENABLED:-true}
       - RATE_LIMIT_WINDOW_MS=${RATE_LIMIT_WINDOW_MS:-60000}
       - RATE_LIMIT_MAX_REQUESTS=${RATE_LIMIT_MAX_REQUESTS:-40}
-      - CORS_ORIGIN=${CORS_ORIGIN:-https://chat.luna}
+      - CORS_ORIGIN=${CORS_ORIGIN:-http://10.0.0.2:3004}
       - SANDBOX_CONTAINER=luna-sandbox
       - DOCKER_HOST=${DOCKER_HOST:-tcp://docker-proxy:2375}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
@@ -256,7 +256,6 @@ services:
   luna-postgres:
     image: pgvector/pgvector:pg15
     container_name: luna-postgres
-    user: "999:999"
     restart: unless-stopped
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-luna}
@@ -392,14 +391,12 @@ services:
   luna-ollama:
     image: ollama/ollama:latest
     container_name: luna-ollama
-    user: "1000:1000"
     restart: unless-stopped
     # PERFORMANCE: Optimize for 6-core CPU system (95% utilization)
     cpus: "5.7"  # Allow up to 5.7 of 6 cores (95%)
     environment:
       # CPU optimization - use all cores for inference
       - OLLAMA_NUM_THREADS=6
-      - HOME=/home/ollama
       # Allow 2 concurrent inference requests for better throughput
       - OLLAMA_NUM_PARALLEL=2
       # Limit loaded models to prevent memory thrashing
@@ -409,7 +406,7 @@ services:
       # Enable flash attention optimization if models support it
       - OLLAMA_FLASH_ATTENTION=1
     volumes:
-      - luna-ollama-data:/home/ollama/.ollama
+      - luna-ollama-data:/root/.ollama
     networks:
       - luna-network
     healthcheck:
@@ -421,19 +418,13 @@ services:
   luna-radicale:
     image: python:3.12-slim
     container_name: luna-radicale
-    user: "1000:1000"
-    environment:
-      - HOME=/tmp
-      - PIP_CACHE_DIR=/tmp/pip-cache
-      - PYTHONUSERBASE=/tmp/python-user-base
-      - PATH=/usr/local/bin:/usr/bin:/bin:/tmp/python-user-base/bin
     restart: unless-stopped
     # SECURITY: Internal only - NO ports exposed to host/internet
     # Only accessible via luna-network from other containers
     expose:
       - "5232"  # Internal only - not mapped to host
     command: >
-      sh -c "pip install --quiet --user radicale &&
+      sh -c "pip install --quiet radicale &&
              python -m radicale --config /config/config"
     volumes:
       - ./radicale/config:/config:ro
