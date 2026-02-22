@@ -5,6 +5,23 @@
 
 import { query } from '../db/postgres.js';
 
+const COMMON_MULTI_PART_TLDS = new Set([
+  'co.uk',
+  'org.uk',
+  'ac.uk',
+  'gov.uk',
+  'com.au',
+  'net.au',
+  'org.au',
+  'co.jp',
+  'co.kr',
+  'com.br',
+  'com.mx',
+  'co.nz',
+  'co.in',
+  'com.cn',
+]);
+
 export interface SourceTrustScore {
   id: number;
   domain: string;
@@ -24,19 +41,27 @@ export interface TrustCategory {
  * Get trust score for a specific domain
  */
 export async function getTrustScore(domain: string): Promise<number | null> {
-  // Extract root domain (remove www, subdomains)
-  const rootDomain = extractRootDomain(domain);
+  const normalized = normalizeDomain(domain);
+  const candidates = getDomainCandidates(normalized);
 
   const rows = await query<any>(
-    'SELECT trust_score FROM source_trust_scores WHERE domain = $1',
-    [rootDomain]
+    'SELECT domain, trust_score FROM source_trust_scores WHERE domain = ANY($1)',
+    [candidates]
   );
 
   if (rows.length === 0) {
     return null; // Unknown domain
   }
 
-  return parseFloat(rows[0].trust_score);
+  const trustByDomain = new Map<string, number>();
+  rows.forEach((row) => trustByDomain.set(row.domain, parseFloat(row.trust_score)));
+
+  for (const candidate of candidates) {
+    const match = trustByDomain.get(candidate);
+    if (match !== undefined) return match;
+  }
+
+  return null;
 }
 
 /**
@@ -78,7 +103,7 @@ export async function updateTrustScore(
     throw new Error('Trust score must be between 0 and 1');
   }
 
-  const rootDomain = extractRootDomain(domain);
+  const normalizedDomain = normalizeDomain(domain);
 
   if (category) {
     await query(
@@ -86,7 +111,7 @@ export async function updateTrustScore(
        VALUES ($1, $2, $3, $4, NOW())
        ON CONFLICT (domain) DO UPDATE
        SET trust_score = $2, category = $3, update_reason = $4, last_updated = NOW()`,
-      [rootDomain, trustScore, category, updateReason]
+      [normalizedDomain, trustScore, category, updateReason]
     );
   } else {
     await query(
@@ -94,7 +119,7 @@ export async function updateTrustScore(
        VALUES ($1, $2, $3, NOW())
        ON CONFLICT (domain) DO UPDATE
        SET trust_score = $2, update_reason = $3, last_updated = NOW()`,
-      [rootDomain, trustScore, updateReason]
+      [normalizedDomain, trustScore, updateReason]
     );
   }
 }
@@ -153,16 +178,23 @@ export async function filterByTrust(urls: string[], threshold: number = 0.8): Pr
  * Get trust scores for multiple URLs
  */
 export async function getBulkTrustScores(urls: string[]): Promise<Map<string, number | null>> {
-  const domains = urls.map((url) => extractDomainFromUrl(url));
-  const uniqueDomains = [...new Set(domains)];
+  const candidatesByUrl = new Map<string, string[]>();
+  const uniqueCandidates = new Set<string>();
 
-  if (uniqueDomains.length === 0) {
+  for (const url of urls) {
+    const domain = extractDomainFromUrl(url);
+    const candidates = getDomainCandidates(domain);
+    candidatesByUrl.set(url, candidates);
+    candidates.forEach((candidate) => uniqueCandidates.add(candidate));
+  }
+
+  if (uniqueCandidates.size === 0) {
     return new Map();
   }
 
   const rows = await query<any>(
     `SELECT domain, trust_score FROM source_trust_scores WHERE domain = ANY($1)`,
-    [uniqueDomains]
+    [[...uniqueCandidates]]
   );
 
   const trustMap = new Map<string, number>();
@@ -173,8 +205,11 @@ export async function getBulkTrustScores(urls: string[]): Promise<Map<string, nu
   // Map URLs to their trust scores
   const urlTrustMap = new Map<string, number | null>();
   urls.forEach((url) => {
-    const domain = extractDomainFromUrl(url);
-    urlTrustMap.set(url, trustMap.get(domain) || null);
+    const candidates = candidatesByUrl.get(url) || [];
+    const matchedScore = candidates
+      .map((candidate) => trustMap.get(candidate))
+      .find((score): score is number => score !== undefined);
+    urlTrustMap.set(url, matchedScore ?? null);
   });
 
   return urlTrustMap;
@@ -186,36 +221,51 @@ export async function getBulkTrustScores(urls: string[]): Promise<Map<string, nu
 function extractDomainFromUrl(url: string): string {
   try {
     const urlObj = new URL(url);
-    return extractRootDomain(urlObj.hostname);
+    return normalizeDomain(urlObj.hostname);
   } catch (error) {
     // If URL parsing fails, try to extract domain pattern
     const match = url.match(/^(?:https?:\/\/)?(?:www\.)?([^\/]+)/i);
-    return match ? extractRootDomain(match[1]) : url;
+    return match ? normalizeDomain(match[1]) : normalizeDomain(url);
   }
 }
 
 /**
- * Extract root domain (remove www and subdomains for common cases)
+ * Normalize a hostname or domain for storage and matching.
+ */
+function normalizeDomain(input: string): string {
+  const trimmed = input.trim().toLowerCase();
+  const candidate = trimmed.includes('://') ? trimmed : `https://${trimmed}`;
+  try {
+    const url = new URL(candidate);
+    return url.hostname.replace(/^www\./i, '');
+  } catch {
+    return trimmed.replace(/^www\./i, '').split('/')[0].split(':')[0];
+  }
+}
+
+/**
+ * Return domain candidates in priority order: exact host first, then registrable root.
+ */
+function getDomainCandidates(hostname: string): string[] {
+  const exact = normalizeDomain(hostname);
+  const root = extractRootDomain(exact);
+  return root === exact ? [exact] : [exact, root];
+}
+
+/**
+ * Extract registrable/root domain, handling common multi-part public suffixes.
  */
 function extractRootDomain(hostname: string): string {
-  // Remove www prefix
-  let domain = hostname.replace(/^www\./i, '');
+  const normalized = normalizeDomain(hostname);
+  const parts = normalized.split('.');
+  if (parts.length <= 2) return normalized;
 
-  // For common patterns like subdomain.domain.com, try to get domain.com
-  // This is a simple heuristic - keeps last two parts for .com, .org, etc.
-  const parts = domain.split('.');
-  if (parts.length > 2) {
-    // Check if last part is a common TLD
-    const tld = parts[parts.length - 1];
-    const commonTlds = ['com', 'org', 'net', 'edu', 'gov', 'io', 'co', 'ai'];
-
-    if (commonTlds.includes(tld)) {
-      // Return last two parts (domain.tld)
-      return parts.slice(-2).join('.');
-    }
+  const lastTwo = parts.slice(-2).join('.');
+  if (COMMON_MULTI_PART_TLDS.has(lastTwo) && parts.length >= 3) {
+    return parts.slice(-3).join('.');
   }
 
-  return domain;
+  return lastTwo;
 }
 
 /**
@@ -234,6 +284,6 @@ export async function addTrustedDomain(
  * Remove a domain from trust scores
  */
 export async function removeTrustedDomain(domain: string): Promise<void> {
-  const rootDomain = extractRootDomain(domain);
-  await query('DELETE FROM source_trust_scores WHERE domain = $1', [rootDomain]);
+  const normalizedDomain = normalizeDomain(domain);
+  await query('DELETE FROM source_trust_scores WHERE domain = $1', [normalizedDomain]);
 }
