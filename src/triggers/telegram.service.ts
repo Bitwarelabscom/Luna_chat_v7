@@ -12,6 +12,9 @@ import { synthesizeWithOpenAI } from '../llm/tts.service.js';
 import * as voiceChatService from '../chat/voice-chat.service.js';
 import OpenAI from 'openai';
 import { config } from '../config/index.js';
+import * as intentService from '../intents/intent.service.js';
+import * as newsfetcherService from '../autonomous/newsfetcher.service.js';
+import * as sandbox from '../abilities/sandbox.service.js';
 
 // ============================================
 // Telegram Idle Timer System
@@ -848,7 +851,7 @@ export async function processUpdate(update: TelegramUpdate): Promise<void> {
   if (text === '/help') {
     await sendTelegramMessage(
       chatId,
-      'Luna Telegram Commands:\n\n/start - Get started\n/list - Quick actions menu\n/status - Check connection status\n/sum - Summarize conversation\n/unlink - Disconnect from Luna\n/help - Show this help\n\nOr just send me a message to chat!\n\nYou can also send images - I will describe them for you!'
+      'Luna Telegram Commands:\n\n/start - Get started\n/list - Quick actions menu\n/status - Check connection status\n/sum - Summarize conversation\n/intents - List active intents\n/news [topic] - Fetch latest interesting news\n/elpris - Run workspace elpris.py\n/unlink - Disconnect from Luna\n/help - Show this help\n\nOr just send me a message to chat!\n\nYou can also send images - I will describe them for you!'
     );
     return;
   }
@@ -870,6 +873,22 @@ export async function processUpdate(update: TelegramUpdate): Promise<void> {
 
   if (text === '/sum') {
     await handleSumCommand(chatId);
+    return;
+  }
+
+  if (text === '/intents') {
+    await handleIntentsCommand(chatId);
+    return;
+  }
+
+  if (text === '/elpris') {
+    await handleElprisCommand(chatId);
+    return;
+  }
+
+  if (/^\/news(\s|$)/.test(text)) {
+    const topic = text.slice('/news'.length).trim();
+    await handleNewsCommand(chatId, topic || null);
     return;
   }
 
@@ -968,6 +987,148 @@ async function handleListCommand(chatId: number): Promise<void> {
     'What would you like to do?',
     QUICK_ACTIONS.main
   );
+}
+
+async function handleElprisCommand(chatId: number): Promise<void> {
+  const connection = await getConnectionByChatId(chatId);
+
+  if (!connection) {
+    await sendTelegramMessage(chatId, 'Not connected to any Luna account.');
+    return;
+  }
+
+  try {
+    await sendTelegramMessage(chatId, 'Running `elpris.py` in sandbox workspace...');
+    const result = await sandbox.executeWorkspaceFile(connection.userId, 'elpris.py');
+
+    const outputParts = [result.output?.trim(), result.error?.trim()].filter(Boolean);
+    const output = outputParts.length > 0 ? outputParts.join('\n\n') : '(no output)';
+    const status = result.success ? 'success' : 'failed';
+    const message = `elpris.py (${status}, ${result.executionTimeMs}ms):\n\n${output}`;
+    const maxLength = 4000;
+    let content = message;
+
+    while (content.length > 0) {
+      const chunk = content.slice(0, maxLength);
+      content = content.slice(maxLength);
+      await sendTelegramMessage(chatId, chunk);
+    }
+
+  } catch (error) {
+    logger.error('Failed to handle /elpris command', {
+      chatId,
+      userId: connection.userId,
+      error: (error as Error).message,
+    });
+    await sendTelegramMessage(
+      chatId,
+      `Could not run elpris.py: ${(error as Error).message}`
+    );
+  }
+}
+
+async function handleIntentsCommand(chatId: number): Promise<void> {
+  const connection = await getConnectionByChatId(chatId);
+
+  if (!connection) {
+    await sendTelegramMessage(chatId, 'Not connected to any Luna account.');
+    return;
+  }
+
+  try {
+    const intents = await intentService.getActiveIntentSummaries(connection.userId);
+
+    if (intents.length === 0) {
+      await sendTelegramMessage(chatId, 'No active intents right now.');
+      return;
+    }
+
+    const lines = intents.slice(0, 20).map((intent, index) => {
+      const priority = intent.priority.toUpperCase();
+      const blocker = intent.blockers.length > 0 ? ` | blockers: ${intent.blockers.join(', ')}` : '';
+      return `${index + 1}. [${priority}] ${intent.label}${blocker}`;
+    });
+
+    await sendTelegramMessage(
+      chatId,
+      `Current active intents (${intents.length}):\n\n${lines.join('\n')}`
+    );
+  } catch (error) {
+    logger.error('Failed to handle /intents command', {
+      chatId,
+      userId: connection.userId,
+      error: (error as Error).message,
+    });
+    await sendTelegramMessage(chatId, 'Failed to load intents. Please try again later.');
+  }
+}
+
+function formatNewsArticleLine(index: number, article: newsfetcherService.NewsArticle): string {
+  const published = article.publishedAt
+    ? new Date(article.publishedAt).toLocaleString()
+    : 'unknown time';
+  const signal = article.signal ? ` | signal: ${article.signal}` : '';
+  const url = article.url || 'no URL';
+  return `${index + 1}. ${article.title}\n   ${article.sourceName} | ${article.verificationStatus} (${article.confidenceScore})${signal} | ${published}\n   ${url}`;
+}
+
+async function handleNewsCommand(chatId: number, topic: string | null): Promise<void> {
+  const connection = await getConnectionByChatId(chatId);
+
+  if (!connection) {
+    await sendTelegramMessage(chatId, 'Not connected to any Luna account.');
+    return;
+  }
+
+  try {
+    await sendTelegramMessage(chatId, 'Fetching latest news from Luna news module...');
+
+    await newsfetcherService.triggerIngestion();
+    await newsfetcherService.batchEnrichArticles(connection.userId, 15);
+
+    const articles = topic
+      ? await newsfetcherService.getArticles({ q: topic, minScore: 50, limit: 8 })
+      : await newsfetcherService.getInterestingArticles(8);
+
+    if (articles.length === 0) {
+      await sendTelegramMessage(
+        chatId,
+        topic
+          ? `No relevant news found for "${topic}" right now.`
+          : 'No interesting news found right now.'
+      );
+      return;
+    }
+
+    const lines = articles.map((article, index) => formatNewsArticleLine(index, article));
+    const header = topic
+      ? `Latest news for "${topic}" (${articles.length}):`
+      : `Latest interesting/breaking news (${articles.length}):`;
+
+    const fullMessage = `${header}\n\n${lines.join('\n\n')}`;
+    const maxLength = 4000;
+    let content = fullMessage;
+
+    while (content.length > 0) {
+      const chunk = content.slice(0, maxLength);
+      content = content.slice(maxLength);
+      await sendTelegramMessage(chatId, chunk);
+    }
+
+    await sendTelegramMessage(chatId, 'Running live web search for breaking updates...');
+    const liveSearchPrompt = topic
+      ? `Do a fresh news search about "${topic}" with emphasis on breaking updates and what is likely to interest me. Keep it concise and include source links.`
+      : 'Do a fresh news search on breaking and important current events that are likely to interest me based on what you know about me. Keep it concise and include source links.';
+    await handleChatMessage(connection, liveSearchPrompt);
+  } catch (error) {
+    logger.error('Failed to handle /news command', {
+      chatId,
+      userId: connection.userId,
+      topic,
+      error: (error as Error).message,
+    });
+    await sendTelegramMessage(chatId, 'Failed to fetch news right now. Please try again later.');
+  }
 }
 
 async function handleCallbackQuery(callback: NonNullable<TelegramUpdate['callback_query']>): Promise<void> {
