@@ -250,6 +250,13 @@ const configSchema = z.object({
     channels: z.array(z.string()).default(['#luna']),
     enabled: z.coerce.boolean().default(true),
   }),
+
+  n8n: z.object({
+    enabled: z.coerce.boolean().default(true),
+    webhookBaseUrl: z.string().url().default('http://luna-n8n:5678/webhook'),
+    testWebhookBaseUrl: z.string().url().default('http://luna-n8n:5678/webhook-test'),
+    webhookAuthToken: z.string().optional(),
+  }),
 });
 
 const rawConfig = {
@@ -470,6 +477,13 @@ const rawConfig = {
     nick: process.env.IRC_NICK,
     channels: process.env.IRC_CHANNELS?.split(',').map(c => c.trim()).filter(Boolean),
     enabled: process.env.IRC_ENABLED,
+  },
+
+  n8n: {
+    enabled: process.env.N8N_ENABLED,
+    webhookBaseUrl: process.env.N8N_WEBHOOK_BASE_URL,
+    testWebhookBaseUrl: process.env.N8N_TEST_WEBHOOK_BASE_URL,
+    webhookAuthToken: process.env.N8N_WEBHOOK_AUTH_TOKEN,
   },
 };
 

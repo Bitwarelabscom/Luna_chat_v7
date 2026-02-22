@@ -52,6 +52,7 @@ import {
   generateImageTool,
   generateBackgroundTool,
   researchTool,
+  n8nWebhookTool,
   loadContextTool,
   correctSummaryTool,
   generateArtifactTool,
@@ -126,6 +127,7 @@ import * as intentDetection from '../intents/intent-detection.service.js';
 import logger from '../utils/logger.js';
 import { sysmonTools, executeSysmonTool } from '../abilities/sysmon.service.js';
 import * as researchAgent from '../abilities/research.agent.service.js';
+import * as n8nService from '../abilities/n8n.service.js';
 import * as mcpService from '../mcp/mcp.service.js';
 import * as router from '../router/index.js';
 import type { RouterDecision } from '../router/router.types.js';
@@ -789,7 +791,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     sessionNoteTool, createReminderTool, listRemindersTool, cancelReminderTool,
     browserNavigateTool, browserScreenshotTool, browserClickTool, browserTypeTool, browserGetPageContentTool, browserFillTool,
     browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool,
-    generateImageTool, generateBackgroundTool, researchTool, delegateToAgentTool,
+    generateImageTool, generateBackgroundTool, researchTool, n8nWebhookTool, delegateToAgentTool,
     loadContextTool, correctSummaryTool,
     workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool,
     generateArtifactTool, rewriteArtifactTool, updateHighlightedTool, saveArtifactFileTool,
@@ -1884,6 +1886,41 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
             role: 'tool',
             tool_call_id: toolCall.id,
             content: `Research error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'n8n_webhook') {
+        const args = JSON.parse(toolCall.function.arguments || '{}');
+        logger.info('n8n webhook tool called', { userId, workflowPath: args.workflow_path });
+        try {
+          const result = await n8nService.executeWebhook(
+            args.workflow_path,
+            args.payload || {},
+            {
+              useTestWebhook: args.use_test_webhook === true,
+              userId,
+              sessionId,
+            }
+          );
+
+          if (result.success) {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `n8n workflow triggered successfully (status ${result.status}).\n${JSON.stringify(result.data ?? {}, null, 2)}`,
+            } as ChatMessage);
+          } else {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `n8n workflow failed (status ${result.status}): ${result.error || 'Unknown error'}`,
+            } as ChatMessage);
+          }
+        } catch (error) {
+          logger.error('n8n webhook tool failed', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `n8n error: ${(error as Error).message}`,
           } as ChatMessage);
         }
       } else if (toolCall.function.name === 'load_context') {
@@ -3370,7 +3407,7 @@ export async function* streamMessage(
     sessionNoteTool, createReminderTool, listRemindersTool, cancelReminderTool,
     browserNavigateTool, browserScreenshotTool, browserClickTool, browserFillTool,
     browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool,
-    generateImageTool, generateBackgroundTool, researchTool, delegateToAgentTool,
+    generateImageTool, generateBackgroundTool, researchTool, n8nWebhookTool, delegateToAgentTool,
     loadContextTool, correctSummaryTool,
     workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool,
     generateArtifactTool, rewriteArtifactTool, updateHighlightedTool, saveArtifactFileTool,
@@ -4487,6 +4524,42 @@ export async function* streamMessage(
             role: 'tool',
             tool_call_id: toolCall.id,
             content: `Research error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'n8n_webhook') {
+        const args = JSON.parse(toolCall.function.arguments || '{}');
+        yield { type: 'reasoning', content: `> Triggering n8n workflow: ${args.workflow_path || 'unknown'}\n` };
+        logger.info('n8n webhook tool called (stream)', { userId, workflowPath: args.workflow_path });
+        try {
+          const result = await n8nService.executeWebhook(
+            args.workflow_path,
+            args.payload || {},
+            {
+              useTestWebhook: args.use_test_webhook === true,
+              userId,
+              sessionId,
+            }
+          );
+
+          if (result.success) {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `n8n workflow triggered successfully (status ${result.status}).\n${JSON.stringify(result.data ?? {}, null, 2)}`,
+            } as ChatMessage);
+          } else {
+            messages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `n8n workflow failed (status ${result.status}): ${result.error || 'Unknown error'}`,
+            } as ChatMessage);
+          }
+        } catch (error) {
+          logger.error('n8n webhook tool failed (stream)', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `n8n error: ${(error as Error).message}`,
           } as ChatMessage);
         }
       } else if (toolCall.function.name === 'load_context') {

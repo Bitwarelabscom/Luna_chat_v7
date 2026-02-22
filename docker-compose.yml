@@ -184,6 +184,11 @@ services:
       - NEO4J_ENABLED=${NEO4J_ENABLED:-true}
       - YTDLP_COOKIES_PATH=/app/secrets/youtube_cookies.txt
       - NEWSFETCHER_URL=http://newsfetcher-app:8000
+      # n8n automation integration
+      - N8N_ENABLED=${N8N_ENABLED:-true}
+      - N8N_WEBHOOK_BASE_URL=${N8N_WEBHOOK_BASE_URL:-http://luna-n8n:5678/webhook}
+      - N8N_TEST_WEBHOOK_BASE_URL=${N8N_TEST_WEBHOOK_BASE_URL:-http://luna-n8n:5678/webhook-test}
+      - N8N_WEBHOOK_AUTH_TOKEN=${N8N_WEBHOOK_AUTH_TOKEN:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     secrets:
@@ -451,6 +456,34 @@ services:
       retries: 3
       start_period: 30s
 
+  luna-n8n:
+    image: n8nio/n8n:latest
+    container_name: luna-n8n
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5678:5678"
+    environment:
+      - N8N_HOST=luna-n8n
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=${N8N_PUBLIC_WEBHOOK_URL:-http://10.0.0.2:5678/}
+      - GENERIC_TIMEZONE=${TZ:-UTC}
+      - TZ=${TZ:-UTC}
+      - N8N_SECURE_COOKIE=false
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+    volumes:
+      - luna-n8n-data:/home/node/.n8n
+    networks:
+      - luna-network
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
   # TradeCore - High-performance trading engine (Go)
   # Handles bot execution, market streaming, and trade execution
   tradecore:
@@ -534,6 +567,7 @@ volumes:
   luna-workspace:
   luna-ollama-data:
   luna-radicale-data:
+  luna-n8n-data:
   luna-packages:
   luna-sandbox-data:
 

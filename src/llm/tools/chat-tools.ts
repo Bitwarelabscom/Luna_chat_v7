@@ -238,3 +238,29 @@ export const researchTool: OpenAI.Chat.Completions.ChatCompletionTool = {
     },
   },
 };
+
+export const n8nWebhookTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'n8n_webhook',
+    description: 'Trigger an n8n workflow webhook to automate external actions. Use this when the task should be handed off to a configured n8n workflow.',
+    parameters: {
+      type: 'object',
+      properties: {
+        workflow_path: {
+          type: 'string',
+          description: 'Webhook path in n8n (for example: "luna-assistant" for /webhook/luna-assistant).',
+        },
+        payload: {
+          type: 'object',
+          description: 'JSON payload to send to the n8n workflow.',
+        },
+        use_test_webhook: {
+          type: 'boolean',
+          description: 'Set true to use /webhook-test during development. Default is false.',
+        },
+      },
+      required: ['workflow_path'],
+    },
+  },
+};
