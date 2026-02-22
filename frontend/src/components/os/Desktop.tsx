@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
+import { useState, useEffect, useCallback, lazy, Suspense, useRef } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { AnimatePresence } from 'framer-motion';
 import { SystemBar } from './SystemBar';
 import { Spotlight } from './Spotlight';
@@ -38,6 +39,7 @@ const LazyCanvasWindow = lazy(() => import('./apps/CanvasWindow').then(m => ({ d
 const GamesWindow = lazy(() => import('./apps/GamesWindow'));
 const RpgWindow = lazy(() => import('./apps/RpgWindow'));
 const ChatWindow = lazy(() => import('./apps/ChatWindow'));
+const DJLunaWindow = lazy(() => import('./apps/DJLunaWindow'));
 
 // Map appId to component
 function getAppComponent(appId: AppId): React.ReactNode {
@@ -88,6 +90,8 @@ function getAppComponent(appId: AppId): React.ReactNode {
       return <GamesWindow />;
     case 'rpg':
       return <RpgWindow />;
+    case 'dj-luna':
+      return <DJLunaWindow />;
     default:
       return <PlaceholderWindow title="Unknown" message="Unknown app" />;
   }
@@ -117,9 +121,21 @@ export function Desktop() {
   const setPendingCanvasData = useWindowStore((state) => state.setPendingCanvasData);
 
   const { activeBackground, setActiveBackground } = useBackgroundStore();
+  const searchParams = useSearchParams();
+  const openParamHandled = useRef(false);
 
   const [spotlightOpen, setSpotlightOpen] = useState(false);
   const [newFileDialogOpen, setNewFileDialogOpen] = useState(false);
+
+  // Handle ?open= query param (e.g. from /chat redirect)
+  useEffect(() => {
+    if (openParamHandled.current) return;
+    const appToOpen = searchParams?.get('open');
+    if (appToOpen) {
+      openParamHandled.current = true;
+      openApp(appToOpen as any);
+    }
+  }, [searchParams, openApp]);
 
   // Fetch active background on mount and on refresh events
   const fetchActiveBackground = useCallback(() => {

@@ -1,0 +1,220 @@
+'use client';
+
+import { create } from 'zustand';
+import { workspaceApi } from './api/workspace';
+
+export interface SongMeta {
+  title: string;
+  project: string;
+  style: string;
+  path: string;
+  slug?: string;
+}
+
+export interface StylePreset {
+  id: string;
+  name: string;
+  tags: string;
+  color?: string;
+}
+
+export interface ProjectFolder {
+  name: string;
+  songs: SongMeta[];
+}
+
+interface DJLunaState {
+  // Session
+  sessionId: string | null;
+
+  // Canvas
+  canvasContent: string;
+  canvasDirty: boolean;
+
+  // Current song
+  currentSong: SongMeta | null;
+
+  // Style
+  activeStyle: string;
+  activePresetId: string | null;
+  customPresets: StylePreset[];
+
+  // Song list
+  projects: ProjectFolder[];
+  isLoadingSongs: boolean;
+
+  // UI state
+  showStartupModal: boolean;
+
+  // Actions
+  setCanvasContent: (content: string, markDirty?: boolean) => void;
+  setActiveStyle: (style: string, presetId?: string | null) => void;
+  loadSong: (path: string) => Promise<void>;
+  saveSong: () => Promise<void>;
+  newSong: (title: string, project: string) => void;
+  loadSongList: () => Promise<void>;
+  addCustomPreset: (name: string, tags: string) => void;
+  removeCustomPreset: (id: string) => void;
+  setSessionId: (id: string) => void;
+  setShowStartupModal: (show: boolean) => void;
+  markCanvasClean: () => void;
+}
+
+function slugify(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
+function parseFrontmatter(content: string): { meta: Record<string, string>; body: string } {
+  const match = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  if (!match) return { meta: {}, body: content };
+  const meta: Record<string, string> = {};
+  for (const line of match[1].split('\n')) {
+    const colonIdx = line.indexOf(':');
+    if (colonIdx > 0) {
+      meta[line.slice(0, colonIdx).trim()] = line.slice(colonIdx + 1).trim();
+    }
+  }
+  return { meta, body: match[2] };
+}
+
+export const useDJLunaStore = create<DJLunaState>((set, get) => ({
+  sessionId: null,
+  canvasContent: '',
+  canvasDirty: false,
+  currentSong: null,
+  activeStyle: '',
+  activePresetId: null,
+  customPresets: [],
+  projects: [],
+  isLoadingSongs: false,
+  showStartupModal: true,
+
+  setCanvasContent: (content, markDirty = true) => {
+    set({ canvasContent: content, canvasDirty: markDirty });
+  },
+
+  setActiveStyle: (style, presetId = null) => {
+    set({ activeStyle: style, activePresetId: presetId });
+  },
+
+  loadSong: async (path: string) => {
+    try {
+      const { content } = await workspaceApi.getFile(path);
+      const { meta, body } = parseFrontmatter(content);
+      const song: SongMeta = {
+        title: meta.title || path,
+        project: meta.project || 'Unknown',
+        style: meta.style || '',
+        path,
+      };
+      set({
+        currentSong: song,
+        canvasContent: body.trim(),
+        canvasDirty: false,
+      });
+      if (meta.style) {
+        set({ activeStyle: meta.style, activePresetId: null });
+      }
+    } catch (err) {
+      console.error('Failed to load song:', err);
+    }
+  },
+
+  saveSong: async () => {
+    const { currentSong, canvasContent, activeStyle } = get();
+    if (!currentSong) return;
+
+    const frontmatter = [
+      '---',
+      `title: ${currentSong.title}`,
+      `project: ${currentSong.project}`,
+      `style: ${activeStyle || currentSong.style}`,
+      `saved: ${new Date().toISOString().split('T')[0]}`,
+      '---',
+      '',
+    ].join('\n');
+
+    const fileContent = frontmatter + canvasContent;
+
+    try {
+      // Try update first, then create
+      try {
+        await workspaceApi.updateFile(currentSong.path, fileContent);
+      } catch {
+        await workspaceApi.createFile(currentSong.path, fileContent);
+      }
+      set({ canvasDirty: false });
+      // Refresh song list
+      get().loadSongList();
+    } catch (err) {
+      console.error('Failed to save song:', err);
+      throw err;
+    }
+  },
+
+  newSong: (title: string, project: string) => {
+    const slug = slugify(title);
+    const path = `dj-luna/${project}/${slug}.md`;
+    const song: SongMeta = { title, project, style: get().activeStyle, path, slug };
+    set({
+      currentSong: song,
+      canvasContent: '[Intro]\n\n[Verse 1]\n\n[Chorus]\n\n[Verse 2]\n\n[Chorus]\n\n[Outro]\n',
+      canvasDirty: true,
+    });
+  },
+
+  loadSongList: async () => {
+    set({ isLoadingSongs: true });
+    try {
+      const files = await workspaceApi.listFiles();
+      const songFiles = files.filter((f) => f.path.startsWith('dj-luna/') && f.name.endsWith('.md') && f.name !== 'styles.json');
+
+      const projectMap: Record<string, SongMeta[]> = {};
+      for (const file of songFiles) {
+        const parts = file.path.split('/');
+        // Expected: dj-luna/{project}/{slug}.md
+        const projectName = parts.length >= 3 ? parts[1] : 'Unsorted';
+        if (!projectMap[projectName]) projectMap[projectName] = [];
+        projectMap[projectName].push({
+          title: file.name.replace(/\.md$/, '').replace(/-/g, ' ').replace(/^\d+-/, ''),
+          project: projectName,
+          style: '',
+          path: file.path,
+        });
+      }
+
+      const projects: ProjectFolder[] = Object.entries(projectMap).map(([name, songs]) => ({ name, songs }));
+      set({ projects });
+    } catch (err) {
+      console.error('Failed to load song list:', err);
+    } finally {
+      set({ isLoadingSongs: false });
+    }
+  },
+
+  addCustomPreset: (name: string, tags: string) => {
+    const preset: StylePreset = {
+      id: `custom-${Date.now()}`,
+      name,
+      tags,
+    };
+    set((state) => ({ customPresets: [...state.customPresets, preset] }));
+    // Save to workspace
+    const { customPresets } = get();
+    workspaceApi.createFile('dj-luna/styles.json', JSON.stringify({ custom: customPresets }, null, 2))
+      .catch(() => workspaceApi.updateFile('dj-luna/styles.json', JSON.stringify({ custom: customPresets }, null, 2)));
+  },
+
+  removeCustomPreset: (id: string) => {
+    set((state) => ({ customPresets: state.customPresets.filter((p) => p.id !== id) }));
+    const { customPresets } = get();
+    workspaceApi.updateFile('dj-luna/styles.json', JSON.stringify({ custom: customPresets }, null, 2))
+      .catch(console.error);
+  },
+
+  setSessionId: (id: string) => set({ sessionId: id }),
+
+  setShowStartupModal: (show: boolean) => set({ showStartupModal: show }),
+
+  markCanvasClean: () => set({ canvasDirty: false }),
+}));

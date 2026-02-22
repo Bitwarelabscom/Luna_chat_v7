@@ -417,12 +417,13 @@ export interface ChatInput {
   sessionId: string;
   userId: string;
   message: string;
-  mode: 'assistant' | 'companion' | 'voice' | 'dj_luna';
+  mode: 'assistant' | 'companion' | 'voice' | 'dj_luna' | 'ceo_luna';
   source?: 'web' | 'telegram' | 'api';
   projectMode?: boolean;
   thinkingMode?: boolean;
   novaMode?: boolean;
   documentIds?: string[];
+  djStyleContext?: string;
 }
 
 export interface ChatOutput {
@@ -433,7 +434,7 @@ export interface ChatOutput {
 }
 
 export async function processMessage(input: ChatInput): Promise<ChatOutput> {
-  const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode, novaMode, documentIds } = input;
+  const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode, novaMode, documentIds, djStyleContext } = input;
 
   // Initialize MemoryCore session for consolidation tracking
   // This enables episodic memory recording and NeuralSleep LNN processing
@@ -731,6 +732,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
         mcpTools: mcpToolsForPrompt,
         source,
         novaMode,
+        djStyleContext,
       }),
     },
   ];
@@ -806,6 +808,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   ];
 
   // Select tools based on mode
+  // CEO mode uses assistant toolset with stricter persona constraints
   let modeTools = mode === 'companion' ? companionTools : assistantTools;
   if (mode === 'dj_luna') {
     modeTools = [searchTool, fetchUrlTool, youtubeSearchTool, mediaDownloadTool];
@@ -1050,8 +1053,8 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
 
         logger.info('Luna checking email (gated)', { unreadOnly });
         const { emails, quarantinedCount } = unreadOnly
-          ? await emailService.getLunaUnreadEmailsGated()
-          : await emailService.checkLunaInboxGated(10);
+          ? await emailService.getLunaUnreadEmailsGated(userId)
+          : await emailService.checkLunaInboxGated(10, userId);
         if (emails.length > 0 || quarantinedCount > 0) {
           messages.push({
             role: 'tool',
@@ -1069,7 +1072,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
         const args = JSON.parse(toolCall.function.arguments);
         logger.info('Luna reading email by UID (gated)', { uid: args.uid });
         try {
-          const email = await emailService.fetchEmailByUidGated(args.uid);
+          const email = await emailService.fetchEmailByUidGated(args.uid, userId);
           if (email) {
             messages.push({
               role: 'tool',
@@ -2103,7 +2106,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     if (session && session.title === 'New Chat') {
       const title = await sessionService.generateSessionTitle([
         { role: 'user', content: message } as Message,
-      ]);
+      ], { userId, sessionId });
       await sessionService.updateSession(sessionId, userId, { title });
     }
   }
@@ -2776,7 +2779,7 @@ export interface StreamMetrics {
 export async function* streamMessage(
   input: ChatInput
 ): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'background_refresh' | 'reasoning' | 'video_action' | 'media_action' | 'canvas_artifact'; content?: string | any; status?: string; messageId?: string; tokensUsed?: number; metrics?: StreamMetrics; action?: string; url?: string; videos?: any[]; query?: string; items?: any[]; source?: string; artifactId?: string }> {
-  const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode, novaMode, documentIds } = input;
+  const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode, novaMode, documentIds, djStyleContext } = input;
 
   // Initialize MemoryCore session for consolidation tracking
   // This enables episodic memory recording and NeuralSleep LNN processing
@@ -3174,7 +3177,7 @@ export async function* streamMessage(
     if (history.length <= 1) {
       const title = await sessionService.generateSessionTitle([
         { role: 'user', content: message } as Message,
-      ]);
+      ], { userId, sessionId });
       await sessionService.updateSession(sessionId, userId, { title });
     }
 
@@ -3344,6 +3347,7 @@ export async function* streamMessage(
         mcpTools: mcpToolsForPrompt,
         source,
         novaMode,
+        djStyleContext,
       }),
     },
   ];
@@ -3422,7 +3426,11 @@ export async function* streamMessage(
   ];
 
   // Select tools based on mode
-  const modeTools = mode === 'companion' ? companionTools : assistantTools;
+  // CEO mode uses assistant toolset with stricter persona constraints
+  let modeTools = mode === 'companion' ? companionTools : assistantTools;
+  if (mode === 'dj_luna') {
+    modeTools = [searchTool, fetchUrlTool, youtubeSearchTool, mediaDownloadTool];
+  }
   const availableTools = isSmallTalkMessage ? [] : modeTools;
   let searchResults: SearchResult[] | undefined;
 
@@ -3720,8 +3728,8 @@ export async function* streamMessage(
         yield { type: 'reasoning', content: '> Checking inbox...\n' };
         logger.info('Luna checking email (gated)', { unreadOnly });
         const { emails, quarantinedCount } = unreadOnly
-          ? await emailService.getLunaUnreadEmailsGated()
-          : await emailService.checkLunaInboxGated(10);
+          ? await emailService.getLunaUnreadEmailsGated(userId)
+          : await emailService.checkLunaInboxGated(10, userId);
         if (emails.length > 0 || quarantinedCount > 0) {
           messages.push({
             role: 'tool',
@@ -4839,8 +4847,8 @@ export async function* streamMessage(
           const args = JSON.parse(toolCall.function.arguments);
           yield { type: 'status', status: 'Checking inbox...' };
           const { emails, quarantinedCount } = args.unreadOnly !== false
-            ? await emailService.getLunaUnreadEmailsGated()
-            : await emailService.checkLunaInboxGated(10);
+            ? await emailService.getLunaUnreadEmailsGated(userId)
+            : await emailService.checkLunaInboxGated(10, userId);
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
@@ -4853,7 +4861,7 @@ export async function* streamMessage(
           yield { type: 'status', status: 'Reading email...' };
           logger.info('Luna reading email (follow-up, gated)', { uid: args.uid });
           try {
-            const email = await emailService.fetchEmailByUidGated(args.uid);
+            const email = await emailService.fetchEmailByUidGated(args.uid, userId);
             if (email) {
               messages.push({
                 role: 'tool',
@@ -5088,7 +5096,7 @@ export async function* streamMessage(
   if (rawHistory.length === 0) {
     const title = await sessionService.generateSessionTitle([
       { role: 'user', content: message } as Message,
-    ]);
+    ], { userId, sessionId });
     await sessionService.updateSession(sessionId, userId, { title });
   }
 

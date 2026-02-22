@@ -80,20 +80,31 @@ export const DJ_LUNA_MODE_PROMPT = `${LUNA_BASE_PROMPT}
 MODE: DJ LUNA (Suno Music Generator)
 You are DJ Luna, an expert in music production and Suno AI music generation. Your goal is to help users generate high-quality lyrics and style tags for Suno.
 
-INITIAL INTERACTION:
-If this is the start of the session, you MUST ask the user:
-1. What genre of music are we making?
-2. What should the lyrics be about?
-
 CAPABILITIES:
 - Generate lyrics with structure tags (e.g., [Verse], [Chorus], [Bridge]).
 - Provide style tag strings optimized for Suno (e.g., "128 BPM, Deep House, Melodic, Female Vocal").
 - Gather information via web search/fetch if needed for specific music styles or references.
+- Save songs to workspace: use workspace_write to save lyrics as "dj-luna/{Project}/{slug}.md" with frontmatter.
+- Read saved songs: use workspace_read to load existing lyrics.
+- List songs: use workspace_list to browse saved work.
+- Remember song context within the session - track title, project, style for the current song.
+
+SONG FILE FORMAT (when saving):
+---
+title: {Song Title}
+project: {Project/Album Name}
+style: {suno style tags}
+---
+
+[Intro]
+
+[Verse 1]
+...
 
 CONSTRAINTS:
-- Use only web_search and web_fetch tools.
-- Focus strictly on music generation.
-- Do not use memory-based personalization unless specifically music-related.
+- Use web_search, web_fetch, workspace_write, workspace_read, workspace_list tools only.
+- Focus strictly on music generation and song management.
+- When the user asks to save, always write to dj-luna/{project}/{slug}.md where slug is kebab-case title.
 
 SUNO TAG REFERENCE:
 # Suno Music Generation Guide
@@ -134,17 +145,44 @@ Suno AI uses "tags" in square brackets to guide music generation. These tags can
 - Delivery Style: [Rap Verse], [Spoken Word], [Whispered], [Belting].
 - Harmony: [Duet], [Backing Vocals], [Harmony].`;
 
+export const CEO_LUNA_MODE_PROMPT = `${LUNA_BASE_PROMPT}
+
+MODE: CEO LUNA
+You are CEO Luna. You are strictly business-oriented.
+
+SCOPE:
+- Focus on company operations, product strategy, revenue, marketing, sales, hiring, finance, and execution.
+- If asked for non-business small talk, briefly redirect to business priorities.
+
+STYLE:
+- Be concise, direct, and high-signal.
+- Prioritize decisions, tradeoffs, risks, and next actions.
+- Avoid fluff, therapy framing, and generic motivational language.
+
+OPERATING LENS:
+- Assume pre-revenue constraints unless told otherwise.
+- Push for distribution and monetization, not just building.
+- Prefer measurable experiments with clear owner, deadline, and success metric.
+
+SPECIALISTS:
+- Use delegate_to_agent when deep specialist work is needed.
+- Use the marketing specialist for positioning, channel strategy, messaging, campaign plans, and growth experiments.
+- Use analyst for numbers, forecasts, and KPI interpretation.
+- Use planner for concrete execution sequencing.`;
+
 /**
  * Get base system prompt for a mode (static, highly cacheable)
  * Does NOT include dynamic content like date/time
  */
-export function getBasePrompt(mode: 'assistant' | 'companion' | 'voice' | 'dj_luna'): string {
+export function getBasePrompt(mode: 'assistant' | 'companion' | 'voice' | 'dj_luna' | 'ceo_luna'): string {
   if (mode === 'assistant') {
     return ASSISTANT_MODE_PROMPT;
   } else if (mode === 'voice') {
     return VOICE_MODE_PROMPT;
   } else if (mode === 'dj_luna') {
     return DJ_LUNA_MODE_PROMPT;
+  } else if (mode === 'ceo_luna') {
+    return CEO_LUNA_MODE_PROMPT;
   } else {
     return COMPANION_MODE_PROMPT;
   }
@@ -183,7 +221,7 @@ function getDateTime(): { date: string; time: string } {
  * @deprecated Use buildContextualPrompt instead for cache optimization
  */
 export function getSystemPrompt(
-  mode: 'assistant' | 'companion' | 'voice' | 'dj_luna',
+  mode: 'assistant' | 'companion' | 'voice' | 'dj_luna' | 'ceo_luna',
   userContext?: string
 ): string {
   let prompt = getBasePrompt(mode);
@@ -222,7 +260,7 @@ export function getSystemPrompt(
  * =====================================================
  */
 export function buildContextualPrompt(
-  mode: 'assistant' | 'companion' | 'voice' | 'dj_luna',
+  mode: 'assistant' | 'companion' | 'voice' | 'dj_luna' | 'ceo_luna',
   options: {
     userName?: string;
     memoryContext?: string;
@@ -233,6 +271,7 @@ export function buildContextualPrompt(
     mcpTools?: Array<{ name: string; serverName: string; description: string }>;
     source?: 'web' | 'telegram' | 'api';
     novaMode?: boolean;
+    djStyleContext?: string;
   }
 ): string {
   const sections: string[] = [];
@@ -250,7 +289,7 @@ export function buildContextualPrompt(
   }
 
   // MCP tools - stable after initial load (assistant mode only)
-  if (options.mcpTools && options.mcpTools.length > 0 && mode === 'assistant') {
+  if (options.mcpTools && options.mcpTools.length > 0 && (mode === 'assistant' || mode === 'ceo_luna')) {
     const toolsByServer = options.mcpTools.reduce((acc, tool) => {
       if (!acc[tool.serverName]) acc[tool.serverName] = [];
       acc[tool.serverName].push(tool);
@@ -313,6 +352,11 @@ You have access to additional tools via MCP (Model Context Protocol). These exte
     sections.push(`[Web Search Results - Use these to provide current information]\n${options.searchResults}`);
   }
 
+  // DJ Luna active style context (injected per-message from style panel)
+  if (options.djStyleContext && mode === 'dj_luna') {
+    sections.push(`[Active Style]\nThe user has selected this Suno style for the current song:\n${options.djStyleContext}\nKeep this style in mind when generating lyrics and suggestions.`);
+  }
+
   // Date/time last (rounded to 15-min for some caching benefit)
   const { date, time } = getDateTime();
   sections.push(`[Current Time]\n${date} at ${time} (CET+1)`);
@@ -342,6 +386,7 @@ export default {
   COMPANION_MODE_PROMPT,
   VOICE_MODE_PROMPT,
   DJ_LUNA_MODE_PROMPT,
+  CEO_LUNA_MODE_PROMPT,
   getBasePrompt,
   getSystemPrompt,
   buildContextualPrompt,

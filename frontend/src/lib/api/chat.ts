@@ -5,7 +5,7 @@ export interface Session {
   id: string;
   userId: string;
   title: string;
-  mode: 'assistant' | 'companion' | 'voice' | 'dj_luna';
+  mode: 'assistant' | 'companion' | 'voice' | 'dj_luna' | 'ceo_luna';
   isArchived: boolean;
   createdAt: string;
   updatedAt: string;
@@ -86,10 +86,10 @@ export const chatApi = {
   getSession: (id: string) =>
     api<Session & { messages: Message[] }>(`/api/chat/sessions/${id}`),
 
-  createSession: (data?: { title?: string; mode?: 'assistant' | 'companion' | 'voice' | 'dj_luna' }) =>
+  createSession: (data?: { title?: string; mode?: 'assistant' | 'companion' | 'voice' | 'dj_luna' | 'ceo_luna' }) =>
     api<Session>('/api/chat/sessions', { method: 'POST', body: data || {} }),
 
-  updateSession: (id: string, data: { title?: string; mode?: 'assistant' | 'companion' | 'voice' | 'dj_luna'; isArchived?: boolean }) =>
+  updateSession: (id: string, data: { title?: string; mode?: 'assistant' | 'companion' | 'voice' | 'dj_luna' | 'ceo_luna'; isArchived?: boolean }) =>
     api<Session>(`/api/chat/sessions/${id}`, { method: 'PATCH', body: data }),
 
   deleteSession: (id: string) =>
@@ -124,7 +124,8 @@ export async function* streamMessage(
   message: string,
   projectMode?: boolean,
   thinkingMode?: boolean,
-  novaMode?: boolean
+  novaMode?: boolean,
+  djStyleContext?: string
 ): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'reasoning' | 'background_refresh' | 'video_action' | 'media_action' | 'canvas_artifact'; content?: string | any; status?: string; messageId?: string; metrics?: MessageMetrics; action?: string; url?: string; videos?: any[]; query?: string; items?: any[]; source?: string; artifactId?: string }> {
   const response = await fetch(`${API_URL}${API_PREFIX}/api/chat/sessions/${sessionId}/send`, {
     method: 'POST',
@@ -132,7 +133,7 @@ export async function* streamMessage(
       'Content-Type': 'application/json',
     },
     credentials: 'include',
-    body: JSON.stringify({ message, stream: true, projectMode, thinkingMode, novaMode }),
+    body: JSON.stringify({ message, stream: true, projectMode, thinkingMode, novaMode, djStyleContext }),
   });
 
   if (!response.ok) {

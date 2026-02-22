@@ -2,15 +2,16 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useChatStore } from '@/lib/store';
+import { useWindowStore } from '@/lib/window-store';
 import {
-  MessageSquare, Plus, Mic, Bot, Music,
+  MessageSquare, Plus, Mic, Bot, Music, Briefcase,
   MoreVertical, Trash2, Pencil, Archive,
   PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useLayoutStore } from '@/lib/layout-store';
 
-type SessionMode = 'assistant' | 'companion' | 'voice' | 'dj_luna';
+type SessionMode = 'assistant' | 'companion' | 'voice' | 'dj_luna' | 'ceo_luna';
 
 function getModeIcon(mode: string) {
   switch (mode) {
@@ -20,6 +21,8 @@ function getModeIcon(mode: string) {
       return <Bot className="w-3.5 h-3.5 text-pink-400" />;
     case 'dj_luna':
       return <Music className="w-3.5 h-3.5 text-yellow-400" />;
+    case 'ceo_luna':
+      return <Briefcase className="w-3.5 h-3.5 text-orange-400" />;
     default:
       return <MessageSquare className="w-3.5 h-3.5 text-blue-400" />;
   }
@@ -44,6 +47,7 @@ const MODE_OPTIONS: { mode: SessionMode; label: string; desc: string; icon: Reac
   { mode: 'companion', label: 'Companion', desc: 'Friendly conversation', icon: <Bot className="w-4 h-4" />, color: 'text-pink-400' },
   { mode: 'voice', label: 'Voice', desc: 'Talk with Luna', icon: <Mic className="w-4 h-4" />, color: 'text-green-400' },
   { mode: 'dj_luna', label: 'DJ Luna', desc: 'Suno Music Gen', icon: <Music className="w-4 h-4" />, color: 'text-yellow-400' },
+  { mode: 'ceo_luna', label: 'CEO Luna', desc: 'Business execution', icon: <Briefcase className="w-4 h-4" />, color: 'text-orange-400' },
 ];
 
 export function SessionList() {
@@ -59,6 +63,7 @@ export function SessionList() {
   } = useChatStore();
 
   const { sessionSidebarOpen, toggleSessionSidebar } = useLayoutStore();
+  const openApp = useWindowStore((state) => state.openApp);
 
   const [showMenu, setShowMenu] = useState<string | null>(null);
   const [showModeSelector, setShowModeSelector] = useState(false);
@@ -99,6 +104,11 @@ export function SessionList() {
   }, [renamingId]);
 
   const handleNewChat = async (mode: SessionMode) => {
+    if (mode === 'dj_luna') {
+      openApp('dj-luna');
+      setShowModeSelector(false);
+      return;
+    }
     const session = await createSession(mode);
     await loadSession(session.id);
     setShowModeSelector(false);

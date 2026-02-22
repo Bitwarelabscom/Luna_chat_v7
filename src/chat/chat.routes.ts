@@ -49,7 +49,7 @@ async function rateLimit(req: Request, res: Response, next: () => void) {
 
 const createSessionSchema = z.object({
   title: z.string().min(1).max(255).optional(),
-  mode: z.enum(['assistant', 'companion', 'voice', 'dj_luna']).optional(),
+  mode: z.enum(['assistant', 'companion', 'voice', 'dj_luna', 'ceo_luna']).optional(),
 });
 
 const sendMessageSchema = z.object({
@@ -58,11 +58,12 @@ const sendMessageSchema = z.object({
   projectMode: z.boolean().optional(),
   thinkingMode: z.boolean().optional(),
   novaMode: z.boolean().optional(),
+  djStyleContext: z.string().max(500).optional(),
 });
 
 const updateSessionSchema = z.object({
   title: z.string().min(1).max(255).optional(),
-  mode: z.enum(['assistant', 'companion', 'voice', 'dj_luna']).optional(),
+  mode: z.enum(['assistant', 'companion', 'voice', 'dj_luna', 'ceo_luna']).optional(),
   isArchived: z.boolean().optional(),
 });
 
@@ -313,6 +314,7 @@ router.post('/sessions/:id/send', rateLimit, upload.array('files', 5), async (re
         thinkingMode: data.thinkingMode,
         novaMode: data.novaMode,
         documentIds: documentIds.length > 0 ? documentIds : undefined,
+        djStyleContext: data.djStyleContext,
       });
       let loggedReasoningVisible = false;
 
@@ -375,6 +377,7 @@ router.post('/sessions/:id/send', rateLimit, upload.array('files', 5), async (re
         thinkingMode: data.thinkingMode,
         novaMode: data.novaMode,
         documentIds: documentIds.length > 0 ? documentIds : undefined,
+        djStyleContext: data.djStyleContext,
       });
 
       res.json(result);

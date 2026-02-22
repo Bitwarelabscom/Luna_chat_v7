@@ -11,6 +11,7 @@ import {
   Mail,
   Users,
   Music,
+  Music2,
   Video,
   Settings,
   TrendingUp,
@@ -48,7 +49,8 @@ export type AppId =
   | 'irc'
   | 'canvas'
   | 'games'
-  | 'rpg';
+  | 'rpg'
+  | 'dj-luna';
 
 export interface AppConfig {
   id: AppId;
@@ -247,6 +249,15 @@ export const appConfig: Record<AppId, AppConfig> = {
     defaultSize: { width: 1200, height: 800 },
     showInDock: true,
   },
+  'dj-luna': {
+    id: 'dj-luna',
+    title: 'DJ Luna',
+    icon: Music2,
+    color: 'from-purple-500 to-pink-600',
+    defaultSize: { width: 1280, height: 800 },
+    showInDock: true,
+    keepAlive: true,
+  },
 };
 
 // Apps to show in the dock (in order)
@@ -272,6 +283,7 @@ export const dockApps: AppId[] = [
   'consciousness',
   'autonomous-learning',
   'games',
+  'dj-luna',
 ];
 
 export default appConfig;
