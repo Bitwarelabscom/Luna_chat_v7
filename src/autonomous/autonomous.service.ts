@@ -27,6 +27,10 @@ export interface AutonomousConfig {
   maxDailySessions: number;
   rssCheckIntervalMinutes: number;
   idleTimeoutMinutes: number;
+  learningEnabled: boolean;
+  rssEnabled: boolean;
+  insightsEnabled: boolean;
+  voiceEnabled: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -179,8 +183,12 @@ export async function createOrUpdateConfig(
   config: Partial<Omit<AutonomousConfig, 'id' | 'userId' | 'createdAt' | 'updatedAt'>>
 ): Promise<AutonomousConfig> {
   const result = await pool.query(
-    `INSERT INTO autonomous_config (user_id, enabled, auto_start, session_interval_minutes, max_daily_sessions, rss_check_interval_minutes, idle_timeout_minutes)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO autonomous_config (
+       user_id, enabled, auto_start, session_interval_minutes, max_daily_sessions, 
+       rss_check_interval_minutes, idle_timeout_minutes, 
+       learning_enabled, rss_enabled, insights_enabled, voice_enabled
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      ON CONFLICT (user_id) DO UPDATE SET
        enabled = COALESCE($2, autonomous_config.enabled),
        auto_start = COALESCE($3, autonomous_config.auto_start),
@@ -188,6 +196,10 @@ export async function createOrUpdateConfig(
        max_daily_sessions = COALESCE($5, autonomous_config.max_daily_sessions),
        rss_check_interval_minutes = COALESCE($6, autonomous_config.rss_check_interval_minutes),
        idle_timeout_minutes = COALESCE($7, autonomous_config.idle_timeout_minutes),
+       learning_enabled = COALESCE($8, autonomous_config.learning_enabled),
+       rss_enabled = COALESCE($9, autonomous_config.rss_enabled),
+       insights_enabled = COALESCE($10, autonomous_config.insights_enabled),
+       voice_enabled = COALESCE($11, autonomous_config.voice_enabled),
        updated_at = NOW()
      RETURNING *`,
     [
@@ -198,6 +210,10 @@ export async function createOrUpdateConfig(
       config.maxDailySessions ?? 24,
       config.rssCheckIntervalMinutes ?? 30,
       config.idleTimeoutMinutes ?? 30,
+      config.learningEnabled ?? true,
+      config.rssEnabled ?? true,
+      config.insightsEnabled ?? true,
+      config.voiceEnabled ?? true,
     ]
   );
 
@@ -1755,7 +1771,8 @@ async function executeFriendDiscussionAction(
       topicData.context,
       topicData.triggerType,
       5, // 5 rounds of discussion
-      friendId
+      friendId,
+      topicData.topicCandidateId
     );
 
     // Broadcast each message
@@ -1794,6 +1811,10 @@ function mapConfigRow(row: Record<string, unknown>): AutonomousConfig {
     maxDailySessions: row.max_daily_sessions as number,
     rssCheckIntervalMinutes: row.rss_check_interval_minutes as number,
     idleTimeoutMinutes: row.idle_timeout_minutes as number,
+    learningEnabled: row.learning_enabled as boolean ?? true,
+    rssEnabled: row.rss_enabled as boolean ?? true,
+    insightsEnabled: row.insights_enabled as boolean ?? true,
+    voiceEnabled: row.voice_enabled as boolean ?? true,
     createdAt: new Date(row.created_at as string),
     updatedAt: new Date(row.updated_at as string),
   };

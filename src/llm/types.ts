@@ -979,7 +979,11 @@ export type ConfigurableTask =
   | 'fast_llm'
   | 'fast_plan'
   | 'fast_draft'
-  | 'image_generation';
+  | 'image_generation'
+  | 'rpg_architect'
+  | 'rpg_character_forge'
+  | 'rpg_narrator'
+  | 'rpg_adjudicator';
 
 export interface TaskModelConfig {
   taskType: ConfigurableTask;
@@ -1080,6 +1084,34 @@ export const CONFIGURABLE_TASKS: TaskModelConfig[] = [
     description: 'Model used for generating images from text descriptions',
     defaultProvider: 'openai',
     defaultModel: 'gpt-image-1-mini',
+  },
+  {
+    taskType: 'rpg_architect',
+    displayName: 'RPG World Architect',
+    description: 'Generates RPG world setup and world suggestions',
+    defaultProvider: 'ollama',
+    defaultModel: 'qwen2.5:7b',
+  },
+  {
+    taskType: 'rpg_character_forge',
+    displayName: 'RPG Character Forge',
+    description: 'Generates RPG cast and character details',
+    defaultProvider: 'ollama',
+    defaultModel: 'qwen2.5:7b',
+  },
+  {
+    taskType: 'rpg_narrator',
+    displayName: 'RPG Narrator',
+    description: 'Creates short narration for RPG action outcomes',
+    defaultProvider: 'ollama',
+    defaultModel: 'llama3.2:3b',
+  },
+  {
+    taskType: 'rpg_adjudicator',
+    displayName: 'RPG Adjudicator',
+    description: 'Adjudicates custom RPG actions and stat deltas',
+    defaultProvider: 'ollama',
+    defaultModel: 'qwen2.5:7b',
   },
 ];
 

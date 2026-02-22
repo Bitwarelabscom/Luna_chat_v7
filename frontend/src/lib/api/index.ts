@@ -20,3 +20,4 @@ export * from './background';
 export * from './consciousness';
 export * from './autonomous-learning';
 export * from './abilities';
+export * from './rpg';

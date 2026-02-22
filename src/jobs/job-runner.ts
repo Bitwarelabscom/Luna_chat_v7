@@ -5,6 +5,7 @@ import * as taskPatterns from '../abilities/task-patterns.service.js';
 import * as oauthService from '../integrations/oauth.service.js';
 import * as newsfetcherService from '../autonomous/newsfetcher.service.js';
 import * as insightsService from '../autonomous/insights.service.js';
+import * as friendVerificationService from '../autonomous/friend-verification.service.js';
 import * as triggerService from '../triggers/trigger.service.js';
 import * as deliveryService from '../triggers/delivery.service.js';
 import * as sessionLogService from '../chat/session-log.service.js';
@@ -112,6 +113,13 @@ const jobs: Job[] = [
     enabled: true,
     running: false,
     handler: consolidateSessionLearnings,
+  },
+  {
+    name: 'friendTopicMiner',
+    intervalMs: 60 * 60 * 1000, // Hourly
+    enabled: true,
+    running: false,
+    handler: mineFriendTopics,
   },
   // Proactive trigger jobs
   {
@@ -512,6 +520,18 @@ async function refreshSuggestions(): Promise<void> {
  */
 async function triggerNewsfetcherIngestion(): Promise<void> {
   try {
+    // Check if any user has RSS ingestion enabled
+    const checkResult = await pool.query(`
+      SELECT COUNT(*) as count 
+      FROM autonomous_config 
+      WHERE rss_enabled = true AND enabled = true
+    `);
+    
+    if (parseInt(checkResult.rows[0].count) === 0) {
+      logger.debug('Skipping newsfetcher ingestion - no users have RSS enabled');
+      return;
+    }
+
     const result = await newsfetcherService.triggerIngestion();
     if (result.ingested > 0) {
       logger.info('Newsfetcher ingestion completed', { ingested: result.ingested });
@@ -530,11 +550,11 @@ async function triggerNewsfetcherIngestion(): Promise<void> {
  */
 async function enrichNewsArticles(): Promise<void> {
   try {
-    // Get users with autonomous mode enabled
+    // Get users with autonomous mode AND RSS ingestion enabled
     const result = await pool.query(`
       SELECT DISTINCT user_id
       FROM autonomous_config
-      WHERE enabled = true
+      WHERE enabled = true AND rss_enabled = true
     `);
 
     for (const row of result.rows) {
@@ -566,16 +586,52 @@ async function enrichNewsArticles(): Promise<void> {
 }
 
 /**
+ * Mine recent discussion patterns into friend topic candidates
+ */
+async function mineFriendTopics(): Promise<void> {
+  try {
+    const users = await pool.query(
+      `SELECT DISTINCT s.user_id
+       FROM sessions s
+       JOIN messages m ON m.session_id = s.id
+       WHERE m.created_at > NOW() - INTERVAL '24 hours'
+       LIMIT 50`
+    );
+
+    let usersProcessed = 0;
+    let topicsInserted = 0;
+
+    for (const row of users.rows as Array<{ user_id: string }>) {
+      const inserted = await friendVerificationService.mineTopicCandidatesForUser(row.user_id);
+      usersProcessed++;
+      topicsInserted += inserted;
+    }
+
+    if (topicsInserted > 0) {
+      logger.info('Friend topic miner completed', { usersProcessed, topicsInserted });
+    } else {
+      logger.debug('Friend topic miner completed - no new topics', { usersProcessed });
+    }
+  } catch (error) {
+    logger.error('Friend topic miner job failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+/**
  * Consolidate session learnings from autonomous sessions
  */
 async function consolidateSessionLearnings(): Promise<void> {
   try {
-    // Get users with recent autonomous sessions
+    // Get users with recent autonomous sessions and insights enabled
     const result = await pool.query(`
-      SELECT DISTINCT user_id
-      FROM autonomous_sessions
-      WHERE created_at > NOW() - INTERVAL '7 days'
-        AND status = 'completed'
+      SELECT DISTINCT ac.user_id
+      FROM autonomous_sessions as
+      JOIN autonomous_config ac ON as.user_id = ac.user_id
+      WHERE as.created_at > NOW() - INTERVAL '7 days'
+        AND as.status = 'completed'
+        AND ac.insights_enabled = true
     `);
 
     for (const row of result.rows) {

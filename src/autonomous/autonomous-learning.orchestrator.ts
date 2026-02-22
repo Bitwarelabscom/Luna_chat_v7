@@ -11,6 +11,11 @@ import * as knowledgeEmbedder from './knowledge-embedder.service.js';
 import * as friendService from './friend.service.js';
 import logger from '../utils/logger.js';
 
+const PRIMARY_PRIORITY_THRESHOLD = 0.7;
+const MAX_GAPS_PER_RUN = 5;
+const LOW_PRIORITY_FALLBACK_MIN_PRIORITY = 0.5;
+const LOW_PRIORITY_FALLBACK_MAX_PER_RUN = 2;
+
 export interface OrchestrationResult {
   userId: string;
   gapsIdentified: number;
@@ -76,18 +81,44 @@ export async function orchestrateAutonomousLearning(
       true
     );
 
-    // Step 2: Get high-priority pending gaps (priority >= 0.7)
-    const pendingGaps = await sessionAnalyzer.getPendingGaps(userId, 5); // Process top 5
-    const highPriorityGaps = pendingGaps.filter((gap) => gap.priority >= 0.7);
+    // Step 2: Select pending gaps for this run.
+    // Prefer high-priority items; if none are available, drain a small low-priority batch.
+    const pendingGaps = await sessionAnalyzer.getPendingGaps(userId, MAX_GAPS_PER_RUN);
+    const highPriorityGaps = pendingGaps.filter(
+      (gap) => gap.priority >= PRIMARY_PRIORITY_THRESHOLD
+    );
 
-    logger.info('Processing high-priority gaps', {
+    let gapsToProcess = highPriorityGaps;
+    let selectionMode: 'high_priority' | 'low_priority_fallback' = 'high_priority';
+
+    if (gapsToProcess.length === 0 && pendingGaps.length > 0) {
+      const lowPriorityFallback = pendingGaps
+        .filter((gap) => gap.priority >= LOW_PRIORITY_FALLBACK_MIN_PRIORITY)
+        .slice(0, LOW_PRIORITY_FALLBACK_MAX_PER_RUN);
+
+      if (lowPriorityFallback.length > 0) {
+        gapsToProcess = lowPriorityFallback;
+        selectionMode = 'low_priority_fallback';
+      }
+    }
+
+    logger.info('Selected pending gaps for processing', {
       userId,
       total: pendingGaps.length,
       highPriority: highPriorityGaps.length,
+      selected: gapsToProcess.length,
+      selectionMode,
+      highPriorityThreshold: PRIMARY_PRIORITY_THRESHOLD,
+      lowPriorityFallbackMin: LOW_PRIORITY_FALLBACK_MIN_PRIORITY,
+      lowPriorityFallbackMax: LOW_PRIORITY_FALLBACK_MAX_PER_RUN,
     });
 
-    // Step 3: Research each high-priority gap
-    for (const gap of highPriorityGaps) {
+    if (gapsToProcess.length === 0) {
+      return result;
+    }
+
+    // Step 3: Research each selected gap
+    for (const gap of gapsToProcess) {
       try {
         // PREVENT REDUNDANCY: Check if a similar gap (semantic similarity > 0.85) was already embedded or verified
         if (gap.embedding) {
@@ -346,10 +377,12 @@ async function logActivity(
  */
 export async function getEligibleUsers(): Promise<string[]> {
   try {
-    // For now, get all active users
-    // In the future, could filter by autonomous learning preferences
+    // Get active users who have autonomous learning enabled in their config
     const rows = await query<{id: string}>(
-      `SELECT id FROM users WHERE is_active = true`
+      `SELECT u.id 
+       FROM users u
+       JOIN autonomous_config ac ON u.id = ac.user_id
+       WHERE u.is_active = true AND ac.learning_enabled = true`
     );
 
     return rows.map((row) => row.id);
@@ -419,9 +452,18 @@ export async function embedApprovedGap(gapId: number, userId: string): Promise<v
 
     // Fetch gap with research session and findings
     const gapRows = await query<any>(
-      `SELECT kg.*, ars.id as session_id, ars.research_findings
+      `SELECT
+         kg.*,
+         ars.id as session_id,
+         ars.findings as findings
        FROM knowledge_gaps kg
-       LEFT JOIN autonomous_research_sessions ars ON kg.id = ars.knowledge_gap_id
+       LEFT JOIN LATERAL (
+         SELECT id, findings
+         FROM autonomous_research_sessions
+         WHERE knowledge_gap_id = kg.id
+         ORDER BY completed_at DESC NULLS LAST, created_at DESC
+         LIMIT 1
+       ) ars ON true
        WHERE kg.id = $1 AND kg.user_id = $2 AND kg.status = 'verified'`,
       [gapId, userId]
     );
@@ -432,35 +474,47 @@ export async function embedApprovedGap(gapId: number, userId: string): Promise<v
 
     const gap = gapRows[0];
 
-    if (!gap.session_id || !gap.research_findings) {
+    if (!gap.session_id || !gap.findings) {
       throw new Error(`Gap ${gapId} missing research session or findings`);
     }
 
-    const findings = gap.research_findings;
+    const findings =
+      typeof gap.findings === 'string' ? JSON.parse(gap.findings) : gap.findings;
 
     // Calculate average trust score from sources
     let trustScore = 0.5; // Default
     if (findings.sources && findings.sources.length > 0) {
       const totalScore = findings.sources.reduce(
-        (sum: number, source: any) => sum + (source.trust_score || 0.5),
+        (sum: number, source: any) => {
+          const score = source?.trustScore ?? source?.trust_score ?? 0.5;
+          return sum + (typeof score === 'number' ? score : 0.5);
+        },
         0
       );
       trustScore = totalScore / findings.sources.length;
     }
 
     // Embed knowledge
-    await knowledgeEmbedder.embedKnowledge(
+    const embeddingResult = await knowledgeEmbedder.embedKnowledge(
       userId,
       gap.session_id,
-      gap.description,
+      gap.gap_description,
       findings,
       trustScore
     );
 
+    if (!embeddingResult.success) {
+      throw new Error(embeddingResult.error || 'Embedding failed');
+    }
+
     // Update gap status to embedded
     await query(
       `UPDATE knowledge_gaps
-       SET status = 'embedded', updated_at = NOW()
+       SET
+         status = 'embedded',
+         manual_approval_required = false,
+         failure_reason = NULL,
+         completed_at = NOW()
        WHERE id = $1`,
       [gapId]
     );
@@ -473,8 +527,8 @@ export async function embedApprovedGap(gapId: number, userId: string): Promise<v
         userId,
         'autonomous_learning',
         'Research Approved and Embedded',
-        `Your manually approved research on "${gap.description}" has been embedded into my memory.`,
-        JSON.stringify({ gapId, topic: gap.description })
+        `Your manually approved research on "${gap.gap_description}" has been embedded into my memory.`,
+        JSON.stringify({ gapId, topic: gap.gap_description })
       ]
     );
 

@@ -47,7 +47,8 @@ export type AppId =
   | 'news'
   | 'irc'
   | 'canvas'
-  | 'games';
+  | 'games'
+  | 'rpg';
 
 export interface AppConfig {
   id: AppId;
@@ -238,6 +239,14 @@ export const appConfig: Record<AppId, AppConfig> = {
     defaultSize: { width: 1100, height: 760 },
     showInDock: true,
   },
+  rpg: {
+    id: 'rpg',
+    title: 'RPG Forge',
+    icon: Gamepad2,
+    color: 'from-emerald-500 to-teal-600',
+    defaultSize: { width: 1200, height: 800 },
+    showInDock: true,
+  },
 };
 
 // Apps to show in the dock (in order)
@@ -251,6 +260,7 @@ export const dockApps: AppId[] = [
   'terminal',
   'browser',
   'editor',
+  'rpg',
   'todo',
   'calendar',
   'email',

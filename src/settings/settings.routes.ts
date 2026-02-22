@@ -535,11 +535,24 @@ router.delete('/models', async (req: Request, res: Response) => {
 router.get('/background-llm', async (req: Request, res: Response) => {
   try {
     const settings = await backgroundLlmSettingsService.getBackgroundLlmSettings(req.user!.userId);
+    let providers = PROVIDERS;
+    let source: 'live' | 'static' = 'static';
+
+    try {
+      providers = await getCachedModels();
+      source = 'live';
+    } catch (modelError) {
+      logger.warn('Failed to fetch live models for background LLM settings, falling back to static', {
+        error: (modelError as Error).message,
+      });
+    }
+
     res.json({
       settings,
       features: backgroundLlmSettingsService.BACKGROUND_LLM_FEATURES,
       defaults: backgroundLlmSettingsService.DEFAULT_BACKGROUND_LLM_SETTINGS,
-      providers: PROVIDERS,
+      providers,
+      source,
     });
   } catch (error) {
     logger.error('Failed to get background LLM settings', { error: (error as Error).message });

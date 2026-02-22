@@ -155,6 +155,9 @@ export async function answerQuestion(
   factsService.processConversationFacts(userId, question.sessionId || '', qaMessages)
     .catch(err => logger.error('Failed to extract facts from Q&A', { err: (err as Error).message }));
 
+  const friendVerificationService = await import('./friend-verification.service.js');
+  await friendVerificationService.resolveVerificationForQuestion(questionId, userId, response);
+
   // Check if this was a goal suggestion confirmation
   if (question.context?.includes('Goal type:')) {
     const responseLower = response.toLowerCase();
@@ -204,6 +207,8 @@ export async function dismissQuestion(
   const success = result.rowCount === 1;
 
   if (success) {
+    const friendVerificationService = await import('./friend-verification.service.js');
+    await friendVerificationService.dismissVerificationForQuestion(questionId, userId);
     logger.info('Question dismissed', { questionId, userId });
   }
 

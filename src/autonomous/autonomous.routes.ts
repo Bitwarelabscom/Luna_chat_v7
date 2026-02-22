@@ -9,6 +9,7 @@ import * as questionsService from './questions.service.js';
 import * as sessionWorkspaceService from './session-workspace.service.js';
 import * as researchService from './research.service.js';
 import * as friendService from './friend.service.js';
+import * as friendVerificationService from './friend-verification.service.js';
 import * as webfetchService from '../search/webfetch.service.js';
 import logger from '../utils/logger.js';
 
@@ -1354,6 +1355,7 @@ router.post('/friends/discuss', async (req: Request, res: Response) => {
     let discussionTopic = topic;
     let context = '';
     let triggerType: 'pattern' | 'interest' | 'fact' | 'random' = 'random';
+    let topicCandidateId: string | undefined;
 
     if (!discussionTopic) {
       const topicData = await friendService.selectDiscussionTopic(userId);
@@ -1363,6 +1365,7 @@ router.post('/friends/discuss', async (req: Request, res: Response) => {
       discussionTopic = topicData.topic;
       context = topicData.context;
       triggerType = topicData.triggerType;
+      topicCandidateId = topicData.topicCandidateId;
     }
 
     const conversation = await friendService.startFriendDiscussion(
@@ -1372,7 +1375,8 @@ router.post('/friends/discuss', async (req: Request, res: Response) => {
       context,
       triggerType,
       rounds || 5,
-      friendId
+      friendId,
+      topicCandidateId
     );
 
     return res.json({ conversation });
@@ -1397,6 +1401,23 @@ router.get('/friends/discussions', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Error getting friend discussions', { error });
     res.status(500).json({ error: 'Failed to get friend discussions' });
+  }
+});
+
+/**
+ * GET /api/autonomous/friends/topics
+ * List recent mined topics and their status
+ */
+router.get('/friends/topics', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
+    const topics = await friendVerificationService.listRecentTopicCandidates(userId, limit);
+
+    res.json({ topics });
+  } catch (error) {
+    logger.error('Error getting friend topics', { error });
+    res.status(500).json({ error: 'Failed to get friend topics' });
   }
 });
 
@@ -1465,6 +1486,7 @@ router.post('/friends/discuss/stream', async (req: Request, res: Response): Prom
     let discussionTopic = topic;
     let context = '';
     let triggerType: 'pattern' | 'interest' | 'fact' | 'random' = 'random';
+    let topicCandidateId: string | undefined;
 
     if (!discussionTopic) {
       const topicData = await friendService.selectDiscussionTopic(userId);
@@ -1476,6 +1498,7 @@ router.post('/friends/discuss/stream', async (req: Request, res: Response): Prom
       discussionTopic = topicData.topic;
       context = topicData.context;
       triggerType = topicData.triggerType;
+      topicCandidateId = topicData.topicCandidateId;
     }
 
     await friendService.startFriendDiscussionStreaming(
@@ -1486,6 +1509,7 @@ router.post('/friends/discuss/stream', async (req: Request, res: Response): Prom
       triggerType,
       rounds || 5,
       friendId,
+      topicCandidateId,
       (event) => {
         res.write(`data: ${JSON.stringify(event)}\n\n`);
       }
@@ -1641,13 +1665,19 @@ router.post('/learning/gaps/:id/approve', async (req: Request, res: Response) =>
     // Update gap status to verified
     await query(
       `UPDATE knowledge_gaps
-       SET status = 'verified', updated_at = NOW()
+       SET
+         status = 'verified',
+         manual_approval_required = false,
+         failure_reason = NULL,
+         completed_at = NOW()
        WHERE id = $1`,
       [gapId]
     );
 
     // Update verification result with manual approval flag
-    const verificationResult = gap.verification_result || {};
+    const verificationResult = typeof gap.verification_result === 'string'
+      ? JSON.parse(gap.verification_result)
+      : (gap.verification_result || {});
     verificationResult.manually_approved = true;
     verificationResult.manual_approval_timestamp = new Date().toISOString();
     verificationResult.manual_approval_user_id = userId;
@@ -1661,12 +1691,12 @@ router.post('/learning/gaps/:id/approve', async (req: Request, res: Response) =>
 
     // Log the manual approval action
     await query(
-      `INSERT INTO autonomous_learning_log (user_id, action_type, action_data, timestamp)
-       VALUES ($1, $2, $3, NOW())`,
+      `INSERT INTO autonomous_learning_log (user_id, action_type, details, success, timestamp)
+       VALUES ($1, $2, $3, true, NOW())`,
       [userId, 'manual_approval', JSON.stringify({
         gapId,
         previousStatus: 'rejected',
-        newStatus: 'verified'
+        newStatus: 'verified',
       })]
     );
 

@@ -3578,7 +3578,7 @@ export async function* streamMessage(
         }
       } else if (toolCall.function.name === 'delegate_to_agent') {
         const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'reasoning', content: `> Invoking agent: ${args.agent}...\n` };
+        yield { type: 'reasoning', content: `> Invoking agent...\n` };
         logger.info('Delegating to agent in stream', { agent: args.agent, task: args.task?.substring(0, 100) });
 
         const result = await agents.executeAgentTask(userId, {
@@ -3587,14 +3587,14 @@ export async function* streamMessage(
           context: args.context,
         });
 
-        yield { type: 'reasoning', content: `> Agent ${args.agent} completed.\n` };
-        logger.info('Agent completed in stream', { agent: args.agent, success: result.success, timeMs: result.executionTimeMs });
+        yield { type: 'reasoning', content: `> Agent ${result.agentName} completed.\n` };
+        logger.info('Agent completed in stream', { requestedAgent: args.agent, actualAgent: result.agentName, success: result.success, timeMs: result.executionTimeMs });
 
         // Add tool result to conversation
         messages.push({
           role: 'tool',
           tool_call_id: toolCall.id,
-          content: formatAgentResultForContext(args.agent, result.result, result.success),
+          content: formatAgentResultForContext(result.agentName, result.result, result.success),
         } as ChatMessage);
       } else if (toolCall.function.name === 'workspace_write') {
         const args = JSON.parse(toolCall.function.arguments);
@@ -4661,7 +4661,7 @@ export async function* streamMessage(
       for (const toolCall of followUpCompletion.toolCalls) {
         if (toolCall.function.name === 'delegate_to_agent') {
           const args = JSON.parse(toolCall.function.arguments);
-          yield { type: 'status', status: `Invoking ${args.agent} agent...` };
+          yield { type: 'status', status: 'Invoking agent...' };
           logger.info('Delegating to agent in follow-up', { agent: args.agent, task: args.task?.substring(0, 100) });
 
           const result = await agents.executeAgentTask(userId, {
@@ -4670,13 +4670,13 @@ export async function* streamMessage(
             context: args.context,
           });
 
-          yield { type: 'status', status: `${args.agent} agent completed` };
-          logger.info('Agent completed in follow-up', { agent: args.agent, success: result.success });
+          yield { type: 'status', status: `${result.agentName} agent completed` };
+          logger.info('Agent completed in follow-up', { requestedAgent: args.agent, actualAgent: result.agentName, success: result.success });
 
           messages.push({
             role: 'tool',
             tool_call_id: toolCall.id,
-            content: formatAgentResultForContext(args.agent, result.result, result.success),
+            content: formatAgentResultForContext(result.agentName, result.result, result.success),
           } as ChatMessage);
         } else if (toolCall.function.name === 'web_search') {
           const args = JSON.parse(toolCall.function.arguments);

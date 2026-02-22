@@ -3,7 +3,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Play, Square, RefreshCw, Plus, Target, BookOpen,
-  Sparkles, Eye, Settings, Trash2, Check, User, MessageCircle, X, Send
+  Sparkles, Eye, Settings, Trash2, Check, User, MessageCircle, X, Send,
+  Clock, Zap
 } from 'lucide-react';
 import { autonomousApi } from '../../lib/api';
 import type {
@@ -11,7 +12,7 @@ import type {
 } from '../../lib/api';
 import TheaterMode from '../TheaterMode';
 
-type TabSection = 'control' | 'goals' | 'journal' | 'insights';
+type TabSection = 'control' | 'goals' | 'journal' | 'insights' | 'settings';
 
 const goalTypeConfig = {
   user_focused: { color: 'text-blue-400', bg: 'bg-blue-400/10', label: 'User Focused' },
@@ -23,8 +24,8 @@ const goalTypeConfig = {
 export default function AutonomousTab() {
   const [activeSection, setActiveSection] = useState<TabSection>('control');
   const [status, setStatus] = useState<AutonomousStatus | null>(null);
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const [_config, setConfig] = useState<AutonomousConfig | null>(null);
+  const [config, setConfig] = useState<AutonomousConfig | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [achievements, setAchievements] = useState<Achievement[]>([]);
   const [insights, setInsights] = useState<ProactiveInsight[]>([]);
@@ -168,6 +169,20 @@ export default function AutonomousTab() {
     }
   };
 
+  const handleUpdateConfig = async (updates: Partial<AutonomousConfig>) => {
+    if (!config) return;
+    try {
+      setIsSaving(true);
+      const result = await autonomousApi.updateConfig(updates);
+      setConfig(result.config);
+    } catch (error) {
+      console.error('Failed to update config:', error);
+      alert('Failed to save settings');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -195,6 +210,7 @@ export default function AutonomousTab() {
           { id: 'goals', icon: Target, label: 'Goals' },
           { id: 'journal', icon: BookOpen, label: 'Journal' },
           { id: 'insights', icon: Sparkles, label: 'Insights' },
+          { id: 'settings', icon: Settings, label: 'Settings' },
         ].map(({ id, icon: Icon, label }) => (
           <button
             key={id}
@@ -646,6 +662,213 @@ export default function AutonomousTab() {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Settings Section */}
+      {activeSection === 'settings' && config && (
+        <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-medium text-theme-text-primary">Autonomous Configuration</h3>
+              <p className="text-sm text-theme-text-muted mt-1">
+                Configure how Luna operates in the background and her autonomous behaviors.
+              </p>
+            </div>
+            {isSaving && (
+              <div className="flex items-center gap-2 text-theme-accent-primary text-sm">
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                Saving...
+              </div>
+            )}
+          </div>
+
+          {/* Core Toggles */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="p-4 bg-theme-bg-tertiary rounded-xl border border-theme-border flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-theme-accent-primary/10 rounded-lg text-theme-accent-primary">
+                  <Play className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="font-medium text-theme-text-primary">Autonomous Mode</div>
+                  <div className="text-xs text-theme-text-muted text-balance">Allow Luna to think and act independently</div>
+                </div>
+              </div>
+              <button
+                onClick={() => handleUpdateConfig({ enabled: !config.enabled })}
+                className={`relative w-12 h-6 rounded-full transition-colors ${config.enabled ? 'bg-theme-accent-primary' : 'bg-theme-bg-secondary border border-theme-border'}`}
+              >
+                <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${config.enabled ? 'left-7' : 'left-1'}`} />
+              </button>
+            </div>
+
+            <div className="p-4 bg-theme-bg-tertiary rounded-xl border border-theme-border flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-purple-500/10 rounded-lg text-purple-400">
+                  <RefreshCw className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="font-medium text-theme-text-primary">Auto-Start</div>
+                  <div className="text-xs text-theme-text-muted text-balance">Automatically start sessions on server boot</div>
+                </div>
+              </div>
+              <button
+                onClick={() => handleUpdateConfig({ autoStart: !config.autoStart })}
+                className={`relative w-12 h-6 rounded-full transition-colors ${config.autoStart ? 'bg-purple-500' : 'bg-theme-bg-secondary border border-theme-border'}`}
+              >
+                <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${config.autoStart ? 'left-7' : 'left-1'}`} />
+              </button>
+            </div>
+          </div>
+
+          {/* Background Task Selectors */}
+          <div className="space-y-4">
+            <h4 className="text-sm font-medium text-theme-text-muted uppercase tracking-wider flex items-center gap-2">
+              <Zap className="w-4 h-4" />
+              Background Task Selectors
+            </h4>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Autonomous Learning */}
+              <div className="p-4 bg-theme-bg-tertiary rounded-xl border border-theme-border space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-blue-500/10 rounded-lg text-blue-400">
+                      <BookOpen className="w-5 h-5" />
+                    </div>
+                    <span className="font-medium text-theme-text-primary">Autonomous Learning</span>
+                  </div>
+                  <button
+                    onClick={() => handleUpdateConfig({ learningEnabled: !config.learningEnabled })}
+                    className={`relative w-12 h-6 rounded-full transition-colors ${config.learningEnabled ? 'bg-blue-500' : 'bg-theme-bg-secondary border border-theme-border'}`}
+                  >
+                    <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${config.learningEnabled ? 'left-7' : 'left-1'}`} />
+                  </button>
+                </div>
+                <p className="text-xs text-theme-text-muted">
+                  Allows Luna to identify knowledge gaps from your conversations and research them independently to improve her expertise.
+                </p>
+              </div>
+
+              {/* RSS Ingestion */}
+              <div className="p-4 bg-theme-bg-tertiary rounded-xl border border-theme-border space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-orange-500/10 rounded-lg text-orange-400">
+                      <RefreshCw className="w-5 h-5" />
+                    </div>
+                    <span className="font-medium text-theme-text-primary">RSS News Ingestion</span>
+                  </div>
+                  <button
+                    onClick={() => handleUpdateConfig({ rssEnabled: !config.rssEnabled })}
+                    className={`relative w-12 h-6 rounded-full transition-colors ${config.rssEnabled ? 'bg-orange-500' : 'bg-theme-bg-secondary border border-theme-border'}`}
+                  >
+                    <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${config.rssEnabled ? 'left-7' : 'left-1'}`} />
+                  </button>
+                </div>
+                <p className="text-xs text-theme-text-muted">
+                  Luna periodically checks configured RSS feeds for news and information relevant to your interests and goals.
+                </p>
+              </div>
+
+              {/* Proactive Insights */}
+              <div className="p-4 bg-theme-bg-tertiary rounded-xl border border-theme-border space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-green-500/10 rounded-lg text-green-400">
+                      <Sparkles className="w-5 h-5" />
+                    </div>
+                    <span className="font-medium text-theme-text-primary">Proactive Insights</span>
+                  </div>
+                  <button
+                    onClick={() => handleUpdateConfig({ insightsEnabled: !config.insightsEnabled })}
+                    className={`relative w-12 h-6 rounded-full transition-colors ${config.insightsEnabled ? 'bg-green-500' : 'bg-theme-bg-secondary border border-theme-border'}`}
+                  >
+                    <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${config.insightsEnabled ? 'left-7' : 'left-1'}`} />
+                  </button>
+                </div>
+                <p className="text-xs text-theme-text-muted">
+                  Allows Luna to generate and share discoveries, pattern analysis, and suggestions based on her background processing.
+                </p>
+              </div>
+
+              {/* Voice Intelligence */}
+              <div className="p-4 bg-theme-bg-tertiary rounded-xl border border-theme-border space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-red-500/10 rounded-lg text-red-400">
+                      <MessageCircle className="w-5 h-5" />
+                    </div>
+                    <span className="font-medium text-theme-text-primary">Voice Intelligence</span>
+                  </div>
+                  <button
+                    onClick={() => handleUpdateConfig({ voiceEnabled: !config.voiceEnabled })}
+                    className={`relative w-12 h-6 rounded-full transition-colors ${config.voiceEnabled ? 'bg-red-500' : 'bg-theme-bg-secondary border border-theme-border'}`}
+                  >
+                    <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${config.voiceEnabled ? 'left-7' : 'left-1'}`} />
+                  </button>
+                </div>
+                <p className="text-xs text-theme-text-muted">
+                  Enables advanced voice pattern analysis and emotional detection during spoken conversations.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Timing Intervals */}
+          <div className="bg-theme-bg-tertiary rounded-xl border border-theme-border p-6 space-y-6">
+            <h4 className="text-sm font-medium text-theme-text-muted uppercase tracking-wider flex items-center gap-2">
+              <Clock className="w-4 h-4" />
+              Intervals & Limits
+            </h4>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="space-y-2">
+                <label className="text-sm text-theme-text-secondary">Session Interval (minutes)</label>
+                <input
+                  type="number"
+                  value={config.sessionIntervalMinutes}
+                  onChange={(e) => handleUpdateConfig({ sessionIntervalMinutes: parseInt(e.target.value) })}
+                  className="w-full px-4 py-2 bg-theme-bg-secondary border border-theme-border rounded-lg text-theme-text-primary focus:outline-none focus:border-theme-accent-primary"
+                />
+                <p className="text-xs text-theme-text-muted">Time to wait between autonomous thinking sessions.</p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm text-theme-text-secondary">Max Daily Sessions</label>
+                <input
+                  type="number"
+                  value={config.maxDailySessions}
+                  onChange={(e) => handleUpdateConfig({ maxDailySessions: parseInt(e.target.value) })}
+                  className="w-full px-4 py-2 bg-theme-bg-secondary border border-theme-border rounded-lg text-theme-text-primary focus:outline-none focus:border-theme-accent-primary"
+                />
+                <p className="text-xs text-theme-text-muted">Limit the total number of autonomous sessions per day.</p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm text-theme-text-secondary">RSS Check Interval (minutes)</label>
+                <input
+                  type="number"
+                  value={config.rssCheckIntervalMinutes}
+                  onChange={(e) => handleUpdateConfig({ rssCheckIntervalMinutes: parseInt(e.target.value) })}
+                  className="w-full px-4 py-2 bg-theme-bg-secondary border border-theme-border rounded-lg text-theme-text-primary focus:outline-none focus:border-theme-accent-primary"
+                />
+                <p className="text-xs text-theme-text-muted">How often to check your news feeds for updates.</p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm text-theme-text-secondary">Idle Timeout (minutes)</label>
+                <input
+                  type="number"
+                  value={config.idleTimeoutMinutes}
+                  onChange={(e) => handleUpdateConfig({ idleTimeoutMinutes: parseInt(e.target.value) })}
+                  className="w-full px-4 py-2 bg-theme-bg-secondary border border-theme-border rounded-lg text-theme-text-primary focus:outline-none focus:border-theme-accent-primary"
+                />
+                <p className="text-xs text-theme-text-muted">Stop session if Luna remains idle longer than this.</p>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

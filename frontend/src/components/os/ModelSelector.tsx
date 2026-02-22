@@ -2,12 +2,13 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { ChevronDown, Loader2, RefreshCw } from 'lucide-react';
-import { settingsApi, type LLMProvider, type TaskModelConfig, type UserModelConfig } from '@/lib/api/settings';
+import { settingsApi, type CoderSettings, type LLMProvider, type TaskModelConfig, type UserModelConfig } from '@/lib/api/settings';
 
 export function ModelSelector() {
   const [providers, setProviders] = useState<LLMProvider[]>([]);
   const [tasks, setTasks] = useState<TaskModelConfig[]>([]);
   const [userConfigs, setUserConfigs] = useState<UserModelConfig[]>([]);
+  const [coderSettings, setCoderSettings] = useState<CoderSettings | null>(null);
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [hasFetched, setHasFetched] = useState(false);
@@ -28,13 +29,15 @@ export function ModelSelector() {
   const fetchModels = async () => {
     setIsLoading(true);
     try {
-      const [modelsRes, configsRes] = await Promise.all([
+      const [modelsRes, configsRes, coderRes] = await Promise.all([
         settingsApi.getAvailableModels(),
         settingsApi.getUserModelConfigs(),
+        settingsApi.getCoderSettings(),
       ]);
       setProviders(modelsRes.providers);
       setTasks(modelsRes.tasks);
       setUserConfigs(configsRes.configs);
+      setCoderSettings(coderRes.settings);
       setHasFetched(true);
     } catch (err) {
       console.error('Failed to fetch models:', err);
@@ -59,6 +62,48 @@ export function ModelSelector() {
       console.error('Failed to set model:', err);
     }
     setIsOpen(false);
+  };
+
+  type CoderChoice = 'claude' | 'gemini' | 'codex' | 'api';
+
+  const getEnabledCoderCount = (settings: CoderSettings) => {
+    let count = 0;
+    if (settings.claudeCliEnabled) count++;
+    if (settings.geminiCliEnabled) count++;
+    if (settings.codexCliEnabled) count++;
+    if (settings.coderApiEnabled && settings.coderApiProvider && settings.coderApiModel) count++;
+    return count;
+  };
+
+  const getLockedCoderLabel = (settings: CoderSettings) => {
+    const enabledCount = getEnabledCoderCount(settings);
+    if (enabledCount !== 1) return 'Mixed';
+    if (settings.claudeCliEnabled) return 'Claude';
+    if (settings.geminiCliEnabled) return 'Gemini';
+    if (settings.codexCliEnabled) return 'Codex Mini';
+    if (settings.coderApiEnabled && settings.coderApiProvider && settings.coderApiModel) return 'Coder API';
+    return 'Mixed';
+  };
+
+  const handleLockCoder = async (choice: CoderChoice) => {
+    try {
+      if (choice === 'api' && (!coderSettings?.coderApiProvider || !coderSettings?.coderApiModel)) {
+        return;
+      }
+
+      const updates = {
+        claudeCliEnabled: choice === 'claude',
+        geminiCliEnabled: choice === 'gemini',
+        codexCliEnabled: choice === 'codex',
+        coderApiEnabled: choice === 'api',
+        defaultCoder: choice,
+      } as const;
+
+      const result = await settingsApi.updateCoderSettings(updates);
+      setCoderSettings(result.settings);
+    } catch (err) {
+      console.error('Failed to lock coder backend:', err);
+    }
   };
 
   // Close on outside click
@@ -155,6 +200,40 @@ export function ModelSelector() {
                   })}
                 </div>
               ))}
+              {coderSettings && (
+                <div className="border-t mt-1" style={{ borderColor: 'var(--theme-border)' }}>
+                  <div className="flex items-center justify-between px-3 pt-2 pb-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--theme-text-muted)' }}>
+                      Coder Agent Lock
+                    </span>
+                    <span className="text-[10px]" style={{ color: 'var(--theme-text-muted)' }}>
+                      {getLockedCoderLabel(coderSettings)}
+                    </span>
+                  </div>
+                  {[
+                    { id: 'claude' as const, label: 'Claude CLI' },
+                    { id: 'gemini' as const, label: 'Gemini CLI' },
+                    { id: 'codex' as const, label: 'Codex Mini' },
+                    { id: 'api' as const, label: 'Coder API', disabled: !coderSettings.coderApiProvider || !coderSettings.coderApiModel },
+                  ].map((coder) => (
+                    <button
+                      key={coder.id}
+                      onClick={() => handleLockCoder(coder.id)}
+                      disabled={coder.disabled}
+                      className={`w-full flex items-center justify-between px-3 py-2 text-left hover:bg-white/5 transition-colors disabled:opacity-40 ${
+                        coderSettings.defaultCoder === coder.id ? 'bg-white/10' : ''
+                      }`}
+                    >
+                      <span className="text-sm" style={{ color: 'var(--theme-text-primary)' }}>
+                        {coder.label}
+                      </span>
+                      {coderSettings.defaultCoder === coder.id && (
+                        <span className="w-1.5 h-1.5 rounded-full bg-green-400 flex-shrink-0" />
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
             </>
           )}
         </div>

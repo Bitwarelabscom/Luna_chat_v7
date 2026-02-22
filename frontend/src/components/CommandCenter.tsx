@@ -33,6 +33,7 @@ import FriendsTab from './settings/FriendsTab';
 import MemoryTab from './settings/MemoryTab';
 import TriggersTab from './settings/TriggersTab';
 import McpTab from './settings/McpTab';
+import BackgroundModelsTab from './settings/BackgroundModelsTab';
 import QuestionNotification from './QuestionNotification';
 import TradingTerminal from './trading/terminal/TradingTerminal';
 
@@ -43,7 +44,7 @@ interface ActivityLog {
 }
 
 type MainTab = 'chat' | 'autonomous' | 'friends' | 'tasks' | 'workspace' | 'email' | 'calendar' | 'trading' | 'settings' | 'activity';
-type SettingsTab = 'appearance' | 'prompts' | 'models' | 'integrations' | 'mcpconfig' | 'workspace' | 'tasks' | 'memory' | 'autonomous' | 'triggers' | 'stats' | 'data';
+type SettingsTab = 'appearance' | 'prompts' | 'models' | 'backgroundai' | 'integrations' | 'mcpconfig' | 'workspace' | 'tasks' | 'memory' | 'autonomous' | 'triggers' | 'stats' | 'data';
 
 // Format token count for compact display
 function formatTokenCount(count: number): string {
@@ -681,6 +682,7 @@ const CommandCenter = () => {
     { id: 'appearance', label: 'Appearance' },
     { id: 'prompts', label: 'Prompts' },
     { id: 'models', label: 'Models' },
+    { id: 'backgroundai', label: 'Background AI' },
     { id: 'integrations', label: 'Integrations' },
     { id: 'mcpconfig', label: 'MCP Servers' },
     { id: 'workspace', label: 'Workspace' },
@@ -2014,6 +2016,7 @@ const CommandCenter = () => {
                 {settingsTab === 'appearance' && <AppearanceTab />}
                 {settingsTab === 'prompts' && <PromptsTab />}
                 {settingsTab === 'models' && <ModelsTab />}
+                {settingsTab === 'backgroundai' && <BackgroundModelsTab />}
                 {settingsTab === 'integrations' && <IntegrationsTab />}
                 {settingsTab === 'mcpconfig' && <McpTab />}
                 {settingsTab === 'workspace' && <WorkspaceTab />}

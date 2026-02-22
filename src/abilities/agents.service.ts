@@ -1,15 +1,22 @@
 import { pool } from '../db/index.js';
 import { spawn } from 'child_process';
-import { createChatCompletion } from '../llm/openai.client.js';
+import { createChatCompletion, type ChatMessage } from '../llm/openai.client.js';
 import * as searxng from '../search/searxng.client.js';
 import logger from '../utils/logger.js';
 import { existsSync, mkdirSync, copyFileSync } from 'fs';
 import { homedir } from 'os';
 import path from 'path';
 import * as workspace from './workspace.service.js';
+import * as sandbox from './sandbox.service.js';
 import * as coderSettings from './coder-settings.service.js';
 import { DAGExecutor } from './dag-executor.js';
 import { config } from '../config/index.js';
+import {
+  workspaceExecuteTool,
+  workspaceListTool,
+  workspaceReadTool,
+  workspaceWriteTool,
+} from '../llm/tools/index.js';
 
 /**
  * Execute command using spawn (more reliable than execFile for Claude CLI)
@@ -163,6 +170,27 @@ function extractJSON(text: string): string {
 }
 
 /**
+ * Decode HTML entities in a string.
+ * Some models emit encoded HTML in tool-call arguments.
+ */
+function decodeHtmlEntities(text: string): string {
+  const entities: Record<string, string> = {
+    '&lt;': '<',
+    '&gt;': '>',
+    '&amp;': '&',
+    '&quot;': '"',
+    '&#39;': "'",
+    '&apos;': "'",
+    '&#x27;': "'",
+    '&#x2F;': '/',
+    '&#x60;': '`',
+    '&#x3D;': '=',
+  };
+
+  return text.replace(/&(?:lt|gt|amp|quot|#39|apos|#x27|#x2F|#x60|#x3D);/g, (match) => entities[match] || match);
+}
+
+/**
  * Interface for orchestration plan steps
  */
 export interface PlanStep {
@@ -207,6 +235,32 @@ export interface AgentResult {
   result: string;
   executionTimeMs: number;
   savedFiles?: string[]; // Files saved to workspace by coder agent
+}
+
+type CodingAgentName = 'coder-claude' | 'coder-gemini' | 'coder-codex' | 'coder-api';
+
+const CODING_AGENT_NAMES = new Set<CodingAgentName>([
+  'coder-claude',
+  'coder-gemini',
+  'coder-codex',
+  'coder-api',
+]);
+
+function isCodingAgentName(agentName: string): agentName is CodingAgentName {
+  return CODING_AGENT_NAMES.has(agentName as CodingAgentName);
+}
+
+function getLockedCodingAgent(settings: coderSettings.CoderSettings): CodingAgentName | null {
+  const enabled: CodingAgentName[] = [];
+
+  if (settings.claudeCliEnabled) enabled.push('coder-claude');
+  if (settings.geminiCliEnabled) enabled.push('coder-gemini');
+  if (settings.codexCliEnabled) enabled.push('coder-codex');
+  if (settings.coderApiEnabled && settings.coderApiProvider && settings.coderApiModel) {
+    enabled.push('coder-api');
+  }
+
+  return enabled.length === 1 ? enabled[0] : null;
 }
 
 // Agents now use Claude CLI
@@ -669,29 +723,51 @@ export async function executeAgentTask(
   task: AgentTask
 ): Promise<AgentResult> {
   const startTime = Date.now();
+  let effectiveAgentName = task.agentName;
 
   try {
+    // Enforce coder lock if user has exactly one coder backend enabled
+    if (isCodingAgentName(task.agentName)) {
+      try {
+        const settings = await coderSettings.getCoderSettings(userId);
+        const lockedCoder = getLockedCodingAgent(settings);
+        if (lockedCoder && lockedCoder !== task.agentName) {
+          logger.info('Overriding requested coding agent due to lock', {
+            userId,
+            requested: task.agentName,
+            locked: lockedCoder,
+          });
+          effectiveAgentName = lockedCoder;
+        }
+      } catch (settingsError) {
+        logger.warn('Failed to read coder settings for lock enforcement', {
+          userId,
+          error: (settingsError as Error).message,
+        });
+      }
+    }
+
     // Get agent config
     let systemPrompt: string;
     let temperature = 0.7;
 
     // Check built-in agents first
-    if (BUILT_IN_AGENTS[task.agentName]) {
-      const builtIn = BUILT_IN_AGENTS[task.agentName];
+    if (BUILT_IN_AGENTS[effectiveAgentName]) {
+      const builtIn = BUILT_IN_AGENTS[effectiveAgentName];
       systemPrompt = builtIn.systemPrompt;
       temperature = builtIn.temperature;
     } else {
       // Check custom agents
       const dbResult = await pool.query(
         `SELECT system_prompt, temperature FROM agent_configs WHERE user_id = $1 AND name = $2`,
-        [userId, task.agentName]
+        [userId, effectiveAgentName]
       );
 
       if (dbResult.rows.length === 0) {
         return {
-          agentName: task.agentName,
+          agentName: effectiveAgentName,
           success: false,
-          result: `Agent "${task.agentName}" not found`,
+          result: `Agent "${effectiveAgentName}" not found`,
           executionTimeMs: Date.now() - startTime,
         };
       }
@@ -708,31 +784,31 @@ export async function executeAgentTask(
     userMessage += `Task: ${task.task}`;
 
     // Route agents to appropriate execution method
-    if (task.agentName === 'coder-claude') {
+    if (effectiveAgentName === 'coder-claude') {
       // Claude CLI for senior engineer agent
-      return executeWithClaudeCLI(task.agentName, systemPrompt, userMessage, startTime, userId);
-    } else if (task.agentName === 'coder-gemini') {
+      return executeWithClaudeCLI(effectiveAgentName, systemPrompt, userMessage, startTime, userId);
+    } else if (effectiveAgentName === 'coder-gemini') {
       // Gemini CLI for rapid prototyper agent
-      return executeWithGeminiCLI(task.agentName, systemPrompt, userMessage, startTime, userId);
-    } else if (task.agentName === 'coder-codex') {
+      return executeWithGeminiCLI(effectiveAgentName, systemPrompt, userMessage, startTime, userId);
+    } else if (effectiveAgentName === 'coder-codex') {
       // OpenAI Codex Mini for balanced coding tasks
-      return executeWithCodexMini(task.agentName, systemPrompt, userMessage, startTime, userId);
-    } else if (task.agentName === 'coder-api') {
+      return executeWithCodexMini(effectiveAgentName, systemPrompt, userMessage, startTime, userId);
+    } else if (effectiveAgentName === 'coder-api') {
       // User-configured API provider/model for coding tasks
-      return executeWithCoderAPI(task.agentName, systemPrompt, userMessage, startTime, userId);
-    } else if (task.agentName === 'researcher') {
-      return executeResearcherWithWebSearch(task.agentName, systemPrompt, userMessage, startTime, userId);
+      return executeWithCoderAPI(effectiveAgentName, systemPrompt, userMessage, startTime, userId);
+    } else if (effectiveAgentName === 'researcher') {
+      return executeResearcherWithWebSearch(effectiveAgentName, systemPrompt, userMessage, startTime, userId);
     } else {
-      return executeWithOpenAI(task.agentName, systemPrompt, userMessage, temperature, startTime, userId);
+      return executeWithOpenAI(effectiveAgentName, systemPrompt, userMessage, temperature, startTime, userId);
     }
   } catch (error) {
     logger.error('Agent task failed', {
       error: (error as Error).message,
-      agentName: task.agentName,
+      agentName: effectiveAgentName,
       userId
     });
     return {
-      agentName: task.agentName,
+      agentName: effectiveAgentName,
       success: false,
       result: `Error: ${(error as Error).message}`,
       executionTimeMs: Date.now() - startTime,
@@ -1194,12 +1270,33 @@ async function executeWithCoderAPI(
       model: settings.coderApiModel,
     });
 
-    // Execute with the user's configured provider/model
-    const completion = await createChatCompletion({
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userMessage }
-      ],
+    // Give coder-api the same workspace tool access as chat (read/write/list/execute).
+    const userWorkspace = await ensureUserWorkspace(userId);
+    const workspaceSystemPrompt = `${systemPrompt}
+
+WORKSPACE CONTEXT:
+- You are working against the user's persistent workspace at: ${userWorkspace}
+- Use workspace tools to inspect files, write files, and execute scripts.
+- Prefer workspace_write for file creation/updates instead of only describing code.
+- Use relative filenames (e.g., "main.py", "src/app.ts"), never absolute paths.
+- For execution, use workspace_execute with filename and optional args.
+`;
+
+    const toolEnabledMessages: ChatMessage[] = [
+      { role: 'system', content: workspaceSystemPrompt },
+      { role: 'user', content: userMessage },
+    ];
+
+    const coderWorkspaceTools = [
+      workspaceWriteTool,
+      workspaceReadTool,
+      workspaceListTool,
+      workspaceExecuteTool,
+    ];
+
+    let completion = await createChatCompletion({
+      messages: toolEnabledMessages,
+      tools: coderWorkspaceTools,
       provider: settings.coderApiProvider,
       model: settings.coderApiModel,
       loggingContext: {
@@ -1209,7 +1306,98 @@ async function executeWithCoderAPI(
       },
     });
 
+    let toolRounds = 0;
+    const maxToolRounds = 8;
+
+    while (completion.toolCalls && completion.toolCalls.length > 0 && toolRounds < maxToolRounds) {
+      toolRounds++;
+
+      toolEnabledMessages.push({
+        role: 'assistant',
+        content: completion.content || '',
+        tool_calls: completion.toolCalls,
+      } as ChatMessage);
+
+      for (const toolCall of completion.toolCalls) {
+        if (toolCall.function.name === 'workspace_write') {
+          const args = JSON.parse(toolCall.function.arguments || '{}');
+          try {
+            const decodedContent = decodeHtmlEntities(args.content || '');
+            const file = await workspace.writeFile(userId, args.filename, decodedContent);
+            toolEnabledMessages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `File "${args.filename}" saved successfully (${file.size} bytes)`,
+            } as ChatMessage);
+          } catch (error) {
+            toolEnabledMessages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Error saving file: ${(error as Error).message}`,
+            } as ChatMessage);
+          }
+        } else if (toolCall.function.name === 'workspace_read') {
+          const args = JSON.parse(toolCall.function.arguments || '{}');
+          try {
+            const content = await workspace.readFile(userId, args.filename);
+            toolEnabledMessages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Contents of ${args.filename}:\n\`\`\`\n${content}\n\`\`\``,
+            } as ChatMessage);
+          } catch (error) {
+            toolEnabledMessages.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: `Error reading file: ${(error as Error).message}`,
+            } as ChatMessage);
+          }
+        } else if (toolCall.function.name === 'workspace_list') {
+          const files = await workspace.listFiles(userId);
+          const fileList = files.length > 0
+            ? files.map(f => `- ${f.name} (${f.size} bytes, ${f.mimeType})`).join('\n')
+            : 'No files in workspace';
+          toolEnabledMessages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Workspace files:\n${fileList}`,
+          } as ChatMessage);
+        } else if (toolCall.function.name === 'workspace_execute') {
+          const args = JSON.parse(toolCall.function.arguments || '{}');
+          const execution = await sandbox.executeWorkspaceFile(userId, args.filename, undefined, args.args || []);
+          toolEnabledMessages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: execution.success
+              ? `Execution output:\n${execution.output}`
+              : `Execution error:\n${execution.error}`,
+          } as ChatMessage);
+        } else {
+          toolEnabledMessages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Unsupported tool: ${toolCall.function.name}`,
+          } as ChatMessage);
+        }
+      }
+
+      completion = await createChatCompletion({
+        messages: toolEnabledMessages,
+        tools: coderWorkspaceTools,
+        provider: settings.coderApiProvider,
+        model: settings.coderApiModel,
+        loggingContext: {
+          userId,
+          source: 'agents',
+          nodeName: 'coder',
+        },
+      });
+    }
+
     let result = completion.content || 'No response generated';
+    if (completion.toolCalls && completion.toolCalls.length > 0 && toolRounds >= maxToolRounds) {
+      result += '\n\nTool execution limit reached. Please continue with a narrower follow-up request.';
+    }
 
     // Extract and save any files from the output
     const extractedFiles = extractFilesFromOutput(result);
@@ -1519,12 +1707,46 @@ export async function* orchestrateTaskStream(
     return;
   }
 
+  // Enforce coder lock in orchestration plans
+  let lockedCodingAgent: CodingAgentName | null = null;
+  try {
+    const settings = await coderSettings.getCoderSettings(userId);
+    lockedCodingAgent = getLockedCodingAgent(settings);
+
+    if (lockedCodingAgent) {
+      const lockedAgent = lockedCodingAgent;
+      let rewrites = 0;
+      plan.steps = plan.steps.map((step) => {
+        if (isCodingAgentName(step.agent) && step.agent !== lockedAgent) {
+          rewrites++;
+          return { ...step, agent: lockedAgent };
+        }
+        return step;
+      });
+
+      if (rewrites > 0) {
+        logger.info('Rewrote orchestration plan to honor coder lock', {
+          userId,
+          lockedCodingAgent,
+          rewrites,
+        });
+        yield { type: 'status', status: `Coding agent locked to ${lockedCodingAgent}` };
+      }
+    }
+  } catch (settingsError) {
+    logger.warn('Failed to enforce coder lock during orchestration planning', {
+      userId,
+      error: (settingsError as Error).message,
+    });
+  }
+
   // Step 3: Execute steps using DAG parallel executor with retry logic
   const dagConfig = {
     maxConcurrency: config.orchestration?.maxConcurrency ?? 3,
     maxRetries: config.orchestration?.maxRetries ?? 3,
     enableSummarization: config.orchestration?.enableSummarization ?? true,
     summarizationModel: config.ollama?.chatModel ?? 'qwen2.5:3b',
+    lockedCodingAgent: lockedCodingAgent ?? undefined,
   };
 
   const executor = new DAGExecutor(

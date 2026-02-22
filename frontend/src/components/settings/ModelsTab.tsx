@@ -2,12 +2,13 @@
 
 import { useState, useEffect } from 'react';
 import { RotateCcw, Loader2, Check, ChevronDown, RefreshCw } from 'lucide-react';
-import { settingsApi, type LLMProvider, type TaskModelConfig, type UserModelConfig } from '@/lib/api';
+import { settingsApi, type CoderSettings, type LLMProvider, type TaskModelConfig, type UserModelConfig } from '@/lib/api';
 
 export default function ModelsTab() {
   const [providers, setProviders] = useState<LLMProvider[]>([]);
   const [tasks, setTasks] = useState<TaskModelConfig[]>([]);
   const [configs, setConfigs] = useState<UserModelConfig[]>([]);
+  const [coderSettings, setCoderSettings] = useState<CoderSettings | null>(null);
   const [modelSource, setModelSource] = useState<string>('');
 
   const [isLoading, setIsLoading] = useState(true);
@@ -24,13 +25,15 @@ export default function ModelsTab() {
     setIsLoading(true);
     setError(null);
     try {
-      const [availableRes, configsRes] = await Promise.all([
+      const [availableRes, configsRes, coderRes] = await Promise.all([
         settingsApi.getAvailableModels(),
         settingsApi.getUserModelConfigs(),
+        settingsApi.getCoderSettings(),
       ]);
       setProviders(availableRes.providers);
       setTasks(availableRes.tasks);
       setConfigs(configsRes.configs);
+      setCoderSettings(coderRes.settings);
       setModelSource(availableRes.source || 'live');
     } catch {
       setError('Failed to load model configurations');
@@ -90,6 +93,52 @@ export default function ModelsTab() {
       return null;
     }
     return { input: model.costPer1kInput, output: model.costPer1kOutput };
+  }
+
+  type CoderChoice = 'claude' | 'gemini' | 'codex' | 'api';
+
+  function getEnabledCoders(settings: CoderSettings): CoderChoice[] {
+    const enabled: CoderChoice[] = [];
+    if (settings.claudeCliEnabled) enabled.push('claude');
+    if (settings.geminiCliEnabled) enabled.push('gemini');
+    if (settings.codexCliEnabled) enabled.push('codex');
+    if (settings.coderApiEnabled && settings.coderApiProvider && settings.coderApiModel) {
+      enabled.push('api');
+    }
+    return enabled;
+  }
+
+  function getMainChatCoderValue(settings: CoderSettings): '' | CoderChoice {
+    const enabled = getEnabledCoders(settings);
+    if (enabled.length === 1) {
+      return enabled[0];
+    }
+    return '';
+  }
+
+  async function handleMainChatCoderChange(choice: CoderChoice) {
+    if (choice === 'api' && (!coderSettings?.coderApiProvider || !coderSettings?.coderApiModel)) {
+      setError('Configure Coder API provider/model first in the Coder settings tab');
+      return;
+    }
+
+    setIsSaving('main_chat');
+    setError(null);
+    try {
+      const result = await settingsApi.updateCoderSettings({
+        claudeCliEnabled: choice === 'claude',
+        geminiCliEnabled: choice === 'gemini',
+        codexCliEnabled: choice === 'codex',
+        coderApiEnabled: choice === 'api',
+        defaultCoder: choice,
+      });
+      setCoderSettings(result.settings);
+      showSuccess('Main Chat coder agent locked');
+    } catch {
+      setError('Failed to update Main Chat coder agent');
+    } finally {
+      setIsSaving(null);
+    }
   }
 
   async function handleProviderChange(taskType: string, newProvider: string) {
@@ -248,7 +297,7 @@ export default function ModelsTab() {
                 )}
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className={`grid grid-cols-1 gap-3 ${task.taskType === 'main_chat' ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
                 {/* Provider Select */}
                 <div>
                   <label className="block text-xs text-theme-text-muted mb-1">Provider</label>
@@ -288,6 +337,33 @@ export default function ModelsTab() {
                     <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-muted pointer-events-none" />
                   </div>
                 </div>
+
+                {task.taskType === 'main_chat' && coderSettings && (
+                  <div>
+                    <label className="block text-xs text-theme-text-muted mb-1">Coder Agent</label>
+                    <div className="relative">
+                      <select
+                        value={getMainChatCoderValue(coderSettings)}
+                        onChange={e => {
+                          const next = e.target.value;
+                          if (!next) return;
+                          handleMainChatCoderChange(next as CoderChoice);
+                        }}
+                        disabled={isSaving !== null}
+                        className="w-full px-3 py-2 bg-theme-bg-secondary border border-theme-border rounded-lg text-theme-text-primary text-sm appearance-none focus:outline-none focus:border-theme-border-focus disabled:opacity-50"
+                      >
+                        <option value="" disabled>Mixed (not locked)</option>
+                        <option value="claude">Claude CLI</option>
+                        <option value="gemini">Gemini CLI</option>
+                        <option value="codex">Codex Mini</option>
+                        <option value="api" disabled={!coderSettings.coderApiProvider || !coderSettings.coderApiModel}>
+                          Coder API
+                        </option>
+                      </select>
+                      <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-muted pointer-events-none" />
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Cost Display */}

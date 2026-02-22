@@ -31,6 +31,7 @@ export interface DAGExecutorConfig {
   maxRetries: number;
   enableSummarization: boolean;
   summarizationModel: string;
+  lockedCodingAgent?: 'coder-claude' | 'coder-gemini' | 'coder-codex' | 'coder-api';
 }
 
 export interface FixerSuggestion {
@@ -93,6 +94,12 @@ const CODING_AGENT_FAILOVER: Record<string, string> = {
   'coder-gemini': 'coder-claude',
   'coder-codex': 'coder-claude',
 };
+
+const ALL_CODING_AGENTS = new Set(['coder-claude', 'coder-gemini', 'coder-codex', 'coder-api']);
+
+function isCodingAgent(agentName: string): boolean {
+  return ALL_CODING_AGENTS.has(agentName);
+}
 
 // ============================================================================
 // DAG Executor Class
@@ -393,6 +400,20 @@ What should we do?`;
   ): Promise<void> {
     while (node.retryCount <= this.config.maxRetries) {
       try {
+        // Enforce locked coding agent on every retry attempt
+        if (
+          this.config.lockedCodingAgent &&
+          isCodingAgent(node.step.agent) &&
+          node.step.agent !== this.config.lockedCodingAgent
+        ) {
+          logger.info('Overriding coding agent due to orchestration lock', {
+            step: node.step.step,
+            from: node.step.agent,
+            to: this.config.lockedCodingAgent,
+          });
+          node.step = { ...node.step, agent: this.config.lockedCodingAgent };
+        }
+
         const context = this.buildStepContext(node.step, originalContext);
 
         const result = await this.executeAgentFn(userId, {
@@ -444,7 +465,7 @@ What should we do?`;
           const currentAgent = node.step.agent;
           const failoverAgent = CODING_AGENT_FAILOVER[currentAgent];
 
-          if (node.retryCount === 1 && failoverAgent) {
+          if (node.retryCount === 1 && failoverAgent && !this.config.lockedCodingAgent) {
             // First failure of a coding agent - auto-switch to the other one
             logger.info('Auto-failover: switching coding agent', {
               step: node.step.step,
@@ -493,11 +514,23 @@ What should we do?`;
               newTask: suggestion.modifiedTask.slice(0, 100),
             });
           } else if (suggestion.action === 'switch_agent' && suggestion.newAgent) {
-            node.step = { ...node.step, agent: suggestion.newAgent };
-            logger.info('Switched agent per fixer suggestion', {
-              step: node.step.step,
-              newAgent: suggestion.newAgent,
-            });
+            if (
+              this.config.lockedCodingAgent &&
+              isCodingAgent(suggestion.newAgent) &&
+              suggestion.newAgent !== this.config.lockedCodingAgent
+            ) {
+              logger.info('Ignoring fixer coding-agent switch due to lock', {
+                step: node.step.step,
+                requested: suggestion.newAgent,
+                locked: this.config.lockedCodingAgent,
+              });
+            } else {
+              node.step = { ...node.step, agent: suggestion.newAgent };
+              logger.info('Switched agent per fixer suggestion', {
+                step: node.step.step,
+                newAgent: suggestion.newAgent,
+              });
+            }
           }
           // retry_same: just loop again
         } else {

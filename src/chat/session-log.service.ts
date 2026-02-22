@@ -10,6 +10,7 @@
 
 import { query, queryOne } from '../db/postgres.js';
 import { createCompletion } from '../llm/router.js';
+import { createBackgroundCompletionWithFallback } from '../llm/background-completion.service.js';
 import { config } from '../config/index.js';
 import * as tasksService from '../abilities/tasks.service.js';
 import * as contextSummaryService from '../context/context-summary.service.js';
@@ -442,21 +443,20 @@ export async function generateDetailedSessionSummary(
       .map(m => `${m.role}: ${m.content.slice(0, 300)}`)
       .join('\n');
 
-    const response = await createCompletion(
-      'ollama',
-      config.ollama.chatModel,
-      [{ role: 'user', content: DETAILED_ANALYSIS_PROMPT + formatted }],
-      {
-        temperature: 0.3,
-        maxTokens: 5000,
-        loggingContext: {
-          userId,
-          sessionId,
-          source: 'session-log',
-          nodeName: 'detailed_summary'
-        }
-      }
-    );
+    const response = await createBackgroundCompletionWithFallback({
+      userId,
+      sessionId,
+      feature: 'context_summary',
+      messages: [{ role: 'user', content: DETAILED_ANALYSIS_PROMPT + formatted }],
+      temperature: 0.3,
+      maxTokens: 5000,
+      loggingContext: {
+        userId,
+        sessionId,
+        source: 'session-log',
+        nodeName: 'detailed_summary',
+      },
+    });
 
     const content = response.content || '';
 

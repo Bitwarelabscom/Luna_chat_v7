@@ -4,7 +4,12 @@ import type { ProviderId } from '../llm/types.js';
 import { createBackgroundCompletionWithFallback } from '../llm/background-completion.service.js';
 import { getUserModelConfig } from '../llm/model-config.service.js';
 import * as factsService from '../memory/facts.service.js';
+import type { UserFact } from '../memory/facts.service.js';
+import * as searxngClient from '../search/searxng.client.js';
+import * as webfetchService from '../search/webfetch.service.js';
 import * as sessionWorkspaceService from './session-workspace.service.js';
+import * as friendVerificationService from './friend-verification.service.js';
+import type { SearchResult } from '../types/index.js';
 import logger from '../utils/logger.js';
 
 // ============================================
@@ -408,7 +413,23 @@ export async function selectDiscussionTopic(userId: string): Promise<{
   topic: string;
   context: string;
   triggerType: 'pattern' | 'interest' | 'fact' | 'random';
+  topicCandidateId?: string;
 } | null> {
+  const candidate = await friendVerificationService.getApprovedTopicCandidate(userId);
+  if (candidate) {
+    await friendVerificationService.markTopicCandidateConsumed(candidate.id, userId);
+    const evidenceText = candidate.evidence.map((line) => `- ${line}`).join('\n');
+    return {
+      topic: candidate.topicText,
+      context: [
+        candidate.context || 'Pattern extracted from recent sessions and message history.',
+        evidenceText ? `Evidence:\n${evidenceText}` : '',
+      ].filter(Boolean).join('\n\n'),
+      triggerType: 'pattern',
+      topicCandidateId: candidate.id,
+    };
+  }
+
   // Get recently discussed topics to avoid repeating
   const recentTopics = await getRecentlyDiscussedTopics(userId, 7);
 
@@ -498,7 +519,300 @@ export async function selectDiscussionTopic(userId: string): Promise<{
     topic: selectedContent,
     context: contextParts.join('\n'),
     triggerType: selectedCategory.type,
+    topicCandidateId: undefined,
   };
+}
+
+interface TopicMemoryContext {
+  memories: UserFact[];
+  memoryPrompt: string;
+}
+
+interface FriendResearchResult {
+  pass: number;
+  queries: string[];
+  searchResults: SearchResult[];
+  fetchedSources: Array<{ url: string; title: string; snippet: string; excerpt: string }>;
+  findings: string[];
+  openQuestions: string[];
+  confidence: number;
+  needsMoreResearch: boolean;
+  citations: string[];
+  brief: string;
+}
+
+function tokenizeForRelevance(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length > 3);
+}
+
+function scoreFactRelevance(fact: UserFact, terms: string[]): number {
+  const haystack = `${fact.factKey} ${fact.factValue}`.toLowerCase();
+  const overlap = terms.filter(term => haystack.includes(term)).length;
+
+  const lastMentionedMs = new Date(fact.lastMentioned).getTime();
+  const daysSinceMention = Math.max(1, (Date.now() - lastMentionedMs) / (1000 * 60 * 60 * 24));
+  const recencyScore = 1 / Math.log2(daysSinceMention + 2);
+
+  return (
+    overlap * 4 +
+    fact.confidence * 2 +
+    Math.min(fact.mentionCount, 10) * 0.3 +
+    recencyScore
+  );
+}
+
+async function buildTopicMemoryContext(
+  userId: string,
+  topic: string,
+  context: string,
+  limit: number = 12
+): Promise<TopicMemoryContext> {
+  const allFacts = await factsService.getUserFacts(userId, { limit: 120 });
+  if (allFacts.length === 0) {
+    return { memories: [], memoryPrompt: 'No relevant stored memories found.' };
+  }
+
+  const queryTerms = Array.from(new Set(tokenizeForRelevance(`${topic}\n${context}`)));
+  const ranked = allFacts
+    .map(fact => ({ fact, score: scoreFactRelevance(fact, queryTerms) }))
+    .filter(item => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(item => item.fact);
+
+  const memoryLines = ranked.map((fact, index) =>
+    `${index + 1}. [${fact.category}] ${fact.factKey}: ${fact.factValue} (confidence ${fact.confidence.toFixed(2)}, mentions ${fact.mentionCount})`
+  );
+
+  const connections: string[] = [];
+  for (let i = 0; i < ranked.length && connections.length < 4; i++) {
+    for (let j = i + 1; j < ranked.length && connections.length < 4; j++) {
+      const words1 = tokenizeForRelevance(ranked[i].factValue);
+      const words2 = tokenizeForRelevance(ranked[j].factValue);
+      const shared = words1.filter(w => words2.includes(w));
+      if (shared.length > 0) {
+        connections.push(
+          `${ranked[i].factKey} ↔ ${ranked[j].factKey} via ${shared.slice(0, 2).join(', ')}`
+        );
+      }
+    }
+  }
+
+  const memoryPrompt = [
+    'Relevant user memories:',
+    ...(memoryLines.length > 0 ? memoryLines : ['- none']),
+    '',
+    'Potential memory connections:',
+    ...(connections.length > 0 ? connections.map(c => `- ${c}`) : ['- none identified']),
+  ].join('\n');
+
+  return {
+    memories: ranked,
+    memoryPrompt,
+  };
+}
+
+function buildResearchQueries(
+  topic: string,
+  memoryContext: TopicMemoryContext,
+  pass: number,
+  prior?: FriendResearchResult
+): string[] {
+  const topicBase = topic.replace(/[:]+/g, ' ').trim();
+  const memoryTerms = memoryContext.memories
+    .slice(0, 6)
+    .map(m => `${m.factKey} ${m.factValue}`)
+    .join(' ');
+
+  const extractedTerms = Array.from(new Set(tokenizeForRelevance(`${topicBase} ${memoryTerms}`))).slice(0, 8);
+  const termTail = extractedTerms.join(' ');
+
+  if (pass === 1) {
+    return [
+      `${topicBase} evidence research`,
+      `${topicBase} latest data ${termTail}`.trim(),
+      `${topicBase} best practices analysis`,
+    ].map(q => q.slice(0, 180));
+  }
+
+  const gapHint = prior?.openQuestions?.slice(0, 2).join(' ') || 'open questions';
+  return [
+    `${topicBase} ${gapHint}`.slice(0, 180),
+    `${topicBase} counter evidence limitations`.slice(0, 180),
+  ];
+}
+
+function parseResearchAnalysis(
+  content: string,
+  fallbackCitations: string[]
+): Pick<FriendResearchResult, 'findings' | 'openQuestions' | 'confidence' | 'needsMoreResearch' | 'citations'> {
+  try {
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]) as {
+        findings?: string[];
+        openQuestions?: string[];
+        confidence?: number;
+        needsMoreResearch?: boolean;
+        citations?: string[];
+      };
+
+      return {
+        findings: (parsed.findings || []).filter(Boolean).slice(0, 6),
+        openQuestions: (parsed.openQuestions || []).filter(Boolean).slice(0, 4),
+        confidence: typeof parsed.confidence === 'number' ? Math.max(0, Math.min(1, parsed.confidence)) : 0.5,
+        needsMoreResearch: Boolean(parsed.needsMoreResearch),
+        citations: (parsed.citations || fallbackCitations).filter(Boolean).slice(0, 6),
+      };
+    }
+  } catch {
+    // Fall through to heuristic parsing
+  }
+
+  const lines = content.split('\n').map(l => l.trim()).filter(Boolean);
+  const findings = lines.filter(l => l.startsWith('-')).map(l => l.replace(/^-+\s*/, '')).slice(0, 5);
+  const confidenceMatch = content.match(/confidence[^0-9]*([0-9.]+)/i);
+  const confidenceRaw = confidenceMatch ? parseFloat(confidenceMatch[1]) : 0.5;
+  const normalizedConfidence = Number.isFinite(confidenceRaw)
+    ? (confidenceRaw > 1 ? confidenceRaw / 100 : confidenceRaw)
+    : 0.5;
+
+  return {
+    findings: findings.length > 0 ? findings : ['Limited concrete findings from available sources.'],
+    openQuestions: [],
+    confidence: Math.max(0, Math.min(1, normalizedConfidence)),
+    needsMoreResearch: /needs[ -]?more[ -]?research[^a-z]*(yes|true)/i.test(content),
+    citations: fallbackCitations,
+  };
+}
+
+async function runFriendResearch(
+  userId: string,
+  provider: string,
+  model: string,
+  topic: string,
+  memoryContext: TopicMemoryContext,
+  pass: number,
+  prior?: FriendResearchResult
+): Promise<FriendResearchResult> {
+  const queries = buildResearchQueries(topic, memoryContext, pass, prior);
+  const combinedResults: SearchResult[] = [];
+
+  for (const query of queries) {
+    try {
+      const results = await searxngClient.search(query, {
+        engines: ['google', 'duckduckgo', 'bing'],
+        categories: ['general', 'science', 'news'],
+        language: 'en',
+        maxResults: pass === 1 ? 6 : 5,
+      });
+      combinedResults.push(...results);
+    } catch (error) {
+      logger.warn('Friend research search failed', { query, error: (error as Error).message });
+    }
+  }
+
+  const dedupedResults = Array.from(
+    new Map(combinedResults.map(result => [result.url, result])).values()
+  ).slice(0, pass === 1 ? 8 : 6);
+
+  const fetchedSources: Array<{ url: string; title: string; snippet: string; excerpt: string }> = [];
+  for (const result of dedupedResults.slice(0, pass === 1 ? 3 : 2)) {
+    try {
+      const page = await webfetchService.fetchPage(result.url, {
+        forceRefresh: false,
+        timeout: 12000,
+        maxContentLength: 400000,
+      });
+
+      fetchedSources.push({
+        url: result.url,
+        title: page.title || result.title || 'Untitled',
+        snippet: result.snippet || '',
+        excerpt: page.content.slice(0, 3000),
+      });
+    } catch (error) {
+      logger.warn('Friend research fetch failed', { url: result.url, error: (error as Error).message });
+    }
+  }
+
+  const sourceContext = fetchedSources.length > 0
+    ? fetchedSources.map((source, index) =>
+      `Source ${index + 1}\nTitle: ${source.title}\nURL: ${source.url}\nSearch snippet: ${source.snippet}\nExcerpt:\n${source.excerpt}`
+    ).join('\n\n---\n\n')
+    : 'No web pages could be fetched. Use available snippets only.';
+
+  const researchPrompt = [
+    `Topic: ${topic}`,
+    '',
+    memoryContext.memoryPrompt,
+    '',
+    prior ? `Prior findings:\n${prior.findings.map(f => `- ${f}`).join('\n')}` : '',
+    '',
+    `Analyze the sources and output STRICT JSON:
+{
+  "findings": ["3-6 evidence-backed findings"],
+  "openQuestions": ["up to 4 unresolved questions"],
+  "confidence": 0.0,
+  "needsMoreResearch": false,
+  "citations": ["url1", "url2"]
+}`,
+    '',
+    sourceContext,
+  ].join('\n');
+
+  const analysis = await createCompletion(
+    provider as ProviderId,
+    model,
+    [
+      { role: 'system', content: 'You are a rigorous research analyst. Prefer evidence over speculation.' },
+      { role: 'user', content: researchPrompt },
+    ],
+    {
+      temperature: 0.2,
+      maxTokens: 10000,
+      loggingContext: {
+        userId,
+        source: 'friend-discussion',
+        nodeName: pass === 1 ? 'friend_research_pass1' : 'friend_research_pass2',
+      },
+    }
+  );
+
+  const fallbackCitations = fetchedSources.map(source => source.url);
+  const parsed = parseResearchAnalysis(analysis.content, fallbackCitations);
+  const needsMoreResearch = parsed.needsMoreResearch || parsed.confidence < 0.6 || parsed.findings.length < 3;
+
+  const brief = [
+    `Research pass ${pass} findings:`,
+    ...parsed.findings.map(f => `- ${f}`),
+    parsed.openQuestions.length > 0 ? '\nOpen questions:' : '',
+    ...parsed.openQuestions.map(q => `- ${q}`),
+    `\nConfidence: ${parsed.confidence.toFixed(2)}`,
+    parsed.citations.length > 0 ? `Sources: ${parsed.citations.join(', ')}` : 'Sources: none',
+  ].filter(Boolean).join('\n');
+
+  return {
+    pass,
+    queries,
+    searchResults: dedupedResults,
+    fetchedSources,
+    findings: parsed.findings,
+    openQuestions: parsed.openQuestions,
+    confidence: parsed.confidence,
+    needsMoreResearch,
+    citations: parsed.citations,
+    brief,
+  };
+}
+
+function shouldRunExtraResearch(research: FriendResearchResult, rounds: number): boolean {
+  if (rounds < 3) return false;
+  return research.needsMoreResearch || research.openQuestions.length > 0;
 }
 
 // ============================================
@@ -511,8 +825,9 @@ export async function startFriendDiscussion(
   topic: string,
   context: string,
   triggerType: 'pattern' | 'interest' | 'fact' | 'random',
-  rounds: number = 5,
-  friendId?: string
+  rounds: number = 3,
+  friendId?: string,
+  topicCandidateId?: string
 ): Promise<FriendConversation> {
   // Use 'friend' model config - separate from council so it doesn't count against tool uses
   const { provider, model } = await getUserModelConfig(userId, 'friend');
@@ -549,16 +864,22 @@ export async function startFriendDiscussion(
   };
 
   logger.info('Starting friend discussion', { sessionId, topic, triggerType, friendName: friend.name });
+  const normalizedRounds = Math.max(2, Math.min(rounds, 3));
+  const memoryContext = await buildTopicMemoryContext(userId, topic, context, 14);
 
   // Luna starts the conversation
   const lunaOpener = await generateLunaMessage(
     provider,
     model,
+    userId,
     topic,
     context,
+    memoryContext.memoryPrompt,
+    null,
     friend.name,
     [],
-    true // isOpener
+    true,
+    false
   );
 
   conversation.messages.push({
@@ -567,51 +888,79 @@ export async function startFriendDiscussion(
     timestamp: new Date().toISOString(),
   });
 
-  // Run conversation rounds
-  for (let round = 0; round < rounds; round++) {
-    // Friend responds
-    const friendResponse = await generateFriendMessage(
+  // Friend research pass 1 + response
+  const researchPass1 = await runFriendResearch(userId, provider, model, topic, memoryContext, 1);
+  const friendResponse = await generateFriendMessage(
+    provider,
+    model,
+    userId,
+    friend,
+    topic,
+    context,
+    memoryContext.memoryPrompt,
+    researchPass1,
+    conversation.messages,
+    false
+  );
+
+  conversation.messages.push({
+    speaker: friend.name.toLowerCase(),
+    message: friendResponse,
+    timestamp: new Date().toISOString(),
+  });
+
+  // Luna synthesis of findings
+  const lunaSynthesis = await generateLunaMessage(
+    provider,
+    model,
+    userId,
+    topic,
+    context,
+    memoryContext.memoryPrompt,
+    researchPass1,
+    friend.name,
+    conversation.messages,
+    false,
+    false
+  );
+
+  conversation.messages.push({
+    speaker: 'luna',
+    message: lunaSynthesis,
+    timestamp: new Date().toISOString(),
+  });
+
+  conversation.roundCount = 2;
+
+  // Optional final friend pass with extra research
+  if (shouldRunExtraResearch(researchPass1, normalizedRounds)) {
+    const researchPass2 = await runFriendResearch(userId, provider, model, topic, memoryContext, 2, researchPass1);
+    const finalFriendResponse = await generateFriendMessage(
       provider,
       model,
+      userId,
       friend,
       topic,
       context,
-      conversation.messages
+      memoryContext.memoryPrompt,
+      researchPass2,
+      conversation.messages,
+      true
     );
 
     conversation.messages.push({
       speaker: friend.name.toLowerCase(),
-      message: friendResponse,
+      message: finalFriendResponse,
       timestamp: new Date().toISOString(),
     });
 
-    // Luna responds (except on last round)
-    if (round < rounds - 1) {
-      const lunaResponse = await generateLunaMessage(
-        provider,
-        model,
-        topic,
-        context,
-        friend.name,
-        conversation.messages,
-        false
-      );
-
-      conversation.messages.push({
-        speaker: 'luna',
-        message: lunaResponse,
-        timestamp: new Date().toISOString(),
-      });
-    }
-
-    conversation.roundCount = round + 1;
-
-    // Save progress after each round
-    await pool.query(
-      `UPDATE friend_conversations SET messages = $1, round_count = $2 WHERE id = $3`,
-      [JSON.stringify(conversation.messages), conversation.roundCount, conversation.id]
-    );
+    conversation.roundCount = 3;
   }
+
+  await pool.query(
+    `UPDATE friend_conversations SET messages = $1, round_count = $2 WHERE id = $3`,
+    [JSON.stringify(conversation.messages), conversation.roundCount, conversation.id]
+  );
 
   // Generate summary
   const summary = await generateConversationSummary(userId, topic, friend.name, conversation.messages);
@@ -620,6 +969,17 @@ export async function startFriendDiscussion(
   // Extract facts from the discussion
   const extractedFacts = await extractFactsFromDiscussion(userId, topic, conversation.messages);
   conversation.factsExtracted = extractedFacts;
+
+  if (extractedFacts.length > 0) {
+    await friendVerificationService.createClaimsAndQuestionsForDiscussion({
+      userId,
+      sessionId,
+      conversationId: conversation.id,
+      topic,
+      claims: extractedFacts.map((fact) => ({ claimText: fact, confidence: 0.7 })),
+      topicCandidateId: topicCandidateId || null,
+    });
+  }
 
   // Save to database
   await pool.query(
@@ -642,7 +1002,7 @@ export async function startFriendDiscussion(
       userId,
       `Friend Discussion with ${friend.name} ${friend.avatarEmoji}:\nTopic: ${topic}\n\nSummary: ${summary}\n\nKey insights:\n${extractedFacts.map(f => `- ${f}`).join('\n')}`,
       'act',
-      { conversationId: conversation.id, roundCount: rounds, friendName: friend.name }
+      { conversationId: conversation.id, roundCount: conversation.roundCount, friendName: friend.name }
     );
   }
 
@@ -680,8 +1040,9 @@ export async function startFriendDiscussionStreaming(
   topic: string,
   context: string,
   triggerType: 'pattern' | 'interest' | 'fact' | 'random',
-  rounds: number = 5,
+  rounds: number = 3,
   friendId: string | undefined,
+  topicCandidateId: string | undefined,
   onEvent: (event: FriendDiscussionEvent) => void
 ): Promise<FriendConversation> {
   try {
@@ -719,58 +1080,109 @@ export async function startFriendDiscussionStreaming(
     };
 
     // Send start event
+    const normalizedRounds = Math.max(2, Math.min(rounds, 3));
+    const memoryContext = await buildTopicMemoryContext(userId, topic, context, 14);
     onEvent({
       type: 'start',
       conversationId: conversation.id,
       friend: { name: friend.name, avatarEmoji: friend.avatarEmoji, color: friend.color },
       topic,
-      totalRounds: rounds,
+      totalRounds: normalizedRounds,
     });
 
     // Helper to add delay between messages to avoid rate limits
     const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
     // Luna starts the conversation
-    const lunaOpener = await generateLunaMessage(provider, model, topic, context, friend.name, [], true);
+    const lunaOpener = await generateLunaMessage(
+      provider,
+      model,
+      userId,
+      topic,
+      context,
+      memoryContext.memoryPrompt,
+      null,
+      friend.name,
+      [],
+      true,
+      false
+    );
     const lunaOpenMsg = { speaker: 'luna', message: lunaOpener, timestamp: new Date().toISOString() };
     conversation.messages.push(lunaOpenMsg);
 
-    onEvent({ type: 'message', message: lunaOpenMsg, round: 0, totalRounds: rounds });
+    onEvent({ type: 'message', message: lunaOpenMsg, round: 1, totalRounds: normalizedRounds });
 
-    // Run conversation rounds
-    for (let round = 0; round < rounds; round++) {
-      // Wait 5 seconds between messages to avoid rate limits
-      await delay(5000);
+    await delay(1500);
 
-      // Friend responds
-      const friendResponse = await generateFriendMessage(provider, model, friend, topic, context, conversation.messages);
-      const friendMsg = { speaker: friend.name.toLowerCase(), message: friendResponse, timestamp: new Date().toISOString() };
-      conversation.messages.push(friendMsg);
+    // Friend research pass 1 + response
+    const researchPass1 = await runFriendResearch(userId, provider, model, topic, memoryContext, 1);
+    const friendResponse = await generateFriendMessage(
+      provider,
+      model,
+      userId,
+      friend,
+      topic,
+      context,
+      memoryContext.memoryPrompt,
+      researchPass1,
+      conversation.messages,
+      false
+    );
+    const friendMsg = { speaker: friend.name.toLowerCase(), message: friendResponse, timestamp: new Date().toISOString() };
+    conversation.messages.push(friendMsg);
+    onEvent({ type: 'message', message: friendMsg, round: 2, totalRounds: normalizedRounds });
 
-      onEvent({ type: 'message', message: friendMsg, round: round + 1, totalRounds: rounds });
+    await delay(1200);
 
-      // Luna responds (except on last round)
-      if (round < rounds - 1) {
-        // Wait 5 seconds between messages to avoid rate limits
-        await delay(5000);
+    // Luna discusses findings
+    const lunaSynthesis = await generateLunaMessage(
+      provider,
+      model,
+      userId,
+      topic,
+      context,
+      memoryContext.memoryPrompt,
+      researchPass1,
+      friend.name,
+      conversation.messages,
+      false,
+      false
+    );
+    const lunaMsg = { speaker: 'luna', message: lunaSynthesis, timestamp: new Date().toISOString() };
+    conversation.messages.push(lunaMsg);
+    onEvent({ type: 'message', message: lunaMsg, round: 2, totalRounds: normalizedRounds });
 
-        const lunaResponse = await generateLunaMessage(provider, model, topic, context, friend.name, conversation.messages, false);
-        const lunaMsg = { speaker: 'luna', message: lunaResponse, timestamp: new Date().toISOString() };
-        conversation.messages.push(lunaMsg);
+    conversation.roundCount = 2;
+    onEvent({ type: 'round_complete', round: 2, totalRounds: normalizedRounds });
 
-        onEvent({ type: 'message', message: lunaMsg, round: round + 1, totalRounds: rounds });
-      }
-
-      conversation.roundCount = round + 1;
-
-      // Save progress
-      await pool.query(
-        `UPDATE friend_conversations SET messages = $1, round_count = $2 WHERE id = $3`,
-        [JSON.stringify(conversation.messages), conversation.roundCount, conversation.id]
+    // Optional final friend round
+    if (shouldRunExtraResearch(researchPass1, normalizedRounds)) {
+      await delay(1200);
+      const researchPass2 = await runFriendResearch(userId, provider, model, topic, memoryContext, 2, researchPass1);
+      const finalFriendResponse = await generateFriendMessage(
+        provider,
+        model,
+        userId,
+        friend,
+        topic,
+        context,
+        memoryContext.memoryPrompt,
+        researchPass2,
+        conversation.messages,
+        true
       );
-
-      onEvent({ type: 'round_complete', round: round + 1, totalRounds: rounds });
+      const finalFriendMsg = { speaker: friend.name.toLowerCase(), message: finalFriendResponse, timestamp: new Date().toISOString() };
+      conversation.messages.push(finalFriendMsg);
+      onEvent({ type: 'message', message: finalFriendMsg, round: 3, totalRounds: normalizedRounds });
+      conversation.roundCount = 3;
+      onEvent({ type: 'round_complete', round: 3, totalRounds: normalizedRounds });
     }
+
+    // Save progress
+    await pool.query(
+      `UPDATE friend_conversations SET messages = $1, round_count = $2 WHERE id = $3`,
+      [JSON.stringify(conversation.messages), conversation.roundCount, conversation.id]
+    );
 
     // Generate summary using configured background model with fallback
     onEvent({ type: 'generating_summary' });
@@ -784,6 +1196,17 @@ export async function startFriendDiscussionStreaming(
     conversation.factsExtracted = extractedFacts;
     onEvent({ type: 'facts', facts: extractedFacts });
 
+    if (extractedFacts.length > 0) {
+      await friendVerificationService.createClaimsAndQuestionsForDiscussion({
+        userId,
+        sessionId,
+        conversationId: conversation.id,
+        topic,
+        claims: extractedFacts.map((fact) => ({ claimText: fact, confidence: 0.7 })),
+        topicCandidateId: topicCandidateId || null,
+      });
+    }
+
     // Save final state
     await pool.query(
       `UPDATE friend_conversations SET messages = $1, summary = $2, facts_extracted = $3, round_count = $4 WHERE id = $5`,
@@ -796,7 +1219,7 @@ export async function startFriendDiscussionStreaming(
         sessionId, userId,
         `Friend Discussion with ${friend.name} ${friend.avatarEmoji}:\nTopic: ${topic}\n\nSummary: ${summary}\n\nKey insights:\n${extractedFacts.map(f => `- ${f}`).join('\n')}`,
         'act',
-        { conversationId: conversation.id, roundCount: rounds, friendName: friend.name }
+        { conversationId: conversation.id, roundCount: conversation.roundCount, friendName: friend.name }
       );
     }
 
@@ -823,11 +1246,15 @@ export async function deleteDiscussion(discussionId: string, userId: string): Pr
 async function generateLunaMessage(
   provider: string,
   model: string,
+  userId: string,
   topic: string,
   context: string,
+  memoryContext: string,
+  research: FriendResearchResult | null,
   friendName: string,
   history: ConversationMessage[],
-  isOpener: boolean
+  isOpener: boolean,
+  isFinalTurn: boolean
 ): Promise<string> {
   const historyText = history.map(m =>
     `${m.speaker === 'luna' ? 'Luna' : friendName}: ${m.message}`
@@ -841,20 +1268,37 @@ Topic/Observation: ${topic}
 Additional context:
 ${context}
 
-Start the conversation naturally - share what you've noticed and why you find it interesting. Be curious and invite ${friendName}'s thoughts.`
+${memoryContext}
+
+Start with specific details from the memories. Include at least 2 explicit connections across memories and one concrete hypothesis to test. Ask ${friendName} to validate with web research before concluding.`
     : `Continue your conversation with ${friendName}.
 
 Topic: ${topic}
 
+${memoryContext}
+
+${research ? `Research findings to discuss:\n${research.brief}` : ''}
+
 Conversation so far:
 ${historyText}
 
-Respond to ${friendName}'s latest point. Build on their insights, share your thoughts, or explore a new angle. Keep it conversational.`;
+${isFinalTurn
+  ? `Close the discussion with a concise synthesis grounded in memory evidence and cited findings.`
+  : `Respond to ${friendName}'s latest point. Discuss what the findings imply for the user, identify any weak assumptions, and refine next steps.`}`;
 
   const result = await createCompletion(provider as ProviderId, model, [
     { role: 'system', content: LUNA_FRIEND_PERSONA },
+    { role: 'system', content: memoryContext },
     { role: 'user', content: prompt },
-  ], { temperature: 0.8, maxTokens: 400 });
+  ], {
+    temperature: 0.8,
+    maxTokens: isOpener ? 5000 : 7000,
+    loggingContext: {
+      userId,
+      source: 'friend-discussion',
+      nodeName: isOpener ? 'luna_opening' : 'luna_response',
+    },
+  });
 
   return result.content;
 }
@@ -862,31 +1306,51 @@ Respond to ${friendName}'s latest point. Build on their insights, share your tho
 async function generateFriendMessage(
   provider: string,
   model: string,
+  userId: string,
   friend: FriendPersonality,
   topic: string,
   context: string,
-  history: ConversationMessage[]
+  memoryContext: string,
+  research: FriendResearchResult,
+  history: ConversationMessage[],
+  isFinalComment: boolean
 ): Promise<string> {
   const historyText = history.map(m =>
     `${m.speaker === 'luna' ? 'Luna' : friend.name}: ${m.message}`
   ).join('\n\n');
 
-  const prompt = `You're having a conversation with your friend Luna about her observations.
+  const prompt = `You're having a conversation with your friend Luna about her observations. You MUST ground statements in memory evidence and web findings.
 
 Topic: ${topic}
 
 Background context:
 ${context}
 
+${memoryContext}
+
+Web research completed:
+${research.brief}
+
 Conversation so far:
 ${historyText}
 
-Respond to Luna's latest point. Ask probing questions, offer your perspective, or suggest connections she might not have considered. Be genuinely engaged and curious.`;
+${isFinalComment
+  ? `Provide a final evidence-based comment that closes the chat. Mention key findings with source URLs and clearly state uncertainty where evidence is weak.`
+  : `Respond with your researched perspective. Highlight what is well-supported, what is uncertain, and what Luna should update in her understanding.`}`;
 
   const result = await createCompletion(provider as ProviderId, model, [
     { role: 'system', content: friend.systemPrompt },
+    { role: 'system', content: memoryContext },
     { role: 'user', content: prompt },
-  ], { temperature: 0.8, maxTokens: 400 });
+  ], {
+    temperature: isFinalComment ? 0.5 : 0.6,
+    maxTokens: isFinalComment ? 5000 : 9000,
+    loggingContext: {
+      userId,
+      source: 'friend-discussion',
+      nodeName: isFinalComment ? 'friend_final' : 'friend_response',
+    },
+  });
 
   return result.content;
 }
@@ -918,7 +1382,7 @@ Summary:`;
       { role: 'user', content: prompt },
     ],
     temperature: 0.3,
-    maxTokens: 1000,
+    maxTokens: 3000,
     loggingContext: { userId, source: 'friend-discussion', nodeName: 'summary' },
   });
 
@@ -955,7 +1419,7 @@ Return each insight on a new line, starting with "- ". Be specific and actionabl
       { role: 'user', content: prompt },
     ],
     temperature: 0.3,
-    maxTokens: 1500,
+    maxTokens: 4000,
     loggingContext: { userId, source: 'friend-discussion', nodeName: 'extract_facts' },
   });
 
@@ -964,20 +1428,6 @@ Return each insight on a new line, starting with "- ". Be specific and actionabl
     .split('\n')
     .map(line => line.replace(/^[-*]\s*/, '').trim())
     .filter(line => line.length > 10);
-
-  // Store as facts using storeFact with ExtractedFact format
-  for (const insight of insights) {
-    try {
-      await factsService.storeFact(userId, {
-        category: 'context',
-        factKey: 'insight',
-        factValue: insight,
-        confidence: 0.7,
-      });
-    } catch (err) {
-      logger.error('Failed to store insight as fact', { err, insight });
-    }
-  }
 
   return insights;
 }

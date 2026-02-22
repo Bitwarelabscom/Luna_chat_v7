@@ -36,6 +36,7 @@ const IRCWindow = lazy(() => import('./apps/IRCWindow'));
 const PlaceholderWindow = lazy(() => import('./apps/PlaceholderWindow'));
 const LazyCanvasWindow = lazy(() => import('./apps/CanvasWindow').then(m => ({ default: m.CanvasWindow })));
 const GamesWindow = lazy(() => import('./apps/GamesWindow'));
+const RpgWindow = lazy(() => import('./apps/RpgWindow'));
 const ChatWindow = lazy(() => import('./apps/ChatWindow'));
 
 // Map appId to component
@@ -85,6 +86,8 @@ function getAppComponent(appId: AppId): React.ReactNode {
       return <LazyCanvasWindow />;
     case 'games':
       return <GamesWindow />;
+    case 'rpg':
+      return <RpgWindow />;
     default:
       return <PlaceholderWindow title="Unknown" message="Unknown app" />;
   }

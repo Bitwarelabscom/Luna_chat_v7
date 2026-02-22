@@ -171,6 +171,13 @@ export function NotificationDropdown({ onClose }: NotificationDropdownProps) {
     // Mark as read
     markRead(notification.id);
 
+    const questionId = notification.navigationTarget?.context?.questionId;
+    if (typeof questionId === 'string' && questionId.trim()) {
+      window.dispatchEvent(new CustomEvent('luna:open-question', {
+        detail: { questionId },
+      }));
+    }
+
     // Navigate to target app
     if (notification.navigationTarget) {
       openApp(notification.navigationTarget.appId);

@@ -86,6 +86,7 @@ export function SystemBar({ onSpotlightOpen, onAppOpen, onNewFile }: SystemBarPr
         { label: 'Music', icon: Music, action: () => { onAppOpen('music'); setActiveMenu(null); } },
         { label: 'Videos', icon: Video, action: () => { onAppOpen('videos'); setActiveMenu(null); } },
         { label: 'Games', icon: Gamepad2, action: () => { onAppOpen('games'); setActiveMenu(null); } },
+        { label: 'RPG Forge', icon: Gamepad2, action: () => { onAppOpen('rpg'); setActiveMenu(null); } },
       ],
     },
     tools: {

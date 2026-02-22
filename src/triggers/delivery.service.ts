@@ -535,7 +535,8 @@ export async function sendAutonomousNotification(
   title: string,
   message: string,
   eventType: string = 'autonomous.message',
-  priority: number = 6
+  priority: number = 6,
+  context?: Record<string, unknown>
 ): Promise<void> {
   await sendNotification(userId, {
     category: 'autonomous',
@@ -543,7 +544,7 @@ export async function sendAutonomousNotification(
     message,
     priority,
     eventType,
-    navigationTarget: { appId: 'chat' },
+    navigationTarget: { appId: 'chat', context },
   });
 }
 

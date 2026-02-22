@@ -31,6 +31,7 @@ import editorBridgeRoutes from './editor/editor-bridge.routes.js';
 import plannerRoutes from './planner/planner.routes.js';
 import mediaRoutes from './abilities/download.routes.js';
 import canvasRoutes from './canvas/canvas.routes.js';
+import rpgRoutes from './rpg/rpg.routes.js';
 import { startJobs, stopJobs } from './jobs/job-runner.js';
 import { setBroadcastFunction } from './activity/activity.service.js';
 import { initializeCritiqueQueue, shutdownCritiqueQueue } from './layered-agent/services/critique-queue.service.js';
@@ -198,6 +199,7 @@ app.use('/api/editor/bridge', editorBridgeRoutes);
 app.use('/api/planner', plannerRoutes);
 app.use('/api/media', mediaRoutes);
 app.use('/api/canvas', canvasRoutes);
+app.use('/api/rpg', rpgRoutes);
 app.use('/api/consolidation', consciousnessRoutes);  // Consolidation logs share routes
 
 // Connect activity service to delivery service's SSE broadcast

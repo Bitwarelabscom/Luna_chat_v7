@@ -29,9 +29,9 @@ export default function BackgroundModelsTab() {
     setError(null);
     try {
       const result = await settingsApi.getBackgroundLlmSettings();
-      setProviders(result.providers);
-      setFeatures(result.features);
-      setSettings(result.settings);
+      setProviders(Array.isArray(result.providers) ? result.providers : []);
+      setFeatures(Array.isArray(result.features) ? result.features : []);
+      setSettings(result.settings || null);
     } catch {
       setError('Failed to load background AI settings');
     } finally {
@@ -141,9 +141,29 @@ export default function BackgroundModelsTab() {
         </button>
       </div>
 
+      {!features.length && (
+        <div className="p-3 bg-yellow-500/10 border border-yellow-500/50 rounded-lg text-yellow-400 text-sm">
+          No Background AI features were returned by the API.
+        </div>
+      )}
+
+      {!providers.length && (
+        <div className="p-3 bg-yellow-500/10 border border-yellow-500/50 rounded-lg text-yellow-400 text-sm">
+          No model providers were returned by the API.
+        </div>
+      )}
+
       <div className="space-y-4">
         {features.map(feature => {
           const config = settings[feature.id];
+          if (!config) {
+            return (
+              <div key={feature.id} className="p-3 bg-yellow-500/10 border border-yellow-500/50 rounded-lg text-yellow-400 text-sm">
+                Missing model configuration for feature: {feature.label}
+              </div>
+            );
+          }
+
           const primaryModels = getModelsForProvider(config.primary.provider);
           const fallbackModels = getModelsForProvider(config.fallback.provider);
 
@@ -162,8 +182,10 @@ export default function BackgroundModelsTab() {
                       <select
                         value={config.primary.provider}
                         onChange={e => updateFeatureConfig(feature.id, 'primary', { provider: e.target.value as ProviderId })}
+                        disabled={providers.length === 0}
                         className="w-full px-3 py-2 bg-theme-bg-secondary border border-theme-border rounded-lg text-theme-text-primary text-sm appearance-none focus:outline-none focus:border-theme-border-focus"
                       >
+                        {providers.length === 0 && <option value="">No providers</option>}
                         {providers.map(provider => (
                           <option key={provider.id} value={provider.id}>{provider.name}</option>
                         ))}
@@ -174,8 +196,10 @@ export default function BackgroundModelsTab() {
                       <select
                         value={config.primary.model}
                         onChange={e => updateFeatureConfig(feature.id, 'primary', { model: e.target.value })}
+                        disabled={primaryModels.length === 0}
                         className="w-full px-3 py-2 bg-theme-bg-secondary border border-theme-border rounded-lg text-theme-text-primary text-sm appearance-none focus:outline-none focus:border-theme-border-focus"
                       >
+                        {primaryModels.length === 0 && <option value="">No models</option>}
                         {primaryModels.map(model => (
                           <option key={model.id} value={model.id}>{model.name}</option>
                         ))}
@@ -192,8 +216,10 @@ export default function BackgroundModelsTab() {
                       <select
                         value={config.fallback.provider}
                         onChange={e => updateFeatureConfig(feature.id, 'fallback', { provider: e.target.value as ProviderId })}
+                        disabled={providers.length === 0}
                         className="w-full px-3 py-2 bg-theme-bg-secondary border border-theme-border rounded-lg text-theme-text-primary text-sm appearance-none focus:outline-none focus:border-theme-border-focus"
                       >
+                        {providers.length === 0 && <option value="">No providers</option>}
                         {providers.map(provider => (
                           <option key={provider.id} value={provider.id}>{provider.name}</option>
                         ))}
@@ -204,8 +230,10 @@ export default function BackgroundModelsTab() {
                       <select
                         value={config.fallback.model}
                         onChange={e => updateFeatureConfig(feature.id, 'fallback', { model: e.target.value })}
+                        disabled={fallbackModels.length === 0}
                         className="w-full px-3 py-2 bg-theme-bg-secondary border border-theme-border rounded-lg text-theme-text-primary text-sm appearance-none focus:outline-none focus:border-theme-border-focus"
                       >
+                        {fallbackModels.length === 0 && <option value="">No models</option>}
                         {fallbackModels.map(model => (
                           <option key={model.id} value={model.id}>{model.name}</option>
                         ))}

@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useMemo, ChangeEvent } from 'react';
 import { useChatStore } from '@/lib/store';
 import { useActivityStore } from '@/lib/activity-store';
-import { streamMessage, streamMessageWithFiles, regenerateMessage, chatApi } from '@/lib/api';
+import { streamMessage, streamMessageWithFiles, regenerateMessage, chatApi, autonomousApi, type AutonomousQuestion } from '@/lib/api';
 import { Send, Moon, Loader2, Mic, Sparkles, Paperclip } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import clsx from 'clsx';
@@ -16,6 +16,7 @@ import { AttachmentCard } from './AttachmentCard';
 import { FileChip } from './FileChip';
 import { useThinkingMessage } from './ThinkingStatus';
 import { ModelSelector } from './os/ModelSelector';
+import { CoderSelector } from './os/CoderSelector';
 import dynamic from 'next/dynamic';
 import SuggestionChips from './SuggestionChips';
 import { useWindowStore } from '@/lib/window-store';
@@ -144,6 +145,10 @@ function StandardChatArea() {
   const [projectMode, setProjectMode] = useState(false);
   const [thinkingMode, setThinkingMode] = useState(false);
   const [novaMode, setNovaMode] = useState(false);
+  const [verificationQuestion, setVerificationQuestion] = useState<AutonomousQuestion | null>(null);
+  const [verificationAnswer, setVerificationAnswer] = useState('');
+  const [verificationBusy, setVerificationBusy] = useState(false);
+  const [verificationError, setVerificationError] = useState<string | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -176,6 +181,26 @@ function StandardChatArea() {
   useEffect(() => {
     textareaRef.current?.focus();
   }, [currentSession?.id]);
+
+  useEffect(() => {
+    const handler = async (event: Event) => {
+      const custom = event as CustomEvent<{ questionId?: string }>;
+      const questionId = custom.detail?.questionId;
+      if (!questionId) return;
+
+      try {
+        const { question } = await autonomousApi.getQuestion(questionId);
+        setVerificationQuestion(question);
+        setVerificationAnswer('');
+        setVerificationError(null);
+      } catch {
+        setVerificationError('Could not load verification question.');
+      }
+    };
+
+    window.addEventListener('luna:open-question', handler as EventListener);
+    return () => window.removeEventListener('luna:open-question', handler as EventListener);
+  }, []);
 
   useEffect(() => {
     const session = currentSession;
@@ -376,6 +401,38 @@ function StandardChatArea() {
       );
     } finally {
       setIsSending(false);
+    }
+  };
+
+  const submitVerificationAnswer = async () => {
+    if (!verificationQuestion || !verificationAnswer.trim() || verificationBusy) return;
+
+    setVerificationBusy(true);
+    setVerificationError(null);
+    try {
+      await autonomousApi.answerQuestion(verificationQuestion.id, verificationAnswer.trim());
+      setVerificationQuestion(null);
+      setVerificationAnswer('');
+    } catch {
+      setVerificationError('Failed to submit answer. Try again.');
+    } finally {
+      setVerificationBusy(false);
+    }
+  };
+
+  const dismissVerificationQuestion = async () => {
+    if (!verificationQuestion || verificationBusy) return;
+
+    setVerificationBusy(true);
+    setVerificationError(null);
+    try {
+      await autonomousApi.dismissQuestion(verificationQuestion.id);
+      setVerificationQuestion(null);
+      setVerificationAnswer('');
+    } catch {
+      setVerificationError('Failed to dismiss question.');
+    } finally {
+      setVerificationBusy(false);
     }
   };
 
@@ -723,6 +780,7 @@ function StandardChatArea() {
               />
               <div className="w-px h-4 bg-theme-border mx-1" />
               <ModelSelector />
+              <CoderSelector />
               <span className="ml-auto text-xs text-theme-text-muted">
                 Luna can make mistakes.
               </span>
@@ -762,6 +820,52 @@ function StandardChatArea() {
                 className="px-4 py-2 rounded-lg bg-theme-accent-primary hover:bg-theme-accent-hover text-theme-text-primary transition"
               >
                 Regenerate response
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Friend verification popup */}
+      {verificationQuestion && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-theme-bg-secondary border border-theme-border rounded-xl p-6 max-w-lg w-full mx-4">
+            <h3 className="text-lg font-semibold text-theme-text-primary mb-2">
+              Verify Friend Claim
+            </h3>
+            <p className="text-theme-text-secondary mb-1">
+              {verificationQuestion.question}
+            </p>
+            {verificationQuestion.context && (
+              <p className="text-xs text-theme-text-muted mb-3 whitespace-pre-wrap">
+                {verificationQuestion.context}
+              </p>
+            )}
+            <textarea
+              value={verificationAnswer}
+              onChange={(e) => setVerificationAnswer(e.target.value)}
+              placeholder="Type your answer..."
+              rows={3}
+              className="w-full bg-theme-bg-tertiary border border-theme-border rounded-lg p-3 text-theme-text-primary outline-none focus:border-theme-border-focus"
+              disabled={verificationBusy}
+            />
+            {verificationError && (
+              <p className="text-red-400 text-sm mt-2">{verificationError}</p>
+            )}
+            <div className="flex gap-3 justify-end mt-4">
+              <button
+                onClick={dismissVerificationQuestion}
+                className="px-4 py-2 rounded-lg bg-theme-bg-tertiary hover:bg-theme-bg-primary text-theme-text-secondary transition disabled:opacity-50"
+                disabled={verificationBusy}
+              >
+                Dismiss
+              </button>
+              <button
+                onClick={submitVerificationAnswer}
+                className="px-4 py-2 rounded-lg bg-theme-accent-primary hover:bg-theme-accent-hover text-theme-text-primary transition disabled:opacity-50"
+                disabled={verificationBusy || !verificationAnswer.trim()}
+              >
+                {verificationBusy ? 'Submitting...' : 'Submit'}
               </button>
             </div>
           </div>

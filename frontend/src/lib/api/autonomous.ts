@@ -10,6 +10,10 @@ export interface AutonomousConfig {
   maxDailySessions: number;
   rssCheckIntervalMinutes: number;
   idleTimeoutMinutes: number;
+  learningEnabled: boolean;
+  rssEnabled: boolean;
+  insightsEnabled: boolean;
+  voiceEnabled: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -158,6 +162,20 @@ export interface AutonomousQuestion {
   userResponse: string | null;
   expiresAt: string | null;
   relatedGoalId: string | null;
+  createdAt: string;
+}
+
+export interface FriendTopicCandidate {
+  id: string;
+  userId: string;
+  topicText: string;
+  context: string | null;
+  evidence: string[];
+  evidenceCount: number;
+  modelConfidence: number;
+  relevanceScore: number;
+  thresholdScore: number;
+  status: 'pending' | 'approved' | 'rejected' | 'consumed';
   createdAt: string;
 }
 
@@ -346,6 +364,9 @@ export const autonomousApi = {
   getPendingQuestions: () =>
     api<{ questions: AutonomousQuestion[] }>('/api/autonomous/questions'),
 
+  getQuestion: (questionId: string) =>
+    api<{ question: AutonomousQuestion }>(`/api/autonomous/questions/${questionId}`),
+
   answerQuestion: (questionId: string, response: string) =>
     api<{ question: AutonomousQuestion }>(`/api/autonomous/questions/${questionId}/answer`, { method: 'POST', body: { response } }),
 
@@ -365,6 +386,10 @@ export const autonomousApi = {
 
   getResearchItems: (collectionId: string) =>
     api<{ items: ResearchItem[] }>(`/api/autonomous/research/${collectionId}/items`),
+
+  // Friend topic candidates
+  getFriendTopics: (limit = 20) =>
+    api<{ topics: FriendTopicCandidate[] }>(`/api/autonomous/friends/topics?limit=${limit}`),
 
   // Web Fetch
   fetchPage: (url: string, summarize = false, prompt?: string) =>

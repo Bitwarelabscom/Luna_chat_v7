@@ -18,11 +18,13 @@ import TriggersTab from '@/components/settings/TriggersTab';
 import StatsTab from '@/components/settings/StatsTab';
 import DataTab from '@/components/settings/DataTab';
 import FriendsTab from '@/components/settings/FriendsTab';
+import BackgroundModelsTab from '@/components/settings/BackgroundModelsTab';
 
 type SettingsTab =
   | 'appearance'
   | 'prompts'
   | 'models'
+  | 'backgroundai'
   | 'integrations'
   | 'mcp'
   | 'workspace'
@@ -45,6 +47,7 @@ const tabs: TabConfig[] = [
   { id: 'appearance', label: 'Appearance', icon: Palette, description: 'Theme and visual settings' },
   { id: 'prompts', label: 'Prompts', icon: MessageSquare, description: 'System prompts and personas' },
   { id: 'models', label: 'Models', icon: Cpu, description: 'AI model configuration' },
+  { id: 'backgroundai', label: 'Background AI', icon: Cpu, description: 'Background AI model selectors' },
   { id: 'integrations', label: 'Integrations', icon: Link, description: 'OAuth and external services' },
   { id: 'mcp', label: 'MCP Servers', icon: Server, description: 'Model Context Protocol' },
   { id: 'workspace', label: 'Workspace', icon: FolderOpen, description: 'Files and documents' },
@@ -68,6 +71,8 @@ export default function SettingsWindow() {
         return <PromptsTab />;
       case 'models':
         return <ModelsTab />;
+      case 'backgroundai':
+        return <BackgroundModelsTab />;
       case 'integrations':
         return <IntegrationsTab />;
       case 'mcp':
