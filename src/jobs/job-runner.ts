@@ -26,6 +26,8 @@ import * as contextSummaryService from '../context/context-summary.service.js';
 import * as intentSummaryGenerator from '../context/intent-summary-generator.service.js';
 import * as graphSyncService from '../graph/graph-sync.service.js';
 import * as neo4jService from '../graph/neo4j.service.js';
+import * as ceoService from '../ceo/ceo.service.js';
+import * as buildTracker from '../ceo/build-tracker.service.js';
 import { activityHelpers } from '../activity/activity.service.js';
 import logger from '../utils/logger.js';
 
@@ -299,6 +301,35 @@ const jobs: Job[] = [
     enabled: true,
     running: false,
     handler: cleanupNeo4jOrphans,
+  },
+  // CEO monitoring jobs
+  {
+    name: 'ceoMonitoring',
+    intervalMs: 60 * 1000, // Every minute - schedule-aware checks by timezone
+    enabled: true,
+    running: false,
+    handler: runCeoMonitoring,
+  },
+  {
+    name: 'ceoAutopostWorker',
+    intervalMs: 5 * 60 * 1000, // Every 5 minutes
+    enabled: true,
+    running: false,
+    handler: runCeoAutopostWorker,
+  },
+  {
+    name: 'ceoMaintenance',
+    intervalMs: 24 * 60 * 60 * 1000, // Daily
+    enabled: true,
+    running: false,
+    handler: runCeoMaintenance,
+  },
+  {
+    name: 'ceoBuildCheckin',
+    intervalMs: 5 * 60 * 1000, // Every 5 minutes (checks if 30min elapsed)
+    enabled: true,
+    running: false,
+    handler: processBuildCheckins,
   },
 ];
 
@@ -839,7 +870,7 @@ async function finalizeIdleSessions(): Promise<void> {
     }
 
     let finalized = 0;
-    for (const { sessionId } of idleLogs) {
+    for (const { sessionId, userId } of idleLogs) {
       try {
         const messages = messagesBySession.get(sessionId) || [];
 
@@ -849,7 +880,7 @@ async function finalizeIdleSessions(): Promise<void> {
           continue;
         }
 
-        const analysis = await sessionLogService.analyzeSession(messages);
+        const analysis = await sessionLogService.analyzeSession(messages, userId);
 
         await sessionLogService.finalizeSessionLog(
           sessionId,
@@ -1405,6 +1436,83 @@ async function cleanupNeo4jOrphans(): Promise<void> {
     }
   } catch (error) {
     logger.error('Neo4j orphan cleanup job failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+// ============================================
+// CEO Monitoring Job Handlers
+// ============================================
+
+/**
+ * Run CEO monitoring loops (daily, weekly, bi-weekly) for configured users.
+ * Uses per-user timezone + slot locks inside ceo.service.
+ */
+async function runCeoMonitoring(): Promise<void> {
+  try {
+    const result = await ceoService.runMonitoringCycle();
+
+    if (result.dailyRuns > 0 || result.weeklyRuns > 0 || result.biweeklyRuns > 0 || result.alertsQueued > 0) {
+      logger.info('CEO monitoring cycle completed', result);
+    } else {
+      logger.debug('CEO monitoring cycle completed - no scheduled slots due');
+    }
+  } catch (error) {
+    logger.error('CEO monitoring cycle failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+/**
+ * Process approved/scheduled CEO autopost queue items.
+ */
+async function runCeoAutopostWorker(): Promise<void> {
+  try {
+    const result = await ceoService.processAutopostQueue(30);
+
+    if (result.attempted > 0) {
+      logger.info('CEO autopost worker completed', result);
+    } else {
+      logger.debug('CEO autopost worker completed - no posts due');
+    }
+  } catch (error) {
+    logger.error('CEO autopost worker failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+/**
+ * Apply CEO data retention windows.
+ */
+async function runCeoMaintenance(): Promise<void> {
+  try {
+    const result = await ceoService.runMaintenanceCleanup();
+    if (result.deletedRows > 0) {
+      logger.info('CEO maintenance cleanup completed', result);
+    } else {
+      logger.debug('CEO maintenance cleanup completed - nothing deleted');
+    }
+  } catch (error) {
+    logger.error('CEO maintenance cleanup failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+/**
+ * Send check-in messages for active builds running 30+ minutes without a check-in.
+ */
+async function processBuildCheckins(): Promise<void> {
+  try {
+    const count = await buildTracker.processCheckins();
+    if (count > 0) {
+      logger.info('CEO build check-ins sent', { count });
+    }
+  } catch (error) {
+    logger.error('CEO build check-in job failed', {
       error: (error as Error).message,
     });
   }

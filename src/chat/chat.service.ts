@@ -36,6 +36,7 @@ import {
   createCalendarEventTool,
   listCalendarEventsTool,
   sessionNoteTool,
+  ceoNoteBuildTool,
   createReminderTool,
   listRemindersTool,
   cancelReminderTool,
@@ -424,6 +425,7 @@ export interface ChatInput {
   novaMode?: boolean;
   documentIds?: string[];
   djStyleContext?: string;
+  ceoSystemLog?: string;
 }
 
 export interface ChatOutput {
@@ -434,7 +436,7 @@ export interface ChatOutput {
 }
 
 export async function processMessage(input: ChatInput): Promise<ChatOutput> {
-  const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode, novaMode, documentIds, djStyleContext } = input;
+  const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode, novaMode, documentIds, djStyleContext, ceoSystemLog } = input;
 
   // Initialize MemoryCore session for consolidation tracking
   // This enables episodic memory recording and NeuralSleep LNN processing
@@ -733,6 +735,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
         source,
         novaMode,
         djStyleContext,
+        ceoSystemLog,
       }),
     },
   ];
@@ -812,6 +815,9 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   let modeTools = mode === 'companion' ? companionTools : assistantTools;
   if (mode === 'dj_luna') {
     modeTools = [searchTool, fetchUrlTool, youtubeSearchTool, mediaDownloadTool];
+  }
+  if (mode === 'ceo_luna') {
+    modeTools = [...modeTools, ceoNoteBuildTool];
   }
   const availableTools = isSmallTalkMessageLegacy ? [] : modeTools;
   let searchResults: SearchResult[] | undefined;
@@ -1504,6 +1510,25 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
           tool_call_id: toolCall.id,
           content: 'Note saved. It will appear in future session greetings.',
         } as ChatMessage);
+      } else if (toolCall.function.name === 'ceo_note_build') {
+        // CEO build note - saves progress note from check-in reply
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('CEO Luna saving build note', { buildId: args.build_id, note: args.note });
+        try {
+          const { addNote } = await import('../ceo/build-tracker.service.js');
+          await addNote(args.build_id, userId, args.note, 'checkin');
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Progress note saved: "${args.note}"`,
+          } as ChatMessage);
+        } catch (error) {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to save note: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
       } else if (toolCall.function.name === 'create_reminder') {
         // Quick reminder tool
         const args = JSON.parse(toolCall.function.arguments);
@@ -2779,7 +2804,7 @@ export interface StreamMetrics {
 export async function* streamMessage(
   input: ChatInput
 ): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'background_refresh' | 'reasoning' | 'video_action' | 'media_action' | 'canvas_artifact'; content?: string | any; status?: string; messageId?: string; tokensUsed?: number; metrics?: StreamMetrics; action?: string; url?: string; videos?: any[]; query?: string; items?: any[]; source?: string; artifactId?: string }> {
-  const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode, novaMode, documentIds, djStyleContext } = input;
+  const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode, novaMode, documentIds, djStyleContext, ceoSystemLog } = input;
 
   // Initialize MemoryCore session for consolidation tracking
   // This enables episodic memory recording and NeuralSleep LNN processing
@@ -3348,6 +3373,7 @@ export async function* streamMessage(
         source,
         novaMode,
         djStyleContext,
+        ceoSystemLog,
       }),
     },
   ];
@@ -3430,6 +3456,9 @@ export async function* streamMessage(
   let modeTools = mode === 'companion' ? companionTools : assistantTools;
   if (mode === 'dj_luna') {
     modeTools = [searchTool, fetchUrlTool, youtubeSearchTool, mediaDownloadTool];
+  }
+  if (mode === 'ceo_luna') {
+    modeTools = [...modeTools, ceoNoteBuildTool];
   }
   const availableTools = isSmallTalkMessage ? [] : modeTools;
   let searchResults: SearchResult[] | undefined;
@@ -4098,6 +4127,25 @@ export async function* streamMessage(
           tool_call_id: toolCall.id,
           content: 'Note saved. It will appear in future session greetings.',
         } as ChatMessage);
+      } else if (toolCall.function.name === 'ceo_note_build') {
+        // CEO build note - saves progress note from check-in reply
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('CEO Luna saving build note', { buildId: args.build_id, note: args.note });
+        try {
+          const { addNote } = await import('../ceo/build-tracker.service.js');
+          await addNote(args.build_id, userId, args.note, 'checkin');
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Progress note saved: "${args.note}"`,
+          } as ChatMessage);
+        } catch (error) {
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Failed to save note: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
       } else if (toolCall.function.name === 'create_reminder') {
         // Quick reminder tool
         const args = JSON.parse(toolCall.function.arguments);

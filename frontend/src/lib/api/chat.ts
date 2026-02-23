@@ -125,7 +125,8 @@ export async function* streamMessage(
   projectMode?: boolean,
   thinkingMode?: boolean,
   novaMode?: boolean,
-  djStyleContext?: string
+  djStyleContext?: string,
+  ceoSystemLog?: string
 ): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'reasoning' | 'background_refresh' | 'video_action' | 'media_action' | 'canvas_artifact'; content?: string | any; status?: string; messageId?: string; metrics?: MessageMetrics; action?: string; url?: string; videos?: any[]; query?: string; items?: any[]; source?: string; artifactId?: string }> {
   const response = await fetch(`${API_URL}${API_PREFIX}/api/chat/sessions/${sessionId}/send`, {
     method: 'POST',
@@ -133,7 +134,7 @@ export async function* streamMessage(
       'Content-Type': 'application/json',
     },
     credentials: 'include',
-    body: JSON.stringify({ message, stream: true, projectMode, thinkingMode, novaMode, djStyleContext }),
+    body: JSON.stringify({ message, stream: true, projectMode, thinkingMode, novaMode, djStyleContext, ceoSystemLog }),
   });
 
   if (!response.ok) {

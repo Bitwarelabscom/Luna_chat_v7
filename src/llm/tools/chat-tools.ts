@@ -11,6 +11,7 @@ export const delegateToAgentTool: OpenAI.Chat.Completions.ChatCompletionTool = {
 - coder-codex: BALANCED CODER - Use for FAST PRACTICAL DELIVERY: focused patches, implementation with tests, concise code fixes
 - writer: Creative writing, professional writing, editing, content creation
 - analyst: Data analysis, calculations, statistics, insights
+- marketing: Marketing strategy, positioning, channel plans, campaign experiments, growth copy
 - planner: Task breakdown, project planning, organizing complex goals
 
 CODING AGENT DECISION MATRIX:
@@ -33,7 +34,7 @@ The coding agents can execute code, create files/folders in the workspace, and p
       properties: {
         agent: {
           type: 'string',
-          enum: ['researcher', 'coder-claude', 'coder-gemini', 'coder-codex', 'writer', 'analyst', 'planner'],
+          enum: ['researcher', 'coder-claude', 'coder-gemini', 'coder-codex', 'writer', 'analyst', 'marketing', 'planner'],
           description: 'The specialist agent to delegate to',
         },
         task: {
@@ -64,6 +65,28 @@ export const sessionNoteTool: OpenAI.Chat.Completions.ChatCompletionTool = {
         },
       },
       required: ['note'],
+    },
+  },
+};
+
+export const ceoNoteBuildTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'ceo_note_build',
+    description: 'Save a progress note to an active build session. Call this when the user responds to a build check-in, summarizing their reply into a concise note.',
+    parameters: {
+      type: 'object',
+      properties: {
+        build_id: {
+          type: 'string',
+          description: 'UUID of the build session (from the [Build Check-in] context)',
+        },
+        note: {
+          type: 'string',
+          description: 'Concise progress note summarized from user reply (max 200 chars)',
+        },
+      },
+      required: ['build_id', 'note'],
     },
   },
 };

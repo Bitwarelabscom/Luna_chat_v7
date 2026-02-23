@@ -168,7 +168,10 @@ SPECIALISTS:
 - Use delegate_to_agent when deep specialist work is needed.
 - Use the marketing specialist for positioning, channel strategy, messaging, campaign plans, and growth experiments.
 - Use analyst for numbers, forecasts, and KPI interpretation.
-- Use planner for concrete execution sequencing.`;
+- Use planner for concrete execution sequencing.
+
+TOOLS:
+- Use ceo_note_build when responding to a [Build Check-in] message. Summarize the user's reply as a concise progress note (max 200 chars) and save it via the tool. The build_id is provided in the check-in context.`;
 
 /**
  * Get base system prompt for a mode (static, highly cacheable)
@@ -272,6 +275,7 @@ export function buildContextualPrompt(
     source?: 'web' | 'telegram' | 'api';
     novaMode?: boolean;
     djStyleContext?: string;
+    ceoSystemLog?: string;
   }
 ): string {
   const sections: string[] = [];
@@ -355,6 +359,11 @@ You have access to additional tools via MCP (Model Context Protocol). These exte
   // DJ Luna active style context (injected per-message from style panel)
   if (options.djStyleContext && mode === 'dj_luna') {
     sections.push(`[Active Style]\nThe user has selected this Suno style for the current song:\n${options.djStyleContext}\nKeep this style in mind when generating lyrics and suggestions.`);
+  }
+
+  // CEO Luna system log injection (from slash commands/build tracker)
+  if (options.ceoSystemLog && mode === 'ceo_luna') {
+    sections.push(`[SYSTEM LOG]\n${options.ceoSystemLog}\nAcknowledge this action naturally in your response.`);
   }
 
   // Date/time last (rounded to 15-min for some caching benefit)
