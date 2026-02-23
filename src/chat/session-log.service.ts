@@ -9,9 +9,7 @@
  */
 
 import { query, queryOne } from '../db/postgres.js';
-import { createCompletion } from '../llm/router.js';
 import { createBackgroundCompletionWithFallback } from '../llm/background-completion.service.js';
-import { config } from '../config/index.js';
 import * as tasksService from '../abilities/tasks.service.js';
 import * as contextSummaryService from '../context/context-summary.service.js';
 import type { SessionSummary, SessionArtifact } from '../context/context-summary.types.js';
@@ -335,7 +333,8 @@ Chat messages:
  * Analyze a session's messages to generate summary, mood, and energy
  */
 export async function analyzeSession(
-  messages: Array<{ role: string; content: string }>
+  messages: Array<{ role: string; content: string }>,
+  userId?: string
 ): Promise<{
   summary: string;
   mood: string;
@@ -349,12 +348,20 @@ export async function analyzeSession(
       .map(m => `${m.role}: ${m.content.slice(0, 200)}`)
       .join('\n');
 
-    const response = await createCompletion(
-      'ollama',
-      config.ollama.chatModel,
-      [{ role: 'user', content: ANALYSIS_PROMPT + formatted }],
-      { temperature: 0.3, maxTokens: 5000 }
-    );
+    const response = await createBackgroundCompletionWithFallback({
+      userId,
+      feature: 'context_summary',
+      messages: [{ role: 'user', content: ANALYSIS_PROMPT + formatted }],
+      temperature: 0.3,
+      maxTokens: 6000,
+      ...(userId ? {
+        loggingContext: {
+          userId,
+          source: 'session-log',
+          nodeName: 'session_analysis',
+        },
+      } : {}),
+    });
 
     const content = response.content || '';
 

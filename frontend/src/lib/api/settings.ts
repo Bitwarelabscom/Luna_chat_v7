@@ -154,7 +154,8 @@ export type BackgroundLlmFeatureId =
   | 'news_filter'
   | 'research_synthesis'
   | 'session_gap_analysis'
-  | 'knowledge_verification';
+  | 'knowledge_verification'
+  | 'supervisor_critique';
 
 export interface BackgroundLlmFeatureMeta {
   id: BackgroundLlmFeatureId;
@@ -215,7 +216,7 @@ export interface UserSettings {
   crtFlicker?: boolean;
   language?: string;
   notifications?: boolean;
-  defaultMode?: 'assistant' | 'companion' | 'voice';
+  defaultMode?: 'assistant' | 'companion' | 'voice' | 'dj_luna' | 'ceo_luna';
   // Locale settings
   timeFormat?: TimeFormat;
   dateFormat?: DateFormat;

@@ -84,6 +84,11 @@ export default function Sidebar() {
       setShowModeSelector(false);
       return;
     }
+    if (mode === 'ceo_luna') {
+      router.push('/?open=ceo-luna');
+      setShowModeSelector(false);
+      return;
+    }
     const session = await createSession(mode);
     loadSession(session.id);
     setShowModeSelector(false);

@@ -1147,6 +1147,31 @@ const CommandCenter = () => {
                         <strong style={{ display: 'block', marginBottom: '2px' }}>Voice</strong>
                         <span style={{ color: '#607080', fontSize: '10px' }}>Talk with Luna</span>
                       </button>
+                      <button
+                        onClick={async () => {
+                          const session = await createSession('ceo_luna');
+                          await loadSession(session.id);
+                          setShowModeSelector(false);
+                          addLog('CEO Luna session created', 'success');
+                        }}
+                        style={{
+                          width: '100%',
+                          background: 'transparent',
+                          border: 'none',
+                          borderTop: '1px solid #2a3545',
+                          color: '#fb923c',
+                          padding: '10px',
+                          textAlign: 'left',
+                          cursor: 'pointer',
+                          fontSize: '11px',
+                          fontFamily: 'inherit',
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.background = '#2a3545'}
+                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                      >
+                        <strong style={{ display: 'block', marginBottom: '2px' }}>CEO Luna</strong>
+                        <span style={{ color: '#607080', fontSize: '10px' }}>Business execution mode</span>
+                      </button>
                     </div>
                   )}
                 </div>

@@ -21,7 +21,7 @@ export interface LayeredAgentInput {
   sessionId: string;
   userId: string;
   message: string;
-  mode: 'assistant' | 'companion' | 'voice' | 'dj_luna';
+  mode: 'assistant' | 'companion' | 'voice' | 'dj_luna' | 'ceo_luna';
   source?: 'web' | 'telegram' | 'api';
 }
 

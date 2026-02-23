@@ -25,7 +25,7 @@ export interface CritiqueJobData {
   userInput: string;
   draft: string;
   plan: string | null;
-  mode: 'assistant' | 'companion' | 'voice' | 'dj_luna';
+  mode: 'assistant' | 'companion' | 'voice' | 'dj_luna' | 'ceo_luna';
   identityId: string;
   identityVersion: number;
 }
@@ -243,7 +243,7 @@ async function processCritiqueJob(
     };
 
     // Run supervisor critique
-    const result = await supervisorNode({ state });
+    const result = await supervisorNode({ state, userId });
     const approved = result.verdict.approved;
     const issues = result.verdict.issues;
     const fixInstructions = result.verdict.fix_instructions;

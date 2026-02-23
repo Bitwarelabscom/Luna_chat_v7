@@ -147,7 +147,17 @@ export async function plannerNode(
         { role: 'system', content: PLANNER_SYSTEM_PROMPT },
         { role: 'user', content: userPrompt },
       ],
-      { temperature: 0.3, maxTokens: 500 }
+      {
+        temperature: 0.3,
+        maxTokens: 500,
+        loggingContext: {
+          userId,
+          sessionId: state.session_id,
+          turnId: state.turn_id,
+          source: 'layered-agent',
+          nodeName: 'planner',
+        },
+      }
     );
 
     const plan = response.content?.trim() || null;

@@ -874,8 +874,8 @@ export async function processMessage(input: VoiceChatInput): Promise<VoiceChatOu
           case 'check_email': {
             const unreadOnly = args.unreadOnly === true;
             const { emails: gatedEmails, quarantinedCount } = unreadOnly
-              ? await emailService.getLunaUnreadEmailsGated()
-              : await emailService.checkLunaInboxGated(5);
+              ? await emailService.getLunaUnreadEmailsGated(userId)
+              : await emailService.checkLunaInboxGated(5, userId);
             if (gatedEmails.length === 0 && quarantinedCount === 0) {
               toolResult = unreadOnly ? 'No unread emails.' : 'Inbox is empty.';
             } else {
@@ -890,7 +890,7 @@ export async function processMessage(input: VoiceChatInput): Promise<VoiceChatOu
               toolResult = 'Error: email UID is required';
               break;
             }
-            const gatedEmail = await emailService.fetchEmailByUidGated(uid);
+            const gatedEmail = await emailService.fetchEmailByUidGated(uid, userId);
             if (gatedEmail) {
               toolResult = emailService.formatGatedEmailForPrompt(gatedEmail);
             } else {

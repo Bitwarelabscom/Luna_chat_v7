@@ -130,6 +130,36 @@ export async function createCompletion(
     result = await provider.createCompletion(model, messages, options);
   } catch (err) {
     const durationMs = Date.now() - startTime;
+    if (options.loggingContext) {
+      activityHelpers.logLLMCall(
+        options.loggingContext.userId,
+        options.loggingContext.sessionId,
+        options.loggingContext.turnId,
+        options.loggingContext.nodeName,
+        model,
+        providerId,
+        {
+          input: 0,
+          output: 0,
+          cache: 0,
+        },
+        durationMs,
+        undefined,
+        undefined,
+        {
+          messages: messages.map(m => ({
+            role: m.role,
+            content: m.content,
+          })),
+          temperature: options.temperature,
+          maxTokens: options.maxTokens,
+          response: {
+            content: '',
+            finishReason: 'error',
+          },
+        }
+      ).catch(() => {});
+    }
     if (!EXCLUDED_PROVIDERS.has(providerId)) {
       logToDb({
         userId: options.loggingContext?.userId,
@@ -234,6 +264,36 @@ export async function* streamCompletion(
       yield chunk;
     }
   } catch (err) {
+    if (options.loggingContext) {
+      activityHelpers.logLLMCall(
+        options.loggingContext.userId,
+        options.loggingContext.sessionId,
+        options.loggingContext.turnId,
+        options.loggingContext.nodeName,
+        model,
+        providerId,
+        {
+          input: totalInput,
+          output: totalOutput,
+          cache: totalCache,
+        },
+        Date.now() - startTime,
+        undefined,
+        undefined,
+        {
+          messages: messages.map(m => ({
+            role: m.role,
+            content: m.content,
+          })),
+          temperature: options.temperature,
+          maxTokens: options.maxTokens,
+          response: {
+            content: '',
+            finishReason: 'error',
+          },
+        }
+      ).catch(() => {});
+    }
     if (!EXCLUDED_PROVIDERS.has(providerId)) {
       logToDb({
         userId: options.loggingContext?.userId,
@@ -267,6 +327,37 @@ export async function* streamCompletion(
       durationMs: Date.now() - startTime,
       success: true,
     });
+  }
+
+  if (options.loggingContext) {
+    activityHelpers.logLLMCall(
+      options.loggingContext.userId,
+      options.loggingContext.sessionId,
+      options.loggingContext.turnId,
+      options.loggingContext.nodeName,
+      model,
+      providerId,
+      {
+        input: totalInput,
+        output: totalOutput,
+        cache: totalCache,
+      },
+      Date.now() - startTime,
+      undefined,
+      undefined,
+      {
+        messages: messages.map(m => ({
+          role: m.role,
+          content: m.content,
+        })),
+        temperature: options.temperature,
+        maxTokens: options.maxTokens,
+        response: {
+          content: '',
+          finishReason: 'stop',
+        },
+      }
+    ).catch(() => {});
   }
 }
 

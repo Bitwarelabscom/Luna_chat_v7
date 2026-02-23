@@ -1,6 +1,5 @@
 import { pool } from '../db/index.js';
-import { createCompletion } from '../llm/router.js';
-import { config } from '../config/index.js';
+import { createBackgroundCompletionWithFallback } from '../llm/background-completion.service.js';
 import * as knowledgeGraphService from '../graph/knowledge-graph.service.js';
 import logger from '../utils/logger.js';
 import { formatRelativeTime } from './time-utils.js';
@@ -52,7 +51,9 @@ Only return the JSON array, no other text.`;
  * Extract facts from a conversation using LLM
  */
 export async function extractFactsFromMessages(
-  messages: Array<{ role: string; content: string }>
+  messages: Array<{ role: string; content: string }>,
+  userId?: string,
+  sessionId?: string
 ): Promise<ExtractedFact[]> {
   // Only look at user messages for fact extraction
   const userMessages = messages
@@ -63,16 +64,25 @@ export async function extractFactsFromMessages(
   if (!userMessages.trim()) return [];
 
   try {
-    // Use local Ollama qwen2.5:3b for fast fact extraction
-    const response = await createCompletion(
-      'ollama',
-      config.ollama.chatModel,
-      [
+    const response = await createBackgroundCompletionWithFallback({
+      userId,
+      sessionId,
+      feature: 'memory_curation',
+      messages: [
         { role: 'system', content: EXTRACTION_PROMPT },
         { role: 'user', content: `Extract facts from:\n\n${userMessages}` },
       ],
-      { temperature: 0.1, maxTokens: 4000 }
-    );
+      temperature: 0.1,
+      maxTokens: 6000,
+      ...(userId ? {
+        loggingContext: {
+          userId,
+          sessionId,
+          source: 'memory',
+          nodeName: 'fact_extraction',
+        },
+      } : {}),
+    });
 
     const content = response.content || '[]';
 
@@ -266,7 +276,7 @@ export async function processConversationFacts(
   intentId?: string | null
 ): Promise<void> {
   try {
-    const extractedFacts = await extractFactsFromMessages(messages);
+    const extractedFacts = await extractFactsFromMessages(messages, userId, sessionId);
 
     for (const fact of extractedFacts) {
       const lastUserMessage = messages.filter(m => m.role === 'user').pop();
@@ -293,7 +303,9 @@ export async function processConversationFacts(
  * Generate conversation summary for long-term storage
  */
 export async function generateConversationSummary(
-  messages: Array<{ role: string; content: string }>
+  messages: Array<{ role: string; content: string }>,
+  userId?: string,
+  sessionId?: string
 ): Promise<{
   summary: string;
   topics: string[];
@@ -307,11 +319,11 @@ export async function generateConversationSummary(
       .map(m => `${m.role === 'user' ? 'User' : 'Luna'}: ${m.content}`)
       .join('\n\n');
 
-    // Use local Ollama qwen2.5:3b for summaries
-    const response = await createCompletion(
-      'ollama',
-      config.ollama.chatModel,
-      [
+    const response = await createBackgroundCompletionWithFallback({
+      userId,
+      sessionId,
+      feature: 'context_summary',
+      messages: [
         {
           role: 'system',
           content: `Summarize this conversation concisely. Output JSON only:
@@ -325,8 +337,17 @@ Only return the JSON object, no other text.`
         },
         { role: 'user', content: conversation },
       ],
-      { temperature: 0.3, maxTokens: 2000 }
-    );
+      temperature: 0.3,
+      maxTokens: 4000,
+      ...(userId ? {
+        loggingContext: {
+          userId,
+          sessionId,
+          source: 'memory',
+          nodeName: 'conversation_summary',
+        },
+      } : {}),
+    });
 
     const content = response.content || '';
     const jsonMatch = content.match(/\{[\s\S]*\}/);

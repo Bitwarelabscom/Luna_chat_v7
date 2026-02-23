@@ -1004,7 +1004,16 @@ Create a plan to accomplish this task. Include:
   const result = await councilService.createCompletionWithConfig(provider, model, [
     { role: 'system', content: systemPrompt },
     { role: 'user', content: userPrompt },
-  ], { temperature: 0.7, maxTokens: 1500 });
+  ], {
+    temperature: 0.7,
+    maxTokens: 1500,
+    loggingContext: {
+      userId,
+      sessionId,
+      source: 'autonomous',
+      nodeName: 'autonomous_task_plan',
+    },
+  });
 
   return result.content;
 }
@@ -1688,7 +1697,16 @@ Provide your perspective in 2-3 concise paragraphs. Be specific and insightful.`
       const result = await councilService.createCompletionWithConfig(provider, model, [
         { role: 'system', content: `You are ${perspective.name}, providing expert analysis.` },
         { role: 'user', content: prompt },
-      ], { temperature: 0.8, maxTokens: 500 });
+      ], {
+        temperature: 0.8,
+        maxTokens: 500,
+        loggingContext: {
+          userId,
+          sessionId,
+          source: 'autonomous',
+          nodeName: `expert_${perspective.name.toLowerCase()}`,
+        },
+      });
 
       discussionParts.push(`\n**${perspective.name}:**\n${result.content}`);
 

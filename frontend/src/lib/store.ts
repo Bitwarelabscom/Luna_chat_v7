@@ -110,7 +110,7 @@ interface ChatState {
   loadSessions: () => Promise<void>;
   loadArchivedSessions: () => Promise<void>;
   loadSession: (id: string) => Promise<void>;
-  createSession: (mode?: 'assistant' | 'companion' | 'voice' | 'dj_luna') => Promise<Session>;
+  createSession: (mode?: 'assistant' | 'companion' | 'voice' | 'dj_luna' | 'ceo_luna') => Promise<Session>;
   archiveSession: (id: string) => Promise<void>;
   restoreSession: (id: string) => Promise<void>;
   deleteSession: (id: string) => Promise<void>;
@@ -130,7 +130,7 @@ interface ChatState {
   setStartupSuggestions: (suggestions: string[]) => void;
   clearStartupSuggestions: () => void;
   setIsLoadingStartup: (loading: boolean) => void;
-  fetchSuggestions: (mode: 'assistant' | 'companion' | 'voice' | 'dj_luna') => Promise<void>;
+  fetchSuggestions: (mode: 'assistant' | 'companion' | 'voice' | 'dj_luna' | 'ceo_luna') => Promise<void>;
   // Browser action
   setBrowserAction: (action: BrowserAction | null) => void;
   // Video action
@@ -313,7 +313,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   clearStartupSuggestions: () => set({ startupSuggestions: [] }),
   setIsLoadingStartup: (loading) => set({ isLoadingStartup: loading }),
   fetchSuggestions: async (mode) => {
-    const suggestionMode = mode === 'assistant' ? 'assistant' : 'companion';
+    const suggestionMode = (mode === 'assistant' || mode === 'ceo_luna') ? 'assistant' : 'companion';
     try {
       const result = await chatApi.getSuggestions(suggestionMode);
       set({ startupSuggestions: result.suggestions });

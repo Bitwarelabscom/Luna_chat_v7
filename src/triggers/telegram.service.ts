@@ -15,6 +15,7 @@ import { config } from '../config/index.js';
 import * as intentService from '../intents/intent.service.js';
 import * as newsfetcherService from '../autonomous/newsfetcher.service.js';
 import * as sandbox from '../abilities/sandbox.service.js';
+import * as ceoService from '../ceo/ceo.service.js';
 
 // ============================================
 // Telegram Idle Timer System
@@ -701,13 +702,18 @@ export async function updateLastMessageTime(userId: string): Promise<void> {
 /**
  * Get or create a Telegram chat session for a user
  */
-async function getOrCreateTelegramSession(userId: string): Promise<string> {
+async function getOrCreateTelegramSession(
+  userId: string,
+  mode: 'companion' | 'ceo_luna' = 'companion'
+): Promise<string> {
+  const title = mode === 'ceo_luna' ? 'Telegram CEO' : 'Telegram';
+
   // Check for existing Telegram session
   const result = await pool.query(
     `SELECT id FROM sessions
-     WHERE user_id = $1 AND title = 'Telegram'
+     WHERE user_id = $1 AND title = $2
      ORDER BY created_at DESC LIMIT 1`,
-    [userId]
+    [userId, title]
   );
 
   if (result.rows.length > 0) {
@@ -717,11 +723,11 @@ async function getOrCreateTelegramSession(userId: string): Promise<string> {
   // Create new Telegram session
   const session = await sessionService.createSession({
     userId,
-    title: 'Telegram',
-    mode: 'companion',
+    title,
+    mode,
   });
 
-  logger.info('Created Telegram session', { userId, sessionId: session.id });
+  logger.info('Created Telegram session', { userId, sessionId: session.id, mode, title });
 
   return session.id;
 }
@@ -731,9 +737,12 @@ async function getOrCreateTelegramSession(userId: string): Promise<string> {
  */
 async function handleChatMessage(
   connection: TelegramConnection,
-  text: string
+  text: string,
+  options: { mode?: 'companion' | 'ceo_luna' } = {}
 ): Promise<void> {
   try {
+    const mode = options.mode || 'companion';
+
     // Send typing indicator
     await telegramRequest('sendChatAction', {
       chat_id: connection.chatId,
@@ -741,14 +750,14 @@ async function handleChatMessage(
     });
 
     // Get or create session
-    const sessionId = await getOrCreateTelegramSession(connection.userId);
+    const sessionId = await getOrCreateTelegramSession(connection.userId, mode);
 
     // Process message through Luna
     const response = await chatService.processMessage({
       sessionId,
       userId: connection.userId,
       message: text,
-      mode: 'companion',
+      mode,
       source: 'telegram',
     });
 
@@ -778,6 +787,7 @@ async function handleChatMessage(
     logger.info('Telegram chat message processed', {
       userId: connection.userId,
       sessionId,
+      mode,
       inputLength: text.length,
       outputLength: response.content.length,
     });
@@ -851,7 +861,7 @@ export async function processUpdate(update: TelegramUpdate): Promise<void> {
   if (text === '/help') {
     await sendTelegramMessage(
       chatId,
-      'Luna Telegram Commands:\n\n/start - Get started\n/list - Quick actions menu\n/status - Check connection status\n/sum - Summarize conversation\n/intents - List active intents\n/news [topic] - Fetch latest interesting news\n/elpris - Run workspace elpris.py\n/unlink - Disconnect from Luna\n/help - Show this help\n\nOr just send me a message to chat!\n\nYou can also send images - I will describe them for you!'
+      'Luna Telegram Commands:\n\n/start - Get started\n/list - Quick actions menu\n/status - Check connection status\n/sum - Summarize conversation\n/intents - List active intents\n/news [topic] - Fetch latest interesting news\n/elpris - Run workspace elpris.py\n/unlink - Disconnect from Luna\n/help - Show this help\n\nCEO chat mode:\n/ceo <message> - Route message to CEO Luna\n\nCEO tracking commands:\nceo status | ceo daily | ceo brief | ceo audit\nexpense ... | income ... | build ... | experiment ... | lead ... | project ...\nautopost list | autopost show <id> | autopost draft ... | autopost approve ...\n\nOr just send me a message to chat!\n\nYou can also send images - I will describe them for you!'
     );
     return;
   }
@@ -895,6 +905,25 @@ export async function processUpdate(update: TelegramUpdate): Promise<void> {
   // For other messages, process as chat if user is linked
   const connection = await getConnectionByChatId(chatId);
   if (connection) {
+    if (/^\/ceo(\s|$)/i.test(text)) {
+      const ceoMessage = text.replace(/^\/ceo\s*/i, '').trim();
+      if (!ceoMessage) {
+        await sendTelegramMessage(chatId, 'Usage: /ceo <your business message>');
+        return;
+      }
+
+      await handleChatMessage(connection, ceoMessage, { mode: 'ceo_luna' });
+      return;
+    }
+
+    const ceoResult = await ceoService.handleTelegramCommand(connection.userId, text);
+    if (ceoResult.handled) {
+      if (ceoResult.response) {
+        await sendTelegramMessage(chatId, ceoResult.response);
+      }
+      return;
+    }
+
     // Route to Luna chat
     await handleChatMessage(connection, text);
   } else {

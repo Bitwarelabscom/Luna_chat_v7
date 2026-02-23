@@ -141,6 +141,16 @@ export async function createChatCompletion(
 
   const modelToUse = model || config.openai.model;
   const startTime = Date.now();
+  const activityMessages = messages.map(m => ({
+    role: m.role,
+    content: m.content,
+    tool_calls: m.tool_calls,
+    tool_call_id: m.tool_call_id,
+  }));
+  const activityTools = tools?.map(t => ({
+    name: t.function.name,
+    description: t.function.description,
+  }));
 
   // Helper to log LLM call if logging context is provided
   const logActivity = (result: ChatCompletionResult) => {
@@ -162,16 +172,8 @@ export async function createChatCompletion(
         undefined, // reasoning
         {
           // Full request details for debugging/optimization
-          messages: messages.map(m => ({
-            role: m.role,
-            content: m.content,
-            tool_calls: m.tool_calls,
-            tool_call_id: m.tool_call_id,
-          })),
-          tools: tools?.map(t => ({
-            name: t.function.name,
-            description: t.function.description,
-          })),
+          messages: activityMessages,
+          tools: activityTools,
           temperature,
           maxTokens: resolvedMaxTokens,
           numCtx: provider === 'ollama_tertiary' ? tertiaryNumCtx : undefined,
@@ -189,125 +191,71 @@ export async function createChatCompletion(
     }
   };
 
+  const logErrorActivity = (errorMessage: string) => {
+    if (loggingContext) {
+      const durationMs = Date.now() - startTime;
+      activityHelpers.logLLMCall(
+        loggingContext.userId,
+        loggingContext.sessionId,
+        loggingContext.turnId,
+        loggingContext.nodeName,
+        modelToUse,
+        provider,
+        {
+          input: 0,
+          output: 0,
+        },
+        durationMs,
+        undefined,
+        undefined,
+        {
+          messages: activityMessages,
+          tools: activityTools,
+          temperature,
+          maxTokens: resolvedMaxTokens,
+          numCtx: provider === 'ollama_tertiary' ? tertiaryNumCtx : undefined,
+          response: {
+            content: errorMessage.slice(0, 2000),
+            finishReason: 'error',
+          },
+        }
+      ).catch(() => {});
+    }
+  };
+
   // Route Sanhedrin to native provider (no tool support)
   if (provider === 'sanhedrin') {
     if (tools && tools.length > 0) {
       throw new Error('Sanhedrin provider does not support tool calling. Use a different provider for voice chat.');
     }
-    const sanhedrinProvider = await import('./providers/sanhedrin.provider.js');
-    const result = await sanhedrinProvider.createCompletion(
-      modelToUse,
-      messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
-      { temperature, maxTokens: resolvedMaxTokens }
-    );
-    const completionResult: ChatCompletionResult = {
-      content: result.content,
-      tokensUsed: result.tokensUsed,
-      promptTokens: 0,
-      completionTokens: 0,
-      toolCalls: undefined,
-      finishReason: 'stop',
-    };
-    logActivity(completionResult);
-    return completionResult;
-  }
-
-  // Route Moonshot to native provider (OpenAI SDK compatible but has its own stream handling)
-  if (provider === 'moonshot') {
-    const moonshotProvider = await import('./providers/moonshot.provider.js');
-    const result = await moonshotProvider.createCompletion(
-      modelToUse,
-      messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
-      { temperature, maxTokens: resolvedMaxTokens }
-    );
-    const completionResult: ChatCompletionResult = {
-      content: result.content,
-      tokensUsed: result.tokensUsed,
-      promptTokens: result.inputTokens || 0,
-      completionTokens: result.outputTokens || 0,
-      toolCalls: undefined, // Moonshot tool calling is limited, use native for now
-      finishReason: 'stop',
-    };
-    logActivity(completionResult);
-    return completionResult;
-  }
-
-  // Route Ollama to native provider when no tools are needed.
-  // When tools ARE present, fall through to the OpenAI SDK path below --
-  // Ollama exposes an OpenAI-compatible API that supports tool calling for
-  // models like llama3.1, llama3.2, mistral-nemo, etc.
-  if ((provider === 'ollama' || provider === 'ollama_secondary' || provider === 'ollama_tertiary') && (!tools || tools.length === 0)) {
-    let ollamaProvider;
-    if (provider === 'ollama') {
-      ollamaProvider = await import('./providers/ollama.provider.js');
-    } else if (provider === 'ollama_secondary') {
-      ollamaProvider = await import('./providers/ollama-secondary.provider.js');
-    } else {
-      ollamaProvider = await import('./providers/ollama-tertiary.provider.js');
-    }
-    const result = await ollamaProvider.createCompletion(
-      modelToUse,
-      messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
-      provider === 'ollama_tertiary'
-        ? { temperature, maxTokens: resolvedMaxTokens, numCtx: tertiaryNumCtx }
-        : { temperature, maxTokens: resolvedMaxTokens }
-    );
-    const completionResult: ChatCompletionResult = {
-      content: result.content,
-      tokensUsed: result.tokensUsed,
-      promptTokens: 0,
-      completionTokens: 0,
-      toolCalls: undefined,
-      finishReason: 'stop',
-    };
-    logActivity(completionResult);
-    return completionResult;
-  }
-
-  // Route Google AI to native provider (Gemini doesn't support tools via OpenAI SDK here yet)
-  if (provider === 'google') {
-    const googleProvider = await import('./providers/google.provider.js');
-    const result = await googleProvider.createCompletion(
-      modelToUse,
-      messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
-      { temperature, maxTokens: resolvedMaxTokens }
-    );
-    const completionResult: ChatCompletionResult = {
-      content: result.content,
-      tokensUsed: result.tokensUsed,
-      promptTokens: 0,
-      completionTokens: 0,
-      toolCalls: undefined,
-      finishReason: 'stop',
-    };
-    logActivity(completionResult);
-    return completionResult;
-  }
-
-  // Route Anthropic to native provider (required for tool calling, also works without tools)
-  if (provider === 'anthropic') {
-    if (tools && tools.length > 0) {
-      logger.debug('Routing to native Anthropic provider for tool calling', { model: modelToUse });
-      const result = await anthropicProvider.createCompletionWithTools(
+    try {
+      const sanhedrinProvider = await import('./providers/sanhedrin.provider.js');
+      const result = await sanhedrinProvider.createCompletion(
         modelToUse,
-        messages as anthropicProvider.ToolMessage[],
-        tools as anthropicProvider.OpenAITool[],
+        messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
         { temperature, maxTokens: resolvedMaxTokens }
       );
       const completionResult: ChatCompletionResult = {
         content: result.content,
         tokensUsed: result.tokensUsed,
-        promptTokens: result.promptTokens,
-        completionTokens: result.completionTokens,
-        toolCalls: result.toolCalls as OpenAI.Chat.Completions.ChatCompletionMessageToolCall[],
-        finishReason: result.finishReason,
+        promptTokens: 0,
+        completionTokens: 0,
+        toolCalls: undefined,
+        finishReason: 'stop',
       };
       logActivity(completionResult);
       return completionResult;
-    } else {
-      // No tools - use regular Anthropic completion
-      logger.debug('Routing to native Anthropic provider (no tools)', { model: modelToUse });
-      const result = await anthropicProvider.createCompletion(
+    } catch (error) {
+      logErrorActivity((error as Error).message || 'Sanhedrin completion failed');
+      throw error;
+    }
+  }
+
+  // Route Moonshot to native provider (OpenAI SDK compatible but has its own stream handling)
+  if (provider === 'moonshot') {
+    try {
+      const moonshotProvider = await import('./providers/moonshot.provider.js');
+      const result = await moonshotProvider.createCompletion(
         modelToUse,
         messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
         { temperature, maxTokens: resolvedMaxTokens }
@@ -317,11 +265,122 @@ export async function createChatCompletion(
         tokensUsed: result.tokensUsed,
         promptTokens: result.inputTokens || 0,
         completionTokens: result.outputTokens || 0,
+        toolCalls: undefined, // Moonshot tool calling is limited, use native for now
+        finishReason: 'stop',
+      };
+      logActivity(completionResult);
+      return completionResult;
+    } catch (error) {
+      logErrorActivity((error as Error).message || 'Moonshot completion failed');
+      throw error;
+    }
+  }
+
+  // Route Ollama to native provider when no tools are needed.
+  // When tools ARE present, fall through to the OpenAI SDK path below --
+  // Ollama exposes an OpenAI-compatible API that supports tool calling for
+  // models like llama3.1, llama3.2, mistral-nemo, etc.
+  if ((provider === 'ollama' || provider === 'ollama_secondary' || provider === 'ollama_tertiary') && (!tools || tools.length === 0)) {
+    try {
+      let ollamaProvider;
+      if (provider === 'ollama') {
+        ollamaProvider = await import('./providers/ollama.provider.js');
+      } else if (provider === 'ollama_secondary') {
+        ollamaProvider = await import('./providers/ollama-secondary.provider.js');
+      } else {
+        ollamaProvider = await import('./providers/ollama-tertiary.provider.js');
+      }
+      const result = await ollamaProvider.createCompletion(
+        modelToUse,
+        messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
+        provider === 'ollama_tertiary'
+          ? { temperature, maxTokens: resolvedMaxTokens, numCtx: tertiaryNumCtx }
+          : { temperature, maxTokens: resolvedMaxTokens }
+      );
+      const completionResult: ChatCompletionResult = {
+        content: result.content,
+        tokensUsed: result.tokensUsed,
+        promptTokens: 0,
+        completionTokens: 0,
         toolCalls: undefined,
         finishReason: 'stop',
       };
       logActivity(completionResult);
       return completionResult;
+    } catch (error) {
+      logErrorActivity((error as Error).message || 'Ollama completion failed');
+      throw error;
+    }
+  }
+
+  // Route Google AI to native provider (Gemini doesn't support tools via OpenAI SDK here yet)
+  if (provider === 'google') {
+    try {
+      const googleProvider = await import('./providers/google.provider.js');
+      const result = await googleProvider.createCompletion(
+        modelToUse,
+        messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
+        { temperature, maxTokens: resolvedMaxTokens }
+      );
+      const completionResult: ChatCompletionResult = {
+        content: result.content,
+        tokensUsed: result.tokensUsed,
+        promptTokens: 0,
+        completionTokens: 0,
+        toolCalls: undefined,
+        finishReason: 'stop',
+      };
+      logActivity(completionResult);
+      return completionResult;
+    } catch (error) {
+      logErrorActivity((error as Error).message || 'Google completion failed');
+      throw error;
+    }
+  }
+
+  // Route Anthropic to native provider (required for tool calling, also works without tools)
+  if (provider === 'anthropic') {
+    try {
+      if (tools && tools.length > 0) {
+        logger.debug('Routing to native Anthropic provider for tool calling', { model: modelToUse });
+        const result = await anthropicProvider.createCompletionWithTools(
+          modelToUse,
+          messages as anthropicProvider.ToolMessage[],
+          tools as anthropicProvider.OpenAITool[],
+          { temperature, maxTokens: resolvedMaxTokens }
+        );
+        const completionResult: ChatCompletionResult = {
+          content: result.content,
+          tokensUsed: result.tokensUsed,
+          promptTokens: result.promptTokens,
+          completionTokens: result.completionTokens,
+          toolCalls: result.toolCalls as OpenAI.Chat.Completions.ChatCompletionMessageToolCall[],
+          finishReason: result.finishReason,
+        };
+        logActivity(completionResult);
+        return completionResult;
+      } else {
+        // No tools - use regular Anthropic completion
+        logger.debug('Routing to native Anthropic provider (no tools)', { model: modelToUse });
+        const result = await anthropicProvider.createCompletion(
+          modelToUse,
+          messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
+          { temperature, maxTokens: resolvedMaxTokens }
+        );
+        const completionResult: ChatCompletionResult = {
+          content: result.content,
+          tokensUsed: result.tokensUsed,
+          promptTokens: result.inputTokens || 0,
+          completionTokens: result.outputTokens || 0,
+          toolCalls: undefined,
+          finishReason: 'stop',
+        };
+        logActivity(completionResult);
+        return completionResult;
+      }
+    } catch (error) {
+      logErrorActivity((error as Error).message || 'Anthropic completion failed');
+      throw error;
     }
   }
 
@@ -417,6 +476,7 @@ export async function createChatCompletion(
       );
 
     if (shouldFallbackFromOpenRouter) {
+      logErrorActivity(errorMessage);
       const fallbackModel = 'gpt-5-nano';
       logger.warn('OpenRouter free model failed, falling back to OpenAI', {
         fromProvider: provider,
@@ -431,6 +491,7 @@ export async function createChatCompletion(
         model: fallbackModel,
       });
     }
+    logErrorActivity(errorMessage);
 
     logger.error('Chat completion error', {
       error: errorMessage,
@@ -454,11 +515,59 @@ export async function* streamChatCompletion(
     maxTokens,
     provider = 'openai',
     model,
+    loggingContext,
   } = options;
   const resolvedMaxTokens = maxTokens ?? (provider === 'ollama_tertiary' ? 8192 : 4096);
 
   const client = getClient(provider);
   const modelToUse = model || config.openai.model;
+  const startTime = Date.now();
+  let fullContent = '';
+  let fullReasoning = '';
+  let activityLogged = false;
+  let tokensUsed = 0;
+  let promptTokens = 0;
+  let completionTokens = 0;
+
+  const logStreamActivity = (finishReason: string, inputTokens: number, outputTokens: number) => {
+    if (loggingContext && !activityLogged) {
+      activityLogged = true;
+      const durationMs = Date.now() - startTime;
+      activityHelpers.logLLMCall(
+        loggingContext.userId,
+        loggingContext.sessionId,
+        loggingContext.turnId,
+        loggingContext.nodeName,
+        modelToUse,
+        provider,
+        {
+          input: inputTokens,
+          output: outputTokens,
+        },
+        durationMs,
+        undefined,
+        fullReasoning || undefined,
+        {
+          messages: messages.map(m => ({
+            role: m.role,
+            content: m.content,
+            tool_calls: m.tool_calls,
+            tool_call_id: m.tool_call_id,
+          })),
+          tools: tools?.map(t => ({
+            name: t.function.name,
+            description: t.function.description,
+          })),
+          temperature,
+          maxTokens: resolvedMaxTokens,
+          response: {
+            content: fullContent,
+            finishReason,
+          },
+        }
+      ).catch(() => {});
+    }
+  };
 
   try {
     // Use max_completion_tokens for OpenAI (newer models), max_tokens for others
@@ -492,10 +601,6 @@ export async function* streamChatCompletion(
       stream_options: { include_usage: true },
     });
 
-    let tokensUsed = 0;
-    let promptTokens = 0;
-    let completionTokens = 0;
-
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta as any;
 
@@ -508,18 +613,29 @@ export async function* streamChatCompletion(
       // Handle reasoning content (OpenAI o1/o3, xAI Grok)
       const reasoningContent = delta?.reasoning_content || delta?.reasoning;
       if (reasoningContent) {
+        fullReasoning += reasoningContent;
         yield { type: 'reasoning', content: reasoningContent, done: false };
       }
 
       if (delta?.content) {
+        fullContent += delta.content;
         yield { type: 'content', content: delta.content, done: false };
       }
 
       if (chunk.choices[0]?.finish_reason) {
+        logStreamActivity(String(chunk.choices[0]?.finish_reason), promptTokens, completionTokens);
         yield { type: 'done', content: '', done: true, tokensUsed, promptTokens, completionTokens };
       }
     }
+
+    // Some providers may end a stream without finish_reason.
+    // Ensure activity still logs and consumers always receive a terminal done chunk.
+    if (!activityLogged) {
+      logStreamActivity('stop', promptTokens, completionTokens);
+      yield { type: 'done', content: '', done: true, tokensUsed, promptTokens, completionTokens };
+    }
   } catch (error) {
+    logStreamActivity('error', promptTokens, completionTokens);
     logger.error('Streaming error', {
       error: (error as Error).message,
       provider,

@@ -627,8 +627,22 @@ export async function createCompletionWithConfig(
   provider: string,
   model: string,
   messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
-  options: { temperature?: number; maxTokens?: number } = {}
+  options: {
+    temperature?: number;
+    maxTokens?: number;
+    loggingContext?: {
+      userId: string;
+      sessionId?: string;
+      turnId?: string;
+      source: string;
+      nodeName: string;
+    };
+  } = {}
 ): Promise<{ content: string }> {
   // Cast provider to the expected type - the model config service returns valid provider IDs
-  return createCompletion(provider as Parameters<typeof createCompletion>[0], model, messages, options);
+  return createCompletion(provider as Parameters<typeof createCompletion>[0], model, messages, {
+    temperature: options.temperature,
+    maxTokens: options.maxTokens,
+    loggingContext: options.loggingContext,
+  });
 }

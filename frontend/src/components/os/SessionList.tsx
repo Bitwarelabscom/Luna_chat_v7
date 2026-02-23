@@ -109,6 +109,11 @@ export function SessionList() {
       setShowModeSelector(false);
       return;
     }
+    if (mode === 'ceo_luna') {
+      openApp('ceo-luna');
+      setShowModeSelector(false);
+      return;
+    }
     const session = await createSession(mode);
     await loadSession(session.id);
     setShowModeSelector(false);

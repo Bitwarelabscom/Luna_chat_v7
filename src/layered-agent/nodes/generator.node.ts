@@ -205,6 +205,13 @@ export async function draftNode(
       {
         temperature: 0.7,
         maxTokens: state.mode === 'voice' ? 200 : 2000,
+        loggingContext: {
+          userId,
+          sessionId: state.session_id,
+          turnId: state.turn_id,
+          source: 'layered-agent',
+          nodeName: 'generator_draft',
+        },
       }
     );
 
@@ -278,6 +285,13 @@ export async function repairNode(
       {
         temperature: 0.5, // Lower temperature for repair
         maxTokens: state.mode === 'voice' ? 200 : 2000,
+        loggingContext: {
+          userId,
+          sessionId: state.session_id,
+          turnId: state.turn_id,
+          source: 'layered-agent',
+          nodeName: 'generator_repair',
+        },
       }
     );
 

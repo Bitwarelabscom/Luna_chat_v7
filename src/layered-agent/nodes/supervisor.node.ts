@@ -9,11 +9,12 @@
 import type { GraphState } from '../schemas/graph-state.js';
 import { SupervisorVerdictSchema, type SupervisorVerdict } from '../schemas/graph-state.js';
 import { renderRubricForPrompt, renderNormsForPrompt } from '../schemas/identity.js';
-import { createCompletion } from '../../llm/router.js';
+import { createBackgroundCompletionWithFallback } from '../../llm/background-completion.service.js';
 import logger from '../../utils/logger.js';
 
 export interface SupervisorInput {
   state: GraphState;
+  userId: string;
 }
 
 export interface TokenUsage {
@@ -159,7 +160,7 @@ function quickViolationCheck(draft: string, state: GraphState): SupervisorVerdic
 export async function supervisorNode(
   input: SupervisorInput
 ): Promise<SupervisorOutput> {
-  const { state } = input;
+  const { state, userId } = input;
 
   logger.debug('Supervisor node executing', {
     sessionId: state.session_id,
@@ -187,21 +188,27 @@ export async function supervisorNode(
   }
 
   try {
-    // Use groq llama-3.1-8b-instant for fast, cheap compliance checking
+    // Use configurable Background AI model with fallback for compliance checking
     const prompt = buildSupervisorPrompt(state);
 
-    const response = await createCompletion(
-      'groq',
-      'llama-3.1-8b-instant',
-      [
+    const response = await createBackgroundCompletionWithFallback({
+      userId,
+      sessionId: state.session_id,
+      feature: 'supervisor_critique',
+      messages: [
         { role: 'system', content: SUPERVISOR_SYSTEM_PROMPT },
         { role: 'user', content: prompt },
       ],
-      {
-        temperature: 0.1, // Low temperature for consistent judgments
-        maxTokens: 500,
+      temperature: 0.1, // Low temperature for consistent judgments
+      maxTokens: 500,
+      loggingContext: {
+        userId,
+        sessionId: state.session_id,
+        turnId: state.turn_id,
+        source: 'layered-agent',
+        nodeName: 'supervisor',
       }
-    );
+    });
 
     const verdict = parseVerdict(response.content || '');
 

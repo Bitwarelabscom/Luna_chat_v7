@@ -104,7 +104,7 @@ Generate ONLY Luna's greeting.`;
 export async function generateStartupMessage(
   userId: string,
   sessionId: string,
-  mode: 'assistant' | 'companion' | 'voice' | 'dj_luna'
+  mode: 'assistant' | 'companion' | 'voice' | 'dj_luna' | 'ceo_luna'
 ): Promise<StartupResult | null> {
   // Assistant mode: no startup message
   if (mode === 'assistant') {
@@ -124,6 +124,26 @@ export async function generateStartupMessage(
       model: 'static',
     });
     return { message, suggestions: ['Synthwave', 'Epic Orchestral', 'Lo-fi Hip Hop'] };
+  }
+
+  if (mode === 'ceo_luna') {
+    logger.info('Generating startup message for CEO Luna mode', { sessionId });
+    const content = 'CEO Luna online. Share priorities, costs, leads, experiments, or blockers. I will focus on execution and growth.';
+    const message = await sessionService.addMessage({
+      sessionId,
+      role: 'assistant',
+      content,
+      tokensUsed: 0,
+      model: 'static',
+    });
+    return {
+      message,
+      suggestions: [
+        'Set this week top 3 priorities',
+        'Review funnel and lead generation gaps',
+        'Plan a 7-day marketing experiment',
+      ],
+    };
   }
 
   logger.info('Generating startup message', { userId, sessionId, mode });

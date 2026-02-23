@@ -1,7 +1,6 @@
 import { query, queryOne } from '../db/postgres.js';
 import type { Session, SessionCreate, Message, MessageCreate } from '../types/index.js';
-import { createCompletion } from '../llm/router.js';
-import { config } from '../config/index.js';
+import { createBackgroundCompletionWithFallback } from '../llm/background-completion.service.js';
 import logger from '../utils/logger.js';
 import * as memorycoreClient from '../memory/memorycore.client.js';
 
@@ -9,7 +8,7 @@ interface DbSession {
   id: string;
   user_id: string;
   title: string;
-  mode: 'assistant' | 'companion' | 'voice' | 'dj_luna';
+  mode: 'assistant' | 'companion' | 'voice' | 'dj_luna' | 'ceo_luna';
   is_archived: boolean;
   created_at: Date;
   updated_at: Date;
@@ -122,7 +121,7 @@ export async function getUserSessions(
 export async function updateSession(
   sessionId: string,
   userId: string,
-  updates: { title?: string; mode?: 'assistant' | 'companion' | 'voice' | 'dj_luna'; isArchived?: boolean }
+  updates: { title?: string; mode?: 'assistant' | 'companion' | 'voice' | 'dj_luna' | 'ceo_luna'; isArchived?: boolean }
 ): Promise<Session | null> {
   const setClauses: string[] = [];
   const values: unknown[] = [];
@@ -344,7 +343,10 @@ async function fetchAttachmentAnalysis(documentIds: string[]): Promise<any[]> {
   }));
 }
 
-export async function generateSessionTitle(messages: Message[]): Promise<string> {
+export async function generateSessionTitle(
+  messages: Message[],
+  options?: { userId?: string; sessionId?: string }
+): Promise<string> {
   const firstUserMessage = messages.find((m) => m.role === 'user');
   if (!firstUserMessage) return 'New Chat';
 
@@ -354,19 +356,28 @@ export async function generateSessionTitle(messages: Message[]): Promise<string>
   if (content.length <= 40) return content;
 
   try {
-    // Use local Ollama qwen2.5:3b to generate a concise title
-    const response = await createCompletion(
-      'ollama',
-      config.ollama.chatModel,
-      [
+    const response = await createBackgroundCompletionWithFallback({
+      userId: options?.userId,
+      sessionId: options?.sessionId,
+      feature: 'context_summary',
+      messages: [
         {
           role: 'system',
           content: 'Generate a short chat title (3-6 words max) summarizing the user message. Reply with ONLY the title, nothing else.'
         },
         { role: 'user', content: content },
       ],
-      { temperature: 0.3, maxTokens: 100 }
-    );
+      temperature: 0.3,
+      maxTokens: 240,
+      ...(options?.userId ? {
+        loggingContext: {
+          userId: options.userId,
+          sessionId: options.sessionId,
+          source: 'session',
+          nodeName: 'session_title',
+        },
+      } : {}),
+    });
 
     const title = (response.content || '').trim().replace(/^["']|["']$/g, '');
     if (title && title.length > 0 && title.length <= 60) {

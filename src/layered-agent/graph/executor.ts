@@ -336,7 +336,7 @@ async function executeNode(
     }
 
     case 'critique': {
-      const result = await supervisorNode({ state });
+      const result = await supervisorNode({ state, userId });
       return { state: result.state, tokenUsage: result.tokenUsage };
     }
 

@@ -450,6 +450,31 @@ Use code execution for calculations when helpful.${EM_DASH_RULE}`,
     tools: ['code_execution'],
     isDefault: false,
   },
+  marketing: {
+    name: 'marketing',
+    description: 'Marketing strategy, positioning, channel planning, and growth experiments',
+    systemPrompt: `You are a senior growth and marketing strategist. Your job is to:
+- Turn business goals into concrete marketing plans
+- Define positioning, ICP, messaging, and offer clarity
+- Propose channel strategies with expected impact and effort
+- Design experiments with hypothesis, metric, and decision rule
+- Produce practical campaign copy and launch checklists
+
+OPERATING RULES:
+- Prefer measurable outcomes over vague advice
+- Always include assumptions, risks, and constraints
+- Focus on distribution and conversion, not just content volume
+- Keep recommendations lean for pre-revenue and founder-led teams
+
+OUTPUT STYLE:
+- Start with the highest-leverage action
+- Then provide a 7-day plan with clear steps
+- Include success metrics and stop/continue criteria${EM_DASH_RULE}`,
+    model: 'o4-mini',
+    temperature: 0.4,
+    tools: [],
+    isDefault: false,
+  },
   planner: {
     name: 'planner',
     description: 'Task planning and organization',
@@ -469,6 +494,7 @@ Available specialists:
 - researcher: Finds information, data, facts (needs specific search topics)
 - analyst: Performs calculations, data analysis (needs specific data or results to analyze)
 - writer: Creates content, synthesizes information
+- marketing: Plans positioning, channels, campaigns, and growth experiments
 
 CODING AGENTS - You have TWO coding specialists with different strengths:
 
@@ -503,7 +529,7 @@ Rules:
 - Use "dependsOn" to list step numbers that must complete first
 - Steps with no dependencies use an empty array: []
 - Be VERY specific in task descriptions - include what to search for, what to analyze, etc.
-- Only use the agents listed above (researcher, analyst, writer, coder-claude, coder-gemini, coder-codex)${EM_DASH_RULE}`,
+- Only use the agents listed above (researcher, analyst, writer, marketing, coder-claude, coder-gemini, coder-codex)${EM_DASH_RULE}`,
     model: 'o4-mini',
     temperature: 0.4,
     tools: [],
@@ -620,7 +646,7 @@ Output JSON only:
 {
   "action": "retry_same|modify_task|switch_agent|abort",
   "modifiedTask": "new task text if action is modify_task",
-  "newAgent": "researcher|coder-claude|coder-gemini|coder-codex|writer|analyst if action is switch_agent",
+  "newAgent": "researcher|coder-claude|coder-gemini|coder-codex|writer|analyst|marketing if action is switch_agent",
   "explanation": "brief explanation of your reasoning"
 }
 
@@ -631,6 +657,7 @@ Available agents:
 - coder-codex: BALANCED CODER - Practical implementation, focused patches, test-oriented delivery
 - writer: Creative writing, content synthesis, drafting
 - analyst: Data analysis, calculations, insights
+- marketing: Go-to-market strategy, channel plans, messaging, growth experiments
 
 CODING AGENT FAILOVER:
 - If coder-claude fails on a simple task, suggest switch to coder-gemini
@@ -640,7 +667,7 @@ CODING AGENT FAILOVER:
 
 IMPORTANT: Only suggest switch_agent if the current agent type is clearly wrong for the task.
 Most failures should retry_same (transient) or modify_task (unclear requirements).${EM_DASH_RULE}`,
-    model: 'qwen2.5:3b', // Use lightweight local model for fast debugging
+    model: 'llama3.2:3b', // Lightweight local model fallback metadata
     temperature: 0.2,
     tools: [],
     isDefault: false,
@@ -1745,7 +1772,7 @@ export async function* orchestrateTaskStream(
     maxConcurrency: config.orchestration?.maxConcurrency ?? 3,
     maxRetries: config.orchestration?.maxRetries ?? 3,
     enableSummarization: config.orchestration?.enableSummarization ?? true,
-    summarizationModel: config.ollama?.chatModel ?? 'qwen2.5:3b',
+    summarizationModel: config.ollama?.chatModel ?? 'llama3.2:3b',
     lockedCodingAgent: lockedCodingAgent ?? undefined,
   };
 

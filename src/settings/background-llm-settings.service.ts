@@ -11,7 +11,8 @@ export type BackgroundLlmFeature =
   | 'news_filter'
   | 'research_synthesis'
   | 'session_gap_analysis'
-  | 'knowledge_verification';
+  | 'knowledge_verification'
+  | 'supervisor_critique';
 
 export interface FeatureModelSelection {
   provider: ProviderId;
@@ -96,6 +97,11 @@ export const BACKGROUND_LLM_FEATURES: BackgroundLlmFeatureMeta[] = [
     label: 'Knowledge Verification',
     description: 'Verifies synthesized research before embedding into memory.',
   },
+  {
+    id: 'supervisor_critique',
+    label: 'Supervisor Critique',
+    description: 'Compliance review of layered-agent drafts before final output.',
+  },
 ];
 
 export const DEFAULT_BACKGROUND_LLM_SETTINGS: BackgroundLlmSettings = {
@@ -139,6 +145,10 @@ export const DEFAULT_BACKGROUND_LLM_SETTINGS: BackgroundLlmSettings = {
     primary: { provider: 'ollama', model: 'llama3.2:3b' },
     fallback: { provider: 'openai', model: 'gpt-5-mini' },
   },
+  supervisor_critique: {
+    primary: { provider: 'ollama_tertiary', model: 'HoseaDev/qwen2.5-7b-instruct-q4-gguf:latest' },
+    fallback: { provider: 'openai', model: 'gpt-5-mini' },
+  },
 };
 
 interface DbSettingsRow {
@@ -179,6 +189,7 @@ function mergeWithDefaults(raw: unknown): BackgroundLlmSettings {
     research_synthesis: sanitizeFeatureConfig(obj.research_synthesis, DEFAULT_BACKGROUND_LLM_SETTINGS.research_synthesis),
     session_gap_analysis: sanitizeFeatureConfig(obj.session_gap_analysis, DEFAULT_BACKGROUND_LLM_SETTINGS.session_gap_analysis),
     knowledge_verification: sanitizeFeatureConfig(obj.knowledge_verification, DEFAULT_BACKGROUND_LLM_SETTINGS.knowledge_verification),
+    supervisor_critique: sanitizeFeatureConfig(obj.supervisor_critique, DEFAULT_BACKGROUND_LLM_SETTINGS.supervisor_critique),
   };
 }
 
@@ -214,6 +225,7 @@ export async function updateBackgroundLlmSettings(
     research_synthesis: updates.research_synthesis ? sanitizeFeatureConfig(updates.research_synthesis, current.research_synthesis) : current.research_synthesis,
     session_gap_analysis: updates.session_gap_analysis ? sanitizeFeatureConfig(updates.session_gap_analysis, current.session_gap_analysis) : current.session_gap_analysis,
     knowledge_verification: updates.knowledge_verification ? sanitizeFeatureConfig(updates.knowledge_verification, current.knowledge_verification) : current.knowledge_verification,
+    supervisor_critique: updates.supervisor_critique ? sanitizeFeatureConfig(updates.supervisor_critique, current.supervisor_critique) : current.supervisor_critique,
   };
 
   await query(

@@ -490,7 +490,7 @@ export async function replyToEmail(
  * Get unread emails, gated through the security gatekeeper.
  * When gatekeeper is disabled, wraps emails with minimal untrusted framing.
  */
-export async function getLunaUnreadEmailsGated(): Promise<{
+export async function getLunaUnreadEmailsGated(userId?: string): Promise<{
   emails: SanitizedEmail[];
   quarantinedCount: number;
 }> {
@@ -504,14 +504,14 @@ export async function getLunaUnreadEmailsGated(): Promise<{
     };
   }
 
-  const { passed, quarantinedCount } = await gatekeeper.sanitizeEmailBatch(raw);
+  const { passed, quarantinedCount } = await gatekeeper.sanitizeEmailBatch(raw, userId);
   return { emails: passed, quarantinedCount };
 }
 
 /**
  * Check inbox (recent emails), gated through the security gatekeeper.
  */
-export async function checkLunaInboxGated(limit: number = 10): Promise<{
+export async function checkLunaInboxGated(limit: number = 10, userId?: string): Promise<{
   emails: SanitizedEmail[];
   quarantinedCount: number;
 }> {
@@ -524,7 +524,7 @@ export async function checkLunaInboxGated(limit: number = 10): Promise<{
     };
   }
 
-  const { passed, quarantinedCount } = await gatekeeper.sanitizeEmailBatch(raw);
+  const { passed, quarantinedCount } = await gatekeeper.sanitizeEmailBatch(raw, userId);
   return { emails: passed, quarantinedCount };
 }
 
@@ -532,7 +532,7 @@ export async function checkLunaInboxGated(limit: number = 10): Promise<{
  * Fetch single email by UID, gated through the security gatekeeper.
  * Returns null if quarantined or not found.
  */
-export async function fetchEmailByUidGated(uid: number): Promise<SanitizedEmail | null> {
+export async function fetchEmailByUidGated(uid: number, userId?: string): Promise<SanitizedEmail | null> {
   const raw = await localEmail.fetchEmailByUid(uid);
   if (!raw) return null;
 
@@ -540,7 +540,7 @@ export async function fetchEmailByUidGated(uid: number): Promise<SanitizedEmail 
     return bypassSanitize(raw);
   }
 
-  return gatekeeper.sanitizeEmail(raw);
+  return gatekeeper.sanitizeEmail(raw, userId);
 }
 
 /**

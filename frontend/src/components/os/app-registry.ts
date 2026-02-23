@@ -23,6 +23,7 @@ import {
   Hash,
   Code2,
   Gamepad2,
+  Briefcase,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -50,7 +51,8 @@ export type AppId =
   | 'canvas'
   | 'games'
   | 'rpg'
-  | 'dj-luna';
+  | 'dj-luna'
+  | 'ceo-luna';
 
 export interface AppConfig {
   id: AppId;
@@ -258,6 +260,15 @@ export const appConfig: Record<AppId, AppConfig> = {
     showInDock: true,
     keepAlive: true,
   },
+  'ceo-luna': {
+    id: 'ceo-luna',
+    title: 'CEO Luna',
+    icon: Briefcase,
+    color: 'from-slate-500 to-gray-700',
+    defaultSize: { width: 1400, height: 860 },
+    showInDock: true,
+    keepAlive: true,
+  },
 };
 
 // Apps to show in the dock (in order)
@@ -284,6 +295,7 @@ export const dockApps: AppId[] = [
   'autonomous-learning',
   'games',
   'dj-luna',
+  'ceo-luna',
 ];
 
 export default appConfig;

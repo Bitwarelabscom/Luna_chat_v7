@@ -82,7 +82,7 @@ export interface RouterContext {
   sessionId: string;
 
   /** Current session mode */
-  mode?: 'assistant' | 'companion' | 'voice' | 'dj_luna';
+  mode?: 'assistant' | 'companion' | 'voice' | 'dj_luna' | 'ceo_luna';
 
   /** Source of the message */
   source?: 'web' | 'telegram' | 'api' | 'voice';

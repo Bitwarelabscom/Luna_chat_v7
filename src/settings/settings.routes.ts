@@ -63,7 +63,7 @@ const updateUserSettingsSchema = z.object({
   crtFlicker: z.boolean().optional(),
   language: z.string().optional(),
   notifications: z.boolean().optional(),
-  defaultMode: z.enum(['assistant', 'companion']).optional(),
+  defaultMode: z.enum(['assistant', 'companion', 'voice', 'dj_luna', 'ceo_luna']).optional(),
   // Locale settings
   timeFormat: z.enum(['12h', '24h']).optional(),
   dateFormat: z.enum(['DD/MM/YYYY', 'MM/DD/YYYY', 'YYYY-MM-DD']).optional(),
@@ -499,6 +499,7 @@ const updateBackgroundLlmSettingsSchema = z.object({
     research_synthesis: featureModelConfigSchema.optional(),
     session_gap_analysis: featureModelConfigSchema.optional(),
     knowledge_verification: featureModelConfigSchema.optional(),
+    supervisor_critique: featureModelConfigSchema.optional(),
   }),
 });
 

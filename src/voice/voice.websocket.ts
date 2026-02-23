@@ -187,7 +187,13 @@ async function processTextCommand(
           messages,
           model: 'gpt-4o', // Force fast model for voice
           provider: 'openai',
-          maxTokens: 300
+          maxTokens: 300,
+          loggingContext: {
+            userId,
+            sessionId: sessionId || undefined,
+            source: 'voice-websocket',
+            nodeName: 'voice_ws_text_stream',
+          },
       });
       let loggedReasoningVisible = false;
 
@@ -315,7 +321,13 @@ async function processUtterance(
           messages,
           model: 'gpt-4o', // Force fast model for voice
           provider: 'openai',
-          maxTokens: 300
+          maxTokens: 300,
+          loggingContext: {
+            userId,
+            sessionId: sessionId || undefined,
+            source: 'voice-websocket',
+            nodeName: 'voice_ws_audio_stream',
+          },
       });
       let loggedReasoningVisible = false;
 

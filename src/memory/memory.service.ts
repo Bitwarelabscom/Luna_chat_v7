@@ -578,7 +578,7 @@ export async function processConversationMemory(
 
     // Generate and store summary if enough filtered messages
     if (filteredMessages.length >= 4) {
-      const summaryData = await factsService.generateConversationSummary(filteredMessages);
+      const summaryData = await factsService.generateConversationSummary(filteredMessages, userId, sessionId);
       if (summaryData) {
         await embeddingService.storeConversationSummary(
           sessionId,

@@ -3,8 +3,7 @@
  * Compresses step outputs to prevent context window bloat
  */
 
-import { createCompletion } from '../llm/router.js';
-import { config } from '../config/index.js';
+import { createBackgroundCompletionWithFallback } from '../llm/background-completion.service.js';
 import logger from '../utils/logger.js';
 
 // ============================================================================
@@ -37,7 +36,7 @@ Rules:
 - Maximum 5 key facts`;
 
 const MIN_LENGTH_FOR_SUMMARIZATION = 500;
-const MAX_SUMMARY_TOKENS = 500;
+const MAX_SUMMARY_TOKENS = 1200;
 
 // ============================================================================
 // Main Function
@@ -50,7 +49,8 @@ const MAX_SUMMARY_TOKENS = 500;
 export async function summarizeAgentOutput(
   agentName: string,
   output: string,
-  originalTask: string
+  originalTask: string,
+  userId?: string
 ): Promise<SummarizationResult> {
   const originalLength = output.length;
 
@@ -72,15 +72,23 @@ Output:
 ${output.slice(0, 8000)}${output.length > 8000 ? '\n...[truncated]' : ''}`;
 
   try {
-    const result = await createCompletion(
-      'ollama',
-      config.ollama.chatModel, // qwen2.5:3b by default
-      [
+    const result = await createBackgroundCompletionWithFallback({
+      userId,
+      feature: 'context_summary',
+      messages: [
         { role: 'system', content: SUMMARIZER_SYSTEM_PROMPT },
         { role: 'user', content: prompt },
       ],
-      { temperature: 0.1, maxTokens: MAX_SUMMARY_TOKENS }
-    );
+      temperature: 0.1,
+      maxTokens: MAX_SUMMARY_TOKENS,
+      ...(userId ? {
+        loggingContext: {
+          userId,
+          source: 'summarizer',
+          nodeName: 'agent_output_summary',
+        },
+      } : {}),
+    });
 
     const content = result.content || '{}';
     const jsonMatch = content.match(/\{[\s\S]*\}/);
@@ -135,7 +143,8 @@ ${output.slice(0, 8000)}${output.length > 8000 ? '\n...[truncated]' : ''}`;
  * Batch summarize multiple outputs
  */
 export async function summarizeMultipleOutputs(
-  outputs: Array<{ agentName: string; output: string; task: string }>
+  outputs: Array<{ agentName: string; output: string; task: string }>,
+  userId?: string
 ): Promise<Map<string, SummarizationResult>> {
   const results = new Map<string, SummarizationResult>();
 
@@ -145,7 +154,7 @@ export async function summarizeMultipleOutputs(
     const batch = outputs.slice(i, i + concurrency);
     const batchResults = await Promise.all(
       batch.map((item) =>
-        summarizeAgentOutput(item.agentName, item.output, item.task)
+        summarizeAgentOutput(item.agentName, item.output, item.task, userId)
       )
     );
 

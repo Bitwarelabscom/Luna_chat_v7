@@ -80,7 +80,13 @@ export async function analyze(text: string, userId?: string): Promise<MessageSen
       {
         temperature: 0.1,
         maxTokens: 60,
-        loggingContext: { userId: userId ?? '', source: 'sentiment', nodeName: 'sentiment' },
+        ...(userId ? {
+          loggingContext: {
+            userId,
+            source: 'sentiment',
+            nodeName: 'sentiment',
+          },
+        } : {}),
       }
     );
 

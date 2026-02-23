@@ -1,6 +1,6 @@
 import { pool } from '../db/index.js';
 import { redis } from '../db/redis.js';
-import { createCompletion } from '../llm/router.js';
+import { createBackgroundCompletionWithFallback } from '../llm/background-completion.service.js';
 import logger from '../utils/logger.js';
 
 type SuggestionMode = 'assistant' | 'companion';
@@ -98,12 +98,18 @@ export async function generateSuggestions(userId: string, mode: SuggestionMode):
   try {
     const recentTopics = await getRecentTopics(userId);
     const prompt = buildPrompt(mode, recentTopics);
-    const completion = await createCompletion(
-      'ollama',
-      'phi3:mini',
-      [{ role: 'user', content: prompt }],
-      { temperature: 0.7, maxTokens: 220 }
-    );
+    const completion = await createBackgroundCompletionWithFallback({
+      userId,
+      feature: 'context_summary',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.7,
+      maxTokens: 600,
+      loggingContext: {
+        userId,
+        source: 'suggestions',
+        nodeName: `suggestions_${mode}`,
+      },
+    });
 
     const suggestions = parseSuggestions(completion.content);
     if (suggestions.length === 0) {
@@ -176,4 +182,3 @@ export async function generateForAllActiveUsers(): Promise<void> {
     });
   }
 }
-

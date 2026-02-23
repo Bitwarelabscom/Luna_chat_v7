@@ -5,7 +5,7 @@
 
 import { PlanStep, AgentResult, AgentTask } from './agents.service.js';
 import { summarizeAgentOutput } from './summarizer.service.js';
-import { createCompletion } from '../llm/router.js';
+import { createBackgroundCompletionWithFallback } from '../llm/background-completion.service.js';
 import logger from '../utils/logger.js';
 
 // ============================================================================
@@ -55,7 +55,7 @@ const DEFAULT_CONFIG: DAGExecutorConfig = {
   maxConcurrency: 3,
   maxRetries: 3,
   enableSummarization: true,
-  summarizationModel: 'qwen2.5:3b',
+  summarizationModel: 'llama3.2:3b',
 };
 
 // Fixer agent system prompt
@@ -70,7 +70,7 @@ Output JSON only:
 {
   "action": "retry_same|modify_task|switch_agent|abort",
   "modifiedTask": "new task text if action is modify_task",
-  "newAgent": "researcher|coder-claude|coder-gemini|coder-codex|writer|analyst if action is switch_agent",
+  "newAgent": "researcher|coder-claude|coder-gemini|coder-codex|writer|analyst|marketing if action is switch_agent",
   "explanation": "brief explanation of your reasoning"
 }
 
@@ -81,6 +81,7 @@ Available agents:
 - coder-codex: BALANCED CODER - Practical implementation, focused patches, test-oriented delivery
 - writer: Creative writing, content synthesis, drafting
 - analyst: Data analysis, calculations, insights
+- marketing: Go-to-market strategy, channel plans, messaging, growth experiments
 
 CODING AGENT FAILOVER:
 - If coder-claude fails on a simple task, suggest switch to coder-gemini
@@ -347,7 +348,8 @@ export class DAGExecutor {
    */
   private async callFixer(
     node: ExecutionNode,
-    errorMessage: string
+    errorMessage: string,
+    userId: string
   ): Promise<FixerSuggestion> {
     const prompt = `A task has failed. Please analyze and suggest a fix.
 
@@ -359,15 +361,21 @@ Attempt: ${node.retryCount} of ${this.config.maxRetries}
 What should we do?`;
 
     try {
-      const result = await createCompletion(
-        'ollama',
-        this.config.summarizationModel,
-        [
+      const result = await createBackgroundCompletionWithFallback({
+        userId,
+        feature: 'session_gap_analysis',
+        messages: [
           { role: 'system', content: FIXER_SYSTEM_PROMPT },
           { role: 'user', content: prompt },
         ],
-        { temperature: 0.2, maxTokens: 500 }
-      );
+        temperature: 0.2,
+        maxTokens: 1200,
+        loggingContext: {
+          userId,
+          source: 'dag-executor',
+          nodeName: 'dag_fixer',
+        },
+      });
 
       const content = result.content || '{}';
       const jsonMatch = content.match(/\{[\s\S]*\}/);
@@ -433,7 +441,8 @@ What should we do?`;
               const summaryResult = await summarizeAgentOutput(
                 node.step.agent,
                 result.result,
-                node.step.task
+                node.step.task,
+                userId
               );
               this.summarizedResults.set(node.step.step, summaryResult.summary);
               logger.debug('Summarized step output', {
@@ -490,7 +499,7 @@ What should we do?`;
           }
 
           // Non-coding agent or second+ failure - call the fixer
-          const suggestion = await this.callFixer(node, result.result);
+          const suggestion = await this.callFixer(node, result.result, userId);
 
           onEvent({
             type: 'step_retrying',

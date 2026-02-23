@@ -12,7 +12,7 @@ import * as irc from './irc.service.js';
 import * as activity from '../activity/activity.service.js';
 import * as facts from '../memory/facts.service.js';
 import * as coderSettings from './coder-settings.service.js';
-import { createCompletion } from '../llm/router.js';
+import { createBackgroundCompletionWithFallback } from '../llm/background-completion.service.js';
 import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
 import { intentCache } from './intent-cache.service.js';
@@ -1052,6 +1052,7 @@ export async function detectAbilityIntentWithCache(
  * Use LLM to identify which fact the user wants to correct/delete
  */
 async function identifyFactToCorrect(
+  userId: string,
   message: string,
   userFacts: facts.UserFact[]
 ): Promise<{ factId: string | null; newValue?: string }> {
@@ -1081,15 +1082,21 @@ If they are deleting/forgetting, set newValue to null.
 Only return the JSON object.`;
 
   try {
-    const response = await createCompletion(
-      'ollama',
-      config.ollama.chatModel,
-      [
+    const response = await createBackgroundCompletionWithFallback({
+      userId,
+      feature: 'memory_curation',
+      messages: [
         { role: 'system', content: 'You identify facts from user messages. Output only valid JSON.' },
         { role: 'user', content: prompt },
       ],
-      { temperature: 0.1, maxTokens: 500 }
-    );
+      temperature: 0.1,
+      maxTokens: 1200,
+      loggingContext: {
+        userId,
+        source: 'orchestrator',
+        nodeName: 'fact_correction_match',
+      },
+    });
 
     const content = response.content || '{}';
     const jsonMatch = content.match(/\{[\s\S]*\}/);
@@ -1453,7 +1460,7 @@ export async function executeAbilityAction(
         }
 
         // Use LLM to identify which fact the user is referring to
-        const matchResult = await identifyFactToCorrect(message, userFacts);
+        const matchResult = await identifyFactToCorrect(userId, message, userFacts);
 
         if (!matchResult.factId) {
           // Couldn't identify the fact - ask for clarification

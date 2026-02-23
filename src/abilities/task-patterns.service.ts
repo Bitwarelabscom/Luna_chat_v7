@@ -1,5 +1,5 @@
 import { pool } from '../db/index.js';
-import { createCompletion } from '../llm/router.js';
+import { createBackgroundCompletionWithFallback } from '../llm/background-completion.service.js';
 import * as moodService from './mood.service.js';
 import logger from '../utils/logger.js';
 
@@ -131,7 +131,7 @@ async function updateCategoryStats(
     );
     if (taskResult.rows.length === 0) return;
 
-    const category = await categorizeTask(taskResult.rows[0].title);
+    const category = await categorizeTask(taskResult.rows[0].title, userId);
     if (!category) return;
 
     // Update or create category entry
@@ -168,12 +168,12 @@ async function updateCategoryStats(
 /**
  * Categorize a task based on its title
  */
-async function categorizeTask(title: string): Promise<string | null> {
+async function categorizeTask(title: string, userId: string): Promise<string | null> {
   try {
-    const response = await createCompletion(
-      'ollama',
-      'qwen2.5:1.5b',
-      [
+    const response = await createBackgroundCompletionWithFallback({
+      userId,
+      feature: 'intent_detection',
+      messages: [
         {
           role: 'system',
           content: `Categorize this task into ONE category. Categories:
@@ -183,8 +183,14 @@ Return only the category name, nothing else.`
         },
         { role: 'user', content: title }
       ],
-      { temperature: 0.1, maxTokens: 50 }
-    );
+      temperature: 0.1,
+      maxTokens: 180,
+      loggingContext: {
+        userId,
+        source: 'task-patterns',
+        nodeName: 'task_categorizer',
+      }
+    });
 
     const category = response.content?.trim().toLowerCase();
     const validCategories = ['work', 'health', 'household', 'personal', 'social', 'finance', 'learning', 'creative', 'errands', 'self-care'];

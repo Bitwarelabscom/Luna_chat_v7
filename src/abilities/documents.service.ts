@@ -172,7 +172,7 @@ export async function uploadDocument(
  */
 async function processDocument(
   docId: string,
-  _userId: string,
+  userId: string,
   storagePath: string,
   mimeType: string
 ): Promise<void> {
@@ -194,6 +194,10 @@ async function processDocument(
 5. Any notable details or elements
 
 Be detailed and specific so this description can be used for search and reference.`,
+          loggingContext: {
+            userId,
+            nodeName: 'document_image_analysis',
+          },
         });
         text = `[Image Analysis by ${analysis.model}]\n\n${analysis.description}`;
         logger.info('Image analyzed successfully', { docId, provider: analysis.provider, model: analysis.model });
