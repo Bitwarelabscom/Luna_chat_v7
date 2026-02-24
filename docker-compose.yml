@@ -223,7 +223,7 @@ services:
       # YouTube cookies for yt-dlp
       - ./secrets/youtube_cookies.txt:/app/secrets/youtube_cookies.txt:ro
       # Local media library (shows, videos, music)
-      - /mnt/data/media:/mnt/data/media:ro
+      - /mnt/data/media:/mnt/data/media:rw
     depends_on:
       luna-postgres:
         condition: service_healthy
@@ -461,7 +461,7 @@ services:
     container_name: luna-n8n
     restart: unless-stopped
     ports:
-      - "127.0.0.1:5678:5678"
+      - "0.0.0.0:5678:5678"
     environment:
       - N8N_HOST=luna-n8n
       - N8N_PORT=5678

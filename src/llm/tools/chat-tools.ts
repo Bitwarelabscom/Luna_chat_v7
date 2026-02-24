@@ -262,6 +262,22 @@ export const researchTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   },
 };
 
+export const sunoGenerateTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'suno_generate',
+    description: 'Trigger ambient music generation. Starts background jobs that create instrumental ambient tracks and save them to the music library. Check the Factory tab in DJ Luna to monitor progress.',
+    parameters: {
+      type: 'object',
+      properties: {
+        count: { type: 'number', description: 'Number of tracks to generate (1-10).' },
+        style_override: { type: 'string', description: 'Optional style override e.g. "dark drone, 60bpm, D minor". If omitted, Qwen AI picks creative styles.' },
+      },
+      required: ['count'],
+    },
+  },
+};
+
 export const n8nWebhookTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: 'function',
   function: {

@@ -2,6 +2,7 @@
 
 import { create } from 'zustand';
 import { workspaceApi } from './api/workspace';
+import type { SunoGeneration } from './api/suno';
 
 export interface SongMeta {
   title: string;
@@ -46,6 +47,10 @@ interface DJLunaState {
   // UI state
   showStartupModal: boolean;
 
+  // Generations (Suno factory)
+  generations: SunoGeneration[];
+  isLoadingGenerations: boolean;
+
   // Actions
   setCanvasContent: (content: string, markDirty?: boolean) => void;
   setActiveStyle: (style: string, presetId?: string | null) => void;
@@ -58,6 +63,8 @@ interface DJLunaState {
   setSessionId: (id: string) => void;
   setShowStartupModal: (show: boolean) => void;
   markCanvasClean: () => void;
+  triggerBatch: (count: number, style?: string) => Promise<void>;
+  pollGenerations: () => Promise<void>;
 }
 
 function slugify(text: string): string {
@@ -88,6 +95,8 @@ export const useDJLunaStore = create<DJLunaState>((set, get) => ({
   projects: [],
   isLoadingSongs: false,
   showStartupModal: true,
+  generations: [],
+  isLoadingGenerations: false,
 
   setCanvasContent: (content, markDirty = true) => {
     set({ canvasContent: content, canvasDirty: markDirty });
@@ -217,4 +226,28 @@ export const useDJLunaStore = create<DJLunaState>((set, get) => ({
   setShowStartupModal: (show: boolean) => set({ showStartupModal: show }),
 
   markCanvasClean: () => set({ canvasDirty: false }),
+
+  triggerBatch: async (count: number, style?: string) => {
+    const { triggerGeneration } = await import('./api/suno');
+    const result = await triggerGeneration(count, style);
+    // Prepend new pending generations to list
+    set((state) => ({
+      generations: [...result.generations, ...state.generations],
+    }));
+  },
+
+  pollGenerations: async () => {
+    const { isLoadingGenerations } = get();
+    if (isLoadingGenerations) return;
+    set({ isLoadingGenerations: true });
+    try {
+      const { getGenerations } = await import('./api/suno');
+      const result = await getGenerations(50);
+      set({ generations: result.generations });
+    } catch (err) {
+      console.error('Failed to poll generations:', err);
+    } finally {
+      set({ isLoadingGenerations: false });
+    }
+  },
 }));

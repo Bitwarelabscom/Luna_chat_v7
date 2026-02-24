@@ -1,0 +1,598 @@
+{
+  "name": "Suno Ambience Generator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "suno-generate",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": "suno-generate"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"received\": true, \"taskId\": \"{{ $json.taskId }}\"}",
+        "options": {}
+      },
+      "id": "respond-accepted",
+      "name": "Respond Accepted",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        460,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://10.0.0.30:11434/api/generate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"HoseaDev/qwen2.5-7b-instruct-q4-gguf:latest\",\n  \"stream\": false,\n  \"format\": \"json\",\n  \"prompt\": \"Output ONLY valid JSON with exactly these two fields: {\\\"title\\\": \\\"<3-5 word ambient title>\\\", \\\"texture_tags\\\": \\\"<3-4 sonic descriptors>\\\"}. Title: calm, poetic, atmospheric (e.g. \\\"Still Rain Kyoto\\\", \\\"Faded Polaroid Glow\\\", \\\"Midnight Moss Garden\\\"). Tags: specific acoustic textures e.g. \\\"soft felt piano, tape hiss, vinyl crackle\\\". Output JSON only, no explanation.\"\n}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "qwen-generate",
+      "name": "Qwen Generate Title",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Qwen response\nconst raw = $input.item.json;\nlet title = 'Ambient Drift';\nlet textureTags = 'soft pad, gentle pulse';\n\ntry {\n  const parsed = JSON.parse(raw.response || '{}');\n  title = parsed.title || title;\n  textureTags = parsed.texture_tags || textureTags;\n} catch(e) {\n  // Use defaults on parse error\n}\n\nconst body = $('Webhook Trigger').item.json.body || $('Webhook Trigger').item.json;\nconst styleOverride = body.style_override;\nconst taskId = body.taskId;\nconst userId = body.userId;\n\nconst bpm = Math.floor(Math.random() * 21) + 60;\nconst keys = ['D minor', 'A minor', 'C major', 'G major', 'E minor', 'F major'];\nconst key = keys[Math.floor(Math.random() * keys.length)];\n\nconst style = styleOverride || `${textureTags}, ${bpm}bpm, ${key}, instrumental, ambient`;\n\nconst sunoPrompt = '[Intro]\\n[Atmospheric Pad]\\n[Main Motif]\\n[Soft Texture]\\n[Light Harmonic Variation]\\n[Return to Main Motif]\\n[Outro]\\n[Fade Out]';\n\nreturn {\n  taskId,\n  userId,\n  title,\n  style,\n  bpm,\n  key,\n  sunoPayload: {\n    prompt: sunoPrompt,\n    tags: style,\n    title,\n    make_instrumental: true,\n    negative_tags: 'vocals, speech, lyrics, singing'\n  }\n};"
+      },
+      "id": "compiler",
+      "name": "Compiler",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://10.0.0.10:3000/api/custom_generate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.sunoPayload) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "suno-submit",
+      "name": "Suno Submit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract suno ID and carry forward compiler data\nconst response = $input.item.json;\nconst items = Array.isArray(response) ? response : [response];\nconst sunoId = items[0]?.id || '';\nconst compiler = $('Compiler').item.json;\n\nreturn {\n  taskId: compiler.taskId,\n  userId: compiler.userId,\n  title: compiler.title,\n  style: compiler.style,\n  bpm: compiler.bpm,\n  key: compiler.key,\n  sunoId\n};"
+      },
+      "id": "extract-id",
+      "name": "Extract Suno ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "unit": "seconds",
+        "value": 300
+      },
+      "id": "wait-1",
+      "name": "Wait 5min",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        1340,
+        300
+      ],
+      "webhookId": "suno-wait-1"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://10.0.0.10:3000/api/get?ids={{ $json.sunoId }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "poll-1",
+      "name": "Poll 1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1560,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const pollResponse = $input.item.json;\nconst items = Array.isArray(pollResponse) ? pollResponse : [pollResponse];\nconst track = items[0] || {};\nconst prev = $('Extract Suno ID').item.json;\nreturn {\n  taskId: prev.taskId,\n  userId: prev.userId,\n  title: prev.title,\n  style: prev.style,\n  bpm: prev.bpm,\n  key: prev.key,\n  sunoId: prev.sunoId,\n  trackStatus: track.status || 'unknown',\n  audioUrl: track.audio_url || '',\n  duration: track.metadata?.duration_formatted ? Math.round(track.duration || 0) : Math.round(track.duration || 0)\n};"
+      },
+      "id": "merge-1",
+      "name": "Merge Poll 1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1780,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.trackStatus }}",
+              "rightValue": "complete",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-1",
+      "name": "Done After 1?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "unit": "seconds",
+        "value": 60
+      },
+      "id": "wait-2",
+      "name": "Wait 40s (2)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        2220,
+        460
+      ],
+      "webhookId": "suno-wait-2"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://10.0.0.10:3000/api/get?ids={{ $json.sunoId }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "poll-2",
+      "name": "Poll 2",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        2440,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const pollResponse = $input.item.json;\nconst items = Array.isArray(pollResponse) ? pollResponse : [pollResponse];\nconst track = items[0] || {};\nconst prev = $('Merge Poll 1').item.json;\nreturn {\n  taskId: prev.taskId,\n  userId: prev.userId,\n  title: prev.title,\n  style: prev.style,\n  bpm: prev.bpm,\n  key: prev.key,\n  sunoId: prev.sunoId,\n  trackStatus: track.status || 'unknown',\n  audioUrl: track.audio_url || '',\n  duration: Math.round(track.duration || 0)\n};"
+      },
+      "id": "merge-2",
+      "name": "Merge Poll 2",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2660,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c2",
+              "leftValue": "={{ $json.trackStatus }}",
+              "rightValue": "complete",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-2",
+      "name": "Done After 2?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2880,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "unit": "seconds",
+        "value": 60
+      },
+      "id": "wait-3",
+      "name": "Wait 60s (3)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        3100,
+        620
+      ],
+      "webhookId": "suno-wait-3"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://10.0.0.10:3000/api/get?ids={{ $json.sunoId }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "poll-3",
+      "name": "Poll 3",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        3320,
+        620
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const pollResponse = $input.item.json;\nconst items = Array.isArray(pollResponse) ? pollResponse : [pollResponse];\nconst track = items[0] || {};\nconst prev = $('Merge Poll 2').item.json;\nreturn {\n  taskId: prev.taskId,\n  userId: prev.userId,\n  title: prev.title,\n  style: prev.style,\n  bpm: prev.bpm,\n  key: prev.key,\n  sunoId: prev.sunoId,\n  trackStatus: track.status || 'unknown',\n  audioUrl: track.audio_url || '',\n  duration: Math.round(track.duration || 0)\n};"
+      },
+      "id": "merge-3",
+      "name": "Merge Poll 3",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3540,
+        620
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c3",
+              "leftValue": "={{ $json.trackStatus }}",
+              "rightValue": "complete",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-3",
+      "name": "Done After 3?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3760,
+        620
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://luna-api:3003/api/webhooks/suno-complete",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"taskId\": \"{{ $json.taskId }}\",\n  \"userId\": \"{{ $json.userId }}\",\n  \"title\": \"{{ $json.title }}\",\n  \"style\": \"{{ $json.style }}\",\n  \"bpm\": {{ $json.bpm }},\n  \"key\": \"{{ $json.key }}\",\n  \"audioUrl\": \"{{ $json.audioUrl }}\",\n  \"duration\": {{ $json.duration }},\n  \"sunoId\": \"{{ $json.sunoId }}\"\n}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "success-callback",
+      "name": "Success Callback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        2220,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://luna-api:3003/api/webhooks/suno-complete",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"taskId\": \"{{ $json.taskId }}\",\n  \"status\": \"failed\",\n  \"error\": \"Track not complete after 160s of polling\"\n}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "failure-callback",
+      "name": "Failure Callback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        3980,
+        620
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Respond Accepted",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Qwen Generate Title",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qwen Generate Title": {
+      "main": [
+        [
+          {
+            "node": "Compiler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compiler": {
+      "main": [
+        [
+          {
+            "node": "Suno Submit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Suno Submit": {
+      "main": [
+        [
+          {
+            "node": "Extract Suno ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Suno ID": {
+      "main": [
+        [
+          {
+            "node": "Wait 40s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Poll 1": {
+      "main": [
+        [
+          {
+            "node": "Merge Poll 1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Poll 1": {
+      "main": [
+        [
+          {
+            "node": "Done After 1?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Done After 1?": {
+      "main": [
+        [
+          {
+            "node": "Success Callback",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait 40s (2)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 40s (2)": {
+      "main": [
+        [
+          {
+            "node": "Poll 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Poll 2": {
+      "main": [
+        [
+          {
+            "node": "Merge Poll 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Poll 2": {
+      "main": [
+        [
+          {
+            "node": "Done After 2?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Done After 2?": {
+      "main": [
+        [
+          {
+            "node": "Success Callback",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait 60s (3)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 60s (3)": {
+      "main": [
+        [
+          {
+            "node": "Poll 3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Poll 3": {
+      "main": [
+        [
+          {
+            "node": "Merge Poll 3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Poll 3": {
+      "main": [
+        [
+          {
+            "node": "Done After 3?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Done After 3?": {
+      "main": [
+        [
+          {
+            "node": "Success Callback",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failure Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 5min": {
+      "main": [
+        [
+          {
+            "node": "Poll 1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2026-02-23T00:00:00.000Z",
+  "versionId": "2"
+}

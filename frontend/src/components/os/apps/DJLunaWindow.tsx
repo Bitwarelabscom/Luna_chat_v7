@@ -1,16 +1,20 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useDJLunaStore } from '@/lib/dj-luna-store';
 import { DJLunaChat } from '@/components/dj-luna/DJLunaChat';
 import { LyricsCanvas } from '@/components/dj-luna/LyricsCanvas';
 import { SongList } from '@/components/dj-luna/SongList';
 import { StylePanel } from '@/components/dj-luna/StylePanel';
 import { StartupModal } from '@/components/dj-luna/StartupModal';
+import { GenerationsPanel } from '@/components/dj-luna/GenerationsPanel';
+
+type RightTab = 'songs' | 'style' | 'factory';
 
 export default function DJLunaWindow() {
   const { showStartupModal, loadSongList } = useDJLunaStore();
   const initialized = useRef(false);
+  const [rightTab, setRightTab] = useState<RightTab>('songs');
 
   useEffect(() => {
     if (!initialized.current) {
@@ -41,16 +45,30 @@ export default function DJLunaWindow() {
           <LyricsCanvas onRegenerateSection={handleRegenerateSection} />
         </div>
 
-        {/* Right: Song list + style panel */}
+        {/* Right: tabbed panel (Songs | Style | Factory) */}
         <div className="flex flex-col border-l border-gray-700 overflow-hidden" style={{ width: '30%', minWidth: 240 }}>
-          {/* Songs - top 60% */}
-          <div className="overflow-hidden" style={{ flex: '0 0 60%' }}>
-            <SongList />
+          {/* Tab bar */}
+          <div className="flex border-b border-gray-700 shrink-0">
+            {(['songs', 'style', 'factory'] as RightTab[]).map(tab => (
+              <button
+                key={tab}
+                onClick={() => setRightTab(tab)}
+                className={`flex-1 py-1.5 text-xs capitalize transition-colors ${
+                  rightTab === tab
+                    ? 'text-white border-b-2 border-purple-500'
+                    : 'text-gray-500 hover:text-gray-300'
+                }`}
+              >
+                {tab}
+              </button>
+            ))}
           </div>
 
-          {/* Style panel - bottom 40% */}
-          <div className="relative overflow-hidden" style={{ flex: '0 0 40%' }}>
-            <StylePanel />
+          {/* Tab content */}
+          <div className="flex-1 overflow-hidden">
+            {rightTab === 'songs' && <SongList />}
+            {rightTab === 'style' && <StylePanel />}
+            {rightTab === 'factory' && <GenerationsPanel />}
           </div>
         </div>
       </div>

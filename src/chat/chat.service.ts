@@ -63,6 +63,7 @@ import {
   listArtifactsTool,
   loadArtifactTool,
   getArtifactDownloadLinkTool,
+  sunoGenerateTool,
 } from '../llm/tools/index.js';
 import * as loadContextHandler from '../context/load-context.handler.js';
 import * as browserScreencast from '../abilities/browser-screencast.service.js';
@@ -129,6 +130,7 @@ import logger from '../utils/logger.js';
 import { sysmonTools, executeSysmonTool } from '../abilities/sysmon.service.js';
 import * as researchAgent from '../abilities/research.agent.service.js';
 import * as n8nService from '../abilities/n8n.service.js';
+import * as sunoService from '../abilities/suno-generator.service.js';
 import * as mcpService from '../mcp/mcp.service.js';
 import * as router from '../router/index.js';
 import type { RouterDecision } from '../router/router.types.js';
@@ -513,6 +515,20 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     };
   }
 
+  // CEO Luna / DJ Luna: never use nano route - always upgrade to pro minimum
+  if ((mode === 'ceo_luna' || mode === 'dj_luna') && routerDecision?.route === 'nano') {
+    logger.info('CEO/DJ Luna mode - upgrading route from nano to pro', {
+      userId,
+      sessionId,
+      mode,
+      originalRoute: routerDecision.route,
+    });
+    routerDecision = {
+      ...routerDecision,
+      route: 'pro',
+    };
+  }
+
   // Feature flag: Use layered agent architecture if enabled
   // EXCEPTIONS that fall through to legacy (faster) path:
   // - Browser intents (need tool execution)
@@ -605,8 +621,8 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     prefGuidelines,
     intentContext,
   ] = await Promise.all([
-    // Get user's model configuration - use fast model for smalltalk
-    getUserModelConfig(userId, isSmallTalkMessageLegacy ? 'smalltalk' : 'main_chat'),
+    // Get user's model configuration - use fast model for smalltalk, dedicated task for ceo/dj modes
+    getUserModelConfig(userId, isSmallTalkMessageLegacy ? 'smalltalk' : mode === 'ceo_luna' ? 'ceo_luna' : mode === 'dj_luna' ? 'dj_luna' : 'main_chat'),
     // Get user profile for personalization
     authService.getUserById(userId),
     // Get conversation history (higher limit for compression to work with)
@@ -814,7 +830,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   // CEO mode uses assistant toolset with stricter persona constraints
   let modeTools = mode === 'companion' ? companionTools : assistantTools;
   if (mode === 'dj_luna') {
-    modeTools = [searchTool, fetchUrlTool, youtubeSearchTool, mediaDownloadTool];
+    modeTools = [searchTool, fetchUrlTool, youtubeSearchTool, mediaDownloadTool, sunoGenerateTool];
   }
   if (mode === 'ceo_luna') {
     modeTools = [...modeTools, ceoNoteBuildTool];
@@ -1951,6 +1967,24 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
             content: `n8n error: ${(error as Error).message}`,
           } as ChatMessage);
         }
+      } else if (toolCall.function.name === 'suno_generate') {
+        const args = JSON.parse(toolCall.function.arguments || '{}');
+        logger.info('suno_generate tool called', { userId, count: args.count });
+        try {
+          const gens = await sunoService.triggerBatch(userId, args.count ?? 1, args.style_override);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Triggered ${gens.length} ambient track generation(s). Check the Factory tab in DJ Luna to monitor progress.`,
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('suno_generate tool failed', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Suno generation error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
       } else if (toolCall.function.name === 'load_context') {
         // Context loading tool - fetch session/intent context on demand
         const args = JSON.parse(toolCall.function.arguments || '{}');
@@ -2880,6 +2914,20 @@ export async function* streamMessage(
     };
   }
 
+  // CEO Luna / DJ Luna: never use nano route - always upgrade to pro minimum
+  if ((mode === 'ceo_luna' || mode === 'dj_luna') && routerDecision?.route === 'nano') {
+    logger.info('CEO/DJ Luna mode - upgrading route from nano to pro (streaming)', {
+      userId,
+      sessionId,
+      mode,
+      originalRoute: routerDecision.route,
+    });
+    routerDecision = {
+      ...routerDecision,
+      route: 'pro',
+    };
+  }
+
   // Feature flag: Use layered agent architecture if enabled
   // EXCEPTIONS that fall through to legacy (faster) path:
   // - Browser intents (need tool execution)
@@ -3233,8 +3281,8 @@ export async function* streamMessage(
     prefGuidelines,
     intentContext,
   ] = await Promise.all([
-    // Get user's model configuration - use fast model for smalltalk
-    getUserModelConfig(userId, isSmallTalkMessage ? 'smalltalk' : 'main_chat'),
+    // Get user's model configuration - use fast model for smalltalk, dedicated task for ceo/dj modes
+    getUserModelConfig(userId, isSmallTalkMessage ? 'smalltalk' : mode === 'ceo_luna' ? 'ceo_luna' : mode === 'dj_luna' ? 'dj_luna' : 'main_chat'),
     // Get user profile for personalization
     authService.getUserById(userId),
     // Get conversation history (higher limit for compression to work with)
@@ -3455,7 +3503,7 @@ export async function* streamMessage(
   // CEO mode uses assistant toolset with stricter persona constraints
   let modeTools = mode === 'companion' ? companionTools : assistantTools;
   if (mode === 'dj_luna') {
-    modeTools = [searchTool, fetchUrlTool, youtubeSearchTool, mediaDownloadTool];
+    modeTools = [searchTool, fetchUrlTool, youtubeSearchTool, mediaDownloadTool, sunoGenerateTool];
   }
   if (mode === 'ceo_luna') {
     modeTools = [...modeTools, ceoNoteBuildTool];
@@ -4616,6 +4664,25 @@ export async function* streamMessage(
             role: 'tool',
             tool_call_id: toolCall.id,
             content: `n8n error: ${(error as Error).message}`,
+          } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'suno_generate') {
+        const args = JSON.parse(toolCall.function.arguments || '{}');
+        yield { type: 'reasoning', content: `> Triggering ambient music generation (${args.count ?? 1} track(s))...\n` };
+        logger.info('suno_generate tool called (stream)', { userId, count: args.count });
+        try {
+          const gens = await sunoService.triggerBatch(userId, args.count ?? 1, args.style_override);
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Triggered ${gens.length} ambient track generation(s). Check the Factory tab in DJ Luna to monitor progress.`,
+          } as ChatMessage);
+        } catch (error) {
+          logger.error('suno_generate tool failed (stream)', { error: (error as Error).message });
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `Suno generation error: ${(error as Error).message}`,
           } as ChatMessage);
         }
       } else if (toolCall.function.name === 'load_context') {
