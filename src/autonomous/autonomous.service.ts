@@ -1098,7 +1098,7 @@ async function executeAction(sessionId: string, userId: string, userAvailable?: 
   } else if (actionLower.includes('collect') || (actionLower.includes('research') && actionLower.includes('add'))) {
     // Collect research
     actionTaken = await executeCollectResearchAction(sessionId, userId, action);
-  } else if (actionLower.includes('goal')) {
+  } else if (actionLower.startsWith('goal:')) {
     // Goal-related action
     actionTaken = await executeGoalAction(userId, action);
   } else if (actionLower.includes('research') || actionLower.includes('rss')) {
@@ -1135,22 +1135,66 @@ async function executeAction(sessionId: string, userId: string, userAvailable?: 
 }
 
 async function executeGoalAction(userId: string, action: string): Promise<string> {
-  // Parse and execute goal actions
-  if (action.toLowerCase().includes('create')) {
-    // Extract goal details and create
+  const lower = action.toLowerCase();
+
+  if (lower.includes('create')) {
+    // Parse title: try quoted string first, then text after "create"
+    let title = '';
+    let description = action;
+
+    const quotedMatch = action.match(/"([^"]+)"/);
+    if (quotedMatch) {
+      title = quotedMatch[1].trim();
+    } else {
+      // Strip "goal: create/update" or "goal: create" prefix and use remainder as title
+      const afterCreate = action.replace(/^goal\s*:\s*(create\/update|create|update)\s*/i, '').trim();
+      // If there's a " - " separator, first part is title, rest is description
+      const dashIdx = afterCreate.indexOf(' - ');
+      if (dashIdx > 0) {
+        title = afterCreate.slice(0, dashIdx).trim();
+        description = afterCreate.slice(dashIdx + 3).trim();
+      } else {
+        title = afterCreate || 'New goal';
+        description = action;
+      }
+    }
+
+    if (!title) {
+      return 'Goal action: could not parse title from action';
+    }
+
     const goal = await goalsService.createGoal(userId, {
       goalType: 'self_improvement',
-      title: 'New goal from autonomous session',
-      description: action,
+      title,
+      description,
       priority: 5,
       createdBy: 'luna',
     });
-    return `Created goal: ${goal.title}`;
-  } else if (action.toLowerCase().includes('complete')) {
-    return 'Marked goal progress';
+    return `Created goal: "${goal.title}"`;
+
+  } else if (lower.includes('update') || lower.includes('complete')) {
+    // Extract title to find the goal
+    const quotedMatch = action.match(/"([^"]+)"/);
+    const titleQuery = quotedMatch?.[1]?.trim();
+
+    if (titleQuery) {
+      // Find goal by title (case-insensitive)
+      const goals = await goalsService.getGoals(userId, { status: 'active' });
+      const match = goals.find(g => g.title.toLowerCase().includes(titleQuery.toLowerCase()));
+      if (match) {
+        const isComplete = lower.includes('complete') || lower.includes('done') || lower.includes('status: completed');
+        if (isComplete) {
+          await goalsService.updateGoal(match.id, userId, { status: 'completed' });
+          return `Completed goal: "${match.title}"`;
+        }
+        return `Found goal "${match.title}" - no specific update applied`;
+      }
+      return `Goal not found: "${titleQuery}"`;
+    }
+    return `Goal update: could not parse title from action`;
   }
 
-  return `Goal action: ${action}`;
+  return `Goal action recorded: ${action}`;
 }
 
 async function executeResearchAction(userId: string, _action: string, sessionId: string): Promise<string> {

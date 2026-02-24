@@ -507,7 +507,8 @@ async function buildSolContext(userId: string, deliberation: CouncilDeliberation
   parts.push('- "collect research: [URL or finding]" - Add to research collection');
   parts.push('- "write file: [filename] content: [content]" - Save a file to workspace');
   parts.push('- "read file: [filename]" - Read a file from workspace');
-  parts.push('- "goal: create/update [details]" - Work with goals');
+  parts.push('- "goal: create \\"Title Here\\" - optional description" - Create a new goal');
+  parts.push('- "goal: complete \\"Title Here\\"" - Mark a goal as completed');
   parts.push('- "research" - Refresh RSS feeds and research');
   parts.push('- "sleep" - End this cycle, nothing more to do');
 
