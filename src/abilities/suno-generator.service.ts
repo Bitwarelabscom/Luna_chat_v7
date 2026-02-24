@@ -86,48 +86,50 @@ export async function triggerBatch(
   const safeCount = Math.max(1, Math.min(10, Math.floor(count)));
   const generations: SunoGeneration[] = [];
 
+  // Insert all DB rows immediately so we can return right away
   for (let i = 0; i < safeCount; i++) {
-    // Insert pending row
     const result = await pool.query<GenerationRow>(
       `INSERT INTO suno_generations (user_id, style)
        VALUES ($1, $2)
        RETURNING *`,
       [userId, styleOverride || ''],
     );
-    const gen = rowToGeneration(result.rows[0]);
-
-    // Fire webhook - one per track for individual tracking
-    const webhookResult = await n8nService.executeWebhook(
-      'suno-generate',
-      {
-        taskId: gen.id,
-        userId,
-        count: 1,
-        style_override: styleOverride || null,
-      },
-      { userId },
-    );
-
-    if (!webhookResult.success) {
-      // Mark as failed immediately
-      await pool.query(
-        `UPDATE suno_generations SET status = 'failed', error_message = $1 WHERE id = $2`,
-        [webhookResult.error || 'Webhook trigger failed', gen.id],
-      );
-      gen.status = 'failed';
-      gen.errorMessage = webhookResult.error || 'Webhook trigger failed';
-    } else {
-      // Mark as processing
-      await pool.query(
-        `UPDATE suno_generations SET status = 'processing' WHERE id = $1`,
-        [gen.id],
-      );
-      gen.status = 'processing';
-    }
-
-    generations.push(gen);
-    logger.info('Suno generation triggered', { genId: gen.id, status: gen.status, userId });
+    generations.push(rowToGeneration(result.rows[0]));
   }
+
+  // Fire webhooks in background with 15s stagger between each.
+  // Suno-api uses Playwright internally and cannot handle concurrent browser ops.
+  const fireWebhooks = async () => {
+    for (let i = 0; i < generations.length; i++) {
+      if (i > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 15_000));
+      }
+      const gen = generations[i];
+      const webhookResult = await n8nService.executeWebhook(
+        'suno-generate',
+        { taskId: gen.id, userId, count: 1, style_override: styleOverride || null },
+        { userId },
+      );
+      if (!webhookResult.success) {
+        await pool.query(
+          `UPDATE suno_generations SET status = 'failed', error_message = $1 WHERE id = $2`,
+          [webhookResult.error || 'Webhook trigger failed', gen.id],
+        );
+        logger.warn('Suno webhook failed', { genId: gen.id, error: webhookResult.error });
+      } else {
+        await pool.query(
+          `UPDATE suno_generations SET status = 'processing' WHERE id = $1`,
+          [gen.id],
+        );
+        logger.info('Suno generation triggered', { genId: gen.id, userId });
+      }
+    }
+  };
+
+  // Don't await - fire and forget so the HTTP response returns immediately
+  fireWebhooks().catch((err) =>
+    logger.error('Suno batch webhook loop failed', { error: (err as Error).message }),
+  );
 
   return generations;
 }
