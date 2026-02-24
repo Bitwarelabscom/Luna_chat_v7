@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Copy, Save, RotateCcw, Clipboard } from 'lucide-react';
+import { Copy, Save, RotateCcw, Clipboard, Plus } from 'lucide-react';
 import { useDJLunaStore } from '@/lib/dj-luna-store';
 import { analyzeLineSyllables } from '@/lib/syllable-counter';
 
@@ -28,15 +28,22 @@ function SyllableGutter({ lines }: { lines: { count: number; isFlagged: boolean 
 }
 
 export function LyricsCanvas({ onRegenerateSection }: LyricsCanvasProps) {
-  const { canvasContent, currentSong, activeStyle, setCanvasContent, saveSong, canvasDirty } = useDJLunaStore();
+  const { canvasContent, currentSong, activeStyle, setCanvasContent, saveSong, newSong, canvasDirty } = useDJLunaStore();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [lineAnalysis, setLineAnalysis] = useState<ReturnType<typeof analyzeLineSyllables>>([]);
   const [hoveredSection, setHoveredSection] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [editableTitle, setEditableTitle] = useState<string>(currentSong?.title || 'Untitled');
+  const [showSaveAsPrompt, setShowSaveAsPrompt] = useState(false);
+  const [saveAsTitle, setSaveAsTitle] = useState('');
+  const [saveAsProject, setSaveAsProject] = useState('My Project');
 
   useEffect(() => {
     setEditableTitle(currentSong?.title || 'Untitled');
+    // Scroll textarea to top whenever a song is loaded - gives clear visual feedback
+    if (currentSong && textareaRef.current) {
+      textareaRef.current.scrollTop = 0;
+    }
   }, [currentSong]);
 
   useEffect(() => {
@@ -49,6 +56,12 @@ export function LyricsCanvas({ onRegenerateSection }: LyricsCanvasProps) {
   }, [setCanvasContent]);
 
   const handleSave = useCallback(async () => {
+    if (!currentSong) {
+      // Show Save As prompt instead
+      setSaveAsTitle(editableTitle !== 'Untitled' ? editableTitle : '');
+      setShowSaveAsPrompt(true);
+      return;
+    }
     setSaveStatus('saving');
     try {
       await saveSong();
@@ -58,7 +71,28 @@ export function LyricsCanvas({ onRegenerateSection }: LyricsCanvasProps) {
       setSaveStatus('error');
       setTimeout(() => setSaveStatus('idle'), 2000);
     }
-  }, [saveSong]);
+  }, [currentSong, saveSong, editableTitle]);
+
+  const handleSaveAs = useCallback(async () => {
+    const title = saveAsTitle.trim() || 'Untitled';
+    const project = saveAsProject.trim() || 'My Project';
+    // Pass current canvas content so newSong doesn't overwrite it with a blank template
+    newSong(title, project, canvasContent);
+    setShowSaveAsPrompt(false);
+    // saveSong reads from store so we need to call after state updates
+    // Use setTimeout to let Zustand flush the state update
+    setTimeout(async () => {
+      setSaveStatus('saving');
+      try {
+        await saveSong();
+        setSaveStatus('saved');
+        setTimeout(() => setSaveStatus('idle'), 2000);
+      } catch {
+        setSaveStatus('error');
+        setTimeout(() => setSaveStatus('idle'), 2000);
+      }
+    }, 50);
+  }, [saveAsTitle, saveAsProject, newSong, saveSong]);
 
   // Cmd/Ctrl+S to save
   useEffect(() => {
@@ -137,17 +171,18 @@ export function LyricsCanvas({ onRegenerateSection }: LyricsCanvasProps) {
           </button>
           <button
             onClick={handleSave}
-            disabled={!currentSong || saveStatus === 'saving'}
+            disabled={saveStatus === 'saving'}
             className={`flex items-center gap-1 px-2.5 py-1.5 text-xs rounded transition-colors ${
               saveStatus === 'saved' ? 'bg-green-700 text-white' :
               saveStatus === 'error' ? 'bg-red-700 text-white' :
+              !currentSong ? 'bg-gray-700 hover:bg-gray-600 text-gray-400' :
               canvasDirty ? 'bg-purple-600 hover:bg-purple-700 text-white' :
               'bg-gray-800 hover:bg-gray-700 text-gray-400'
             }`}
-            title="Save song (Cmd/Ctrl+S)"
+            title={currentSong ? 'Save song (Cmd/Ctrl+S)' : 'Create new song file to save'}
           >
-            <Save size={12} />
-            {saveStatus === 'saving' ? 'Saving...' : saveStatus === 'saved' ? 'Saved!' : saveStatus === 'error' ? 'Error' : 'Save'}
+            {!currentSong ? <Plus size={12} /> : <Save size={12} />}
+            {saveStatus === 'saving' ? 'Saving...' : saveStatus === 'saved' ? 'Saved!' : saveStatus === 'error' ? 'Error' : !currentSong ? 'Save As' : 'Save'}
           </button>
         </div>
       </div>
@@ -213,6 +248,53 @@ export function LyricsCanvas({ onRegenerateSection }: LyricsCanvasProps) {
             spellCheck={false}
           />
         </div>
+
+        {/* Save As prompt overlay */}
+        {showSaveAsPrompt && (
+          <div className="absolute inset-0 bg-gray-950/80 flex items-center justify-center z-20">
+            <div className="bg-gray-900 border border-gray-700 rounded-xl p-5 w-72 shadow-xl space-y-3">
+              <div className="text-sm font-semibold text-white">Save As</div>
+              <div className="space-y-2">
+                <div>
+                  <label className="text-xs text-gray-400 block mb-1">Song title</label>
+                  <input
+                    autoFocus
+                    value={saveAsTitle}
+                    onChange={(e) => setSaveAsTitle(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleSaveAs(); if (e.key === 'Escape') setShowSaveAsPrompt(false); }}
+                    placeholder="My Song"
+                    className="w-full bg-gray-800 border border-gray-700 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-purple-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-400 block mb-1">Project / Album</label>
+                  <input
+                    value={saveAsProject}
+                    onChange={(e) => setSaveAsProject(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleSaveAs(); if (e.key === 'Escape') setShowSaveAsPrompt(false); }}
+                    placeholder="My Project"
+                    className="w-full bg-gray-800 border border-gray-700 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-purple-500"
+                  />
+                </div>
+              </div>
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={handleSaveAs}
+                  disabled={!saveAsTitle.trim()}
+                  className="flex-1 py-1.5 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white text-sm rounded-lg transition-colors"
+                >
+                  Save
+                </button>
+                <button
+                  onClick={() => setShowSaveAsPrompt(false)}
+                  className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Flagged lines highlight overlay - rendered as absolutely positioned divs */}
         <div className="absolute inset-0 pointer-events-none overflow-hidden pl-10">

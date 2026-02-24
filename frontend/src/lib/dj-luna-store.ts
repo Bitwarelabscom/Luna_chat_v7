@@ -56,7 +56,7 @@ interface DJLunaState {
   setActiveStyle: (style: string, presetId?: string | null) => void;
   loadSong: (path: string) => Promise<void>;
   saveSong: () => Promise<void>;
-  newSong: (title: string, project: string) => void;
+  newSong: (title: string, project: string, initialContent?: string) => void;
   loadSongList: () => Promise<void>;
   addCustomPreset: (name: string, tags: string) => void;
   removeCustomPreset: (id: string) => void;
@@ -64,11 +64,18 @@ interface DJLunaState {
   setShowStartupModal: (show: boolean) => void;
   markCanvasClean: () => void;
   triggerBatch: (count: number, style?: string) => Promise<void>;
+  triggerSongGeneration: (title: string, lyrics: string, style: string) => Promise<void>;
   pollGenerations: () => Promise<void>;
 }
 
 function slugify(text: string): string {
-  return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  // Only strip filesystem-unsafe characters; preserve åäö and other Unicode
+  return text
+    .replace(/[/\\:*?"<>|]/g, '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
 }
 
 function parseFrontmatter(content: string): { meta: Record<string, string>; body: string } {
@@ -161,13 +168,16 @@ export const useDJLunaStore = create<DJLunaState>((set, get) => ({
     }
   },
 
-  newSong: (title: string, project: string) => {
+  newSong: (title: string, project: string, initialContent?: string) => {
     const slug = slugify(title);
     const path = `dj-luna/${project}/${slug}.md`;
     const song: SongMeta = { title, project, style: get().activeStyle, path, slug };
     set({
       currentSong: song,
-      canvasContent: '[Intro]\n\n[Verse 1]\n\n[Chorus]\n\n[Verse 2]\n\n[Chorus]\n\n[Outro]\n',
+      // If initialContent provided (Save As flow), preserve it; otherwise use blank template
+      canvasContent: initialContent !== undefined
+        ? initialContent
+        : '[Intro]\n\n[Verse 1]\n\n[Chorus]\n\n[Verse 2]\n\n[Chorus]\n\n[Outro]\n',
       canvasDirty: true,
     });
   },
@@ -176,16 +186,29 @@ export const useDJLunaStore = create<DJLunaState>((set, get) => ({
     set({ isLoadingSongs: true });
     try {
       const files = await workspaceApi.listFiles();
-      const songFiles = files.filter((f) => f.path.startsWith('dj-luna/') && f.name.endsWith('.md') && f.name !== 'styles.json');
+      const songFiles = files.filter((f) => f.path.startsWith('dj-luna/') && f.path.endsWith('.md') && !f.path.endsWith('styles.json'));
+
+      // Load frontmatter from each song file in parallel to get actual titles (preserves åäö)
+      const songDetails = await Promise.all(
+        songFiles.map(async (file) => {
+          const parts = file.path.split('/');
+          const projectName = parts.length >= 3 ? parts[1] : 'Unsorted';
+          const basenameTitle = (parts[parts.length - 1] ?? '').replace(/\.md$/, '').replace(/-/g, ' ');
+          try {
+            const { content } = await workspaceApi.getFile(file.path);
+            const { meta } = parseFrontmatter(content);
+            return { file, projectName, title: meta.title || basenameTitle };
+          } catch {
+            return { file, projectName, title: basenameTitle };
+          }
+        })
+      );
 
       const projectMap: Record<string, SongMeta[]> = {};
-      for (const file of songFiles) {
-        const parts = file.path.split('/');
-        // Expected: dj-luna/{project}/{slug}.md
-        const projectName = parts.length >= 3 ? parts[1] : 'Unsorted';
+      for (const { file, projectName, title } of songDetails) {
         if (!projectMap[projectName]) projectMap[projectName] = [];
         projectMap[projectName].push({
-          title: file.name.replace(/\.md$/, '').replace(/-/g, ' ').replace(/^\d+-/, ''),
+          title,
           project: projectName,
           style: '',
           path: file.path,
@@ -231,6 +254,14 @@ export const useDJLunaStore = create<DJLunaState>((set, get) => ({
     const { triggerGeneration } = await import('./api/suno');
     const result = await triggerGeneration(count, style);
     // Prepend new pending generations to list
+    set((state) => ({
+      generations: [...result.generations, ...state.generations],
+    }));
+  },
+
+  triggerSongGeneration: async (title: string, lyrics: string, style: string) => {
+    const { triggerGeneration } = await import('./api/suno');
+    const result = await triggerGeneration(1, style, lyrics, title);
     set((state) => ({
       generations: [...result.generations, ...state.generations],
     }));
