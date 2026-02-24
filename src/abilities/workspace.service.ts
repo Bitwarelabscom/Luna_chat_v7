@@ -50,22 +50,29 @@ export function getWorkspaceFileUrl(userId: string, filename: string): string {
 
 /**
  * Validate filename for security
+ * Allows nested paths (e.g. dj-luna/My Project/song.md) but prevents traversal.
  */
 function validateFilename(filename: string): { valid: boolean; error?: string } {
-  // Check for path traversal
-  if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+  // Prevent absolute paths and path traversal
+  if (path.isAbsolute(filename) || filename.includes('..') || filename.includes('\\')) {
     return { valid: false, error: 'Invalid filename - path traversal not allowed' };
   }
 
-  // Check extension
+  // Check each path segment is non-empty
+  const parts = filename.split('/');
+  for (const part of parts) {
+    if (!part) return { valid: false, error: 'Invalid filename - empty path segment' };
+  }
+
+  // Extension check on the last segment only
   const ext = path.extname(filename).toLowerCase();
   if (!ALLOWED_EXTENSIONS.has(ext)) {
     return { valid: false, error: `File extension "${ext}" not allowed. Allowed: ${[...ALLOWED_EXTENSIONS].join(', ')}` };
   }
 
   // Check filename length
-  if (filename.length > 255) {
-    return { valid: false, error: 'Filename too long (max 255 characters)' };
+  if (filename.length > 500) {
+    return { valid: false, error: 'Filename too long (max 500 characters)' };
   }
 
   return { valid: true };
@@ -122,6 +129,9 @@ export async function writeBuffer(
   const fileId = randomUUID();
 
   try {
+    // Ensure parent directories exist (supports nested paths like dj-luna/Project/song.md)
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+
     // Write file
     await fs.writeFile(filePath, buffer, { mode: 0o640 });
 
@@ -211,42 +221,24 @@ export async function deleteFile(userId: string, filename: string): Promise<bool
 }
 
 /**
- * List files in user's workspace
+ * List files in user's workspace - reads from DB so nested paths are returned correctly.
  */
 export async function listFiles(userId: string): Promise<WorkspaceFile[]> {
-  const userDir = getUserWorkspacePath(userId);
-
   try {
-    await fs.access(userDir);
-  } catch {
-    return []; // Directory doesn't exist yet
-  }
-
-  try {
-    const files = await fs.readdir(userDir);
-    const fileList: WorkspaceFile[] = [];
-
-    for (const filename of files) {
-      const filePath = path.join(userDir, filename);
-      try {
-        const stat = await fs.stat(filePath);
-        if (stat.isFile()) {
-          fileList.push({
-            id: '', // Will be populated from DB if needed
-            name: filename,
-            path: filePath,
-            size: stat.size,
-            mimeType: getMimeType(filename),
-            createdAt: stat.birthtime,
-            updatedAt: stat.mtime,
-          });
-        }
-      } catch {
-        // Skip files we can't stat
-      }
-    }
-
-    return fileList.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+    const result = await pool.query(
+      `SELECT id, filename, file_size, mime_type, created_at, updated_at
+       FROM workspace_files WHERE user_id = $1 ORDER BY updated_at DESC`,
+      [userId]
+    );
+    return result.rows.map((row: Record<string, unknown>) => ({
+      id: row.id as string,
+      name: row.filename as string,
+      path: row.filename as string,  // relative path, e.g. 'dj-luna/My Project/song.md'
+      size: Number(row.file_size) || 0,
+      mimeType: row.mime_type as string,
+      createdAt: row.created_at as Date,
+      updatedAt: row.updated_at as Date,
+    }));
   } catch (error) {
     logger.error('Failed to list workspace files', { error: (error as Error).message, userId });
     return [];

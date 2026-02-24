@@ -315,10 +315,11 @@ router.get('/workspace/stats', async (req: Request, res: Response) => {
   }
 });
 
-router.get('/workspace/file/:filename', async (req: Request, res: Response) => {
+router.get('/workspace/file/*', async (req: Request, res: Response) => {
   try {
-    const content = await workspace.readFile(getUserId(req), req.params.filename);
-    res.json({ filename: req.params.filename, content });
+    const filename = (req.params as Record<string, string>)[0];
+    const content = await workspace.readFile(getUserId(req), filename);
+    res.json({ filename, content });
   } catch (error) {
     const message = (error as Error).message;
     if (message.includes('not found')) {
@@ -368,8 +369,9 @@ router.post('/workspace/upload', upload.single('file'), async (req: Request, res
 });
 
 // Update existing workspace file
-router.put('/workspace/file/:filename', async (req: Request, res: Response) => {
+router.put('/workspace/file/*', async (req: Request, res: Response) => {
   try {
+    const filename = (req.params as Record<string, string>)[0];
     const { content } = req.body;
     if (content === undefined) {
       res.status(400).json({ error: 'content is required' });
@@ -377,13 +379,13 @@ router.put('/workspace/file/:filename', async (req: Request, res: Response) => {
     }
 
     // Verify file exists
-    const exists = await workspace.fileExists(getUserId(req), req.params.filename);
+    const exists = await workspace.fileExists(getUserId(req), filename);
     if (!exists) {
-      res.status(404).json({ error: `File not found: ${req.params.filename}` });
+      res.status(404).json({ error: `File not found: ${filename}` });
       return;
     }
 
-    const file = await workspace.writeFile(getUserId(req), req.params.filename, content);
+    const file = await workspace.writeFile(getUserId(req), filename, content);
     res.json(file);
   } catch (error) {
     const message = (error as Error).message;
@@ -392,9 +394,10 @@ router.put('/workspace/file/:filename', async (req: Request, res: Response) => {
   }
 });
 
-router.delete('/workspace/file/:filename', async (req: Request, res: Response) => {
+router.delete('/workspace/file/*', async (req: Request, res: Response) => {
   try {
-    const deleted = await workspace.deleteFile(getUserId(req), req.params.filename);
+    const filename = (req.params as Record<string, string>)[0];
+    const deleted = await workspace.deleteFile(getUserId(req), filename);
     if (!deleted) {
       res.status(404).json({ error: 'File not found' });
       return;
