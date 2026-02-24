@@ -30,6 +30,7 @@ import * as ceoService from '../ceo/ceo.service.js';
 import * as buildTracker from '../ceo/build-tracker.service.js';
 import { activityHelpers } from '../activity/activity.service.js';
 import logger from '../utils/logger.js';
+import * as sunoService from '../abilities/suno-generator.service.js';
 
 // ============================================
 // Job Definitions
@@ -330,6 +331,13 @@ const jobs: Job[] = [
     enabled: true,
     running: false,
     handler: processBuildCheckins,
+  },
+  {
+    name: 'sunoStaleCleanup',
+    intervalMs: 15 * 60 * 1000, // Every 15 minutes
+    enabled: true,
+    running: false,
+    handler: cleanupSunoStale,
   },
 ];
 
@@ -1515,6 +1523,17 @@ async function processBuildCheckins(): Promise<void> {
     logger.error('CEO build check-in job failed', {
       error: (error as Error).message,
     });
+  }
+}
+
+async function cleanupSunoStale(): Promise<void> {
+  try {
+    const cleaned = await sunoService.failStaleGenerations();
+    if (cleaned > 0) {
+      logger.info('Suno stale rows auto-failed', { count: cleaned });
+    }
+  } catch (error) {
+    logger.error('Suno stale cleanup job failed', { error: (error as Error).message });
   }
 }
 

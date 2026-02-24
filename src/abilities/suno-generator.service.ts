@@ -253,6 +253,23 @@ export async function downloadAndSave(audioUrl: string, title: string): Promise<
 }
 
 /**
+ * Auto-fail processing rows older than 30 minutes with no callback.
+ * Called by the job runner every 15 minutes.
+ */
+export async function failStaleGenerations(): Promise<number> {
+  const result = await pool.query<{ id: string }>(
+    `UPDATE suno_generations
+     SET status = 'failed',
+         error_message = 'No callback received within 30 minutes',
+         completed_at = NOW()
+     WHERE status IN ('pending', 'processing')
+       AND created_at < NOW() - INTERVAL '30 minutes'
+     RETURNING id`,
+  );
+  return result.rowCount ?? 0;
+}
+
+/**
  * List recent generations for a user.
  */
 export async function listGenerations(
