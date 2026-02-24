@@ -4,7 +4,8 @@ import logger from '../utils/logger.js';
 
 // Configuration for local media
 const MEDIA_ROOT = '/mnt/data/media';
-const API_BASE = 'http://10.0.0.2:3005';
+// Use relative path - frontend will prepend the correct API base URL
+const API_BASE = '';
 
 export interface LocalMediaItem {
   id: string;

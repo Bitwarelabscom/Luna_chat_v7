@@ -11,6 +11,7 @@ import { FooterBar } from './FooterBar';
 import { useWindowStore } from '@/lib/window-store';
 import { useChatStore } from '@/lib/store';
 import { useBackgroundStore } from '@/lib/background-store';
+import { useLayoutStore } from '@/lib/layout-store';
 import { getMediaUrl, backgroundApi } from '@/lib/api';
 import { type AppId, appConfig } from './app-registry';
 
@@ -109,7 +110,10 @@ export function Desktop() {
     minimizeApp,
     focusWindow,
     setPendingBrowserUrl,
+    maximizeWindow,
   } = useWindowStore();
+
+  const openInlineCanvas = useLayoutStore((state) => state.openInlineCanvas);
 
   const browserAction = useChatStore((state) => state.browserAction);
   const setBrowserAction = useChatStore((state) => state.setBrowserAction);
@@ -189,6 +193,7 @@ export function Desktop() {
   // Auto-open videos window when mediaAction is triggered
   useEffect(() => {
     if (mediaAction) {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || '';
       const mediaItems = mediaAction.items.map((item: any) => ({
         id: item.id,
         name: item.name,
@@ -198,7 +203,10 @@ export function Desktop() {
         channelTitle: item.channelTitle,
         duration: item.duration,
         isLive: item.isLive,
-        streamUrl: item.streamUrl,
+        // Prepend API base for relative stream URLs (avoids mixed content on HTTPS)
+        streamUrl: item.streamUrl
+          ? (item.streamUrl.startsWith('/') ? `${apiBase}${item.streamUrl}` : item.streamUrl)
+          : undefined,
         imageUrl: item.imageUrl,
         artist: item.artist,
         album: item.album,
@@ -216,17 +224,23 @@ export function Desktop() {
     }
   }, [mediaAction, openApp, setMediaAction, setPendingMediaResults]);
 
-  // Auto-open canvas window when canvasAction is triggered
+  // Auto-open canvas when canvasAction is triggered - inline if chat is open, else standalone
   useEffect(() => {
     if (canvasAction?.type === 'complete' && canvasAction.content) {
       setPendingCanvasData({
         artifactId: canvasAction.artifactId,
         content: canvasAction.content,
       });
-      openApp('canvas');
+      const chatWindow = windows.find((w) => w.appId === 'chat');
+      if (chatWindow) {
+        maximizeWindow(chatWindow.id);
+        openInlineCanvas();
+      } else {
+        openApp('canvas');
+      }
       setCanvasAction(null);
     }
-  }, [canvasAction, openApp, setCanvasAction, setPendingCanvasData]);
+  }, [canvasAction, openApp, setCanvasAction, setPendingCanvasData, windows, maximizeWindow, openInlineCanvas]);
 
   // Keyboard shortcuts
   useEffect(() => {

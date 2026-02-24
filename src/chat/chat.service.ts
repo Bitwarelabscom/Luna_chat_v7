@@ -3610,19 +3610,23 @@ export async function* streamMessage(
         logger.info('Local media play executing (stream)', { fileId: args.fileId, fileName: args.fileName });
 
         const streamUrl = localMedia.getStreamUrl(args.fileId);
+        // Detect type from decoded file path extension
+        const decodedPath = Buffer.from(args.fileId, 'base64url').toString();
+        const fileExt = decodedPath.toLowerCase().split('.').pop() || '';
+        const mediaType = ['mp3', 'flac', 'wav', 'm4a'].includes(fileExt) ? 'audio' : 'video';
 
         // Signal frontend to play
-        yield { 
-          type: 'media_action', 
-          action: 'play', 
+        yield {
+          type: 'media_action',
+          action: 'play',
           items: [{
             id: args.fileId,
             name: args.fileName,
-            type: 'video', 
+            type: mediaType,
             streamUrl
-          }], 
-          query: args.fileName, 
-          source: 'local' 
+          }],
+          query: args.fileName,
+          source: 'local'
         };
 
         messages.push({
