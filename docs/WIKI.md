@@ -1,7 +1,7 @@
 # Luna Chat Wiki
 
 **Version**: 7.x
-**Last Updated**: February 16, 2026
+**Last Updated**: February 2026
 
 ---
 
@@ -12,12 +12,14 @@
 3. [Core Systems](#core-systems)
 4. [Memory & Intelligence](#memory--intelligence)
 5. [Autonomous Mode](#autonomous-mode)
-6. [Trading System](#trading-system)
-7. [Integrations](#integrations)
-8. [Developer Guide](#developer-guide)
-9. [API Reference](#api-reference)
-10. [Configuration](#configuration)
-11. [Troubleshooting](#troubleshooting)
+6. [CEO Luna](#ceo-luna)
+7. [DJ Luna](#dj-luna)
+8. [Trading System](#trading-system)
+9. [Integrations](#integrations)
+10. [Developer Guide](#developer-guide)
+11. [API Reference](#api-reference)
+12. [Configuration](#configuration)
+13. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -153,13 +155,24 @@ Luna adapts her behavior based on the selected mode:
 - Telegram voice note support
 
 #### 4. DJ Luna Mode
-**Purpose**: Music generation assistance
+**Purpose**: Music production studio
 
-- Specialized for Suno AI
-- Music theory and genre expertise
-- Lyric and style generation
-- Limited to web search tools only
-- Outputs structured for Suno custom mode
+- Specialized for Suno AI music generation
+- Music theory, genre expertise, lyric writing
+- Style string generation in Suno custom mode format
+- Active style context injected automatically from Style panel
+- Outputs structured for Suno: lyrics with section tags + style string
+- Full workspace tools for saving song files
+
+#### 5. CEO Luna Mode
+**Purpose**: Business operations and AI co-founder
+
+- Financial tracking context (P&L, build hours, alerts)
+- Slash command parser: `/build`, `/cost`, `/income`
+- System log injection for slash command acknowledgment
+- `ceo_note_build` tool for saving build progress notes
+- Proactive build check-ins every 30 minutes
+- Scheduled daily/weekly reports via Telegram
 
 ### Tool System
 
@@ -440,6 +453,106 @@ Replaced RSS with verified news:
 
 ---
 
+## CEO Luna
+
+CEO Luna is a dedicated business operations workspace with an AI co-founder persona. Access it from the Communication menu (Briefcase icon). The window is 1400x860.
+
+### Layout
+
+- **Top (KPI Strip)**: Net P&L, Build Hours, Leads, Alert count - refreshes every 5 minutes
+- **Left (File Tree)**: Workspace files under `ceo-luna/` grouped into Documents/Plans/Week folders
+- **Right (Tabs)**: Viewer | Chat | Dashboard | Radar | Autopost | Builds | Log
+
+### Key Features
+
+#### Build Tracker
+Time-track development sessions directly from chat using slash commands:
+
+```
+/build start <name>    -- Start a tracked build session
+/build pause <#>       -- Pause (accumulates elapsed time)
+/build continue <#>    -- Resume a paused build
+/build done <#>        -- Complete and log hours
+/build list            -- Show active/paused builds with elapsed time
+```
+
+Automated check-ins fire every 30 minutes for active builds. CEO Luna saves your replies as progress notes using the `ceo_note_build` tool.
+
+#### Finance Logging
+
+```
+/cost <amount> <keyword> [note]    -- Log an expense
+/income <amount> <source> [note]   -- Log income
+```
+
+Keywords are auto-mapped to expense categories (infrastructure, software, marketing, etc.).
+
+#### Dashboard & Reports
+
+- Monthly P&L chart and transaction history
+- Competitor radar (news signals for configured competitors)
+- Automated social posting to X, LinkedIn, Telegram, Blog
+- Scheduled reports: daily morning brief, evening review, weekly P&L, biweekly audit
+
+### CEO Modes
+
+| Mode | Description |
+|------|-------------|
+| `pre_revenue` | Focus on build time and cost control. Alerts on build gaps. |
+| `normal` | Full business mode with revenue tracking and growth KPIs. |
+
+*👉 [Full CEO Luna Documentation](CEO_LUNA.md)*
+
+---
+
+## DJ Luna
+
+DJ Luna is a dedicated AI music production studio. Access it from the Communication menu (Headphones icon). The window is 1280x800.
+
+### Layout (3-column)
+
+- **Left (30%)**: DJ Luna Chat - AI lyric writing with `dj_luna` session mode
+- **Center (40%)**: Lyrics Canvas - monospace editor with syllable analysis
+- **Right (30%)**: Songs / Style / Factory tabs
+
+### Key Features
+
+#### AI Lyric Writing
+
+DJ Luna specializes in music theory, song structure, Suno tag format, and lyric writing. When a response contains a lyrics block, a **Send to Canvas** button appears. Style lines are automatically synced to the Style panel.
+
+#### Lyrics Canvas
+
+| Feature | Description |
+|---------|-------------|
+| Section detection | Recognizes all Suno section tags (`[Verse]`, `[Chorus]`, etc.) |
+| Syllable gutter | Per-line syllable count displayed in right margin |
+| Outlier highlighting | Lines >35% off from section median highlighted in amber |
+| Section toolbar | Hover any section to get a Regenerate button |
+
+#### Suno Integration
+
+One-click generation from canvas lyrics via the n8n pipeline:
+
+```
+Lyrics + Style string
+    -> Suno API (via n8n workflow)
+    -> MP3 saved to /mnt/data/media/Music/
+    -> Status tracked in suno_generations table
+```
+
+#### Ambient Factory
+
+Batch-generate multiple ambient tracks from the Factory tab - useful for producing background music libraries. Set count (1-10) and style string, then trigger batch.
+
+#### Song Management
+
+Songs saved as Markdown files with YAML frontmatter in `dj-luna/<project>/` workspace directory. Style presets stored in `dj-luna/styles.json`.
+
+*👉 [Full DJ Luna Documentation](DJ_LUNA.md)*
+
+---
+
 ## Trading System
 
 ### Trader Luna
@@ -650,7 +763,9 @@ High-frequency paper trading for strategy testing:
 - Auto-integration with local library
 - Download progress tracking
 
-**Implementation**: `src/abilities/local-media.service.ts`, `src/media/ytdlp.service.ts`
+**Jellyfin Integration**: Luna can search and stream from a Jellyfin media server using the `jellyfin_search` and `jellyfin_play` tools.
+
+**Implementation**: `src/abilities/local-media.service.ts`, `src/media/ytdlp.service.ts`, `src/media/jellyfin.service.ts`
 
 ### Web Search (SearXNG)
 
@@ -713,12 +828,14 @@ luna-chat/
 ├── src/                          # Backend (Node.js/TypeScript)
 │   ├── abilities/               # Tools and integrations
 │   ├── autonomous/              # Autonomous mode
+│   ├── ceo/                     # CEO Luna backend
 │   ├── planner/                 # Projects (Execution Graph)
 │   ├── auth/                    # Authentication
 │   ├── intents/                 # Intent persistence
 │   ├── email/                   # Email security (gatekeeper)
 │   ├── chat/                    # Chat processing
 │   ├── llm/                     # LLM providers
+│   ├── media/                   # Jellyfin + yt-dlp media
 │   ├── memory/                  # Memory system
 │   ├── graph/                   # Graph memory integration
 │   ├── persona/                 # Personality
@@ -732,13 +849,16 @@ luna-chat/
 │   └── db/                      # Database clients
 ├── frontend/                     # Next.js web UI
 │   ├── src/
-│   │   ├── components/          # React components
+│   │   ├── components/
+│   │   │   ├── ceo-luna/        # CEO Luna panels
+│   │   │   ├── dj-luna/         # DJ Luna panels
+│   │   │   ├── os/              # Desktop OS shell + windows
+│   │   │   └── settings/        # Settings panels
 │   │   ├── hooks/               # Custom hooks
-│   │   ├── lib/                 # Zustand stores, API client
-│   │   └── pages/               # Next.js pages
+│   │   └── lib/                 # Zustand stores, API client
 ├── android/                      # Native Android app
 ├── docs/                         # Documentation
-├── migrations/                   # Database migrations
+├── n8n-workflows/                # n8n workflow JSON exports
 ├── secrets/                      # Docker secrets
 └── workspace/                    # User workspace files
 ```
@@ -795,7 +915,7 @@ docker compose up -d
 
 **Naming**: `XXX_descriptive_name.sql` (numbered sequentially)
 
-**Latest**: Migration 075 (Dual-LNN enrichment fields)
+**Latest**: Migration 087 (Suno generations table)
 
 **Create Migration**:
 ```bash
@@ -1206,6 +1326,9 @@ docker stats luna-api luna-frontend luna-postgres luna-redis
 - **docs/AUTONOMOUS.md**: Autonomous mode and Council system
 - **docs/PLANNER.md**: Projects (Execution Graph) documentation
 - **docs/AUTONOMOUS_LEARNING.md**: Learning and consolidation
+- **docs/CEO_LUNA.md**: CEO Luna workspace documentation
+- **docs/DJ_LUNA.md**: DJ Luna music studio documentation
+- **docs/musicgen.md**: Suno AI tag reference for music generation
 - **DUAL_LNN_ARCHITECTURE.md**: Dual-LNN technical specification
 - **graph-memory-architecture.md**: Graph memory technical specification
 

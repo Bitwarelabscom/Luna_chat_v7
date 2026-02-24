@@ -50,8 +50,49 @@ Luna has a "job" even when you aren't chatting. She can research news, track you
 *   📧 **Secure Integration:** Manages your Email, Calendar (CalDAV), and IRC with advanced security "Gatekeepers."
 *   🌐 **Visual Browsing:** Luna can actually *see* and navigate websites to perform research for you.
 *   💻 **Code Sandbox:** Safely executes Python, JavaScript, and Shell scripts to solve problems.
-*   📺 **Local Media:** Streams your local movies and music directly to your browser or phone.
+*   📺 **Local Media:** Streams your local movies and music directly to your browser or phone, with YouTube download support via yt-dlp.
 *   🕹️ **Retro Gaming:** Includes a built-in emulator for classic games (GBA, NES, SNES, etc.).
+*   💼 **CEO Luna:** A full business operations hub - track builds, log finances, monitor competitors, and schedule social posts with an AI co-founder persona.
+*   🎵 **DJ Luna:** An AI music production studio for writing lyrics and generating tracks via Suno AI, with a live canvas editor, syllable analysis, and an ambient batch factory.
+*   🖼️ **Inline Canvas:** Code artifacts open in a split-view panel directly inside the chat window, with a detach button to pop them out as standalone windows.
+
+---
+
+## 🏢 CEO Luna - Business Operations Hub
+
+CEO Luna is a dedicated 1400x860 workspace for running your business alongside an AI co-founder persona. Open it from the Communication menu.
+
+**KPI Strip** (always visible): Net P&L, Build Hours, Leads, Alert count - refreshed every 5 minutes.
+
+**Tabs**: Viewer | Chat | Dashboard | Radar | Autopost | Builds | Log
+
+Key capabilities:
+- **Build Tracker**: Time-track development sessions with `/build start|pause|done` slash commands. Automated check-ins every 30 minutes save progress notes to the build log.
+- **Finance Logging**: Log costs and income with `/cost` and `/income` slash commands. Keyword-to-category auto-mapping for common vendors.
+- **Financial Dashboard**: Monthly P&L chart, expense categories, transaction history.
+- **Competitor Radar**: CEO Luna monitors your competitor list and surfaces news signals.
+- **Autopost**: Schedule automated social posts to X, LinkedIn, Telegram, and Blog.
+- **Scheduled Reports**: Daily morning brief, evening review, weekly P&L report, and biweekly audit - delivered via Telegram.
+
+*👉 [CEO Luna Documentation](docs/CEO_LUNA.md)*
+
+---
+
+## 🎵 DJ Luna - AI Music Production Studio
+
+DJ Luna is a dedicated 1280x800 music production workspace. Open it from the Communication menu (Headphones icon).
+
+**3-column layout**: Chat (AI lyric writing) | Lyrics Canvas (editor) | Songs / Style / Factory
+
+Key capabilities:
+- **AI Lyric Writing**: Chat with DJ Luna - a persona specialized in music theory, song structure, and Suno tag format. Generated lyrics auto-detect sections and show a "Send to Canvas" button.
+- **Lyrics Canvas**: Monospace editor with per-line syllable counts and amber highlighting for rhythmically off lines. Hover over any section for quick regeneration.
+- **Style Presets**: 8 built-in genre presets (Lo-fi, Synthwave, Ambient, Pop, Rock, Jazz, EDM, R&B) plus custom presets you can save.
+- **Suno Integration**: One-click generation from canvas lyrics. Completed MP3s are saved to your local media library.
+- **Ambient Factory**: Batch-generate multiple ambient/instrumental tracks in one click using the n8n workflow pipeline.
+- **Project Management**: Songs are saved as Markdown files with YAML frontmatter in your workspace, organized by project folder.
+
+*👉 [DJ Luna Documentation](docs/DJ_LUNA.md)*
 
 ---
 
@@ -102,7 +143,9 @@ docker compose -f docker-compose.portable.yml up -d
 |:--- |:--- |
 | **[WIKI.md](docs/WIKI.md)**: The complete guide. | **[DUAL_LNN.md](DUAL_LNN_ARCHITECTURE.md)**: Neural network specs. |
 | **[AUTONOMOUS.md](docs/AUTONOMOUS.md)**: Understanding AI modes. | **[PLANNER.md](docs/PLANNER.md)**: Execution graph logic. |
-| **[INSTALL.md](INSTALL.md)**: Detailed setup steps. | **[CLAUDE.md](CLAUDE.md)**: Coding standards for contributors. |
+| **[CEO_LUNA.md](docs/CEO_LUNA.md)**: Business hub guide. | **[CLAUDE.md](CLAUDE.md)**: Coding standards for contributors. |
+| **[DJ_LUNA.md](docs/DJ_LUNA.md)**: Music studio guide. | **[MEMORY.md](docs/MEMORY.md)**: Memory system deep dive. |
+| **[INSTALL.md](INSTALL.md)**: Detailed setup steps. | **[musicgen.md](docs/musicgen.md)**: Suno tag reference. |
 
 ---
 
