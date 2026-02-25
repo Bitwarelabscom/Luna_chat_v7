@@ -346,6 +346,13 @@ const jobs: Job[] = [
     running: false,
     handler: runAlbumPipelineStep,
   },
+  {
+    name: 'musicTrendScraper',
+    intervalMs: 2 * 60 * 60 * 1000, // Every 2 hours
+    enabled: true,
+    running: false,
+    handler: runMusicTrendScraper,
+  },
 ];
 
 // ============================================
@@ -1553,6 +1560,18 @@ async function runAlbumPipelineStep(): Promise<void> {
     await runPipelineStep();
   } catch (error) {
     logger.error('Album pipeline worker failed', { error: (error as Error).message });
+  }
+}
+
+/**
+ * Music trend scraper - scrapes sources, analyzes with LLM, proposes genres
+ */
+async function runMusicTrendScraper(): Promise<void> {
+  try {
+    const { runMusicTrendPipeline } = await import('../ceo/music-trend-scraper.service.js');
+    await runMusicTrendPipeline();
+  } catch (error) {
+    logger.error('Music trend scraper failed', { error: (error as Error).message });
   }
 }
 

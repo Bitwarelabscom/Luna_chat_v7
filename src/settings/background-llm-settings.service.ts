@@ -12,7 +12,8 @@ export type BackgroundLlmFeature =
   | 'research_synthesis'
   | 'session_gap_analysis'
   | 'knowledge_verification'
-  | 'supervisor_critique';
+  | 'supervisor_critique'
+  | 'music_trend_analysis';
 
 export interface FeatureModelSelection {
   provider: ProviderId;
@@ -102,6 +103,11 @@ export const BACKGROUND_LLM_FEATURES: BackgroundLlmFeatureMeta[] = [
     label: 'Supervisor Critique',
     description: 'Compliance review of layered-agent drafts before final output.',
   },
+  {
+    id: 'music_trend_analysis',
+    label: 'Music Trend Analysis',
+    description: 'Analyzes scraped music trends to identify emerging genres and market signals.',
+  },
 ];
 
 export const DEFAULT_BACKGROUND_LLM_SETTINGS: BackgroundLlmSettings = {
@@ -149,6 +155,10 @@ export const DEFAULT_BACKGROUND_LLM_SETTINGS: BackgroundLlmSettings = {
     primary: { provider: 'ollama_tertiary', model: 'HoseaDev/qwen2.5-7b-instruct-q4-gguf:latest' },
     fallback: { provider: 'openai', model: 'gpt-5-mini' },
   },
+  music_trend_analysis: {
+    primary: { provider: 'ollama_tertiary', model: 'HoseaDev/qwen2.5-7b-instruct-q4-gguf:latest' },
+    fallback: { provider: 'openai', model: 'gpt-5-mini' },
+  },
 };
 
 interface DbSettingsRow {
@@ -190,6 +200,7 @@ function mergeWithDefaults(raw: unknown): BackgroundLlmSettings {
     session_gap_analysis: sanitizeFeatureConfig(obj.session_gap_analysis, DEFAULT_BACKGROUND_LLM_SETTINGS.session_gap_analysis),
     knowledge_verification: sanitizeFeatureConfig(obj.knowledge_verification, DEFAULT_BACKGROUND_LLM_SETTINGS.knowledge_verification),
     supervisor_critique: sanitizeFeatureConfig(obj.supervisor_critique, DEFAULT_BACKGROUND_LLM_SETTINGS.supervisor_critique),
+    music_trend_analysis: sanitizeFeatureConfig(obj.music_trend_analysis, DEFAULT_BACKGROUND_LLM_SETTINGS.music_trend_analysis),
   };
 }
 
@@ -226,6 +237,7 @@ export async function updateBackgroundLlmSettings(
     session_gap_analysis: updates.session_gap_analysis ? sanitizeFeatureConfig(updates.session_gap_analysis, current.session_gap_analysis) : current.session_gap_analysis,
     knowledge_verification: updates.knowledge_verification ? sanitizeFeatureConfig(updates.knowledge_verification, current.knowledge_verification) : current.knowledge_verification,
     supervisor_critique: updates.supervisor_critique ? sanitizeFeatureConfig(updates.supervisor_critique, current.supervisor_critique) : current.supervisor_critique,
+    music_trend_analysis: updates.music_trend_analysis ? sanitizeFeatureConfig(updates.music_trend_analysis, current.music_trend_analysis) : current.music_trend_analysis,
   };
 
   await query(

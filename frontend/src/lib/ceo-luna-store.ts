@@ -2,7 +2,7 @@
 
 import { create } from 'zustand';
 import { workspaceApi } from './api/workspace';
-import type { CeoDashboard, RadarSignal, AutopostItem, ProductionSummary, GenreOption } from './api/ceo';
+import type { CeoDashboard, RadarSignal, AutopostItem, ProductionSummary, GenreOption, ProposedGenre } from './api/ceo';
 
 export interface CeoFileEntry {
   name: string;
@@ -32,6 +32,11 @@ interface CEOLunaState {
   // Radar
   radarSignals: RadarSignal[];
   isLoadingRadar: boolean;
+  radarFilter: 'all' | 'market' | 'music_trend';
+
+  // Proposed Genres
+  proposedGenres: ProposedGenre[];
+  isLoadingProposedGenres: boolean;
 
   // Autopost
   autopostQueue: AutopostItem[];
@@ -51,6 +56,10 @@ interface CEOLunaState {
   loadFileTree: () => Promise<void>;
   loadDashboard: (days?: number) => Promise<void>;
   loadRadarSignals: (limit?: number) => Promise<void>;
+  setRadarFilter: (filter: 'all' | 'market' | 'music_trend') => void;
+  loadProposedGenres: () => Promise<void>;
+  approveProposedGenre: (id: string) => Promise<void>;
+  rejectProposedGenre: (id: string) => Promise<void>;
   loadAutopostQueue: (limit?: number) => Promise<void>;
   setDashboardPeriod: (days: number) => void;
   createFile: (folder: string, name: string) => Promise<void>;
@@ -82,6 +91,9 @@ export const useCEOLunaStore = create<CEOLunaState>((set, get) => ({
   dashboardPeriod: 30,
   radarSignals: [],
   isLoadingRadar: false,
+  radarFilter: 'all',
+  proposedGenres: [],
+  isLoadingProposedGenres: false,
   autopostQueue: [],
   isLoadingAutopost: false,
   productions: [],
@@ -152,6 +164,46 @@ export const useCEOLunaStore = create<CEOLunaState>((set, get) => ({
       console.error('Failed to load radar signals:', err);
     } finally {
       set({ isLoadingRadar: false });
+    }
+  },
+
+  setRadarFilter: (filter) => set({ radarFilter: filter }),
+
+  loadProposedGenres: async () => {
+    set({ isLoadingProposedGenres: true });
+    try {
+      const { fetchProposedGenres } = await import('./api/ceo');
+      const { proposals } = await fetchProposedGenres('pending');
+      set({ proposedGenres: proposals });
+    } catch (err) {
+      console.error('Failed to load proposed genres:', err);
+    } finally {
+      set({ isLoadingProposedGenres: false });
+    }
+  },
+
+  approveProposedGenre: async (id) => {
+    try {
+      const { approveGenre } = await import('./api/ceo');
+      await approveGenre(id);
+      // Remove from local state
+      set(state => ({
+        proposedGenres: state.proposedGenres.filter(g => g.id !== id),
+      }));
+    } catch (err) {
+      console.error('Failed to approve genre:', err);
+    }
+  },
+
+  rejectProposedGenre: async (id) => {
+    try {
+      const { rejectGenre } = await import('./api/ceo');
+      await rejectGenre(id);
+      set(state => ({
+        proposedGenres: state.proposedGenres.filter(g => g.id !== id),
+      }));
+    } catch (err) {
+      console.error('Failed to reject genre:', err);
     }
   },
 

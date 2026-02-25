@@ -5,12 +5,16 @@ import { DJ_LUNA_MODE_PROMPT, CEO_LUNA_MODE_PROMPT } from '../persona/luna.perso
 import * as workspaceService from '../abilities/workspace.service.js';
 import * as sunoService from '../abilities/suno-generator.service.js';
 import { analyzeLyrics } from '../abilities/lyric-checker.service.js';
-import { getPresetById, getDefaultSongCount, GENRE_PRESETS } from '../abilities/genre-presets.js';
+import { getPresetById as getBuiltinPresetById, getDefaultSongCount, GENRE_PRESETS } from '../abilities/genre-presets.js';
+import * as genreRegistry from '../abilities/genre-registry.service.js';
 import type { ProviderId, ChatMessage } from '../llm/types.js';
 import logger from '../utils/logger.js';
 
 const OLLAMA_PROVIDERS = new Set<string>(['ollama', 'ollama_secondary', 'ollama_tertiary']);
-const SUNO_STAGGER_MS = 15_000; // 15s between Suno submissions
+const SUNO_STAGGER_MS = 30_000; // 30s between Suno submissions
+
+// Prevent concurrent pipeline runs per production
+const activePipelines = new Set<string>();
 
 // ============================================================
 // Types
@@ -305,11 +309,12 @@ export async function planAlbums(productionId: string): Promise<void> {
     artistContext = `Artist: ${prod.artist_name}\nGenre: ${prod.genre}`;
   }
 
-  const genrePreset = getPresetById(prod.genre) ?? GENRE_PRESETS[0];
-  const songCount = getDefaultSongCount(prod.genre);
+  // Use genre registry to include user-approved presets
+  const genrePreset = await genreRegistry.getPresetById(userId, prod.genre) ?? getBuiltinPresetById(prod.genre) ?? GENRE_PRESETS[0];
+  const songCount = genrePreset.defaultSongCount ?? getDefaultSongCount(prod.genre);
 
   for (let albumNum = 1; albumNum <= prod.album_count; albumNum++) {
-    const planPrompt = buildPlanningPrompt(prod, albumNum, artistContext, songCount);
+    const planPrompt = buildPlanningPrompt(prod, albumNum, artistContext, songCount, genrePreset);
 
     const messages: ChatMessage[] = [
       { role: 'system', content: CEO_LUNA_MODE_PROMPT + '\n\nYou are planning an album for autonomous music production. Return ONLY valid JSON, no markdown fences.' },
@@ -387,10 +392,21 @@ function buildPlanningPrompt(
   albumNum: number,
   artistContext: string,
   songCount: number,
+  genrePreset?: { styleTags?: string; bpmRange?: { min: number; max: number }; energy?: string },
 ): string {
+  const styleHint = genrePreset?.styleTags
+    ? `\nDefault style tags for this genre: ${genrePreset.styleTags}`
+    : '';
+  const bpmHint = genrePreset?.bpmRange
+    ? `\nBPM range: ${genrePreset.bpmRange.min}-${genrePreset.bpmRange.max}`
+    : '';
+  const energyHint = genrePreset?.energy
+    ? `\nEnergy level: ${genrePreset.energy}`
+    : '';
+
   return `Plan album #${albumNum} of ${prod.album_count} for the artist "${prod.artist_name}".
 
-Genre: ${prod.genre}
+Genre: ${prod.genre}${styleHint}${bpmHint}${energyHint}
 ${prod.production_notes ? `Production notes: ${prod.production_notes}` : ''}
 
 Artist context:
@@ -401,6 +417,7 @@ Requirements:
 - Each song needs a title, creative direction (2-3 sentences describing mood/theme/story), and Suno style tags
 - The album needs a cohesive theme and title
 - Style tags should be detailed Suno-compatible strings (e.g. "128 BPM, Deep House, Melodic, Female Vocal")
+- Use the genre's default style tags as a base but vary per song for diversity
 - Song titles should be creative and fit the genre
 - Creative directions should give enough context for a lyrics writer to craft full lyrics
 
@@ -452,7 +469,8 @@ async function writeLyrics(songId: string): Promise<void> {
     artistContext = `Artist: ${prod.artist_name}`;
   }
 
-  const genrePreset = getPresetById(song.genre_preset ?? prod.genre);
+  const genrePreset = await genreRegistry.getPresetById(prod.user_id, song.genre_preset ?? prod.genre)
+    ?? getBuiltinPresetById(song.genre_preset ?? prod.genre);
   const { provider, model } = await resolveModel(prod.user_id, prod.lyrics_model, 'dj_luna');
 
   // Build the lyrics prompt
@@ -567,7 +585,8 @@ async function reviewLyrics(songId: string): Promise<void> {
   );
   const prod = prodResult.rows[0];
 
-  const genrePreset = getPresetById(song.genre_preset ?? prod.genre);
+  const genrePreset = await genreRegistry.getPresetById(prod.user_id, song.genre_preset ?? prod.genre)
+    ?? getBuiltinPresetById(song.genre_preset ?? prod.genre);
   if (!genrePreset) {
     // No preset to check against, approve as-is
     await pool.query(`UPDATE album_songs SET status = 'lyrics_approved' WHERE id = $1`, [songId]);
@@ -847,6 +866,19 @@ export function triggerFullPipeline(productionId: string): void {
 }
 
 async function runFullPipeline(productionId: string): Promise<void> {
+  if (activePipelines.has(productionId)) {
+    logger.info('Pipeline already running, skipping duplicate', { productionId });
+    return;
+  }
+  activePipelines.add(productionId);
+  try {
+    await runFullPipelineInner(productionId);
+  } finally {
+    activePipelines.delete(productionId);
+  }
+}
+
+async function runFullPipelineInner(productionId: string): Promise<void> {
   logger.info('Starting full pipeline run', { productionId });
 
   // Phase 1: Write + review lyrics for ALL songs back-to-back (no delays)

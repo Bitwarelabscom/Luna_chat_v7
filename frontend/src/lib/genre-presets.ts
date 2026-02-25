@@ -3,6 +3,11 @@ export interface GenreStructureSection {
   required: boolean;
 }
 
+export type GenreCategory =
+  | 'pop' | 'rock' | 'electronic' | 'hip-hop' | 'r-and-b'
+  | 'folk-country' | 'latin' | 'world' | 'jazz-blues'
+  | 'chill' | 'classical-cinematic' | 'experimental';
+
 export interface GenrePreset {
   id: string;
   name: string;
@@ -11,171 +16,692 @@ export interface GenrePreset {
   syllableRange: { min: number; max: number };
   rhymeScheme: 'AABB' | 'ABAB' | 'ABCB' | 'loose' | 'none';
   notes: string;
+  category: GenreCategory;
+  styleTags: string;
+  bpmRange: { min: number; max: number };
+  energy: 'low' | 'medium' | 'high';
 }
 
+export const GENRE_CATEGORY_LABELS: Record<GenreCategory, string> = {
+  'pop': 'Pop',
+  'rock': 'Rock',
+  'electronic': 'Electronic',
+  'hip-hop': 'Hip-Hop',
+  'r-and-b': 'R&B',
+  'folk-country': 'Folk/Country',
+  'latin': 'Latin',
+  'world': 'World',
+  'jazz-blues': 'Jazz/Blues',
+  'chill': 'Chill',
+  'classical-cinematic': 'Cinematic',
+  'experimental': 'Experimental',
+};
+
+export const GENRE_CATEGORIES: GenreCategory[] = [
+  'pop', 'rock', 'electronic', 'hip-hop', 'r-and-b',
+  'chill', 'folk-country', 'latin', 'world',
+  'jazz-blues', 'classical-cinematic', 'experimental',
+];
+
 export const GENRE_PRESETS: GenrePreset[] = [
+  // Pop (6)
   {
-    id: 'pop',
-    name: 'Pop',
-    description: 'Radio-friendly pop with verse-chorus structure and a bridge.',
+    id: 'pop', name: 'Pop', description: 'Radio-friendly pop with verse-chorus structure and a bridge.',
     structure: [
-      { tag: 'verse', required: true },
-      { tag: 'verse', required: true },
-      { tag: 'pre-chorus', required: true },
-      { tag: 'pre-chorus', required: true },
-      { tag: 'chorus', required: true },
-      { tag: 'chorus', required: true },
-      { tag: 'chorus', required: true },
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'pre-chorus', required: true }, { tag: 'pre-chorus', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true }, { tag: 'chorus', required: true },
       { tag: 'bridge', required: true },
     ],
-    syllableRange: { min: 6, max: 10 },
-    rhymeScheme: 'ABAB',
+    syllableRange: { min: 6, max: 10 }, rhymeScheme: 'ABAB',
     notes: 'Pre-chorus builds tension before each chorus. Bridge provides contrast before final chorus.',
+    category: 'pop', styleTags: 'pop, 120 bpm, catchy, upbeat, polished production, radio-friendly',
+    bpmRange: { min: 100, max: 130 }, energy: 'medium',
   },
   {
-    id: 'hip-hop-trap',
-    name: 'Hip-Hop / Trap',
-    description: 'Rap/trap with verses and hooks. Longer lines with dense rhyme patterns.',
+    id: 'synth-pop', name: 'Synth-Pop', description: 'Synthesizer-driven pop with retro-modern aesthetics.',
     structure: [
-      { tag: 'verse', required: true },
-      { tag: 'verse', required: true },
-      { tag: 'hook', required: true },
-      { tag: 'hook', required: true },
-      { tag: 'intro', required: false },
-      { tag: 'outro', required: false },
-    ],
-    syllableRange: { min: 8, max: 14 },
-    rhymeScheme: 'AABB',
-    notes: 'Hooks are shorter than verses. Internal rhymes are common. Intro/outro optional.',
-  },
-  {
-    id: 'edm-dance',
-    name: 'EDM / Dance',
-    description: 'Electronic dance music built around drops and builds.',
-    structure: [
-      { tag: 'drop', required: true },
-      { tag: 'drop', required: true },
-      { tag: 'intro', required: false },
-      { tag: 'build', required: false },
-      { tag: 'break', required: false },
-      { tag: 'outro', required: false },
-    ],
-    syllableRange: { min: 4, max: 8 },
-    rhymeScheme: 'loose',
-    notes: 'Drops are the main event. Short, punchy lyric lines. Melodic hooks over driving beats.',
-  },
-  {
-    id: 'reggae',
-    name: 'Reggae',
-    description: 'Laid-back reggae with offbeat rhythms and uplifting themes.',
-    structure: [
-      { tag: 'verse', required: true },
-      { tag: 'verse', required: true },
-      { tag: 'chorus', required: true },
-      { tag: 'chorus', required: true },
-      { tag: 'chorus', required: true },
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'pre-chorus', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true }, { tag: 'chorus', required: true },
       { tag: 'bridge', required: false },
     ],
-    syllableRange: { min: 6, max: 10 },
-    rhymeScheme: 'ABAB',
-    notes: 'Syncopated rhythms, conscious or love themes. Bridge optional.',
+    syllableRange: { min: 6, max: 10 }, rhymeScheme: 'ABAB',
+    notes: 'Heavy synth pads and arpeggios. Clean, processed vocals. 80s-inspired modern sound.',
+    category: 'pop', styleTags: 'synth-pop, 118 bpm, synthesizers, retro, new wave, polished vocals',
+    bpmRange: { min: 110, max: 130 }, energy: 'medium',
   },
   {
-    id: 'punk',
-    name: 'Punk',
-    description: 'Fast, aggressive punk with short sharp lines.',
+    id: 'indie-pop', name: 'Indie Pop', description: 'Lo-fi charm meets catchy pop melodies with DIY aesthetics.',
     structure: [
-      { tag: 'verse', required: true },
-      { tag: 'verse', required: true },
-      { tag: 'chorus', required: true },
-      { tag: 'chorus', required: true },
-      { tag: 'chorus', required: true },
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true }, { tag: 'chorus', required: true },
       { tag: 'bridge', required: false },
     ],
-    syllableRange: { min: 4, max: 8 },
-    rhymeScheme: 'AABB',
+    syllableRange: { min: 6, max: 10 }, rhymeScheme: 'ABCB',
+    notes: 'Jangly guitars, understated vocals, clever wordplay. Less polished than mainstream pop.',
+    category: 'pop', styleTags: 'indie pop, 115 bpm, jangly guitar, dreamy, lo-fi, warm vocals',
+    bpmRange: { min: 100, max: 125 }, energy: 'medium',
+  },
+  {
+    id: 'k-pop', name: 'K-Pop', description: 'High-energy Korean pop with complex choreography-ready structures.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'pre-chorus', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true },
+      { tag: 'bridge', required: true }, { tag: 'drop', required: false },
+    ],
+    syllableRange: { min: 5, max: 10 }, rhymeScheme: 'AABB',
+    notes: 'Genre-switching within songs common. Rap verses, sung choruses. High production value.',
+    category: 'pop', styleTags: 'k-pop, 128 bpm, high energy, dance, polished, synth, rap verse',
+    bpmRange: { min: 120, max: 140 }, energy: 'high',
+  },
+  {
+    id: 'electropop', name: 'Electropop', description: 'Electronic-influenced pop with heavy synth production.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true }, { tag: 'chorus', required: true },
+      { tag: 'drop', required: false }, { tag: 'bridge', required: false },
+    ],
+    syllableRange: { min: 5, max: 9 }, rhymeScheme: 'ABAB',
+    notes: 'Autotuned vocals, electronic beats, club-ready production.',
+    category: 'pop', styleTags: 'electropop, 125 bpm, electronic, synth bass, autotune, club-ready, female vocal',
+    bpmRange: { min: 115, max: 135 }, energy: 'high',
+  },
+  {
+    id: 'power-pop', name: 'Power Pop', description: 'Guitar-driven pop with strong melodies and crunchy chords.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true }, { tag: 'chorus', required: true },
+      { tag: 'bridge', required: false },
+    ],
+    syllableRange: { min: 6, max: 10 }, rhymeScheme: 'ABAB',
+    notes: 'Jangly power chords, big harmonies, energetic tempo.',
+    category: 'pop', styleTags: 'power pop, 135 bpm, electric guitar, harmonies, upbeat, driving drums',
+    bpmRange: { min: 125, max: 150 }, energy: 'high',
+  },
+
+  // Rock (7)
+  {
+    id: 'rock', name: 'Rock / Alternative', description: 'Classic rock or alternative with guitar-driven energy.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true }, { tag: 'chorus', required: true },
+      { tag: 'solo', required: false }, { tag: 'bridge', required: false },
+    ],
+    syllableRange: { min: 5, max: 9 }, rhymeScheme: 'ABAB',
+    notes: 'Guitar solo and bridge are optional. Energy builds through the song.',
+    category: 'rock', styleTags: 'rock, 130 bpm, electric guitar, drums, energetic, alternative',
+    bpmRange: { min: 110, max: 145 }, energy: 'high',
+  },
+  {
+    id: 'punk', name: 'Punk', description: 'Fast, aggressive punk with short sharp lines.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true }, { tag: 'chorus', required: true },
+      { tag: 'bridge', required: false },
+    ],
+    syllableRange: { min: 4, max: 8 }, rhymeScheme: 'AABB',
     notes: 'Short, direct lines. Aggressive energy. Keep it raw and simple.',
+    category: 'rock', styleTags: 'punk rock, 170 bpm, fast, aggressive, distorted guitar, raw vocals',
+    bpmRange: { min: 150, max: 200 }, energy: 'high',
   },
   {
-    id: 'swedish-folk',
-    name: 'Swedish Folk',
-    description: 'Traditional Swedish folk with refrains. Lyrics often in Swedish.',
+    id: 'metal', name: 'Metal', description: 'Heavy metal with aggressive riffs and powerful vocals.',
     structure: [
-      { tag: 'verse', required: true },
-      { tag: 'verse', required: true },
-      { tag: 'refrain', required: true },
-      { tag: 'refrain', required: true },
-      { tag: 'refrain', required: true },
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true }, { tag: 'chorus', required: true },
+      { tag: 'solo', required: false }, { tag: 'breakdown', required: false },
     ],
-    syllableRange: { min: 6, max: 9 },
-    rhymeScheme: 'ABAB',
-    notes: 'Section tags must be in English even for Swedish lyrics. Use [Verse] not [Vers], [Refrain] not [Refrang]. Natural, flowing melodies.',
+    syllableRange: { min: 5, max: 10 }, rhymeScheme: 'ABAB',
+    notes: 'Heavy riffs, double kick drums. Breakdowns in heavier subgenres.',
+    category: 'rock', styleTags: 'metal, 140 bpm, heavy, distorted guitar, double kick, aggressive, powerful vocals',
+    bpmRange: { min: 120, max: 180 }, energy: 'high',
   },
   {
-    id: 'rnb-soul',
-    name: 'R&B / Soul',
-    description: 'Smooth R&B/soul with emotional depth and vocal runs.',
+    id: 'post-punk', name: 'Post-Punk', description: 'Dark, atmospheric rock with angular guitars and brooding vocals.',
     structure: [
-      { tag: 'verse', required: true },
-      { tag: 'verse', required: true },
-      { tag: 'pre-chorus', required: true },
-      { tag: 'pre-chorus', required: true },
-      { tag: 'chorus', required: true },
-      { tag: 'chorus', required: true },
-      { tag: 'chorus', required: true },
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true },
+      { tag: 'bridge', required: false }, { tag: 'outro', required: false },
+    ],
+    syllableRange: { min: 6, max: 10 }, rhymeScheme: 'ABCB',
+    notes: 'Angular guitar lines, prominent bass, monotone-to-passionate vocal dynamics.',
+    category: 'rock', styleTags: 'post-punk, 130 bpm, angular guitar, dark, atmospheric, bass-driven, brooding vocals',
+    bpmRange: { min: 115, max: 145 }, energy: 'medium',
+  },
+  {
+    id: 'grunge', name: 'Grunge', description: 'Raw, distorted rock with angst-filled lyrics.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true }, { tag: 'chorus', required: true },
+      { tag: 'solo', required: false },
+    ],
+    syllableRange: { min: 5, max: 9 }, rhymeScheme: 'ABAB',
+    notes: 'Quiet verse/loud chorus dynamics. Raw, unpolished sound.',
+    category: 'rock', styleTags: 'grunge, 125 bpm, distorted, raw, 90s rock, angst, heavy guitar',
+    bpmRange: { min: 100, max: 140 }, energy: 'high',
+  },
+  {
+    id: 'prog-rock', name: 'Progressive Rock', description: 'Complex, ambitious rock with unusual structures.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'bridge', required: true },
+      { tag: 'solo', required: false }, { tag: 'intro', required: false }, { tag: 'outro', required: false },
+    ],
+    syllableRange: { min: 6, max: 12 }, rhymeScheme: 'ABCB',
+    notes: 'Extended song forms, odd time signatures, concept album themes.',
+    category: 'rock', styleTags: 'progressive rock, 120 bpm, complex, keyboards, odd time signature, epic, symphonic',
+    bpmRange: { min: 80, max: 150 }, energy: 'medium',
+  },
+  {
+    id: 'shoegaze', name: 'Shoegaze', description: 'Dreamy, heavily effected guitars creating walls of sound.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true },
+      { tag: 'outro', required: false },
+    ],
+    syllableRange: { min: 5, max: 8 }, rhymeScheme: 'loose',
+    notes: 'Buried vocals under layers of reverb/delay guitar. Dreamy, ethereal atmosphere.',
+    category: 'rock', styleTags: 'shoegaze, 110 bpm, dreamy, reverb, ethereal, wall of sound, distorted guitar',
+    bpmRange: { min: 90, max: 130 }, energy: 'medium',
+  },
+
+  // Electronic (9)
+  {
+    id: 'edm-dance', name: 'EDM / Dance', description: 'Electronic dance music built around drops and builds.',
+    structure: [
+      { tag: 'drop', required: true }, { tag: 'drop', required: true },
+      { tag: 'intro', required: false }, { tag: 'build', required: false },
+      { tag: 'break', required: false }, { tag: 'outro', required: false },
+    ],
+    syllableRange: { min: 4, max: 8 }, rhymeScheme: 'loose',
+    notes: 'Drops are the main event. Short, punchy lyric lines.',
+    category: 'electronic', styleTags: 'EDM, 128 bpm, dance, festival, big drop, synth lead, energetic',
+    bpmRange: { min: 125, max: 135 }, energy: 'high',
+  },
+  {
+    id: 'dark-techno', name: 'Dark Techno', description: 'Industrial-tinged techno with minimal, hypnotic patterns.',
+    structure: [
+      { tag: 'intro', required: false }, { tag: 'drop', required: true }, { tag: 'drop', required: true },
+      { tag: 'break', required: false }, { tag: 'outro', required: false },
+    ],
+    syllableRange: { min: 3, max: 6 }, rhymeScheme: 'none',
+    notes: 'Minimal lyrics, spoken word fragments. Focus on rhythm and atmosphere.',
+    category: 'electronic', styleTags: 'dark techno, 140 bpm, industrial, heavy kick, Berlin underground, hypnotic, minimal',
+    bpmRange: { min: 130, max: 150 }, energy: 'high',
+  },
+  {
+    id: 'melodic-house', name: 'Melodic House', description: 'Emotional house music with progressive builds.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'chorus', required: true }, { tag: 'drop', required: true },
+      { tag: 'break', required: false }, { tag: 'outro', required: false },
+    ],
+    syllableRange: { min: 5, max: 8 }, rhymeScheme: 'loose',
+    notes: 'Warm synth pads, emotional vocal hooks, progressive build-ups.',
+    category: 'electronic', styleTags: 'melodic house, 124 bpm, progressive, emotional, warm synths, deep, female vocal',
+    bpmRange: { min: 118, max: 128 }, energy: 'medium',
+  },
+  {
+    id: 'drum-and-bass', name: 'Drum & Bass', description: 'Fast-paced electronic with breakbeats and heavy bass.',
+    structure: [
+      { tag: 'intro', required: false }, { tag: 'drop', required: true }, { tag: 'drop', required: true },
+      { tag: 'verse', required: false }, { tag: 'break', required: false },
+    ],
+    syllableRange: { min: 4, max: 8 }, rhymeScheme: 'loose',
+    notes: 'Fast breakbeats, sub-bass, rapid-fire lyrics if present.',
+    category: 'electronic', styleTags: 'drum and bass, 174 bpm, breakbeat, sub-bass, fast, energetic, amen break',
+    bpmRange: { min: 165, max: 180 }, energy: 'high',
+  },
+  {
+    id: 'trance', name: 'Trance', description: 'Euphoric electronic music with soaring melodies.',
+    structure: [
+      { tag: 'intro', required: false }, { tag: 'build', required: true }, { tag: 'drop', required: true },
+      { tag: 'break', required: false }, { tag: 'build', required: true }, { tag: 'drop', required: true },
+      { tag: 'outro', required: false },
+    ],
+    syllableRange: { min: 5, max: 8 }, rhymeScheme: 'loose',
+    notes: 'Euphoric builds, arpeggiated synths, emotional breakdowns.',
+    category: 'electronic', styleTags: 'trance, 138 bpm, euphoric, arpeggiated synth, uplifting, anthemic, emotional',
+    bpmRange: { min: 130, max: 145 }, energy: 'high',
+  },
+  {
+    id: 'dubstep', name: 'Dubstep', description: 'Bass-heavy electronic with wobble bass and heavy drops.',
+    structure: [
+      { tag: 'intro', required: false }, { tag: 'build', required: true },
+      { tag: 'drop', required: true }, { tag: 'drop', required: true }, { tag: 'break', required: false },
+    ],
+    syllableRange: { min: 3, max: 7 }, rhymeScheme: 'loose',
+    notes: 'Wobble bass, half-time drums, aggressive sound design.',
+    category: 'electronic', styleTags: 'dubstep, 140 bpm, wobble bass, heavy drop, aggressive, half-time, bass music',
+    bpmRange: { min: 135, max: 150 }, energy: 'high',
+  },
+  {
+    id: 'house', name: 'House', description: 'Four-on-the-floor house music with groovy basslines.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'chorus', required: true }, { tag: 'drop', required: true },
+      { tag: 'break', required: false }, { tag: 'outro', required: false },
+    ],
+    syllableRange: { min: 5, max: 8 }, rhymeScheme: 'loose',
+    notes: 'Four-on-the-floor kick, funky basslines, soulful vocal samples.',
+    category: 'electronic', styleTags: 'house, 124 bpm, four on the floor, funky, groovy, soulful vocal, bass-driven',
+    bpmRange: { min: 118, max: 130 }, energy: 'medium',
+  },
+  {
+    id: 'synthwave', name: 'Synthwave', description: 'Retro-futuristic electronic inspired by 80s aesthetics.',
+    structure: [
+      { tag: 'intro', required: false }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true },
+      { tag: 'bridge', required: false }, { tag: 'outro', required: false },
+    ],
+    syllableRange: { min: 5, max: 9 }, rhymeScheme: 'ABAB',
+    notes: 'Retro synths, gated reverb drums, neon-noir imagery.',
+    category: 'electronic', styleTags: 'synthwave, 110 bpm, retro, 80s, neon, synthesizer, cinematic, nostalgic',
+    bpmRange: { min: 100, max: 120 }, energy: 'medium',
+  },
+  {
+    id: 'phonk', name: 'Phonk', description: 'Memphis rap-influenced electronic with dark, aggressive energy.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'hook', required: true }, { tag: 'hook', required: true },
+    ],
+    syllableRange: { min: 6, max: 10 }, rhymeScheme: 'AABB',
+    notes: 'Dark atmosphere, chopped vocal samples, heavy 808 bass.',
+    category: 'electronic', styleTags: 'phonk, 130 bpm, dark, drift, memphis rap, 808 bass, cowbell, chopped samples',
+    bpmRange: { min: 120, max: 140 }, energy: 'high',
+  },
+
+  // Hip-Hop (6)
+  {
+    id: 'hip-hop-trap', name: 'Hip-Hop / Trap', description: 'Rap/trap with verses and hooks.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'hook', required: true }, { tag: 'hook', required: true },
+      { tag: 'intro', required: false }, { tag: 'outro', required: false },
+    ],
+    syllableRange: { min: 8, max: 14 }, rhymeScheme: 'AABB',
+    notes: 'Hooks are shorter than verses. Internal rhymes are common.',
+    category: 'hip-hop', styleTags: 'trap, 140 bpm, 808 bass, hi-hats, dark, hard-hitting, rap',
+    bpmRange: { min: 130, max: 160 }, energy: 'high',
+  },
+  {
+    id: 'boom-bap', name: 'Boom Bap', description: 'Classic 90s hip-hop with sample-based beats.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'hook', required: true }, { tag: 'hook', required: true }, { tag: 'intro', required: false },
+    ],
+    syllableRange: { min: 8, max: 14 }, rhymeScheme: 'AABB',
+    notes: 'Sample-based production, head-nodding drums, lyrical complexity.',
+    category: 'hip-hop', styleTags: 'boom bap, 90 bpm, old school hip-hop, sampled beats, vinyl, lyrical, 90s',
+    bpmRange: { min: 80, max: 100 }, energy: 'medium',
+  },
+  {
+    id: 'drill', name: 'Drill', description: 'Dark, aggressive rap with sliding 808s.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'hook', required: true }, { tag: 'hook', required: true },
+    ],
+    syllableRange: { min: 7, max: 12 }, rhymeScheme: 'AABB',
+    notes: 'Sliding 808 bass, dark piano melodies, aggressive flow.',
+    category: 'hip-hop', styleTags: 'drill, 145 bpm, sliding 808, dark piano, aggressive, menacing, bass-heavy',
+    bpmRange: { min: 138, max: 150 }, energy: 'high',
+  },
+  {
+    id: 'conscious-rap', name: 'Conscious Rap', description: 'Socially aware hip-hop with thoughtful lyrics.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true }, { tag: 'outro', required: false },
+    ],
+    syllableRange: { min: 8, max: 14 }, rhymeScheme: 'ABAB',
+    notes: 'Thoughtful, socially conscious themes. Complex rhyme schemes.',
+    category: 'hip-hop', styleTags: 'conscious hip-hop, 95 bpm, soulful, jazzy, lyrical, thoughtful, live instruments',
+    bpmRange: { min: 85, max: 105 }, energy: 'medium',
+  },
+  {
+    id: 'cloud-rap', name: 'Cloud Rap', description: 'Ethereal, atmospheric hip-hop with dreamy production.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'hook', required: true }, { tag: 'hook', required: true },
+    ],
+    syllableRange: { min: 6, max: 10 }, rhymeScheme: 'loose',
+    notes: 'Spacey synths, reverb-heavy vocals, atmospheric.',
+    category: 'hip-hop', styleTags: 'cloud rap, 135 bpm, ethereal, spacey synths, reverb, atmospheric, melodic rap',
+    bpmRange: { min: 125, max: 145 }, energy: 'medium',
+  },
+  {
+    id: 'grime', name: 'Grime', description: 'UK electronic rap with rapid-fire bars and dark beats.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'hook', required: true },
+    ],
+    syllableRange: { min: 8, max: 14 }, rhymeScheme: 'AABB',
+    notes: 'Fast, aggressive bars over skippy electronic beats. 140 bpm standard.',
+    category: 'hip-hop', styleTags: 'grime, 140 bpm, UK, aggressive, skippy beats, bass, rapid-fire, dark synths',
+    bpmRange: { min: 135, max: 145 }, energy: 'high',
+  },
+
+  // R&B / Soul (4)
+  {
+    id: 'rnb-soul', name: 'R&B / Soul', description: 'Smooth R&B/soul with emotional depth and vocal runs.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'pre-chorus', required: true }, { tag: 'pre-chorus', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true }, { tag: 'chorus', required: true },
       { tag: 'bridge', required: true },
     ],
-    syllableRange: { min: 6, max: 12 },
-    rhymeScheme: 'ABAB',
-    notes: 'Emphasis on vocal performance and emotion. Bridge often features melisma or spoken word.',
+    syllableRange: { min: 6, max: 12 }, rhymeScheme: 'ABAB',
+    notes: 'Emphasis on vocal performance and emotion.',
+    category: 'r-and-b', styleTags: 'r&b, 90 bpm, soulful, smooth, groovy, contemporary, vocal runs',
+    bpmRange: { min: 75, max: 100 }, energy: 'medium',
   },
   {
-    id: 'ballad',
-    name: 'Ballad / Emotional',
-    description: 'Slow, emotional ballad with storytelling focus.',
+    id: 'neo-soul', name: 'Neo-Soul', description: 'Modern soul with jazz harmonies and organic production.',
     structure: [
-      { tag: 'verse', required: true },
-      { tag: 'verse', required: true },
-      { tag: 'chorus', required: true },
-      { tag: 'chorus', required: true },
-      { tag: 'chorus', required: true },
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true },
+      { tag: 'bridge', required: false }, { tag: 'outro', required: false },
+    ],
+    syllableRange: { min: 6, max: 11 }, rhymeScheme: 'ABCB',
+    notes: 'Jazz chords, live instrumentation feel, poetic lyrics.',
+    category: 'r-and-b', styleTags: 'neo-soul, 85 bpm, jazzy, organic, live instruments, warm, poetic, mellow',
+    bpmRange: { min: 75, max: 95 }, energy: 'low',
+  },
+  {
+    id: 'funk', name: 'Funk', description: 'Groove-heavy music with syncopated bass and rhythm guitar.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true },
+      { tag: 'bridge', required: false }, { tag: 'breakdown', required: false },
+    ],
+    syllableRange: { min: 5, max: 10 }, rhymeScheme: 'AABB',
+    notes: 'Slap bass, wah guitar, tight horn sections. Groove is everything.',
+    category: 'r-and-b', styleTags: 'funk, 110 bpm, groovy, slap bass, wah guitar, horns, tight rhythm, danceable',
+    bpmRange: { min: 95, max: 120 }, energy: 'high',
+  },
+  {
+    id: 'gospel', name: 'Gospel', description: 'Uplifting spiritual music with powerful vocal harmonies.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true }, { tag: 'chorus', required: true },
+      { tag: 'bridge', required: true },
+    ],
+    syllableRange: { min: 6, max: 11 }, rhymeScheme: 'ABAB',
+    notes: 'Powerful choir harmonies, organ/piano foundation, call-and-response.',
+    category: 'r-and-b', styleTags: 'gospel, 100 bpm, choir, uplifting, organ, piano, spiritual, powerful vocals',
+    bpmRange: { min: 80, max: 120 }, energy: 'high',
+  },
+
+  // Chill (4)
+  {
+    id: 'lofi', name: 'Lo-fi / Chill', description: 'Relaxed lo-fi with soft vocals and minimal structure.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'hook', required: true }, { tag: 'hook', required: true },
+      { tag: 'intro', required: false }, { tag: 'outro', required: false },
+    ],
+    syllableRange: { min: 4, max: 8 }, rhymeScheme: 'ABCB',
+    notes: 'Laid-back, introspective vibe. Short hooks.',
+    category: 'chill', styleTags: 'lo-fi hip hop, 85 bpm, chill, boom bap, vinyl texture, mellow, jazzy samples',
+    bpmRange: { min: 70, max: 95 }, energy: 'low',
+  },
+  {
+    id: 'ambient', name: 'Ambient / Instrumental', description: 'Atmospheric ambient tracks, minimal or no lyrics.',
+    structure: [
+      { tag: 'intro', required: false }, { tag: 'drop', required: false }, { tag: 'outro', required: false },
+    ],
+    syllableRange: { min: 0, max: 6 }, rhymeScheme: 'none',
+    notes: 'Focus on atmosphere, texture, and mood. Lyrics optional and minimal.',
+    category: 'chill', styleTags: 'ambient, 70 bpm, atmospheric, pads, cinematic, ethereal, soundscape',
+    bpmRange: { min: 60, max: 90 }, energy: 'low',
+  },
+  {
+    id: 'chillwave', name: 'Chillwave', description: 'Hazy, nostalgic electronic pop with washed-out synths.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true }, { tag: 'outro', required: false },
+    ],
+    syllableRange: { min: 5, max: 8 }, rhymeScheme: 'ABCB',
+    notes: 'Reverb-soaked vocals, warm synths, nostalgic samples.',
+    category: 'chill', styleTags: 'chillwave, 100 bpm, hazy, nostalgic, warm synths, reverb vocals, dreamy, lo-fi',
+    bpmRange: { min: 90, max: 110 }, energy: 'low',
+  },
+  {
+    id: 'downtempo', name: 'Downtempo', description: 'Slow electronic grooves with complex textures.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'chorus', required: false },
+      { tag: 'break', required: false }, { tag: 'outro', required: false },
+    ],
+    syllableRange: { min: 4, max: 8 }, rhymeScheme: 'loose',
+    notes: 'Trip-hop influenced, layered textures, slow grooves.',
+    category: 'chill', styleTags: 'downtempo, 90 bpm, trip-hop, textured, slow groove, atmospheric, cinematic',
+    bpmRange: { min: 70, max: 100 }, energy: 'low',
+  },
+
+  // Ballad / Folk / Country (3)
+  {
+    id: 'ballad', name: 'Ballad / Emotional', description: 'Slow, emotional ballad with storytelling focus.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true }, { tag: 'chorus', required: true },
       { tag: 'bridge', required: false },
     ],
-    syllableRange: { min: 8, max: 12 },
-    rhymeScheme: 'ABAB',
-    notes: 'Longer, more poetic lines. Bridge optional but adds emotional peak before final chorus.',
+    syllableRange: { min: 8, max: 12 }, rhymeScheme: 'ABAB',
+    notes: 'Longer, more poetic lines. Bridge optional but adds emotional peak.',
+    category: 'folk-country', styleTags: 'ballad, 70 bpm, emotional, piano, strings, slow, powerful vocal, heartfelt',
+    bpmRange: { min: 60, max: 80 }, energy: 'low',
   },
   {
-    id: 'rock',
-    name: 'Rock / Alternative',
-    description: 'Classic rock or alternative with guitar-driven energy.',
+    id: 'acoustic-folk', name: 'Acoustic Folk', description: 'Stripped-back acoustic with fingerpicking and storytelling.',
     structure: [
-      { tag: 'verse', required: true },
-      { tag: 'verse', required: true },
-      { tag: 'chorus', required: true },
-      { tag: 'chorus', required: true },
-      { tag: 'chorus', required: true },
-      { tag: 'solo', required: false },
+      { tag: 'verse', required: true }, { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true }, { tag: 'bridge', required: false },
+    ],
+    syllableRange: { min: 7, max: 11 }, rhymeScheme: 'ABAB',
+    notes: 'Acoustic guitar fingerpicking, narrative lyrics, warm vocal delivery.',
+    category: 'folk-country', styleTags: 'acoustic folk, 100 bpm, fingerpicking guitar, warm vocal, storytelling, organic',
+    bpmRange: { min: 80, max: 115 }, energy: 'low',
+  },
+  {
+    id: 'country', name: 'Country', description: 'Modern country with twangy guitars and narrative lyrics.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true }, { tag: 'chorus', required: true },
       { tag: 'bridge', required: false },
     ],
-    syllableRange: { min: 5, max: 9 },
-    rhymeScheme: 'ABAB',
-    notes: 'Guitar solo and bridge are optional. Energy builds through the song.',
+    syllableRange: { min: 6, max: 10 }, rhymeScheme: 'ABAB',
+    notes: 'Twangy guitar, pedal steel, narrative storytelling.',
+    category: 'folk-country', styleTags: 'country, 120 bpm, twangy guitar, pedal steel, Nashville, storytelling, heartland',
+    bpmRange: { min: 100, max: 140 }, energy: 'medium',
+  },
+
+  // Latin (4)
+  {
+    id: 'reggaeton', name: 'Reggaeton', description: 'Latin urban music with dembow rhythm.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true }, { tag: 'chorus', required: true },
+      { tag: 'bridge', required: false },
+    ],
+    syllableRange: { min: 6, max: 10 }, rhymeScheme: 'AABB',
+    notes: 'Dembow beat pattern, Spanish/Spanglish lyrics, party vibes.',
+    category: 'latin', styleTags: 'reggaeton, 95 bpm, dembow, Latin, perreo, urban, bass-heavy, danceable',
+    bpmRange: { min: 88, max: 100 }, energy: 'high',
   },
   {
-    id: 'lofi',
-    name: 'Lo-fi / Chill',
-    description: 'Relaxed lo-fi with soft vocals and minimal structure.',
+    id: 'latin-pop', name: 'Latin Pop', description: 'Pop music with Latin rhythms.',
     structure: [
-      { tag: 'verse', required: true },
-      { tag: 'verse', required: true },
-      { tag: 'hook', required: true },
-      { tag: 'hook', required: true },
-      { tag: 'intro', required: false },
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'pre-chorus', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true }, { tag: 'bridge', required: false },
+    ],
+    syllableRange: { min: 6, max: 10 }, rhymeScheme: 'ABAB',
+    notes: 'Latin percussion, romantic or celebratory themes.',
+    category: 'latin', styleTags: 'latin pop, 110 bpm, romantic, Latin rhythm, acoustic guitar, percussion, warm',
+    bpmRange: { min: 95, max: 120 }, energy: 'medium',
+  },
+  {
+    id: 'salsa', name: 'Salsa', description: 'Energetic salsa with horn sections and clave rhythms.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true },
+      { tag: 'bridge', required: false }, { tag: 'breakdown', required: false },
+    ],
+    syllableRange: { min: 6, max: 10 }, rhymeScheme: 'ABAB',
+    notes: 'Clave rhythm, brass sections, call-and-response.',
+    category: 'latin', styleTags: 'salsa, 180 bpm, clave, brass, piano montuno, energetic, danceable, Latin',
+    bpmRange: { min: 160, max: 200 }, energy: 'high',
+  },
+  {
+    id: 'bossa-nova', name: 'Bossa Nova', description: 'Brazilian jazz-influenced music with gentle rhythms.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true }, { tag: 'bridge', required: false },
+    ],
+    syllableRange: { min: 6, max: 10 }, rhymeScheme: 'ABAB',
+    notes: 'Gentle nylon guitar, jazz chords, soft vocals.',
+    category: 'latin', styleTags: 'bossa nova, 120 bpm, nylon guitar, jazzy, soft vocal, Brazilian, relaxed, sophisticated',
+    bpmRange: { min: 110, max: 140 }, energy: 'low',
+  },
+
+  // World (6)
+  {
+    id: 'reggae', name: 'Reggae', description: 'Laid-back reggae with offbeat rhythms.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true }, { tag: 'chorus', required: true },
+      { tag: 'bridge', required: false },
+    ],
+    syllableRange: { min: 6, max: 10 }, rhymeScheme: 'ABAB',
+    notes: 'Syncopated rhythms, conscious or love themes.',
+    category: 'world', styleTags: 'reggae, 80 bpm, offbeat, laid-back, bass-heavy, Jamaican, conscious, skank guitar',
+    bpmRange: { min: 70, max: 90 }, energy: 'medium',
+  },
+  {
+    id: 'swedish-folk', name: 'Swedish Folk', description: 'Traditional Swedish folk with refrains.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'refrain', required: true }, { tag: 'refrain', required: true }, { tag: 'refrain', required: true },
+    ],
+    syllableRange: { min: 6, max: 9 }, rhymeScheme: 'ABAB',
+    notes: 'Section tags must be in English even for Swedish lyrics. Use [Verse] not [Vers].',
+    category: 'world', styleTags: 'Swedish folk, acoustic, fiddle, traditional, Nordic, melodic, nature themes',
+    bpmRange: { min: 80, max: 120 }, energy: 'medium',
+  },
+  {
+    id: 'afrobeat', name: 'Afrobeat', description: 'West African rhythms with jazz-funk.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true },
+      { tag: 'break', required: false }, { tag: 'outro', required: false },
+    ],
+    syllableRange: { min: 5, max: 10 }, rhymeScheme: 'loose',
+    notes: 'Polyrhythmic percussion, horn sections, call-and-response.',
+    category: 'world', styleTags: 'afrobeat, 110 bpm, polyrhythmic, horns, percussion, West African, groovy, jazz-funk',
+    bpmRange: { min: 95, max: 125 }, energy: 'high',
+  },
+  {
+    id: 'dancehall', name: 'Dancehall', description: 'Jamaican electronic dance music.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true },
+    ],
+    syllableRange: { min: 6, max: 10 }, rhymeScheme: 'AABB',
+    notes: 'Digital riddims, patois lyrics, energetic chanting.',
+    category: 'world', styleTags: 'dancehall, 100 bpm, Jamaican, digital riddim, bass-heavy, energetic, party',
+    bpmRange: { min: 90, max: 110 }, energy: 'high',
+  },
+  {
+    id: 'arabic-pop', name: 'Arabic Pop', description: 'Modern Arabic pop with traditional melodic scales.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true }, { tag: 'bridge', required: false },
+    ],
+    syllableRange: { min: 6, max: 10 }, rhymeScheme: 'ABAB',
+    notes: 'Maqam scales, oud or string elements, modern production.',
+    category: 'world', styleTags: 'Arabic pop, 100 bpm, maqam, oud, strings, Middle Eastern, emotional, modern',
+    bpmRange: { min: 85, max: 115 }, energy: 'medium',
+  },
+  {
+    id: 'celtic', name: 'Celtic', description: 'Irish/Scottish traditional music with modern arrangements.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'chorus', required: true },
+    ],
+    syllableRange: { min: 6, max: 10 }, rhymeScheme: 'ABAB',
+    notes: 'Tin whistle, fiddle, bodhran drums. Storytelling through multiple verses.',
+    category: 'world', styleTags: 'Celtic, 120 bpm, fiddle, tin whistle, folk, Irish, acoustic, storytelling',
+    bpmRange: { min: 100, max: 140 }, energy: 'medium',
+  },
+
+  // Jazz / Blues (3)
+  {
+    id: 'jazz', name: 'Jazz', description: 'Classic jazz with improvisation spaces.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'solo', required: false }, { tag: 'bridge', required: false },
+    ],
+    syllableRange: { min: 6, max: 11 }, rhymeScheme: 'ABCB',
+    notes: 'Swing feel, jazz chords, space for improvisation.',
+    category: 'jazz-blues', styleTags: 'jazz, 130 bpm, swing, saxophone, piano, upright bass, sophisticated, improvisational',
+    bpmRange: { min: 100, max: 160 }, energy: 'medium',
+  },
+  {
+    id: 'blues', name: 'Blues', description: '12-bar blues with call-and-response.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true }, { tag: 'verse', required: true },
+      { tag: 'chorus', required: true }, { tag: 'solo', required: false },
+    ],
+    syllableRange: { min: 6, max: 10 }, rhymeScheme: 'AABB',
+    notes: '12-bar blues structure, AAB lyric pattern per verse, expressive guitar.',
+    category: 'jazz-blues', styleTags: 'blues, 90 bpm, electric guitar, 12-bar, soulful, raw, expressive, harmonica',
+    bpmRange: { min: 70, max: 110 }, energy: 'medium',
+  },
+  {
+    id: 'jazz-fusion', name: 'Jazz Fusion', description: 'Jazz meets rock/funk with electric instruments.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'chorus', required: true }, { tag: 'solo', required: true },
+      { tag: 'bridge', required: false }, { tag: 'outro', required: false },
+    ],
+    syllableRange: { min: 6, max: 10 }, rhymeScheme: 'loose',
+    notes: 'Electric instruments, complex time signatures, extended solos.',
+    category: 'jazz-blues', styleTags: 'jazz fusion, 120 bpm, electric guitar, complex harmony, funky, virtuosic, experimental',
+    bpmRange: { min: 90, max: 150 }, energy: 'medium',
+  },
+
+  // Classical / Cinematic (1)
+  {
+    id: 'cinematic', name: 'Cinematic', description: 'Orchestral music with dramatic builds.',
+    structure: [
+      { tag: 'intro', required: true }, { tag: 'verse', required: true }, { tag: 'chorus', required: true },
+      { tag: 'build', required: true }, { tag: 'drop', required: true }, { tag: 'outro', required: false },
+    ],
+    syllableRange: { min: 6, max: 10 }, rhymeScheme: 'ABAB',
+    notes: 'Orchestral instruments, dramatic dynamics, epic builds.',
+    category: 'classical-cinematic', styleTags: 'cinematic, 90 bpm, orchestral, strings, epic, dramatic, film score, sweeping',
+    bpmRange: { min: 70, max: 120 }, energy: 'medium',
+  },
+
+  // Experimental (2)
+  {
+    id: 'experimental', name: 'Experimental', description: 'Genre-defying music with unconventional structures.',
+    structure: [
+      { tag: 'verse', required: false }, { tag: 'chorus', required: false },
+      { tag: 'bridge', required: false }, { tag: 'break', required: false }, { tag: 'outro', required: false },
+    ],
+    syllableRange: { min: 3, max: 12 }, rhymeScheme: 'none',
+    notes: 'No rules. Unconventional structure, unusual sounds.',
+    category: 'experimental', styleTags: 'experimental, avant-garde, glitch, abstract, unconventional, sound design',
+    bpmRange: { min: 60, max: 180 }, energy: 'medium',
+  },
+  {
+    id: 'spoken-word', name: 'Spoken Word', description: 'Poetry over minimal musical backing.',
+    structure: [
+      { tag: 'verse', required: true }, { tag: 'verse', required: true }, { tag: 'verse', required: true },
       { tag: 'outro', required: false },
     ],
-    syllableRange: { min: 4, max: 8 },
-    rhymeScheme: 'ABCB',
-    notes: 'Laid-back, introspective vibe. Short hooks. Intro and outro optional for atmosphere.',
+    syllableRange: { min: 8, max: 14 }, rhymeScheme: 'loose',
+    notes: 'Emphasis on spoken delivery, poetic rhythm, storytelling.',
+    category: 'experimental', styleTags: 'spoken word, 80 bpm, poetry, minimal, atmospheric, narrative, ambient backing',
+    bpmRange: { min: 60, max: 100 }, energy: 'low',
   },
 ];

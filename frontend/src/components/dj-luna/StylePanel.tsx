@@ -3,22 +3,15 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { Plus, X, Check } from 'lucide-react';
 import { useDJLunaStore, type StylePreset } from '@/lib/dj-luna-store';
+import { GENRE_PRESETS, GENRE_CATEGORIES, GENRE_CATEGORY_LABELS, type GenreCategory } from '@/lib/genre-presets';
 
-const BUILTIN_PRESETS: StylePreset[] = [
-  { id: 'dark-techno',    name: 'Dark Techno',    tags: 'dark techno, 140 bpm, industrial, heavy kick, Berlin underground, hypnotic' },
-  { id: 'lofi-hiphop',   name: 'Lo-fi Hip Hop',  tags: 'lo-fi hip hop, 90 bpm, chill, boom bap, vinyl texture, mellow' },
-  { id: 'melodic-house', name: 'Melodic House',   tags: 'melodic house, 124 bpm, progressive, emotional, warm synths, female vocal' },
-  { id: 'trap',          name: 'Trap',            tags: 'trap, 140 bpm, 808 bass, hi-hats, dark, hard-hitting' },
-  { id: 'ambient',       name: 'Ambient',         tags: 'ambient, 70 bpm, atmospheric, pads, cinematic, ethereal' },
-  { id: 'pop',           name: 'Pop',             tags: 'pop, 120 bpm, catchy, upbeat, polished production' },
-  { id: 'rnb',           name: 'R&B',             tags: 'r&b, 90 bpm, soulful, smooth, groovy, contemporary' },
-  { id: 'phonk',         name: 'Phonk',           tags: 'phonk, 130 bpm, dark, drift, memphis rap, 808 bass' },
-];
+type CategoryFilter = 'all' | GenreCategory;
 
 export function StylePanel() {
   const { activeStyle, activePresetId, customPresets, setActiveStyle, addCustomPreset, removeCustomPreset } = useDJLunaStore();
   const [showSaveDialog, setShowSaveDialog] = useState(false);
   const [newPresetName, setNewPresetName] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('all');
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleStyleChange = useCallback((value: string) => {
@@ -34,7 +27,7 @@ export function StylePanel() {
     };
   }, []);
 
-  const handlePresetClick = (preset: StylePreset) => {
+  const handlePresetClick = (preset: { id: string; tags: string }) => {
     setActiveStyle(preset.tags, preset.id);
   };
 
@@ -45,7 +38,22 @@ export function StylePanel() {
     setShowSaveDialog(false);
   };
 
-  const allPresets = [...BUILTIN_PRESETS, ...customPresets];
+  // Convert genre presets to style presets for display
+  const builtinPresets: Array<{ id: string; name: string; tags: string; category: GenreCategory }> =
+    GENRE_PRESETS.map(g => ({ id: g.id, name: g.name, tags: g.styleTags, category: g.category }));
+
+  const filteredPresets = categoryFilter === 'all'
+    ? builtinPresets
+    : builtinPresets.filter(p => p.category === categoryFilter);
+
+  // Group by category when showing all
+  const groupedPresets = categoryFilter === 'all'
+    ? GENRE_CATEGORIES.map(cat => ({
+        category: cat,
+        label: GENRE_CATEGORY_LABELS[cat],
+        presets: builtinPresets.filter(p => p.category === cat),
+      })).filter(g => g.presets.length > 0)
+    : null;
 
   return (
     <div className="flex flex-col h-full bg-gray-900 border-t border-gray-700">
@@ -73,36 +81,108 @@ export function StylePanel() {
         />
       </div>
 
+      {/* Category filter pills */}
+      <div className="px-3 py-1.5 flex flex-wrap gap-1 border-b border-gray-800">
+        <button
+          onClick={() => setCategoryFilter('all')}
+          className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
+            categoryFilter === 'all'
+              ? 'bg-purple-600 text-white'
+              : 'bg-gray-800 text-gray-400 hover:text-gray-300'
+          }`}
+        >
+          All
+        </button>
+        {GENRE_CATEGORIES.map((cat) => (
+          <button
+            key={cat}
+            onClick={() => setCategoryFilter(cat)}
+            className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
+              categoryFilter === cat
+                ? 'bg-purple-600 text-white'
+                : 'bg-gray-800 text-gray-400 hover:text-gray-300'
+            }`}
+          >
+            {GENRE_CATEGORY_LABELS[cat]}
+          </button>
+        ))}
+      </div>
+
       {/* Preset chips */}
-      <div className="flex-1 overflow-y-auto px-3 pb-3">
-        <div className="flex flex-wrap gap-1.5">
-          {allPresets.map((preset) => {
-            const isActive = activePresetId === preset.id;
-            const isCustom = !BUILTIN_PRESETS.find((b) => b.id === preset.id);
-            return (
-              <div key={preset.id} className="relative group">
-                <button
-                  onClick={() => handlePresetClick(preset)}
-                  className={`px-2.5 py-1 rounded-full text-xs transition-colors ${
-                    isActive
-                      ? 'bg-purple-600 text-white'
-                      : 'bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-purple-300'
-                  }`}
-                >
-                  {preset.name}
-                </button>
-                {isCustom && (
+      <div className="flex-1 overflow-y-auto px-3 py-2">
+        {groupedPresets ? (
+          // Grouped view when "All" is selected
+          groupedPresets.map((group) => (
+            <div key={group.category} className="mb-2">
+              <div className="text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1">
+                {group.label}
+              </div>
+              <div className="flex flex-wrap gap-1.5 mb-1">
+                {group.presets.map((preset) => (
+                  <button
+                    key={preset.id}
+                    onClick={() => handlePresetClick(preset)}
+                    className={`px-2.5 py-1 rounded-full text-xs transition-colors ${
+                      activePresetId === preset.id
+                        ? 'bg-purple-600 text-white'
+                        : 'bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-purple-300'
+                    }`}
+                  >
+                    {preset.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))
+        ) : (
+          // Flat view when a specific category is selected
+          <div className="flex flex-wrap gap-1.5">
+            {filteredPresets.map((preset) => (
+              <button
+                key={preset.id}
+                onClick={() => handlePresetClick(preset)}
+                className={`px-2.5 py-1 rounded-full text-xs transition-colors ${
+                  activePresetId === preset.id
+                    ? 'bg-purple-600 text-white'
+                    : 'bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-purple-300'
+                }`}
+              >
+                {preset.name}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Custom presets section */}
+        {customPresets.length > 0 && (
+          <div className="mt-2 pt-2 border-t border-gray-800">
+            <div className="text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1">
+              Custom
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {customPresets.map((preset: StylePreset) => (
+                <div key={preset.id} className="relative group">
+                  <button
+                    onClick={() => handlePresetClick(preset)}
+                    className={`px-2.5 py-1 rounded-full text-xs transition-colors ${
+                      activePresetId === preset.id
+                        ? 'bg-purple-600 text-white'
+                        : 'bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-purple-300'
+                    }`}
+                  >
+                    {preset.name}
+                  </button>
                   <button
                     onClick={() => removeCustomPreset(preset.id)}
                     className="absolute -top-1 -right-1 hidden group-hover:flex items-center justify-center w-3.5 h-3.5 bg-red-600 rounded-full text-white"
                   >
                     <X size={8} />
                   </button>
-                )}
-              </div>
-            );
-          })}
-        </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Save preset dialog */}

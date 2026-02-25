@@ -6,7 +6,7 @@ import { randomUUID } from 'crypto';
 
 const WORKSPACE_DIR = process.env.WORKSPACE_DIR || '/app/workspace';
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB per file
-const MAX_FILES_PER_USER = 100;
+const MAX_FILES_PER_USER = 2000;
 
 // Allowed file extensions for workspace
 const ALLOWED_EXTENSIONS = new Set([

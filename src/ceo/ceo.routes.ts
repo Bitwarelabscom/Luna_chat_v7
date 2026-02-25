@@ -4,7 +4,9 @@ import { authenticate } from '../auth/auth.middleware.js';
 import * as ceoService from './ceo.service.js';
 import * as buildTracker from './build-tracker.service.js';
 import * as albumPipeline from './album-pipeline.service.js';
+import * as musicTrendScraper from './music-trend-scraper.service.js';
 import { GENRE_PRESETS } from '../abilities/genre-presets.js';
+import * as genreRegistry from '../abilities/genre-registry.service.js';
 import { pool } from '../db/index.js';
 import logger from '../utils/logger.js';
 
@@ -676,9 +678,27 @@ router.get('/albums', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/ceo/albums/genres - Get available genre presets
-router.get('/albums/genres', async (_req: Request, res: Response) => {
-  res.json({ genres: GENRE_PRESETS.map(g => ({ id: g.id, name: g.name, description: g.description, defaultSongCount: g.defaultSongCount })) });
+// GET /api/ceo/albums/genres - Get available genre presets (including user-approved)
+router.get('/albums/genres', async (req: Request, res: Response) => {
+  try {
+    const presets = await genreRegistry.getAllPresets(req.user!.userId);
+    res.json({
+      genres: presets.map(g => ({
+        id: g.id, name: g.name, description: g.description,
+        defaultSongCount: g.defaultSongCount, category: g.category,
+        styleTags: g.styleTags, bpmRange: g.bpmRange, energy: g.energy,
+      })),
+    });
+  } catch {
+    // Fallback to builtins
+    res.json({
+      genres: GENRE_PRESETS.map(g => ({
+        id: g.id, name: g.name, description: g.description,
+        defaultSongCount: g.defaultSongCount, category: g.category,
+        styleTags: g.styleTags, bpmRange: g.bpmRange, energy: g.energy,
+      })),
+    });
+  }
 });
 
 // GET /api/ceo/albums/:id - Production detail
@@ -808,6 +828,108 @@ router.put('/artists/:name', async (req: Request, res: Response) => {
     }
     logger.error('Failed to write artist', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to write artist' });
+  }
+});
+
+// ============================================================
+// Music Trend & Genre Proposal Routes
+// ============================================================
+
+// GET /api/ceo/radar/music-trends - Get music trend signals
+router.get('/radar/music-trends', async (req: Request, res: Response) => {
+  try {
+    const limit = Number.parseInt((req.query.limit as string) || '20', 10);
+    const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(100, limit)) : 20;
+    const result = await pool.query(
+      `SELECT id, signal_type AS "signalType", title, summary, source_url AS "sourceUrl",
+              confidence, actionable, created_at AS "createdAt"
+       FROM ceo_market_signals
+       WHERE user_id = $1 AND signal_type = 'music_trend'
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [req.user!.userId, safeLimit]
+    );
+    res.json({ signals: result.rows });
+  } catch (error) {
+    logger.error('Failed to get music trend signals', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get music trend signals' });
+  }
+});
+
+// GET /api/ceo/genres/proposed - List pending genre proposals
+router.get('/genres/proposed', async (req: Request, res: Response) => {
+  try {
+    const status = (req.query.status as string) || 'pending';
+    const proposals = await musicTrendScraper.listProposedGenres(req.user!.userId, status);
+    res.json({ proposals });
+  } catch (error) {
+    logger.error('Failed to list proposed genres', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to list proposed genres' });
+  }
+});
+
+// POST /api/ceo/genres/proposed/:id/approve - Approve a genre proposal
+router.post('/genres/proposed/:id/approve', async (req: Request, res: Response) => {
+  try {
+    const approved = await musicTrendScraper.approveProposedGenre(req.user!.userId, req.params.id);
+    if (!approved) {
+      res.status(404).json({ error: 'Proposal not found or not pending' });
+      return;
+    }
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Failed to approve genre proposal', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to approve proposal' });
+  }
+});
+
+// POST /api/ceo/genres/proposed/:id/reject - Reject a genre proposal
+router.post('/genres/proposed/:id/reject', async (req: Request, res: Response) => {
+  try {
+    const rejected = await musicTrendScraper.rejectProposedGenre(req.user!.userId, req.params.id);
+    if (!rejected) {
+      res.status(404).json({ error: 'Proposal not found or not pending' });
+      return;
+    }
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Failed to reject genre proposal', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to reject proposal' });
+  }
+});
+
+// PUT /api/ceo/genres/proposed/:id - Edit preset data before approving
+const editProposalSchema = z.object({
+  presetData: z.record(z.unknown()),
+});
+
+router.put('/genres/proposed/:id', async (req: Request, res: Response) => {
+  try {
+    const { presetData } = editProposalSchema.parse(req.body);
+    const updated = await musicTrendScraper.editProposedGenre(req.user!.userId, req.params.id, presetData);
+    if (!updated) {
+      res.status(404).json({ error: 'Proposal not found or not pending' });
+      return;
+    }
+    res.json({ success: true });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: 'Validation error', details: error.errors });
+      return;
+    }
+    logger.error('Failed to edit genre proposal', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to edit proposal' });
+  }
+});
+
+// POST /api/ceo/radar/scrape-now - Manual trigger of music trend scraping
+router.post('/radar/scrape-now', async (req: Request, res: Response) => {
+  try {
+    const result = await musicTrendScraper.runMusicTrendPipelineForUser(req.user!.userId);
+    res.json({ success: true, ...result });
+  } catch (error) {
+    logger.error('Failed to run music trend scrape', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to run scrape' });
   }
 });
 

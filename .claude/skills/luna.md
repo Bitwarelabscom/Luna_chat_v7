@@ -57,6 +57,11 @@ I notice I made a mistake. Let me add this to Luna for next time.
 
 <!-- Claude automatically adds entries here when mistakes are detected -->
 
+### CEO config table is plural: ceo_configs (2026-02-25)
+- **Mistake:** Used `FROM ceo_config` (singular) in music-trend-scraper.service.ts
+- **Correct:** Table name is `ceo_configs` (plural)
+- **Prevention:** Check table names with `\dt ceo*` before writing queries against CEO tables
+
 ### Fetch calls need credentials: 'include' for auth cookies
 - **Mistake:** TerminalChat.tsx was using fetch() without `credentials: 'include'`, causing auth to fail
 - **Correct:** Always include `credentials: 'include'` in fetch calls that need authentication

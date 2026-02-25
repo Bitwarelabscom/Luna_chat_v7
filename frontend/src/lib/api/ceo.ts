@@ -133,12 +133,23 @@ export interface CeoDashboard {
 
 export interface RadarSignal {
   id: string;
-  signalType: 'opportunity' | 'threat' | 'pricing' | 'policy' | 'trend';
+  signalType: 'opportunity' | 'threat' | 'pricing' | 'policy' | 'trend' | 'music_trend';
   title: string;
   summary: string | null;
   sourceUrl: string | null;
   confidence: number;
   actionable: boolean;
+  createdAt: string;
+}
+
+export interface ProposedGenre {
+  id: string;
+  genreId: string;
+  name: string;
+  category: string;
+  presetData: Record<string, unknown>;
+  confidence: number;
+  status: string;
   createdAt: string;
 }
 
@@ -256,6 +267,10 @@ export interface GenreOption {
   name: string;
   description: string;
   defaultSongCount: number;
+  category?: string;
+  styleTags?: string;
+  bpmRange?: { min: number; max: number };
+  energy?: string;
 }
 
 export interface ProductionSummary {
@@ -345,3 +360,25 @@ export const fetchArtist = (name: string) =>
 
 export const saveArtist = (name: string, content: string) =>
   api<{ success: boolean }>(`/api/ceo/artists/${encodeURIComponent(name)}`, { method: 'PUT', body: { content } });
+
+// ============================================================
+// Music Trends & Genre Proposals
+// ============================================================
+
+export const fetchMusicTrendSignals = (limit = 20) =>
+  api<{ signals: RadarSignal[] }>(`/api/ceo/radar/music-trends?limit=${limit}`);
+
+export const fetchProposedGenres = (status = 'pending') =>
+  api<{ proposals: ProposedGenre[] }>(`/api/ceo/genres/proposed?status=${status}`);
+
+export const approveGenre = (id: string) =>
+  api<{ success: boolean }>(`/api/ceo/genres/proposed/${id}/approve`, { method: 'POST' });
+
+export const rejectGenre = (id: string) =>
+  api<{ success: boolean }>(`/api/ceo/genres/proposed/${id}/reject`, { method: 'POST' });
+
+export const editGenre = (id: string, presetData: Record<string, unknown>) =>
+  api<{ success: boolean }>(`/api/ceo/genres/proposed/${id}`, { method: 'PUT', body: { presetData } });
+
+export const triggerMusicScrape = () =>
+  api<{ success: boolean; items: number; genres: number; signals: number }>('/api/ceo/radar/scrape-now', { method: 'POST' });
