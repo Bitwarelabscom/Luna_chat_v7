@@ -32,11 +32,22 @@ export const tokenStorage = {
 
 // Export prefix for static media URLs
 export const getMediaUrl = (path: string): string => {
-  // If path already has prefix or is absolute URL, return as-is
-  if (path.startsWith(API_PREFIX) || path.startsWith('http')) {
+  if (!path) {
     return path;
   }
-  return `${API_PREFIX}${path}`;
+
+  if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('data:') || path.startsWith('blob:')) {
+    return path;
+  }
+
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+
+  if (!API_URL) {
+    return `${API_PREFIX}${normalizedPath}`;
+  }
+
+  const normalizedApiUrl = API_URL.endsWith('/') ? API_URL.slice(0, -1) : API_URL;
+  return `${normalizedApiUrl}${API_PREFIX}${normalizedPath}`;
 };
 
 interface ApiOptions {

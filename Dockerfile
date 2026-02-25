@@ -15,6 +15,21 @@ FROM node:20-bookworm-slim AS runner
 
 WORKDIR /app
 
+ARG DEBIAN_MIRROR=ftp.fi.debian.org
+ARG DEBIAN_SECURITY_MIRROR=security.debian.org
+
+# Use non-US mirrors and apt retries to reduce transient mirror failures.
+RUN set -eux; \
+    printf 'Acquire::Retries "6";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' > /etc/apt/apt.conf.d/80-retries; \
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do \
+      [ -f "$f" ] || continue; \
+      sed -i \
+        -e "s|http://deb.debian.org/debian-security|http://${DEBIAN_SECURITY_MIRROR}/debian-security|g" \
+        -e "s|http://security.debian.org/debian-security|http://${DEBIAN_SECURITY_MIRROR}/debian-security|g" \
+        -e "s|http://deb.debian.org/debian|http://${DEBIAN_MIRROR}/debian|g" \
+        "$f"; \
+    done
+
 # Add system dependencies for tooling, media, and Playwright runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget git ffmpeg vlc python3 python3-pip ca-certificates curl gnupg \

@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { authenticate } from '../auth/auth.middleware.js';
 import * as ceoService from './ceo.service.js';
 import * as buildTracker from './build-tracker.service.js';
+import * as albumPipeline from './album-pipeline.service.js';
+import { GENRE_PRESETS } from '../abilities/genre-presets.js';
 import { pool } from '../db/index.js';
 import logger from '../utils/logger.js';
 
@@ -398,6 +400,10 @@ const startBuildSchema = z.object({
   taskName: z.string().min(1).max(200),
 });
 
+const buildHistoryQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+});
+
 const buildNoteSchema = z.object({
   note: z.string().min(1).max(2000),
 });
@@ -427,6 +433,22 @@ router.get('/builds', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to list builds', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to list builds' });
+  }
+});
+
+// GET /api/ceo/builds/history
+router.get('/builds/history', async (req: Request, res: Response) => {
+  try {
+    const { limit } = buildHistoryQuerySchema.parse(req.query);
+    const builds = await buildTracker.listBuildHistory(req.user!.userId, limit ?? 60);
+    res.json({ builds });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: 'Validation error', details: error.errors });
+      return;
+    }
+    logger.error('Failed to list build history', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to list build history' });
   }
 });
 
@@ -548,7 +570,7 @@ router.post('/slash/cost', async (req: Request, res: Response) => {
       category,
       notes: note || undefined,
     });
-    const systemLog = `[SYSTEM LOG: Expense $${amount.toFixed(2)} logged - ${category} (${categoryOrKeyword}${note ? ': ' + note : ''})]`;
+    const systemLog = `[SYSTEM LOG: Expense ${amount.toFixed(2)} logged - ${category} (${categoryOrKeyword}${note ? ': ' + note : ''})]`;
     res.status(201).json({ success: true, systemLog, data: { id, category, amount } });
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -569,7 +591,7 @@ router.post('/slash/income', async (req: Request, res: Response) => {
       amountUsd: amount,
       notes: note || undefined,
     });
-    const systemLog = `[SYSTEM LOG: Income +$${amount.toFixed(2)} logged - ${source}${note ? ': ' + note : ''}]`;
+    const systemLog = `[SYSTEM LOG: Income +${amount.toFixed(2)} logged - ${source}${note ? ': ' + note : ''}]`;
     res.status(201).json({ success: true, systemLog, data: { id, source, amount } });
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -578,6 +600,194 @@ router.post('/slash/income', async (req: Request, res: Response) => {
     }
     logger.error('Failed to log slash income', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to log income' });
+  }
+});
+
+// POST /api/ceo/slash/pay
+const slashPaySchema = z.object({
+  amount: z.number().min(0),
+  keyword: z.string().min(1).max(80),
+  note: z.string().max(500).default(''),
+});
+
+router.post('/slash/pay', async (req: Request, res: Response) => {
+  try {
+    const { amount, keyword, note } = slashPaySchema.parse(req.body);
+    const id = await ceoService.logOwnerPay(req.user!.userId, {
+      vendor: keyword,
+      amountUsd: amount,
+      notes: note || undefined,
+    });
+    const systemLog = `[SYSTEM LOG: Owner payment ${amount.toFixed(2)} logged - ${keyword}${note ? ': ' + note : ''}]`;
+    res.status(201).json({ success: true, systemLog, data: { id, keyword, amount } });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: 'Validation error', details: error.errors });
+      return;
+    }
+    logger.error('Failed to log slash pay', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to log owner payment' });
+  }
+});
+
+// ============================================================
+// Album Production Pipeline Routes
+// ============================================================
+
+const createProductionSchema = z.object({
+  artistName: z.string().min(1).max(200),
+  genre: z.string().min(1).max(100),
+  productionNotes: z.string().max(2000).optional(),
+  albumCount: z.number().int().min(1).max(10).optional(),
+  planningModel: z.string().max(100).optional(),
+  lyricsModel: z.string().max(100).optional(),
+});
+
+// POST /api/ceo/albums - Create production + trigger planning
+router.post('/albums', async (req: Request, res: Response) => {
+  try {
+    const params = createProductionSchema.parse(req.body);
+    const productionId = await albumPipeline.createProduction(req.user!.userId, params);
+
+    // Trigger planning in background
+    albumPipeline.planAlbums(productionId).catch(err => {
+      logger.error('Background album planning failed', { productionId, error: (err as Error).message });
+    });
+
+    res.status(201).json({ id: productionId, status: 'planning' });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: 'Validation error', details: error.errors });
+      return;
+    }
+    logger.error('Failed to create album production', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to create production' });
+  }
+});
+
+// GET /api/ceo/albums - List productions
+router.get('/albums', async (req: Request, res: Response) => {
+  try {
+    const productions = await albumPipeline.listProductions(req.user!.userId);
+    res.json({ productions });
+  } catch (error) {
+    logger.error('Failed to list album productions', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to list productions' });
+  }
+});
+
+// GET /api/ceo/albums/genres - Get available genre presets
+router.get('/albums/genres', async (_req: Request, res: Response) => {
+  res.json({ genres: GENRE_PRESETS.map(g => ({ id: g.id, name: g.name, description: g.description, defaultSongCount: g.defaultSongCount })) });
+});
+
+// GET /api/ceo/albums/:id - Production detail
+router.get('/albums/:id', async (req: Request, res: Response) => {
+  try {
+    const detail = await albumPipeline.getProductionDetail(req.user!.userId, req.params.id);
+    if (!detail) {
+      res.status(404).json({ error: 'Production not found' });
+      return;
+    }
+    res.json({ production: detail });
+  } catch (error) {
+    logger.error('Failed to get album production detail', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get production detail' });
+  }
+});
+
+// GET /api/ceo/albums/:id/progress - Lightweight progress
+router.get('/albums/:id/progress', async (req: Request, res: Response) => {
+  try {
+    const progress = await albumPipeline.getProductionProgress(req.user!.userId, req.params.id);
+    if (!progress) {
+      res.status(404).json({ error: 'Production not found' });
+      return;
+    }
+    res.json({ progress });
+  } catch (error) {
+    logger.error('Failed to get album progress', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get progress' });
+  }
+});
+
+// POST /api/ceo/albums/:id/approve - Approve plan, start execution
+router.post('/albums/:id/approve', async (req: Request, res: Response) => {
+  try {
+    const approved = await albumPipeline.approveProduction(req.user!.userId, req.params.id);
+    if (!approved) {
+      res.status(400).json({ error: 'Production not found or not in planned state' });
+      return;
+    }
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Failed to approve album production', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to approve production' });
+  }
+});
+
+// POST /api/ceo/albums/:id/cancel - Cancel production
+router.post('/albums/:id/cancel', async (req: Request, res: Response) => {
+  try {
+    const cancelled = await albumPipeline.cancelProduction(req.user!.userId, req.params.id);
+    if (!cancelled) {
+      res.status(404).json({ error: 'Production not found or not cancellable' });
+      return;
+    }
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Failed to cancel album production', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to cancel production' });
+  }
+});
+
+// ============================================================
+// Artist Management Routes
+// ============================================================
+
+// GET /api/ceo/artists - List artist files
+router.get('/artists', async (req: Request, res: Response) => {
+  try {
+    const artists = await albumPipeline.listArtists(req.user!.userId);
+    res.json({ artists });
+  } catch (error) {
+    logger.error('Failed to list artists', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to list artists' });
+  }
+});
+
+// GET /api/ceo/artists/:name - Read artist file
+router.get('/artists/:name', async (req: Request, res: Response) => {
+  try {
+    const content = await albumPipeline.readArtist(req.user!.userId, req.params.name);
+    if (content === null) {
+      res.status(404).json({ error: 'Artist not found' });
+      return;
+    }
+    res.json({ name: req.params.name, content });
+  } catch (error) {
+    logger.error('Failed to read artist', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to read artist' });
+  }
+});
+
+const artistSchema = z.object({
+  content: z.string().min(1).max(10000),
+});
+
+// PUT /api/ceo/artists/:name - Create/update artist file
+router.put('/artists/:name', async (req: Request, res: Response) => {
+  try {
+    const { content } = artistSchema.parse(req.body);
+    await albumPipeline.writeArtist(req.user!.userId, req.params.name, content);
+    res.json({ success: true });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: 'Validation error', details: error.errors });
+      return;
+    }
+    logger.error('Failed to write artist', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to write artist' });
   }
 });
 

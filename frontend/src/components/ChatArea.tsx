@@ -3,8 +3,8 @@
 import { useState, useRef, useEffect, useMemo, ChangeEvent } from 'react';
 import { useChatStore } from '@/lib/store';
 import { useActivityStore } from '@/lib/activity-store';
-import { streamMessage, streamMessageWithFiles, regenerateMessage, chatApi, autonomousApi, type AutonomousQuestion } from '@/lib/api';
-import { Send, Moon, Loader2, Mic, Sparkles, Paperclip } from 'lucide-react';
+import { streamMessage, streamMessageWithFiles, regenerateMessage, chatApi, autonomousApi, backgroundApi, type AutonomousQuestion } from '@/lib/api';
+import { Send, Moon, Loader2, Mic, Sparkles, Paperclip, Bot } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import clsx from 'clsx';
 import MessageActions from './MessageActions';
@@ -20,6 +20,9 @@ import { CoderSelector } from './os/CoderSelector';
 import dynamic from 'next/dynamic';
 import SuggestionChips from './SuggestionChips';
 import { useWindowStore } from '@/lib/window-store';
+import { useSlashCommands } from '@/hooks/useSlashCommands';
+import { SlashCommandDropdown } from './shared/SlashCommandDropdown';
+import { ChatInputBadge } from './shared/ChatInputBadge';
 
 const VoiceChatArea = dynamic(() => import('./VoiceChatArea'), {
   ssr: false,
@@ -44,8 +47,8 @@ function TogglePill({ label, active, onToggle }: { label: string; active: boolea
       className={clsx(
         'px-3 py-1 rounded-full text-xs font-medium transition-all select-none',
         active
-          ? 'bg-theme-accent-primary/20 text-theme-accent-primary border border-theme-accent-primary/40'
-          : 'bg-theme-bg-tertiary text-theme-text-secondary border border-transparent hover:bg-white/10'
+          ? 'bg-slate-600/40 text-slate-300 border border-slate-500/50'
+          : 'bg-gray-800 text-gray-500 border border-gray-700 hover:bg-gray-700 hover:text-gray-300'
       )}
     >
       {label}
@@ -57,6 +60,40 @@ function pickRandomSuggestions(suggestions: string[], count: number): string[] {
   if (suggestions.length <= count) return suggestions;
   const shuffled = [...suggestions].sort(() => Math.random() - 0.5);
   return shuffled.slice(0, count);
+}
+
+function extractGeneratedImageFilenames(content: string): string[] {
+  const regex = /:::image\[([^\]]+)\]/g;
+  const filenames: string[] = [];
+  const seen = new Set<string>();
+
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(content)) !== null) {
+    const rawUrl = match[1]?.trim();
+    if (!rawUrl) continue;
+
+    let path = rawUrl;
+    if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
+      try {
+        path = new URL(rawUrl).pathname;
+      } catch {
+        continue;
+      }
+    }
+
+    const cleanPath = path.split('?')[0].split('#')[0];
+    const filenameMatch = cleanPath.match(/\/api\/images\/generated\/([^/]+)$/);
+    if (!filenameMatch) continue;
+
+    const filename = decodeURIComponent(filenameMatch[1]);
+    if (!seen.has(filename)) {
+      seen.add(filename);
+      filenames.push(filename);
+    }
+
+  }
+
+  return filenames;
 }
 
 function StandardChatArea() {
@@ -92,7 +129,7 @@ function StandardChatArea() {
     setCanvasAction,
   } = useChatStore();
 
-  const thinkingPhrase = useThinkingMessage(isSending && !streamingContent);
+  const thinkingPhrase = useThinkingMessage(isSending && !streamingContent, currentSession?.mode);
 
   // Track background reflection status
   const activities = useActivityStore((state) => state.activities);
@@ -141,6 +178,7 @@ function StandardChatArea() {
     content: string;
   } | null>(null);
 
+  const [localSystemBubbles, setLocalSystemBubbles] = useState<{ id: string; text: string }[]>([]);
   const [input, setInput] = useState('');
   const [projectMode, setProjectMode] = useState(false);
   const [thinkingMode, setThinkingMode] = useState(false);
@@ -150,9 +188,26 @@ function StandardChatArea() {
   const [verificationBusy, setVerificationBusy] = useState(false);
   const [verificationError, setVerificationError] = useState<string | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const autoAppliedGeneratedFilenamesRef = useRef<Set<string>>(new Set());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const addSystemBubble = (text: string) => {
+    setLocalSystemBubbles(prev => [...prev, { id: crypto.randomUUID(), text }]);
+  };
+
+  const slash = useSlashCommands({
+    addSystemBubble,
+    sessionId: currentSession?.id || null,
+    mode: currentSession?.mode,
+  });
+
+  const handleInputChange = async (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const val = e.target.value;
+    setInput(val);
+    await slash.handleInputChange(val);
+  };
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -160,7 +215,7 @@ function StandardChatArea() {
 
   useEffect(() => {
     scrollToBottom();
-  }, [currentSession?.messages, streamingContent]);
+  }, [currentSession?.messages, streamingContent, localSystemBubbles]);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -269,12 +324,44 @@ function StandardChatArea() {
     }
   };
 
+  const autoApplyLatestGeneratedImageAsBackground = async (content: string) => {
+    const generatedFilenames = extractGeneratedImageFilenames(content);
+    if (generatedFilenames.length === 0) return;
+
+    // Pick the newest image block in the message that we have not already auto-applied.
+    const filenameToApply = [...generatedFilenames]
+      .reverse()
+      .find((filename) => !autoAppliedGeneratedFilenamesRef.current.has(filename));
+
+    if (!filenameToApply) return;
+
+    autoAppliedGeneratedFilenamesRef.current.add(filenameToApply);
+    try {
+      await backgroundApi.createFromGenerated(filenameToApply, true);
+      window.dispatchEvent(new CustomEvent('luna:background-refresh'));
+    } catch (error) {
+      // Allow retry on subsequent messages if import failed this time.
+      autoAppliedGeneratedFilenamesRef.current.delete(filenameToApply);
+      console.warn('Auto-apply generated image as background failed:', error);
+    }
+  };
+
   const handleSend = async () => {
     if ((!input.trim() && attachedFiles.length === 0) || isSending) return;
+
+    // Check if it's a slash command
+    if (input.trim().startsWith('/') && !attachedFiles.length) {
+      const handled = await slash.handleSubmit();
+      if (handled) {
+        setInput('');
+        return;
+      }
+    }
 
     const message = input.trim() || ''; // Allow empty message if files attached
     const files = [...attachedFiles];
     setInput('');
+    slash.setInputValue('');
     setAttachedFiles([]);
 
     let sessionId = currentSession?.id;
@@ -296,9 +383,10 @@ function StandardChatArea() {
     try {
       // Stream the response - accumulate content locally to avoid stale closure
       let accumulatedContent = '';
+      const skillContext = slash.activeSkill?.content;
       const streamFunction = files.length > 0
         ? streamMessageWithFiles(sessionId, message, files, projectMode, thinkingMode, novaMode)
-        : streamMessage(sessionId, message, projectMode, thinkingMode, novaMode);
+        : streamMessage(sessionId, message, projectMode, thinkingMode, novaMode, undefined, undefined, undefined, skillContext);
 
       for await (const chunk of streamFunction) {
         if (chunk.type === 'status' && chunk.status) {
@@ -332,6 +420,7 @@ function StandardChatArea() {
           addAssistantMessage(accumulatedContent, chunk.messageId, chunk.metrics);
           setStreamingContent('');
           setStatusMessage('');
+          void autoApplyLatestGeneratedImageAsBackground(accumulatedContent);
         }
       }
 
@@ -389,6 +478,7 @@ function StandardChatArea() {
           addAssistantMessage(accumulatedContent, chunk.messageId, chunk.metrics);
           setStreamingContent('');
           setStatusMessage('');
+          void autoApplyLatestGeneratedImageAsBackground(accumulatedContent);
         }
       }
 
@@ -440,7 +530,12 @@ function StandardChatArea() {
     audioPlayer.play(messageId, content);
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = async (e: React.KeyboardEvent) => {
+    // Route to slash command dropdown if visible
+    if (slash.showDropdown) {
+      const handled = await slash.handleKeyDown(e);
+      if (handled) return;
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -481,14 +576,14 @@ function StandardChatArea() {
   };
 
   const messages = currentSession?.messages || [];
-  const hasMessages = messages.length > 0 || streamingContent;
+  const hasMessages = messages.length > 0 || streamingContent || localSystemBubbles.length > 0;
   const cardSuggestions = useMemo(
     () => pickRandomSuggestions(startupSuggestions, 3),
     [startupSuggestions]
   );
 
   return (
-    <main className="flex-1 flex flex-col h-full overflow-hidden">
+    <main className="flex-1 flex flex-col h-full overflow-hidden bg-gray-900">
       {/* Messages area */}
       <div className="flex-1 overflow-y-auto">
         {isLoadingMessages ? (
@@ -499,31 +594,31 @@ function StandardChatArea() {
           <div className="flex flex-col items-center justify-center h-full px-4">
             {isLoadingStartup ? (
               <>
-                <div className="w-20 h-20 rounded-full bg-theme-accent-primary/20 flex items-center justify-center mb-6">
-                  <Loader2 className="w-10 h-10 text-theme-accent-primary animate-spin" />
+                <div className="w-20 h-20 rounded-full bg-slate-700/40 flex items-center justify-center mb-6">
+                  <Loader2 className="w-10 h-10 text-slate-400 animate-spin" />
                 </div>
-                <h2 className="text-2xl font-semibold text-theme-text-primary mb-2">Luna is getting ready...</h2>
-                <p className="text-theme-text-muted text-center max-w-md">
+                <h2 className="text-2xl font-semibold text-gray-200 mb-2">Luna is getting ready...</h2>
+                <p className="text-gray-500 text-center max-w-md">
                   Preparing a personalized greeting for you.
                 </p>
               </>
             ) : !currentSession ? (
               <>
-                <div className="w-16 h-16 rounded-full bg-theme-accent-primary/20 flex items-center justify-center mb-4">
-                  <Moon className="w-8 h-8 text-theme-accent-primary" />
+                <div className="w-16 h-16 rounded-full bg-slate-700/40 flex items-center justify-center mb-4">
+                  <Moon className="w-8 h-8 text-slate-400" />
                 </div>
-                <h2 className="text-xl font-semibold text-theme-text-primary mb-1">Hello! I&apos;m Luna</h2>
-                <p className="text-theme-text-muted text-center max-w-sm text-sm">
+                <h2 className="text-xl font-semibold text-gray-200 mb-1">Hello! I&apos;m Luna</h2>
+                <p className="text-gray-500 text-center max-w-sm text-sm">
                   Start a new chat from the sidebar to begin.
                 </p>
               </>
             ) : (
               <>
-                <div className="w-20 h-20 rounded-full bg-theme-accent-primary/20 flex items-center justify-center mb-6">
-                  <Moon className="w-10 h-10 text-theme-accent-primary" />
+                <div className="w-20 h-20 rounded-full bg-slate-700/40 flex items-center justify-center mb-6">
+                  <Moon className="w-10 h-10 text-slate-400" />
                 </div>
-                <h2 className="text-2xl font-semibold text-theme-text-primary mb-2">Hello! I&apos;m Luna</h2>
-                <p className="text-theme-text-muted text-center max-w-md">
+                <h2 className="text-2xl font-semibold text-gray-200 mb-2">Hello! I&apos;m Luna</h2>
+                <p className="text-gray-500 text-center max-w-md">
                   Your AI personal assistant and conversation companion. How can I help you today?
                 </p>
                 {startupSuggestions.length > 0 && (
@@ -535,7 +630,7 @@ function StandardChatArea() {
                           setInput(suggestion);
                           clearStartupSuggestions();
                         }}
-                        className="p-3 rounded-xl bg-theme-bg-tertiary border border-theme-border hover:border-theme-accent-primary/50 text-sm text-theme-text-secondary hover:text-theme-text-primary text-left transition-colors"
+                        className="p-3 rounded-xl bg-gray-800 border border-gray-700 hover:border-slate-500 text-sm text-gray-400 hover:text-gray-200 text-left transition-colors"
                       >
                         {suggestion}
                       </button>
@@ -546,24 +641,30 @@ function StandardChatArea() {
             )}
           </div>
         ) : (
-          <div className="max-w-3xl mx-auto py-8 px-4">
+          <div className="max-w-3xl mx-auto py-6 px-4 space-y-3">
             {messages.map((msg) => (
               <div
                 key={msg.id}
-                className={clsx('mb-6', msg.role === 'user' ? 'text-right' : '')}
+                className={clsx('flex flex-col', msg.role === 'user' ? 'items-end' : 'items-start')}
               >
+                {msg.role === 'assistant' && (
+                  <div className="flex items-center gap-1 mb-1 ml-1">
+                    <Bot size={12} className="text-gray-500" />
+                    <span className="text-[11px] text-gray-500">Luna</span>
+                  </div>
+                )}
                 <div
                   className={clsx(
-                    'inline-block max-w-[85%]',
+                    'max-w-[85%]',
                     msg.role === 'user' ? 'text-left' : ''
                   )}
                 >
                   <div
                     className={clsx(
-                      'px-4 py-3 rounded-2xl',
+                      'rounded-xl px-3 py-2 text-sm',
                       msg.role === 'user'
-                        ? 'bg-theme-message-user text-theme-message-user-text rounded-br-md'
-                        : 'bg-theme-message-assistant text-theme-message-assistant-text rounded-bl-md border border-theme-border'
+                        ? 'bg-slate-600 text-white rounded-tr-sm'
+                        : 'bg-gray-800 text-gray-200 rounded-tl-sm'
                     )}
                   >
                     {msg.role === 'assistant' ? (
@@ -596,7 +697,7 @@ function StandardChatArea() {
                   </div>
                   {/* Actions and metrics */}
                   <div className={clsx(
-                    'flex items-start gap-4 mt-1',
+                    'flex items-start gap-4 mt-0.5',
                     msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'
                   )}>
                     <MessageActions
@@ -617,13 +718,17 @@ function StandardChatArea() {
 
             {/* Reasoning content (xAI Grok thinking) */}
             {reasoningContent && (
-              <div className="mb-4">
+              <div className="flex flex-col items-start">
+                <div className="flex items-center gap-1 mb-1 ml-1">
+                  <Bot size={12} className="text-gray-500" />
+                  <span className="text-[11px] text-gray-500">Luna</span>
+                </div>
                 <details className="inline-block max-w-[85%]" open>
-                  <summary className="cursor-pointer px-3 py-2 rounded-lg bg-theme-surface-secondary text-theme-text-secondary text-sm flex items-center gap-2 hover:bg-theme-surface-tertiary transition-colors">
+                  <summary className="cursor-pointer px-3 py-2 rounded-lg bg-gray-800 text-gray-400 text-sm flex items-center gap-2 hover:bg-gray-700 transition-colors">
                     <Loader2 className="w-4 h-4 animate-spin" />
                     <span>{thinkingPhrase}...</span>
                   </summary>
-                  <div className="mt-2 px-3 py-2 rounded-lg bg-theme-surface-secondary border border-theme-border text-theme-text-secondary text-sm font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
+                  <div className="mt-2 px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-gray-400 text-sm font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
                     {reasoningContent}
                   </div>
                 </details>
@@ -632,8 +737,12 @@ function StandardChatArea() {
 
             {/* Streaming message */}
             {streamingContent && (
-              <div className="mb-6">
-                <div className="inline-block max-w-[85%] px-4 py-3 rounded-2xl bg-theme-message-assistant text-theme-message-assistant-text rounded-bl-md border border-theme-border">
+              <div className="flex flex-col items-start">
+                <div className="flex items-center gap-1 mb-1 ml-1">
+                  <Bot size={12} className="text-gray-500" />
+                  <span className="text-[11px] text-gray-500">Luna</span>
+                </div>
+                <div className="inline-block max-w-[85%] rounded-xl px-3 py-2 text-sm bg-gray-800 text-gray-200 rounded-tl-sm">
                   <div className="message-content prose prose-invert prose-sm max-w-none">
                     {parseMediaBlocks(streamingContent).map((block, idx) => (
                       block.type === 'image' ? (
@@ -654,19 +763,32 @@ function StandardChatArea() {
 
             {/* Loading indicator */}
             {isSending && !streamingContent && (
-              <div className="mb-6">
-                <div className="inline-block px-4 py-3 rounded-2xl bg-theme-message-assistant rounded-bl-md border border-theme-border">
+              <div className="flex flex-col items-start">
+                <div className="flex items-center gap-1 mb-1 ml-1">
+                  <Bot size={12} className="text-gray-500" />
+                  <span className="text-[11px] text-gray-500">Luna</span>
+                </div>
+                <div className="inline-block rounded-xl px-3 py-2 bg-gray-800 rounded-tl-sm">
                   <div className="flex items-center gap-2">
                     <div className="flex gap-1">
-                      <span className="w-2 h-2 bg-theme-accent-primary rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                      <span className="w-2 h-2 bg-theme-accent-primary rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                      <span className="w-2 h-2 bg-theme-accent-primary rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                      <span className="w-1.5 h-1.5 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                      <span className="w-1.5 h-1.5 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                      <span className="w-1.5 h-1.5 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                     </div>
-                    <span className="text-theme-text-secondary text-sm">{statusMessage || `${thinkingPhrase}...`}</span>
+                    <span className="text-gray-400 text-sm">{statusMessage || `${thinkingPhrase}...`}</span>
                   </div>
                 </div>
               </div>
             )}
+
+            {/* Local system bubbles (from slash commands) */}
+            {localSystemBubbles.map((bubble) => (
+              <div key={bubble.id} className="flex justify-center my-1">
+                <div className="bg-zinc-800/60 text-zinc-400 text-xs px-3 py-1.5 rounded-full border border-zinc-700/50 font-mono flex items-center gap-1.5 max-w-[90%] whitespace-pre-wrap">
+                  {bubble.text}
+                </div>
+              </div>
+            ))}
 
             <div ref={messagesEndRef} />
           </div>
@@ -675,8 +797,8 @@ function StandardChatArea() {
 
       {/* Reflection indicator - shows when Luna is processing in background */}
       {isReflecting && !isSending && (
-        <div className="px-4 py-2 border-t border-theme-border/50 bg-theme-bg-secondary/30">
-          <div className="max-w-3xl mx-auto flex items-center gap-2 text-sm text-theme-text-secondary">
+        <div className="px-4 py-2 border-t border-gray-700/50 bg-gray-800/30">
+          <div className="max-w-3xl mx-auto flex items-center gap-2 text-sm text-gray-500">
             <Sparkles className="w-4 h-4 text-purple-400 animate-pulse" />
             <span>Luna is reflecting...</span>
           </div>
@@ -685,7 +807,7 @@ function StandardChatArea() {
 
       {/* Input area - hidden when no session (user must pick mode first) */}
       {currentSession && (
-        <div className="border-t border-theme-border p-4">
+        <div className="border-t border-gray-700 p-4 bg-gray-900">
           <div className="max-w-3xl mx-auto">
             {!hasMessages && !input && startupSuggestions.length > 0 && (
               <SuggestionChips
@@ -709,15 +831,27 @@ function StandardChatArea() {
               </div>
             )}
 
-            <div className="relative flex items-end gap-2 bg-theme-bg-secondary rounded-xl border border-theme-border focus-within:border-theme-border-focus transition">
+            <ChatInputBadge
+              activeSkillName={slash.activeBadgeLabel}
+              activeModelLabel={slash.activeModelLabel}
+              onRemoveSkill={slash.clearActiveSkill}
+            />
+            <div className="relative flex items-end gap-2 bg-gray-800 rounded-xl border border-gray-700 focus-within:border-slate-500 transition">
+              {slash.showDropdown && (
+                <SlashCommandDropdown
+                  items={slash.dropdownItems}
+                  selectedIndex={slash.selectedIndex}
+                  onSelect={(idx) => { slash.handleSelect(idx); setInput(''); }}
+                />
+              )}
               <textarea
                 ref={textareaRef}
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
-                placeholder={attachedFiles.length > 0 ? "Add a message (optional)..." : "Message Luna..."}
+                placeholder={attachedFiles.length > 0 ? "Add a message (optional)..." : "Message Luna... (/ for commands)"}
                 rows={1}
-                className="flex-1 bg-transparent px-4 py-3 outline-none resize-none max-h-[50vh] text-theme-text-primary placeholder-theme-text-muted"
+                className="flex-1 bg-transparent px-4 py-3 outline-none resize-none max-h-[50vh] text-gray-100 placeholder-gray-500"
                 disabled={isSending}
               />
               <div className="flex items-center gap-1 p-1">
@@ -731,7 +865,7 @@ function StandardChatArea() {
                 />
                 <button
                   onClick={() => fileInputRef.current?.click()}
-                  className="p-2 text-theme-text-muted hover:text-theme-accent-primary transition-colors rounded-lg"
+                  className="p-2 text-gray-500 hover:text-gray-300 transition-colors rounded-lg"
                   title="Attach files"
                   disabled={isSending}
                 >
@@ -742,7 +876,7 @@ function StandardChatArea() {
                     const session = await createSession('voice');
                     await loadSession(session.id);
                   }}
-                  className="p-2 text-theme-text-muted hover:text-theme-accent-primary transition-colors rounded-lg"
+                  className="p-2 text-gray-500 hover:text-gray-300 transition-colors rounded-lg"
                   title="Switch to Voice Mode"
                 >
                   <Mic className="w-5 h-5" />
@@ -750,7 +884,7 @@ function StandardChatArea() {
                 <button
                   onClick={handleSend}
                   disabled={(!input.trim() && attachedFiles.length === 0) || isSending}
-                  className="p-2 bg-theme-accent-primary hover:bg-theme-accent-hover disabled:bg-theme-bg-tertiary disabled:cursor-not-allowed rounded-lg transition text-theme-text-primary"
+                  className="p-2 bg-slate-600 hover:bg-slate-500 disabled:bg-gray-700 disabled:cursor-not-allowed rounded-lg transition text-white"
                 >
                   {isSending ? (
                     <Loader2 className="w-5 h-5 animate-spin" />
@@ -778,10 +912,10 @@ function StandardChatArea() {
                   setNovaMode(!novaMode);
                 }}
               />
-              <div className="w-px h-4 bg-theme-border mx-1" />
+              <div className="w-px h-4 bg-gray-700 mx-1" />
               <ModelSelector />
               <CoderSelector />
-              <span className="ml-auto text-xs text-theme-text-muted">
+              <span className="ml-auto text-xs text-gray-600">
                 Luna can make mistakes.
               </span>
             </div>

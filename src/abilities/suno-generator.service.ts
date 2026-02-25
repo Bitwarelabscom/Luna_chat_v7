@@ -82,6 +82,8 @@ export async function triggerBatch(
   userId: string,
   count: number,
   styleOverride?: string,
+  lyrics?: string,
+  title?: string,
 ): Promise<SunoGeneration[]> {
   const safeCount = Math.max(1, Math.min(10, Math.floor(count)));
   const generations: SunoGeneration[] = [];
@@ -89,10 +91,10 @@ export async function triggerBatch(
   // Insert all DB rows immediately so we can return right away
   for (let i = 0; i < safeCount; i++) {
     const result = await pool.query<GenerationRow>(
-      `INSERT INTO suno_generations (user_id, style)
-       VALUES ($1, $2)
+      `INSERT INTO suno_generations (user_id, style, title)
+       VALUES ($1, $2, $3)
        RETURNING *`,
-      [userId, styleOverride || ''],
+      [userId, styleOverride || '', title || ''],
     );
     generations.push(rowToGeneration(result.rows[0]));
   }
@@ -107,7 +109,7 @@ export async function triggerBatch(
       const gen = generations[i];
       const webhookResult = await n8nService.executeWebhook(
         'suno-generate',
-        { taskId: gen.id, userId, count: 1, style_override: styleOverride || null },
+        { taskId: gen.id, userId, count: 1, style_override: styleOverride || null, lyrics: lyrics || null, title: title || null },
         { userId },
       );
       if (!webhookResult.success) {
@@ -216,6 +218,14 @@ export async function handleCallback(payload: CallbackPayload): Promise<void> {
   );
 
   logger.info('Suno generation completed', { taskId, filePath, title: payload.title });
+
+  // Check if this generation is linked to an album song
+  try {
+    const { handleSunoComplete } = await import('../ceo/album-pipeline.service.js');
+    await handleSunoComplete(taskId);
+  } catch (err) {
+    logger.warn('Album pipeline callback check failed (non-fatal)', { taskId, error: (err as Error).message });
+  }
 }
 
 /**

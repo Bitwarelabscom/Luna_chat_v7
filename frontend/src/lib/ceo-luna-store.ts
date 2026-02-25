@@ -2,7 +2,7 @@
 
 import { create } from 'zustand';
 import { workspaceApi } from './api/workspace';
-import type { CeoDashboard, RadarSignal, AutopostItem } from './api/ceo';
+import type { CeoDashboard, RadarSignal, AutopostItem, ProductionSummary, GenreOption } from './api/ceo';
 
 export interface CeoFileEntry {
   name: string;
@@ -10,7 +10,7 @@ export interface CeoFileEntry {
   folder: 'Documents' | 'Plans' | 'Week' | 'Other';
 }
 
-type ActiveTab = 'viewer' | 'chat' | 'dashboard' | 'radar' | 'autopost' | 'log';
+type ActiveTab = 'viewer' | 'chat' | 'dashboard' | 'radar' | 'autopost' | 'builds' | 'log' | 'albums';
 
 interface CEOLunaState {
   // Session
@@ -37,6 +37,13 @@ interface CEOLunaState {
   autopostQueue: AutopostItem[];
   isLoadingAutopost: boolean;
 
+  // Albums
+  productions: ProductionSummary[];
+  genres: GenreOption[];
+  artists: string[];
+  isLoadingProductions: boolean;
+  isLoadingGenres: boolean;
+
   // Actions
   setSessionId: (id: string) => void;
   setActiveTab: (tab: ActiveTab) => void;
@@ -47,6 +54,9 @@ interface CEOLunaState {
   loadAutopostQueue: (limit?: number) => Promise<void>;
   setDashboardPeriod: (days: number) => void;
   createFile: (folder: string, name: string) => Promise<void>;
+  loadProductions: () => Promise<void>;
+  loadGenres: () => Promise<void>;
+  loadArtists: () => Promise<void>;
 }
 
 function classifyFolder(path: string): CeoFileEntry['folder'] {
@@ -74,6 +84,11 @@ export const useCEOLunaStore = create<CEOLunaState>((set, get) => ({
   isLoadingRadar: false,
   autopostQueue: [],
   isLoadingAutopost: false,
+  productions: [],
+  genres: [],
+  artists: [],
+  isLoadingProductions: false,
+  isLoadingGenres: false,
 
   setSessionId: (id) => set({ sessionId: id }),
 
@@ -150,6 +165,42 @@ export const useCEOLunaStore = create<CEOLunaState>((set, get) => ({
       console.error('Failed to load autopost queue:', err);
     } finally {
       set({ isLoadingAutopost: false });
+    }
+  },
+
+  loadProductions: async () => {
+    set({ isLoadingProductions: true });
+    try {
+      const { fetchProductions } = await import('./api/ceo');
+      const { productions } = await fetchProductions();
+      set({ productions });
+    } catch (err) {
+      console.error('Failed to load productions:', err);
+    } finally {
+      set({ isLoadingProductions: false });
+    }
+  },
+
+  loadGenres: async () => {
+    set({ isLoadingGenres: true });
+    try {
+      const { fetchGenres } = await import('./api/ceo');
+      const { genres } = await fetchGenres();
+      set({ genres });
+    } catch (err) {
+      console.error('Failed to load genres:', err);
+    } finally {
+      set({ isLoadingGenres: false });
+    }
+  },
+
+  loadArtists: async () => {
+    try {
+      const { fetchArtists } = await import('./api/ceo');
+      const { artists } = await fetchArtists();
+      set({ artists });
+    } catch (err) {
+      console.error('Failed to load artists:', err);
     }
   },
 

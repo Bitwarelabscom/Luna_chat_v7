@@ -843,13 +843,12 @@ async function runCouncilLoop(
         break;
       }
 
-      // Only end if the decision is specifically to sleep/complete, not just contains it
-      const shouldSleep = decisionLower === 'sleep' ||
-                          decisionLower === 'pause' ||
-                          decisionLower === 'complete' ||
-                          decisionLower.startsWith('sleep:') ||
-                          decisionLower.startsWith('sleep -') ||
-                          (decisionLower.includes('sleep') && !decisionLower.includes('ask'));
+      // End only if any line in the decision is specifically a sleep/pause/complete command
+      const decisionLines = decisionLower.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+      const shouldSleep = decisionLines.some(line =>
+        line === 'sleep' || line === 'pause' || line === 'complete' ||
+        line.startsWith('sleep:') || line.startsWith('sleep -')
+      );
 
       if (shouldSleep) {
         // Add session summary note
@@ -1029,20 +1028,59 @@ async function executeAction(sessionId: string, userId: string, userAvailable?: 
     return;
   }
 
-  const action = deliberation.decision;
-  let actionTaken = '';
+  // Split Sol's decision into individual action lines - Sol often outputs multiple actions at once
+  const actionLines = deliberation.decision
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line.length > 0 && !line.startsWith('#') && !line.startsWith('//'))
+    .filter(line => {
+      // Exclude pure sleep/pause lines - those are handled by the loop's sleep check
+      const lower = line.toLowerCase();
+      return lower !== 'sleep' && lower !== 'pause' && lower !== 'complete' &&
+             !lower.startsWith('sleep:') && !lower.startsWith('sleep -');
+    });
+
+  if (actionLines.length === 0) {
+    // Decision was only "sleep" or empty - loop will handle termination
+    broadcastToSession(sessionId, { type: 'action', action: 'Session complete' });
+    return;
+  }
+
+  const actionsTaken: string[] = [];
+  for (const actionLine of actionLines) {
+    incrementToolUse(sessionId);
+    const result = await dispatchSingleAction(sessionId, userId, actionLine, deliberation, userAvailable);
+    actionsTaken.push(result);
+  }
+
+  const actionTaken = actionsTaken.join('\n');
+
+  // Update deliberation with all actions taken
+  await pool.query(
+    `UPDATE council_deliberations SET action_taken = $1 WHERE id = $2`,
+    [actionTaken, deliberation.id]
+  );
+
+  broadcastToSession(sessionId, {
+    type: 'action',
+    action: actionTaken,
+  });
+}
+
+async function dispatchSingleAction(
+  sessionId: string,
+  userId: string,
+  action: string,
+  deliberation: councilService.CouncilDeliberation,
+  userAvailable?: boolean,
+): Promise<string> {
   const actionLower = action.toLowerCase();
 
-  // Track tool use
-  incrementToolUse(sessionId);
-
   // If user is not available and action is to ask user, convert to search instead
-  // Use startsWith to avoid false matches (e.g., "note: ...asking questions...")
   const isAskUserAction = actionLower.startsWith('ask user:') || actionLower.startsWith('ask:') || actionLower.startsWith('question:');
   if (!userAvailable && isAskUserAction) {
     logger.info('User not available, converting ask-user action to search', { sessionId, originalAction: action });
 
-    // Extract what they wanted to ask about and search for it instead
     const questionMatch = action.match(/ask.*?[":]\s*(.+?)(?:["]|$)/i)
       || action.match(/question.*?[":]\s*(.+?)(?:["]|$)/i);
     const searchQuery = questionMatch?.[1]?.trim() || action.replace(/ask|user|question/gi, '').trim();
@@ -1053,85 +1091,44 @@ async function executeAction(sessionId: string, userId: string, userAvailable?: 
       phase: 'act',
     });
 
-    actionTaken = await executeSearchAction(sessionId, userId, `search: ${searchQuery}`);
-
-    // Update deliberation with action taken
-    await pool.query(
-      `UPDATE council_deliberations SET action_taken = $1 WHERE id = $2`,
-      [actionTaken, deliberation.id]
-    );
-
-    broadcastToSession(sessionId, {
-      type: 'action',
-      action: actionTaken,
-    });
-
-    return;
+    return await executeSearchAction(sessionId, userId, `search: ${searchQuery}`);
   }
 
-  // Execute based on action type - use startsWith for reliable routing
-  // Order matters: check most specific patterns first
+  // Route to handler - use startsWith for reliable matching, most specific patterns first
   if (actionLower.startsWith('note:') || actionLower.startsWith('record:') || actionLower.startsWith('remember:')) {
-    // Note to self - add to session workspace (check FIRST to avoid false matches)
-    actionTaken = await executeNoteAction(sessionId, userId, action);
+    return await executeNoteAction(sessionId, userId, action);
   } else if (actionLower.startsWith('ask user:') || actionLower.startsWith('ask:') || actionLower.startsWith('question:')) {
-    // Ask user a question - must START with "ask user:" to avoid false matches
-    actionTaken = await executeAskUserAction(sessionId, userId, action, deliberation);
+    return await executeAskUserAction(sessionId, userId, action, deliberation);
   } else if (actionLower.startsWith('search:') || actionLower.startsWith('find:') || (actionLower.includes('search') && actionLower.includes('web'))) {
-    // Web search
-    actionTaken = await executeSearchAction(sessionId, userId, action);
+    return await executeSearchAction(sessionId, userId, action);
   } else if (actionLower.startsWith('create task:') || actionLower.startsWith('add task:') || actionLower.startsWith('new task:')) {
-    // Create a new task
-    actionTaken = await executeCreateTaskAction(sessionId, userId, action);
+    return await executeCreateTaskAction(sessionId, userId, action);
   } else if (actionLower.startsWith('complete task:') || actionLower.startsWith('done:') || actionLower.startsWith('finish task:')) {
-    // Complete a task
-    actionTaken = await executeCompleteTaskAction(sessionId, userId, action);
+    return await executeCompleteTaskAction(sessionId, userId, action);
   } else if (actionLower.startsWith('write file:') || actionLower.startsWith('save file:') || actionLower.startsWith('create file:')) {
-    // Write a file to workspace
-    actionTaken = await executeWriteFileAction(sessionId, userId, action);
+    return await executeWriteFileAction(sessionId, userId, action);
   } else if (actionLower.startsWith('read file:') || actionLower.startsWith('read:')) {
-    // Read a file from workspace
-    actionTaken = await executeReadFileAction(sessionId, userId, action);
-  } else if (actionLower.startsWith('fetch:') || (actionLower.includes('fetch') && actionLower.includes('url'))) {
-    // Fetch web page content and store as document
-    actionTaken = await executeWebFetchAndStoreAction(sessionId, userId, action);
+    return await executeReadFileAction(sessionId, userId, action);
+  } else if (actionLower.startsWith('fetch:') || actionLower.startsWith('fetch web page:') || actionLower.startsWith('fetch url:') || (actionLower.includes('fetch') && actionLower.includes('url'))) {
+    return await executeWebFetchAndStoreAction(sessionId, userId, action);
   } else if (actionLower.includes('collect') || (actionLower.includes('research') && actionLower.includes('add'))) {
-    // Collect research
-    actionTaken = await executeCollectResearchAction(sessionId, userId, action);
+    return await executeCollectResearchAction(sessionId, userId, action);
   } else if (actionLower.startsWith('goal:')) {
-    // Goal-related action
-    actionTaken = await executeGoalAction(userId, action);
+    return await executeGoalAction(userId, action);
   } else if (actionLower.includes('research') || actionLower.includes('rss')) {
-    // Research action
-    actionTaken = await executeResearchAction(userId, action, sessionId);
+    return await executeResearchAction(userId, action, sessionId);
   } else if (actionLower.includes('insight') || actionLower.includes('share')) {
-    // Create insight to share
-    actionTaken = await executeInsightAction(userId, action, deliberation);
+    return await executeInsightAction(userId, action, deliberation);
   } else if (actionLower.includes('discuss') || actionLower.includes('debate') || actionLower.includes('analyze')) {
-    // Expert discussion for philosophical/complex topics
-    actionTaken = await executeExpertDiscussionAction(sessionId, userId, action, deliberation);
+    return await executeExpertDiscussionAction(sessionId, userId, action, deliberation);
   } else if (actionLower.includes('friend') || actionLower.includes('chat with') || actionLower.includes('talk to nova') || actionLower.includes('talk to sage') || actionLower.includes('talk to spark') || actionLower.includes('talk to echo')) {
-    // Friend discussion - Luna chats with an AI friend about user patterns
-    actionTaken = await executeFriendDiscussionAction(sessionId, userId, action);
+    return await executeFriendDiscussionAction(sessionId, userId, action);
   } else if (actionLower.includes('reflect') || actionLower.includes('think about') || actionLower.includes('ponder')) {
-    // Reflection - trigger a friend discussion about a random pattern
-    actionTaken = await executeFriendDiscussionAction(sessionId, userId, 'reflect on user patterns');
+    return await executeFriendDiscussionAction(sessionId, userId, 'reflect on user patterns');
   } else {
-    // Default: record as observation note and just record the decision
     await sessionWorkspaceService.addObservation(sessionId, userId, action, 'act');
-    actionTaken = `Decided: ${action}`;
+    return `Decided: ${action}`;
   }
-
-  // Update deliberation with action taken
-  await pool.query(
-    `UPDATE council_deliberations SET action_taken = $1 WHERE id = $2`,
-    [actionTaken, deliberation.id]
-  );
-
-  broadcastToSession(sessionId, {
-    type: 'action',
-    action: actionTaken,
-  });
 }
 
 async function executeGoalAction(userId: string, action: string): Promise<string> {

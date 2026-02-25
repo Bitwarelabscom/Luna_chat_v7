@@ -1,5 +1,20 @@
 import { api, ApiError, API_URL, API_PREFIX } from './core';
 
+// Gossip queue topic
+export interface GossipTopic {
+  id: string;
+  topicText: string;
+  motivation: string | null;
+  importance: number; // 1-5
+  suggestedFriendId: string | null;
+  suggestedFriendName: string | null;
+  suggestedFriendEmoji: string | null;
+  suggestedFriendColor: string | null;
+  sourceType: 'session_pattern' | 'discussion' | 'manual';
+  status: 'pending' | 'approved' | 'rejected' | 'consumed';
+  createdAt: string;
+}
+
 // Friend types
 export interface FriendPersonality {
   id: string;
@@ -77,6 +92,22 @@ export const friendsApi = {
   // Delete a discussion
   deleteDiscussion: (id: string) =>
     api<{ success: boolean }>(`/api/autonomous/friends/discussions/${id}`, { method: 'DELETE' }),
+
+  // Get gossip queue
+  getGossipQueue: (limit = 50) =>
+    api<{ topics: GossipTopic[] }>(`/api/autonomous/friends/topics?limit=${limit}`),
+
+  // Add a manual topic
+  addTopic: (data: { topicText: string; motivation?: string; importance?: number; suggestedFriendId?: string }) =>
+    api<{ topic: GossipTopic }>('/api/autonomous/friends/topics', { method: 'POST', body: data }),
+
+  // Update a topic
+  updateTopic: (id: string, data: { importance?: number; motivation?: string | null; suggestedFriendId?: string | null; status?: string }) =>
+    api<{ topic: GossipTopic }>(`/api/autonomous/friends/topics/${id}`, { method: 'PATCH', body: data }),
+
+  // Delete a topic
+  deleteTopic: (id: string) =>
+    api<{ success: boolean }>(`/api/autonomous/friends/topics/${id}`, { method: 'DELETE' }),
 };
 
 // Friend discussion streaming event types

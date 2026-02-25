@@ -31,7 +31,7 @@ export default function VoiceChatArea() {
     setStatusMessage,
   } = useChatStore();
 
-  const thinkingPhrase = useThinkingMessage(isSending && !streamingContent);
+  const thinkingPhrase = useThinkingMessage(isSending && !streamingContent, 'voice');
   const [showReasoning, setShowReasoning] = useState(true);
 
   const [input, setInput] = useState('');

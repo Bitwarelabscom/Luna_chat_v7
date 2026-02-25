@@ -1,15 +1,9 @@
 'use client';
 
 import { useEffect } from 'react';
-import { RefreshCw, Loader2, TrendingUp, TrendingDown } from 'lucide-react';
+import { RefreshCw, Loader2, TrendingUp, TrendingDown, Wallet } from 'lucide-react';
 import { useCEOLunaStore } from '@/lib/ceo-luna-store';
-
-function formatMoney(usd: number): string {
-  const abs = Math.abs(usd);
-  const sign = usd < 0 ? '-' : '+';
-  if (abs >= 1000) return `${sign}$${(abs / 1000).toFixed(1)}k`;
-  return `${sign}$${abs.toFixed(0)}`;
-}
+import { formatMoney, formatMoneyPlain } from '@/lib/format-currency';
 
 function severityColor(s: string) {
   if (s === 'P1') return 'bg-red-900/40 text-red-400 border border-red-700';
@@ -87,20 +81,20 @@ export function DashboardPanel() {
         <div className="grid grid-cols-5 gap-3">
           {[
             {
+              label: 'Saldo',
+              value: fin ? formatMoney(fin.saldo) : '--',
+              color: fin && fin.saldo >= 0 ? 'text-emerald-400' : 'text-red-400',
+              icon: Wallet,
+            },
+            {
               label: 'Income',
-              value: fin ? `$${fin.incomeTotalUsd.toFixed(0)}` : '--',
+              value: fin ? formatMoneyPlain(fin.incomeTotal) : '--',
               color: 'text-emerald-400',
             },
             {
               label: 'Expenses',
-              value: fin ? `$${fin.expenseTotalUsd.toFixed(0)}` : '--',
+              value: fin ? formatMoneyPlain(fin.expenseTotal) : '--',
               color: 'text-red-400',
-            },
-            {
-              label: 'Net',
-              value: fin ? formatMoney(fin.burnNetUsd) : '--',
-              color: fin && fin.burnNetUsd >= 0 ? 'text-emerald-400' : 'text-red-400',
-              icon: fin && fin.burnNetUsd >= 0 ? TrendingUp : TrendingDown,
             },
             {
               label: 'Build Hours',
@@ -146,7 +140,7 @@ export function DashboardPanel() {
                       <td className="px-3 py-2 text-right text-blue-400">{p.opportunityScore.toFixed(1)}</td>
                       <td className="px-3 py-2 text-right text-gray-400">{p.estimatedHours.toFixed(0)}h</td>
                       <td className="px-3 py-2 text-right text-emerald-400">
-                        {p.revenuePotentialUsd > 0 ? `$${(p.revenuePotentialUsd / 1000).toFixed(0)}k` : '--'}
+                        {p.revenuePotential > 0 ? formatMoneyPlain(p.revenuePotential) : '--'}
                       </td>
                     </tr>
                   ))}
@@ -177,9 +171,9 @@ export function DashboardPanel() {
                       <td className="px-3 py-2 text-gray-300 capitalize font-medium">{c.channel}</td>
                       <td className="px-3 py-2 text-right text-purple-400">{c.leads}</td>
                       <td className="px-3 py-2 text-right text-gray-400">{c.runs}</td>
-                      <td className="px-3 py-2 text-right text-red-400">${c.costUsd.toFixed(0)}</td>
+                      <td className="px-3 py-2 text-right text-red-400">{formatMoneyPlain(c.cost)}</td>
                       <td className="px-3 py-2 text-right text-gray-400">
-                        {c.costPerLeadUsd !== null ? `$${c.costPerLeadUsd.toFixed(0)}` : '--'}
+                        {c.costPerLead !== null ? formatMoneyPlain(c.costPerLead) : '--'}
                       </td>
                     </tr>
                   ))}

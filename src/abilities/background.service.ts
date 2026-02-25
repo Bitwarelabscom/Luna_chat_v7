@@ -15,9 +15,10 @@ const IMAGES_DIR = path.join(process.cwd(), 'images');
 const BACKGROUNDS_DIR = path.join(IMAGES_DIR, 'backgrounds');
 const GENERATED_DIR = path.join(BACKGROUNDS_DIR, 'generated');
 const UPLOADED_DIR = path.join(BACKGROUNDS_DIR, 'uploaded');
+const CHAT_GENERATED_DIR = path.join(IMAGES_DIR, 'generated');
 
 // Ensure directories exist
-for (const dir of [BACKGROUNDS_DIR, GENERATED_DIR, UPLOADED_DIR]) {
+for (const dir of [BACKGROUNDS_DIR, GENERATED_DIR, UPLOADED_DIR, CHAT_GENERATED_DIR]) {
   if (!fsSync.existsSync(dir)) {
     fsSync.mkdirSync(dir, { recursive: true });
   }
@@ -62,6 +63,13 @@ export interface BackgroundResult {
   success: boolean;
   background?: Background;
   error?: string;
+}
+
+export interface GeneratedImageOption {
+  filename: string;
+  imageUrl: string;
+  createdAt: Date;
+  sizeBytes: number;
 }
 
 /**
@@ -137,6 +145,18 @@ function generateFilename(userId: string, prefix: string, extension: string): st
   const timestamp = Date.now();
   const hash = crypto.randomBytes(4).toString('hex');
   return `${prefix}_${userId.substring(0, 8)}_${timestamp}_${hash}.${extension}`;
+}
+
+/**
+ * Check if a generated image filename belongs to this user.
+ * Image generation service stores user id prefix in the filename.
+ */
+function isUserGeneratedImageFilename(userId: string, filename: string): boolean {
+  const userPrefix = userId.substring(0, 8);
+  return (
+    filename.startsWith(`gen_${userPrefix}_`) ||
+    filename.startsWith(`screenshot_${userPrefix}_`)
+  );
 }
 
 /**
@@ -322,6 +342,104 @@ export async function uploadBackground(
 }
 
 /**
+ * List generated chat images owned by the user (images/generated).
+ */
+export async function listUserGeneratedImages(userId: string): Promise<GeneratedImageOption[]> {
+  try {
+    const entries = await fs.readdir(CHAT_GENERATED_DIR, { withFileTypes: true });
+    const imageFiles = entries
+      .filter((entry) => entry.isFile())
+      .map((entry) => entry.name)
+      .filter((filename) => {
+        const ext = path.extname(filename).toLowerCase();
+        return ALLOWED_EXTENSIONS.has(ext) && isUserGeneratedImageFilename(userId, filename);
+      });
+
+    const images = await Promise.all(imageFiles.map(async (filename) => {
+      const filePath = path.join(CHAT_GENERATED_DIR, filename);
+      const stat = await fs.stat(filePath);
+      return {
+        filename,
+        imageUrl: `/api/images/generated/${filename}`,
+        createdAt: stat.mtime,
+        sizeBytes: stat.size,
+      };
+    }));
+
+    return images.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  } catch (error) {
+    logger.error('Failed to list generated images', { userId, error: (error as Error).message });
+    return [];
+  }
+}
+
+/**
+ * Create a desktop background entry by importing a user-generated chat image.
+ * The source image is copied into images/backgrounds/generated for lifecycle consistency.
+ */
+export async function importGeneratedImageAsBackground(
+  userId: string,
+  filename: string
+): Promise<BackgroundResult> {
+  try {
+    const sanitizedFilename = path.basename(filename);
+    if (sanitizedFilename !== filename) {
+      return { success: false, error: 'Invalid filename' };
+    }
+
+    if (!isUserGeneratedImageFilename(userId, sanitizedFilename)) {
+      return { success: false, error: 'Generated image not found' };
+    }
+
+    const sourceExt = path.extname(sanitizedFilename).toLowerCase();
+    if (!ALLOWED_EXTENSIONS.has(sourceExt)) {
+      return { success: false, error: 'Unsupported generated image type' };
+    }
+
+    const sourcePath = path.join(CHAT_GENERATED_DIR, sanitizedFilename);
+    try {
+      await fs.access(sourcePath);
+    } catch {
+      return { success: false, error: 'Generated image not found' };
+    }
+
+    const countResult = await pool.query(
+      'SELECT COUNT(*) FROM desktop_backgrounds WHERE user_id = $1',
+      [userId]
+    );
+    if (parseInt(countResult.rows[0].count) >= MAX_BACKGROUNDS_PER_USER) {
+      return { success: false, error: `Maximum backgrounds reached (${MAX_BACKGROUNDS_PER_USER}). Delete some first.` };
+    }
+
+    const normalizedExt = sourceExt === '.jpeg' ? 'jpg' : sourceExt.replace('.', '');
+    const targetFilename = generateFilename(userId, 'bg', normalizedExt);
+    const targetPath = path.join(GENERATED_DIR, targetFilename);
+    await fs.copyFile(sourcePath, targetPath);
+
+    const imageUrl = `/api/images/backgrounds/generated/${targetFilename}`;
+    const result = await pool.query(
+      `INSERT INTO desktop_backgrounds (user_id, name, description, image_url, background_type, style, prompt)
+       VALUES ($1, $2, $3, $4, 'generated', $5, $6)
+       RETURNING *`,
+      [userId, 'Generated image', `Imported from ${sanitizedFilename}`, imageUrl, 'custom', null]
+    );
+
+    const background = mapRowToBackground(result.rows[0]);
+    logger.info('Background imported from generated image', {
+      userId,
+      sourceFilename: sanitizedFilename,
+      backgroundId: background.id,
+    });
+
+    return { success: true, background };
+  } catch (error) {
+    const errorMessage = (error as Error).message;
+    logger.error('Failed to import generated image as background', { userId, filename, error: errorMessage });
+    return { success: false, error: errorMessage };
+  }
+}
+
+/**
  * Set a background as active (deactivates others)
  */
 export async function setActiveBackground(
@@ -467,6 +585,8 @@ export async function deleteBackground(
 export default {
   generateBackground,
   uploadBackground,
+  listUserGeneratedImages,
+  importGeneratedImageAsBackground,
   setActiveBackground,
   getActiveBackground,
   getUserBackgrounds,

@@ -339,6 +339,13 @@ const jobs: Job[] = [
     running: false,
     handler: cleanupSunoStale,
   },
+  {
+    name: 'albumPipelineWorker',
+    intervalMs: 5 * 60 * 1000, // Every 5 minutes
+    enabled: true,
+    running: false,
+    handler: runAlbumPipelineStep,
+  },
 ];
 
 // ============================================
@@ -1534,6 +1541,18 @@ async function cleanupSunoStale(): Promise<void> {
     }
   } catch (error) {
     logger.error('Suno stale cleanup job failed', { error: (error as Error).message });
+  }
+}
+
+/**
+ * Album production pipeline - write lyrics, analyze, submit to Suno
+ */
+async function runAlbumPipelineStep(): Promise<void> {
+  try {
+    const { runPipelineStep } = await import('../ceo/album-pipeline.service.js');
+    await runPipelineStep();
+  } catch (error) {
+    logger.error('Album pipeline worker failed', { error: (error as Error).message });
   }
 }
 

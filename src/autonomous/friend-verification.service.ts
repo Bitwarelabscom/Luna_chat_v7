@@ -29,6 +29,13 @@ export interface TopicCandidate {
   relevanceScore: number;
   thresholdScore: number;
   status: 'pending' | 'approved' | 'rejected' | 'consumed';
+  sourceType: 'session_pattern' | 'discussion' | 'manual';
+  importance: number;
+  motivation: string | null;
+  suggestedFriendId: string | null;
+  suggestedFriendName: string | null;
+  suggestedFriendEmoji: string | null;
+  suggestedFriendColor: string | null;
   createdAt: Date;
 }
 
@@ -304,14 +311,124 @@ export async function dismissVerificationForQuestion(questionId: string, userId:
 
 export async function listRecentTopicCandidates(userId: string, limit = 20): Promise<TopicCandidate[]> {
   const result = await pool.query(
-    `SELECT * FROM friend_topic_candidates
-     WHERE user_id = $1
-     ORDER BY created_at DESC
+    `SELECT ftc.*,
+            fp.name AS suggested_friend_name,
+            fp.avatar_emoji AS suggested_friend_emoji,
+            fp.color AS suggested_friend_color
+     FROM friend_topic_candidates ftc
+     LEFT JOIN friend_personalities fp ON fp.id = ftc.suggested_friend_id
+     WHERE ftc.user_id = $1
+     ORDER BY ftc.importance DESC, ftc.created_at DESC
      LIMIT $2`,
     [userId, limit]
   );
 
   return result.rows.map(mapTopicCandidate);
+}
+
+export async function addManualTopicCandidate(
+  userId: string,
+  topicText: string,
+  motivation: string | null,
+  importance: number,
+  suggestedFriendId: string | null
+): Promise<TopicCandidate> {
+  const result = await pool.query(
+    `INSERT INTO friend_topic_candidates
+       (user_id, source_type, topic_text, motivation, importance, suggested_friend_id,
+        model_confidence, relevance_score, threshold_score, status)
+     VALUES ($1, 'manual', $2, $3, $4, $5, 1.0, 1.0, 0.60, 'approved')
+     RETURNING *`,
+    [userId, topicText, motivation, importance, suggestedFriendId]
+  );
+
+  const row = result.rows[0] as Record<string, unknown>;
+  // Fetch friend details if needed
+  if (row.suggested_friend_id) {
+    const friendResult = await pool.query(
+      `SELECT name, avatar_emoji, color FROM friend_personalities WHERE id = $1`,
+      [row.suggested_friend_id]
+    );
+    if (friendResult.rows.length > 0) {
+      const fr = friendResult.rows[0] as Record<string, unknown>;
+      row.suggested_friend_name = fr.name;
+      row.suggested_friend_emoji = fr.avatar_emoji;
+      row.suggested_friend_color = fr.color;
+    }
+  }
+
+  return mapTopicCandidate(row);
+}
+
+export async function updateTopicCandidate(
+  id: string,
+  userId: string,
+  updates: {
+    importance?: number;
+    motivation?: string | null;
+    suggestedFriendId?: string | null;
+    status?: 'pending' | 'approved' | 'rejected' | 'consumed';
+  }
+): Promise<TopicCandidate | null> {
+  const setClauses: string[] = [];
+  const values: unknown[] = [];
+  let idx = 1;
+
+  if (updates.importance !== undefined) {
+    setClauses.push(`importance = $${idx++}`);
+    values.push(updates.importance);
+  }
+  if ('motivation' in updates) {
+    setClauses.push(`motivation = $${idx++}`);
+    values.push(updates.motivation);
+  }
+  if ('suggestedFriendId' in updates) {
+    setClauses.push(`suggested_friend_id = $${idx++}`);
+    values.push(updates.suggestedFriendId);
+  }
+  if (updates.status !== undefined) {
+    setClauses.push(`status = $${idx++}`);
+    values.push(updates.status);
+  }
+
+  if (setClauses.length === 0) return null;
+
+  setClauses.push(`updated_at = NOW()`);
+  values.push(id, userId);
+
+  const result = await pool.query(
+    `UPDATE friend_topic_candidates
+     SET ${setClauses.join(', ')}
+     WHERE id = $${idx++} AND user_id = $${idx}
+     RETURNING *`,
+    values
+  );
+
+  if (result.rows.length === 0) return null;
+
+  const row = result.rows[0] as Record<string, unknown>;
+  if (row.suggested_friend_id) {
+    const friendResult = await pool.query(
+      `SELECT name, avatar_emoji, color FROM friend_personalities WHERE id = $1`,
+      [row.suggested_friend_id]
+    );
+    if (friendResult.rows.length > 0) {
+      const fr = friendResult.rows[0] as Record<string, unknown>;
+      row.suggested_friend_name = fr.name;
+      row.suggested_friend_emoji = fr.avatar_emoji;
+      row.suggested_friend_color = fr.color;
+    }
+  }
+
+  return mapTopicCandidate(row);
+}
+
+export async function deleteTopicCandidate(id: string, userId: string): Promise<boolean> {
+  const result = await pool.query(
+    `DELETE FROM friend_topic_candidates WHERE id = $1 AND user_id = $2`,
+    [id, userId]
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 async function gatherTopicMiningContext(userId: string): Promise<string> {
@@ -506,6 +623,13 @@ function mapTopicCandidate(row: Record<string, unknown>): TopicCandidate {
     relevanceScore: Number(row.relevance_score || 0),
     thresholdScore: Number(row.threshold_score || 0),
     status: row.status as TopicCandidate['status'],
+    sourceType: (row.source_type as TopicCandidate['sourceType']) || 'session_pattern',
+    importance: Number(row.importance || 3),
+    motivation: (row.motivation as string) || null,
+    suggestedFriendId: (row.suggested_friend_id as string) || null,
+    suggestedFriendName: (row.suggested_friend_name as string) || null,
+    suggestedFriendEmoji: (row.suggested_friend_emoji as string) || null,
+    suggestedFriendColor: (row.suggested_friend_color as string) || null,
     createdAt: new Date(row.created_at as string),
   };
 }

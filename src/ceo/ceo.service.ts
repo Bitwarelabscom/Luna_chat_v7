@@ -126,9 +126,10 @@ export interface CeoDashboard {
   config: CeoConfig;
   financial: {
     periodDays: number;
-    expenseTotalUsd: number;
-    incomeTotalUsd: number;
-    burnNetUsd: number;
+    expenseTotal: number;
+    incomeTotal: number;
+    ownerPayTotal: number;
+    saldo: number;
     projected30dBurnUsd: number;
   };
   activity: {
@@ -143,7 +144,7 @@ export interface CeoDashboard {
     stage: string;
     opportunityScore: number;
     riskScore: number;
-    revenuePotentialUsd: number;
+    revenuePotential: number;
     estimatedHours: number;
     lastBuildAt: Date | null;
   }>;
@@ -151,8 +152,8 @@ export interface CeoDashboard {
     channel: string;
     runs: number;
     leads: number;
-    costUsd: number;
-    costPerLeadUsd: number | null;
+    cost: number;
+    costPerLead: number | null;
     score: number;
   }>;
   alerts: Array<{
@@ -288,6 +289,17 @@ function asStringArray(value: unknown): string[] {
   }
 
   return [];
+}
+
+function asDate(value: unknown): Date | null {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value === 'string' || typeof value === 'number') {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  return null;
 }
 
 function normalizeTimeString(value: string): string {
@@ -714,6 +726,7 @@ async function computeFinancialWindow(
 ): Promise<{
   expenseTotalUsd: number;
   incomeTotalUsd: number;
+  ownerPayTotalUsd: number;
   perDayExpense: Map<string, number>;
   perDayIncome: Map<string, number>;
 }> {
@@ -732,12 +745,15 @@ async function computeFinancialWindow(
   const perDayIncome = new Map<string, number>();
   let expenseTotalUsd = 0;
   let incomeTotalUsd = 0;
+  let ownerPayTotalUsd = 0;
 
   for (const row of result.rows as Array<{ occurred_on: string; entry_type: string; total: string }>) {
     const total = asNumber(row.total, 0);
     if (row.entry_type === 'expense') {
       expenseTotalUsd += total;
       perDayExpense.set(row.occurred_on, total);
+    } else if (row.entry_type === 'owner_pay') {
+      ownerPayTotalUsd += total;
     } else {
       incomeTotalUsd += total;
       perDayIncome.set(row.occurred_on, total);
@@ -747,9 +763,67 @@ async function computeFinancialWindow(
   return {
     expenseTotalUsd,
     incomeTotalUsd,
+    ownerPayTotalUsd,
     perDayExpense,
     perDayIncome,
   };
+}
+
+async function getBuildActivityState(userId: string): Promise<{ activeBuildCount: number; latestBuildActivityAt: Date | null }> {
+  const [lastBuildResult, buildSessionResult] = await Promise.all([
+    pool.query(
+      `SELECT MAX(occurred_at) AS last_build_at
+       FROM ceo_build_logs
+       WHERE user_id = $1`,
+      [userId]
+    ),
+    pool.query(
+      `SELECT
+          COUNT(*) FILTER (WHERE status IN ('active', 'paused'))::int AS active_count,
+          MAX(started_at) AS last_started_at
+       FROM ceo_active_builds
+       WHERE user_id = $1`,
+      [userId]
+    ),
+  ]);
+
+  const lastBuildAt = asDate(lastBuildResult.rows[0]?.last_build_at);
+  const activeBuildCount = asNumber(buildSessionResult.rows[0]?.active_count, 0);
+  const lastStartedAt = asDate(buildSessionResult.rows[0]?.last_started_at);
+  const latestBuildActivityAt = [lastBuildAt, lastStartedAt]
+    .filter((value): value is Date => value !== null)
+    .sort((a, b) => b.getTime() - a.getTime())[0] || null;
+
+  return { activeBuildCount, latestBuildActivityAt };
+}
+
+async function reconcileBuildAlerts(
+  userId: string,
+  activeBuildCount: number,
+  latestBuildActivityAt: Date | null
+): Promise<void> {
+  if (activeBuildCount > 0) {
+    await pool.query(
+      `UPDATE ceo_alerts
+       SET status = 'resolved'
+       WHERE user_id = $1
+         AND alert_type IN ('build_missing', 'build_stall')
+         AND status IN ('new', 'sent', 'suppressed')`,
+      [userId]
+    );
+    return;
+  }
+
+  if (latestBuildActivityAt) {
+    await pool.query(
+      `UPDATE ceo_alerts
+       SET status = 'resolved'
+       WHERE user_id = $1
+         AND alert_type = 'build_missing'
+         AND status IN ('new', 'sent', 'suppressed')`,
+      [userId]
+    );
+  }
 }
 
 async function detectDailyAlerts(
@@ -852,23 +926,20 @@ async function detectDailyAlerts(
     }
   }
 
-  const lastBuildResult = await pool.query(
-    `SELECT MAX(occurred_at) AS last_build_at
-     FROM ceo_build_logs
-     WHERE user_id = $1`,
-    [userId]
-  );
+  const { activeBuildCount, latestBuildActivityAt } = await getBuildActivityState(userId);
+  await reconcileBuildAlerts(userId, activeBuildCount, latestBuildActivityAt);
 
-  const lastBuildAt = lastBuildResult.rows[0]?.last_build_at as Date | null;
-  if (lastBuildAt) {
-    const lastBuildIso = toIsoDate(lastBuildAt);
+  if (activeBuildCount > 0) {
+    // Ongoing build sessions count as active execution, so avoid stale build alerts.
+  } else if (latestBuildActivityAt) {
+    const lastBuildIso = toIsoDate(latestBuildActivityAt);
     const idleDays = daysBetween(lastBuildIso, localDateIso);
     if (idleDays >= config.noBuildDaysThreshold) {
       alerts.push({
         severity: 'P2',
         alertType: 'build_stall',
         title: 'Build momentum stalled',
-        message: `No build logs for ${idleDays} days. Threshold is ${config.noBuildDaysThreshold} days.`,
+        message: `No build updates for ${idleDays} days. Threshold is ${config.noBuildDaysThreshold} days.`,
         payload: { idleDays, threshold: config.noBuildDaysThreshold },
       });
     }
@@ -994,7 +1065,7 @@ async function getLatestProjectRankings(userId: string): Promise<CeoDashboard['p
         stage: String(row.stage || 'build'),
         opportunityScore,
         riskScore,
-        revenuePotentialUsd,
+        revenuePotential: revenuePotentialUsd,
         estimatedHours,
         lastBuildAt,
       };
@@ -1017,18 +1088,18 @@ async function getChannelPerformance(userId: string, windowStartIso: string): Pr
   );
 
   return (result.rows as Array<{ channel: string; runs: number; leads: number; cost: string }>).map((row) => {
-    const costUsd = asNumber(row.cost);
+    const costVal = asNumber(row.cost);
     const leads = row.leads;
     const runs = row.runs;
-    const costPerLeadUsd = leads > 0 ? costUsd / leads : null;
-    const score = leads * 2 + runs * 0.75 - costUsd * 0.05;
+    const costPerLead = leads > 0 ? costVal / leads : null;
+    const score = leads * 2 + runs * 0.75 - costVal * 0.05;
 
     return {
       channel: row.channel,
       runs,
       leads,
-      costUsd,
-      costPerLeadUsd,
+      cost: costVal,
+      costPerLead,
       score,
     };
   }).sort((a, b) => b.score - a.score);
@@ -1465,6 +1536,31 @@ export async function logIncome(userId: string, input: FinanceLogInput): Promise
       normalizeCadence(input.cadence),
       input.notes || null,
       input.source || 'telegram',
+    ]
+  );
+
+  return result.rows[0].id as string;
+}
+
+export async function logOwnerPay(userId: string, input: FinanceLogInput): Promise<string> {
+  const config = await getOrCreateConfig(userId);
+  const localDate = getLocalTimeParts(config.timezone).isoDate;
+  const occurredOn = parseDateInput(input.date, localDate);
+
+  const result = await pool.query(
+    `INSERT INTO ceo_finance_entries
+     (user_id, occurred_on, entry_type, vendor, amount_usd, category, cadence, notes, source)
+     VALUES ($1, $2::date, 'owner_pay', $3, $4, $5, $6, $7, $8)
+     RETURNING id`,
+    [
+      userId,
+      occurredOn,
+      input.vendor.trim(),
+      Math.max(0, input.amountUsd),
+      (input.category || 'owner_payment').trim().toLowerCase(),
+      'one-time',
+      input.notes || null,
+      input.source || 'slash_command',
     ]
   );
 
@@ -2124,6 +2220,8 @@ export async function getDashboard(userId: string, periodDays = 30): Promise<Ceo
   const localTime = getLocalTimeParts(config.timezone);
 
   const financial = await computeFinancialWindow(userId, localTime.isoDate, periodDays);
+  const { activeBuildCount, latestBuildActivityAt } = await getBuildActivityState(userId);
+  await reconcileBuildAlerts(userId, activeBuildCount, latestBuildActivityAt);
 
   const buildResult = await pool.query(
     `SELECT COALESCE(SUM(hours), 0)::numeric AS total,
@@ -2165,6 +2263,7 @@ export async function getDashboard(userId: string, periodDays = 30): Promise<Ceo
     [userId]
   );
 
+  const saldo = financial.ownerPayTotalUsd - financial.expenseTotalUsd;
   const burnNet = financial.expenseTotalUsd - financial.incomeTotalUsd;
   const projected30dBurnUsd = periodDays > 0 ? burnNet * (30 / periodDays) : burnNet;
 
@@ -2172,16 +2271,17 @@ export async function getDashboard(userId: string, periodDays = 30): Promise<Ceo
     config,
     financial: {
       periodDays,
-      expenseTotalUsd: financial.expenseTotalUsd,
-      incomeTotalUsd: financial.incomeTotalUsd,
-      burnNetUsd: burnNet,
+      expenseTotal: financial.expenseTotalUsd,
+      incomeTotal: financial.incomeTotalUsd,
+      ownerPayTotal: financial.ownerPayTotalUsd,
+      saldo,
       projected30dBurnUsd,
     },
     activity: {
       buildHours: asNumber(buildResult.rows[0]?.total),
       experiments: experimentsResult.rows[0]?.experiments || 0,
       leads: experimentsResult.rows[0]?.leads || 0,
-      lastBuildAt: (buildResult.rows[0]?.last_build_at as Date | null) || null,
+      lastBuildAt: asDate(buildResult.rows[0]?.last_build_at) || latestBuildActivityAt,
       lastExperimentDate: (experimentsResult.rows[0]?.last_experiment_date as string | null) || null,
     },
     projectRankings,
@@ -2331,7 +2431,7 @@ export async function runMaintenanceCleanup(): Promise<{ deletedRows: number }> 
 function formatDashboardSummary(dashboard: CeoDashboard): string {
   const lines: string[] = [];
   lines.push(`CEO status (${dashboard.config.mode}, ${dashboard.config.timezone})`);
-  lines.push(`Burn ${dashboard.financial.periodDays}d: ${formatMoney(dashboard.financial.burnNetUsd)} (expenses ${formatMoney(dashboard.financial.expenseTotalUsd)}, income ${formatMoney(dashboard.financial.incomeTotalUsd)})`);
+  lines.push(`Saldo: ${formatMoney(dashboard.financial.saldo)} | Expenses ${dashboard.financial.periodDays}d: ${formatMoney(dashboard.financial.expenseTotal)} | Income: ${formatMoney(dashboard.financial.incomeTotal)}`);
   lines.push(`Projected 30d cash need: ${formatMoney(dashboard.financial.projected30dBurnUsd)}`);
   lines.push(`Build hours: ${dashboard.activity.buildHours.toFixed(1)} | Experiments: ${dashboard.activity.experiments} | Leads: ${dashboard.activity.leads}`);
 

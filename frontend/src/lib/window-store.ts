@@ -116,6 +116,8 @@ interface WindowStore {
   // Canvas artifact actions
   setPendingCanvasData: (data: PendingCanvasData | null) => void;
   consumePendingCanvasData: () => PendingCanvasData | null;
+  // Window sizing
+  maximizeWindow: (windowId: string) => void;
 }
 
 let windowIdCounter = 0;
@@ -324,6 +326,21 @@ export const useWindowStore = create<WindowStore>((set, get) => ({
       set({ pendingCanvasData: null });
     }
     return pendingCanvasData;
+  },
+
+  maximizeWindow: (windowId: string) => {
+    const desktopH = (typeof window !== 'undefined' ? window.innerHeight : 900) - 68;
+    const desktopW = (typeof window !== 'undefined' ? window.innerWidth : 1400) - 60;
+    const { maxZIndex } = get();
+    set((state) => ({
+      windows: state.windows.map((win) =>
+        win.id === windowId
+          ? { ...win, position: { x: 60, y: 28 }, size: { width: desktopW, height: desktopH }, zIndex: maxZIndex + 1 }
+          : win
+      ),
+      maxZIndex: maxZIndex + 1,
+      focusedWindow: windowId,
+    }));
   },
 }));
 

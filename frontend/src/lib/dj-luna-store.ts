@@ -44,6 +44,9 @@ interface DJLunaState {
   projects: ProjectFolder[];
   isLoadingSongs: boolean;
 
+  // Active genre for Check tab (shared with chat context)
+  activeGenreId: string | null;
+
   // UI state
   showStartupModal: boolean;
 
@@ -60,6 +63,7 @@ interface DJLunaState {
   loadSongList: () => Promise<void>;
   addCustomPreset: (name: string, tags: string) => void;
   removeCustomPreset: (id: string) => void;
+  setActiveGenreId: (id: string | null) => void;
   setSessionId: (id: string) => void;
   setShowStartupModal: (show: boolean) => void;
   markCanvasClean: () => void;
@@ -94,6 +98,7 @@ function parseFrontmatter(content: string): { meta: Record<string, string>; body
 export const useDJLunaStore = create<DJLunaState>((set, get) => ({
   sessionId: null,
   canvasContent: '',
+  activeGenreId: null,
   canvasDirty: false,
   currentSong: null,
   activeStyle: '',
@@ -243,6 +248,8 @@ export const useDJLunaStore = create<DJLunaState>((set, get) => ({
     workspaceApi.updateFile('dj-luna/styles.json', JSON.stringify({ custom: customPresets }, null, 2))
       .catch(console.error);
   },
+
+  setActiveGenreId: (id: string | null) => set({ activeGenreId: id }),
 
   setSessionId: (id: string) => set({ sessionId: id }),
 

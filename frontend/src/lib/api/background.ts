@@ -15,6 +15,13 @@ export interface Background {
   createdAt: string;
 }
 
+export interface GeneratedImageOption {
+  filename: string;
+  imageUrl: string;
+  createdAt: string;
+  sizeBytes: number;
+}
+
 export const backgroundApi = {
   // Get all backgrounds for user
   getBackgrounds: () =>
@@ -42,6 +49,17 @@ export const backgroundApi = {
   // Delete a background
   delete: (id: string) =>
     api<{ success: boolean }>(`/api/backgrounds/${id}`, { method: 'DELETE' }),
+
+  // List generated chat images that can be used as background
+  getGeneratedImages: () =>
+    api<{ images: GeneratedImageOption[] }>('/api/backgrounds/generated-images'),
+
+  // Import a generated image into desktop backgrounds
+  createFromGenerated: (filename: string, setActive: boolean = true) =>
+    api<{ background: Background }>('/api/backgrounds/from-generated', {
+      method: 'POST',
+      body: { filename, setActive },
+    }),
 };
 
 // Upload background image using FormData

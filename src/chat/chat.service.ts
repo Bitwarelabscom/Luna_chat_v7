@@ -427,7 +427,9 @@ export interface ChatInput {
   novaMode?: boolean;
   documentIds?: string[];
   djStyleContext?: string;
+  djGenreContext?: string;
   ceoSystemLog?: string;
+  skillContext?: string;
 }
 
 export interface ChatOutput {
@@ -438,7 +440,7 @@ export interface ChatOutput {
 }
 
 export async function processMessage(input: ChatInput): Promise<ChatOutput> {
-  const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode, novaMode, documentIds, djStyleContext, ceoSystemLog } = input;
+  const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode, novaMode, documentIds, djStyleContext, djGenreContext, ceoSystemLog, skillContext } = input;
 
   // Initialize MemoryCore session for consolidation tracking
   // This enables episodic memory recording and NeuralSleep LNN processing
@@ -751,7 +753,9 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
         source,
         novaMode,
         djStyleContext,
+        djGenreContext,
         ceoSystemLog,
+        skillContext,
       }),
     },
   ];
@@ -2838,7 +2842,7 @@ export interface StreamMetrics {
 export async function* streamMessage(
   input: ChatInput
 ): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'background_refresh' | 'reasoning' | 'video_action' | 'media_action' | 'canvas_artifact'; content?: string | any; status?: string; messageId?: string; tokensUsed?: number; metrics?: StreamMetrics; action?: string; url?: string; videos?: any[]; query?: string; items?: any[]; source?: string; artifactId?: string }> {
-  const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode, novaMode, documentIds, djStyleContext, ceoSystemLog } = input;
+  const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode, novaMode, documentIds, djStyleContext, djGenreContext, ceoSystemLog, skillContext } = input;
 
   // Initialize MemoryCore session for consolidation tracking
   // This enables episodic memory recording and NeuralSleep LNN processing
@@ -3421,7 +3425,9 @@ export async function* streamMessage(
         source,
         novaMode,
         djStyleContext,
+        djGenreContext,
         ceoSystemLog,
+        skillContext,
       }),
     },
   ];

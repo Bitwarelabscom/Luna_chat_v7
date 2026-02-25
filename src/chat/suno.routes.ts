@@ -14,6 +14,8 @@ router.use(authenticate as RequestHandler);
 const generateSchema = z.object({
   count: z.number().int().min(1).max(10),
   style_override: z.string().max(500).optional(),
+  lyrics: z.string().max(5000).optional(),
+  title: z.string().max(300).optional(),
 });
 
 const generationsQuerySchema = z.object({
@@ -23,8 +25,8 @@ const generationsQuerySchema = z.object({
 // POST /api/suno/generate
 router.post('/generate', async (req: Request, res: Response) => {
   try {
-    const { count, style_override } = generateSchema.parse(req.body);
-    const generations = await sunoService.triggerBatch(req.user!.userId, count, style_override);
+    const { count, style_override, lyrics, title } = generateSchema.parse(req.body);
+    const generations = await sunoService.triggerBatch(req.user!.userId, count, style_override, lyrics, title);
     res.status(201).json({ generations, count: generations.length });
   } catch (error) {
     if (error instanceof z.ZodError) {

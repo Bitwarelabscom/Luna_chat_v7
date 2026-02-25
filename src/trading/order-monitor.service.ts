@@ -117,6 +117,144 @@ async function getCurrentPrices(symbols: string[]): Promise<Map<string, number>>
   return redisPrices;
 }
 
+function getBaseAssetFromSymbol(symbol: string): string {
+  return symbol.replace(/_USD$|USD$|_USDT$|USDT$/, '');
+}
+
+function formatQuantityToStep(quantity: number, stepSize: string): string {
+  const step = parseFloat(stepSize);
+  if (!Number.isFinite(step) || step <= 0) {
+    return quantity.toString();
+  }
+
+  if (step >= 1) {
+    const rounded = Math.floor(quantity / step) * step;
+    return rounded.toString();
+  }
+
+  const precision = Math.max(0, Math.ceil(-Math.log10(step)));
+  const multiplier = Math.pow(10, precision);
+  const rounded = Math.floor(quantity * multiplier) / multiplier;
+  return rounded.toFixed(precision);
+}
+
+function isOrderQuantityOrBalanceError(errorMessage: string): boolean {
+  const msg = errorMessage.toUpperCase();
+  return (
+    msg.includes('INVALID_ORDERQTY') ||
+    msg.includes('INSUFFICIENT_AVAILABLE_BALANCE') ||
+    msg.includes('INSUFFICIENT BALANCE') ||
+    msg.includes('ACCOUNT HAS INSUFFICIENT')
+  );
+}
+
+async function getAvailableBaseBalance(client: IExchangeClient, normalizedSymbol: string): Promise<number | null> {
+  try {
+    const accountInfo = await client.getAccountInfo();
+    const baseAsset = getBaseAssetFromSymbol(normalizedSymbol);
+    const balance = accountInfo.balances.find((b) => b.asset === baseAsset);
+    const free = parseFloat(balance?.free || '0');
+    if (!Number.isFinite(free)) return null;
+    return Math.max(0, free);
+  } catch {
+    return null;
+  }
+}
+
+async function getFallbackClosePrice(
+  client: IExchangeClient,
+  normalizedSymbol: string,
+  tradeId: string
+): Promise<number> {
+  try {
+    const tickerResult = await client.getTicker24hr(normalizedSymbol);
+    const ticker = Array.isArray(tickerResult)
+      ? tickerResult.find((t: { symbol: string }) => t.symbol === normalizedSymbol)
+      : tickerResult;
+    if (ticker && ticker.lastPrice) {
+      const lastPrice = parseFloat(String(ticker.lastPrice));
+      if (Number.isFinite(lastPrice) && lastPrice > 0) {
+        return lastPrice;
+      }
+    }
+  } catch {
+    // Ignore and fallback to entry price
+  }
+
+  const originalTrade = await pool.query('SELECT filled_price, price FROM trades WHERE id = $1', [tradeId]);
+  const filledPrice = parseFloat(originalTrade.rows[0]?.filled_price || '0');
+  if (Number.isFinite(filledPrice) && filledPrice > 0) {
+    return filledPrice;
+  }
+  const requestedPrice = parseFloat(originalTrade.rows[0]?.price || '0');
+  if (Number.isFinite(requestedPrice) && requestedPrice > 0) {
+    return requestedPrice;
+  }
+  return 0;
+}
+
+async function markTradeClosedExternally(
+  userId: string,
+  tradeId: string,
+  normalizedSymbol: string,
+  reason: string,
+  note: string,
+  client: IExchangeClient
+): Promise<void> {
+  const closePrice = await getFallbackClosePrice(client, normalizedSymbol, tradeId);
+
+  await pool.query(
+    `UPDATE trades SET
+      closed_at = COALESCE(closed_at, NOW()),
+      close_price = CASE WHEN close_price IS NULL OR close_price = 0 THEN $2 ELSE close_price END,
+      close_reason = COALESCE(close_reason, $3),
+      notes = COALESCE(notes, '') || $4
+     WHERE id = $1`,
+    [tradeId, closePrice, reason, ` [Closed externally - ${note}]`]
+  );
+
+  const autoTradeCheck = await pool.query<{
+    auto_trade: boolean | null;
+    filled_price: string | null;
+    side: string;
+    quantity: string;
+    symbol: string;
+  }>(
+    `SELECT auto_trade, filled_price, side, quantity, symbol
+     FROM trades
+     WHERE id = $1`,
+    [tradeId]
+  );
+
+  const row = autoTradeCheck.rows[0];
+  if (row?.auto_trade) {
+    const entryPrice = parseFloat(row.filled_price || '0') || 0;
+    const qty = parseFloat(row.quantity || '0') || 0;
+    const pnlUsd = (row.side === 'buy' || row.side === 'long')
+      ? (closePrice - entryPrice) * qty
+      : (entryPrice - closePrice) * qty;
+    const outcome = pnlUsd >= 0 ? 'win' : 'loss';
+
+    try {
+      await autoTradingService.handleTradeClose(userId, tradeId, outcome, pnlUsd, row.symbol);
+    } catch (err) {
+      logger.warn('Failed to update auto-trading state for externally closed trade', {
+        tradeId,
+        error: (err as Error).message,
+      });
+    }
+  }
+
+  logger.info('Marked trade as closed externally', {
+    userId,
+    tradeId,
+    symbol: normalizedSymbol,
+    reason,
+    note,
+    closePrice,
+  });
+}
+
 /**
  * Check and execute TP/SL orders
  */
@@ -914,62 +1052,76 @@ export async function executeClosePosition(
   const normalizedSymbol = toCryptoComSymbol(symbol);
   const exchange: ExchangeType = 'crypto_com';
 
-  // Get actual balance from exchange to prevent INSUFFICIENT_BALANCE errors
   let actualQuantity = quantity;
+  if (!isMarginTrade && closeSide === 'SELL') {
+    const availableBalance = await getAvailableBaseBalance(client, normalizedSymbol);
+    if (availableBalance === null) {
+      logger.warn('Could not verify base-asset balance, using database quantity', { tradeId, symbol: normalizedSymbol });
+    } else if (availableBalance <= 0) {
+      await markTradeClosedExternally(
+        userId,
+        tradeId,
+        normalizedSymbol,
+        reason,
+        'No available balance on exchange',
+        client
+      );
+      return;
+    } else if (availableBalance < quantity) {
+      logger.warn('Adjusting sell quantity to match actual balance', {
+        tradeId,
+        symbol,
+        requestedQty: quantity,
+        actualBalance: availableBalance,
+      });
+      actualQuantity = availableBalance;
+    }
+  }
+
+  let lotSize: { stepSize: string; minQty: string } | null = null;
   try {
-    const { getPortfolio } = await import('./trading.service.js');
-    const portfolio = await getPortfolio(userId);
-    if (portfolio && portfolio.holdings) {
-      // Extract base asset from symbol (e.g., CHZ from CHZ_USD)
-      const baseAsset = normalizedSymbol.replace(/_USD$|USD$|_USDT$|USDT$/, '');
-      const holding = portfolio.holdings.find(h => h.asset === baseAsset);
-    if (holding && holding.amount) {
-      // Use the minimum of database quantity and actual balance
-      if (holding.amount < quantity) {
-        logger.warn('Adjusting sell quantity to match actual balance', {
-          tradeId,
-          symbol,
-          requestedQty: quantity,
-          actualBalance: holding.amount,
-        });
-        actualQuantity = holding.amount;
-      }
-    }
-    }
-  } catch (balanceErr) {
-    logger.warn('Could not verify balance, using database quantity', {
+    lotSize = await client.getLotSizeFilter(normalizedSymbol);
+  } catch (lotErr) {
+    logger.warn('Could not fetch lot size filter, using fallback quantity formatting', {
       tradeId,
-      error: (balanceErr as Error).message,
+      symbol: normalizedSymbol,
+      error: (lotErr as Error).message,
     });
   }
 
-  // Format quantity according to symbol's lot size
-  let formattedQuantity: string;
-  try {
-    const lotSize = await client.getLotSizeFilter(normalizedSymbol);
-    if (lotSize && lotSize.stepSize) {
-      const step = parseFloat(lotSize.stepSize);
+  const stepSize = lotSize?.stepSize || '0.00000001';
+  const minQty = parseFloat(lotSize?.minQty || '0');
+  const formattedQuantity = formatQuantityToStep(actualQuantity, stepSize);
+  const formattedQuantityNum = parseFloat(formattedQuantity);
 
-      if (step >= 1) {
-        // For large step sizes (e.g., 10000 for SHIB/BONK), round down to nearest multiple
-        const rounded = Math.floor(actualQuantity / step) * step;
-        formattedQuantity = rounded.toString();
-      } else {
-        // For small step sizes, use precision-based formatting
-        const precision = Math.max(0, Math.ceil(-Math.log10(step)));
-        const multiplier = Math.pow(10, precision);
-        const rounded = Math.floor(actualQuantity * multiplier) / multiplier;
-        formattedQuantity = rounded.toFixed(precision);
-      }
-    } else {
-      // Default: 2 decimal places for most coins, round down
-      const factor = 100;
-      formattedQuantity = (Math.floor(actualQuantity * factor) / factor).toFixed(2);
-    }
-  } catch {
-    // Fallback to 2 decimal places, round down
-    const factor = 100;
-    formattedQuantity = (Math.floor(actualQuantity * factor) / factor).toFixed(2);
+  if (!isMarginTrade && (!Number.isFinite(formattedQuantityNum) || formattedQuantityNum <= 0)) {
+    await markTradeClosedExternally(
+      userId,
+      tradeId,
+      normalizedSymbol,
+      reason,
+      `Close quantity rounded to zero (requested=${quantity}, available=${actualQuantity})`,
+      client
+    );
+    return;
+  }
+
+  if (
+    !isMarginTrade &&
+    closeSide === 'SELL' &&
+    Number.isFinite(minQty) &&
+    minQty > 0 &&
+    formattedQuantityNum < minQty
+  ) {
+    await markTradeClosedExternally(
+      userId,
+      tradeId,
+      normalizedSymbol,
+      reason,
+      `Close quantity ${formattedQuantity} below min quantity ${minQty}`,
+      client
+    );
+    return;
   }
 
   let order;
@@ -980,12 +1132,85 @@ export async function executeClosePosition(
     order = await marginClient.closeMarginPosition(normalizedSymbol, positionSide);
   } else {
     // Close spot position
-    order = await client.placeOrder({
-      symbol: normalizedSymbol,
-      side: closeSide as 'BUY' | 'SELL',
-      type: 'MARKET',
-      quantity: formattedQuantity,
-    });
+    try {
+      order = await client.placeOrder({
+        symbol: normalizedSymbol,
+        side: closeSide as 'BUY' | 'SELL',
+        type: 'MARKET',
+        quantity: formattedQuantity,
+      });
+    } catch (error) {
+      const errorMessage = (error as Error).message || 'Unknown order placement error';
+
+      // Retry once with refreshed free balance for sell closes.
+      if (closeSide === 'SELL' && isOrderQuantityOrBalanceError(errorMessage)) {
+        const refreshedAvailableBalance = await getAvailableBaseBalance(client, normalizedSymbol);
+        if (refreshedAvailableBalance === null || refreshedAvailableBalance <= 0) {
+          await markTradeClosedExternally(
+            userId,
+            tradeId,
+            normalizedSymbol,
+            reason,
+            `Order rejected (${errorMessage}) and no sellable balance remains`,
+            client
+          );
+          return;
+        }
+
+        const retryQuantity = Math.max(0, refreshedAvailableBalance * 0.999);
+        const retryFormattedQuantity = formatQuantityToStep(retryQuantity, stepSize);
+        const retryQtyNum = parseFloat(retryFormattedQuantity);
+        const canRetry =
+          Number.isFinite(retryQtyNum) &&
+          retryQtyNum > 0 &&
+          (!(Number.isFinite(minQty) && minQty > 0) || retryQtyNum >= minQty);
+
+        if (!canRetry) {
+          await markTradeClosedExternally(
+            userId,
+            tradeId,
+            normalizedSymbol,
+            reason,
+            `Order rejected (${errorMessage}); retry quantity ${retryFormattedQuantity} not tradable`,
+            client
+          );
+          return;
+        }
+
+        logger.warn('Retrying close order with refreshed balance', {
+          tradeId,
+          symbol: normalizedSymbol,
+          originalQty: formattedQuantity,
+          retryQty: retryFormattedQuantity,
+          cause: errorMessage,
+        });
+
+        try {
+          order = await client.placeOrder({
+            symbol: normalizedSymbol,
+            side: closeSide as 'BUY' | 'SELL',
+            type: 'MARKET',
+            quantity: retryFormattedQuantity,
+          });
+        } catch (retryErr) {
+          const retryMessage = (retryErr as Error).message || 'Unknown retry order placement error';
+          if (isOrderQuantityOrBalanceError(retryMessage)) {
+            await markTradeClosedExternally(
+              userId,
+              tradeId,
+              normalizedSymbol,
+              reason,
+              `Retry rejected (${retryMessage})`,
+              client
+            );
+            return;
+          }
+          throw retryErr;
+        }
+      } else {
+        throw error;
+      }
+    }
   }
 
   // Calculate fill details
@@ -1011,26 +1236,13 @@ export async function executeClosePosition(
   // CRITICAL: If still no fill price, fetch current market price as fallback
   // This prevents incorrect P&L calculations (e.g., -$33 instead of -$0.52)
   if (!filledPrice || filledPrice === 0) {
-    try {
-      const tickerResult = await client.getTicker24hr(normalizedSymbol);
-      const ticker = Array.isArray(tickerResult)
-        ? tickerResult.find((t: { symbol: string }) => t.symbol === normalizedSymbol)
-        : tickerResult;
-      if (ticker && ticker.lastPrice) {
-        filledPrice = parseFloat(String(ticker.lastPrice));
-        console.log(`[OrderMonitor] Using current market price ${filledPrice} for ${normalizedSymbol} (no fill price from exchange)`);
-      }
-    } catch (tickerErr) {
-      console.error('[OrderMonitor] Failed to get market price fallback:', tickerErr);
-    }
-  }
-
-  // Final fallback: if STILL no price, get entry price from original trade (at least avoid 0)
-  if (!filledPrice || filledPrice === 0) {
-    const originalTrade = await pool.query('SELECT filled_price FROM trades WHERE id = $1', [tradeId]);
-    if (originalTrade.rows[0]?.filled_price) {
-      filledPrice = parseFloat(originalTrade.rows[0].filled_price);
-      console.warn(`[OrderMonitor] WARNING: Using entry price ${filledPrice} as exit price for ${normalizedSymbol} - P&L will be ~0`);
+    filledPrice = await getFallbackClosePrice(client, normalizedSymbol, tradeId);
+    if (filledPrice > 0) {
+      logger.warn('Using fallback close price (no fill price from exchange)', {
+        tradeId,
+        symbol: normalizedSymbol,
+        filledPrice,
+      });
     }
   }
 

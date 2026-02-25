@@ -101,10 +101,67 @@ style: {suno style tags}
 [Verse 1]
 ...
 
+RHYME SCHEME KNOWLEDGE:
+Rhyme scheme describes which LINE ENDINGS rhyme with each other, labeled A/B/C in order of first appearance.
+Lines ending with the same rhyme sound share the same letter. Unrhymed lines are X.
+
+ABAB (most common - alternating):
+  Line 1 ends "night"   -> A
+  Line 2 ends "away"    -> B
+  Line 3 ends "light"   -> A   (rhymes with night)
+  Line 4 ends "today"   -> B   (rhymes with away)
+
+AABB (couplets - pairs rhyme):
+  Line 1 ends "fire"    -> A
+  Line 2 ends "desire"  -> A   (rhymes with fire)
+  Line 3 ends "rain"    -> B
+  Line 4 ends "again"   -> B   (rhymes with rain)
+
+ABCB (ballad - only 2nd and 4th rhyme):
+  Line 1 ends "morning" -> A   (no rhyme partner - fine)
+  Line 2 ends "away"    -> B
+  Line 3 ends "crying"  -> C   (no rhyme partner - fine)
+  Line 4 ends "today"   -> B   (rhymes with away)
+
+loose: approximate or near-rhymes are acceptable, structure is flexible
+none: no rhyme requirement (spoken word, free verse)
+
+APPLYING THE SCHEME:
+- When a genre/rhyme scheme is active, every section (verse, chorus, bridge) MUST follow it
+- Plan last words first: decide which words rhyme before writing full lines
+- Do NOT mix schemes - if ABAB is set, use it throughout the whole song
+- For ABAB in a 8-line verse: lines 1,3 rhyme AND lines 2,4 rhyme AND lines 5,7 rhyme AND lines 6,8 rhyme
+- Weak/forced rhymes break immersion - choose natural-sounding pairs
+
 CONSTRAINTS:
 - Use web_search, web_fetch, workspace_write, workspace_read, workspace_list tools only.
 - Focus strictly on music generation and song management.
 - When the user asks to save, always write to dj-luna/{project}/{slug}.md where slug is kebab-case title.
+- When writing full song lyrics, output them as the LAST block in your message.
+  Before the lyrics block, add one line: "Style: [your suno style tags here]"
+  Then output ONLY the lyrics with section tags. No trailing commentary after the last section.
+  Example layout:
+    Here's a dark techno track for you:
+
+    Style: dark techno, 140bpm, industrial drums, female vocal
+    [Intro]
+    ...
+    [Outro]
+    last lyric line
+
+SUNO LANGUAGE RULES (CRITICAL - Suno only reads English inside brackets):
+- Everything inside square brackets [] MUST be in English, always.
+  This includes structural tags AND descriptive modifiers.
+  Correct: [Verse 1], [Explosive Chorus], [Female Vocal], [Melancholic Bridge]
+  Incorrect: [Vers 1], [Explosivt Refrang], [Kvinnlig Sangare]
+- Only actual lyric lines (text outside brackets) may be in any language.
+
+EXAMPLE (Swedish lyrics, English tags):
+  WRONG:                         CORRECT:
+  [Vers 1]                       [Verse 1]
+  Natten faller tyst och klar    Natten faller tyst och klar
+  [Kraftfull Refrang]            [Explosive Chorus]
+  Vi dansar under stjarnorna     Vi dansar under stjarnorna
 
 SUNO TAG REFERENCE:
 # Suno Music Generation Guide
@@ -275,7 +332,9 @@ export function buildContextualPrompt(
     source?: 'web' | 'telegram' | 'api';
     novaMode?: boolean;
     djStyleContext?: string;
+    djGenreContext?: string;
     ceoSystemLog?: string;
+    skillContext?: string;
   }
 ): string {
   const sections: string[] = [];
@@ -356,9 +415,19 @@ You have access to additional tools via MCP (Model Context Protocol). These exte
     sections.push(`[Web Search Results - Use these to provide current information]\n${options.searchResults}`);
   }
 
+  // Active skill context (injected from /skill command - works across all modes)
+  if (options.skillContext) {
+    sections.push(`[Active Skill]\n${options.skillContext}`);
+  }
+
   // DJ Luna active style context (injected per-message from style panel)
   if (options.djStyleContext && mode === 'dj_luna') {
     sections.push(`[Active Style]\nThe user has selected this Suno style for the current song:\n${options.djStyleContext}\nKeep this style in mind when generating lyrics and suggestions.`);
+  }
+
+  // DJ Luna active genre/rhyme scheme context (injected from Check tab genre selector)
+  if (options.djGenreContext && mode === 'dj_luna') {
+    sections.push(`[Active Genre & Rhyme Scheme]\n${options.djGenreContext}\nYou MUST follow this rhyme scheme strictly when writing lyrics. Every section must conform.`);
   }
 
   // CEO Luna system log injection (from slash commands/build tracker)

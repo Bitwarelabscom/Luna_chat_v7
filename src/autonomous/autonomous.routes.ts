@@ -1422,6 +1422,91 @@ router.get('/friends/topics', async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/autonomous/friends/topics
+ * Manually add a gossip topic to the queue
+ */
+router.post('/friends/topics', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const { topicText, motivation, importance = 3, suggestedFriendId } = req.body;
+
+    if (!topicText || typeof topicText !== 'string' || !topicText.trim()) {
+      return res.status(400).json({ error: 'topicText is required' });
+    }
+
+    const topic = await friendVerificationService.addManualTopicCandidate(
+      userId,
+      topicText.trim(),
+      motivation ? String(motivation).trim() : null,
+      Math.min(5, Math.max(1, parseInt(String(importance)) || 3)),
+      suggestedFriendId || null
+    );
+
+    return res.json({ topic });
+  } catch (error) {
+    logger.error('Error adding gossip topic', { error });
+    return res.status(500).json({ error: 'Failed to add topic' });
+  }
+});
+
+/**
+ * PATCH /api/autonomous/friends/topics/:id
+ * Update a gossip topic (importance, motivation, suggestedFriendId, status)
+ */
+router.patch('/friends/topics/:id', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const topicId = req.params.id;
+    const { importance, motivation, suggestedFriendId, status } = req.body;
+
+    const updates: Parameters<typeof friendVerificationService.updateTopicCandidate>[2] = {};
+    if (importance !== undefined) updates.importance = Math.min(5, Math.max(1, parseInt(String(importance)) || 3));
+    if ('motivation' in req.body) updates.motivation = motivation ? String(motivation).trim() : null;
+    if ('suggestedFriendId' in req.body) updates.suggestedFriendId = suggestedFriendId || null;
+    if (status !== undefined) {
+      const validStatuses = ['pending', 'approved', 'rejected', 'consumed'];
+      if (!validStatuses.includes(status)) {
+        return res.status(400).json({ error: 'Invalid status' });
+      }
+      updates.status = status;
+    }
+
+    const topic = await friendVerificationService.updateTopicCandidate(topicId, userId, updates);
+
+    if (!topic) {
+      return res.status(404).json({ error: 'Topic not found' });
+    }
+
+    return res.json({ topic });
+  } catch (error) {
+    logger.error('Error updating gossip topic', { error });
+    return res.status(500).json({ error: 'Failed to update topic' });
+  }
+});
+
+/**
+ * DELETE /api/autonomous/friends/topics/:id
+ * Delete a gossip topic
+ */
+router.delete('/friends/topics/:id', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const topicId = req.params.id;
+
+    const deleted = await friendVerificationService.deleteTopicCandidate(topicId, userId);
+
+    if (!deleted) {
+      return res.status(404).json({ error: 'Topic not found' });
+    }
+
+    return res.json({ success: true });
+  } catch (error) {
+    logger.error('Error deleting gossip topic', { error });
+    return res.status(500).json({ error: 'Failed to delete topic' });
+  }
+});
+
+/**
  * GET /api/autonomous/friends/discussions/:id
  * Get a specific friend discussion
  */

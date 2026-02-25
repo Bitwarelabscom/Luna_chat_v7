@@ -10,6 +10,7 @@ import {
   Calendar,
   Mail,
   Users,
+  Users2,
   Music,
   Music2,
   Video,
@@ -52,7 +53,8 @@ export type AppId =
   | 'games'
   | 'rpg'
   | 'dj-luna'
-  | 'ceo-luna';
+  | 'ceo-luna'
+  | 'council';
 
 export interface AppConfig {
   id: AppId;
@@ -160,7 +162,8 @@ export const appConfig: Record<AppId, AppConfig> = {
     title: 'Friends',
     icon: Users,
     color: 'from-pink-400 to-rose-500',
-    defaultSize: { width: 400, height: 500 },
+    defaultSize: { width: 1100, height: 700 },
+    keepAlive: true,
     showInDock: true,
   },
   music: {
@@ -269,6 +272,15 @@ export const appConfig: Record<AppId, AppConfig> = {
     showInDock: true,
     keepAlive: true,
   },
+  council: {
+    id: 'council',
+    title: 'Council',
+    icon: Users2,
+    color: 'from-indigo-500 to-violet-600',
+    defaultSize: { width: 1100, height: 750 },
+    showInDock: true,
+    keepAlive: true,
+  },
 };
 
 // Apps to show in the dock (in order)
@@ -296,6 +308,7 @@ export const dockApps: AppId[] = [
   'games',
   'dj-luna',
   'ceo-luna',
+  'council',
 ];
 
 export default appConfig;

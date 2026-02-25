@@ -16,6 +16,20 @@ export interface ActiveBuild {
   lastCheckinAt: Date;
 }
 
+export interface BuildNote {
+  id: string;
+  buildId: string;
+  userId: string;
+  note: string;
+  source: string;
+  createdAt: Date;
+}
+
+export interface BuildWithNotes extends ActiveBuild {
+  currentElapsedSeconds: number;
+  notes: BuildNote[];
+}
+
 interface BuildRow {
   id: string;
   user_id: string;
@@ -28,6 +42,19 @@ interface BuildRow {
   completed_at: string | null;
   elapsed_seconds: number;
   last_checkin_at: string;
+}
+
+interface BuildNoteRow {
+  id: string;
+  build_id: string;
+  user_id: string;
+  note: string;
+  source: string;
+  created_at: string;
+}
+
+interface BuildWithNotesRow extends BuildRow {
+  notes: unknown;
 }
 
 function rowToBuild(row: BuildRow): ActiveBuild {
@@ -44,6 +71,32 @@ function rowToBuild(row: BuildRow): ActiveBuild {
     elapsedSeconds: row.elapsed_seconds,
     lastCheckinAt: new Date(row.last_checkin_at),
   };
+}
+
+function rowToNote(row: BuildNoteRow): BuildNote {
+  return {
+    id: row.id,
+    buildId: row.build_id,
+    userId: row.user_id,
+    note: row.note,
+    source: row.source,
+    createdAt: new Date(row.created_at),
+  };
+}
+
+function parseNotes(raw: unknown): BuildNote[] {
+  if (typeof raw === 'string') {
+    try {
+      return parseNotes(JSON.parse(raw) as unknown);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((value) => value as BuildNoteRow)
+    .map(rowToNote)
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 }
 
 /** Compute total elapsed seconds including current active session */
@@ -157,6 +210,49 @@ export async function listBuilds(userId: string): Promise<ActiveBuild[]> {
     [userId]
   );
   return result.rows.map(r => rowToBuild(r as BuildRow));
+}
+
+export async function listBuildHistory(userId: string, limit = 50): Promise<BuildWithNotes[]> {
+  const result = await pool.query(
+    `SELECT
+        b.*,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'id', n.id,
+              'build_id', n.build_id,
+              'user_id', n.user_id,
+              'note', n.note,
+              'source', n.source,
+              'created_at', n.created_at
+            ) ORDER BY n.created_at DESC
+          ) FILTER (WHERE n.id IS NOT NULL),
+          '[]'::json
+        ) AS notes
+     FROM ceo_active_builds b
+     LEFT JOIN ceo_build_notes n
+       ON n.build_id = b.id
+     WHERE b.user_id = $1
+     GROUP BY b.id
+     ORDER BY
+       CASE b.status
+         WHEN 'active' THEN 0
+         WHEN 'paused' THEN 1
+         ELSE 2
+       END,
+       COALESCE(b.completed_at, b.updated_at, b.started_at) DESC
+     LIMIT $2`,
+    [userId, Math.max(1, Math.min(200, limit))]
+  );
+
+  return result.rows.map((row) => {
+    const build = rowToBuild(row as BuildWithNotesRow);
+    return {
+      ...build,
+      currentElapsedSeconds: getCurrentElapsed(build),
+      notes: parseNotes((row as BuildWithNotesRow).notes),
+    };
+  });
 }
 
 export async function getBuild(userId: string, buildNum: number): Promise<ActiveBuild | null> {

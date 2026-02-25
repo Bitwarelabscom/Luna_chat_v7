@@ -15,6 +15,20 @@ export interface ActiveBuild {
   lastCheckinAt: string;
 }
 
+export interface BuildNote {
+  id: string;
+  buildId: string;
+  userId: string;
+  note: string;
+  source: string;
+  createdAt: string;
+}
+
+export interface BuildHistoryItem extends ActiveBuild {
+  currentElapsedSeconds: number;
+  notes: BuildNote[];
+}
+
 export interface BuildActionResult {
   success: boolean;
   systemLog: string;
@@ -37,6 +51,9 @@ export const doneBuild = (buildNum: number) =>
 export const listBuilds = () =>
   api<{ builds: ActiveBuild[] }>('/api/ceo/builds');
 
+export const fetchBuildHistory = (limit = 60) =>
+  api<{ builds: BuildHistoryItem[] }>(`/api/ceo/builds/history?limit=${limit}`);
+
 export const addBuildNote = (buildNum: number, note: string) =>
   api<{ success: boolean }>(`/api/ceo/builds/${buildNum}/note`, { method: 'POST', body: { note } });
 
@@ -53,6 +70,12 @@ export const slashIncome = (amount: number, source: string, note: string) =>
     body: { amount, source, note },
   });
 
+export const slashPay = (amount: number, keyword: string, note: string) =>
+  api<{ success: boolean; systemLog: string; data: { id: string; keyword: string; amount: number } }>('/api/ceo/slash/pay', {
+    method: 'POST',
+    body: { amount, keyword, note },
+  });
+
 // CEO Dashboard types
 export interface CeoDashboard {
   config: {
@@ -62,9 +85,10 @@ export interface CeoDashboard {
   };
   financial: {
     periodDays: number;
-    expenseTotalUsd: number;
-    incomeTotalUsd: number;
-    burnNetUsd: number;
+    expenseTotal: number;
+    incomeTotal: number;
+    ownerPayTotal: number;
+    saldo: number;
     projected30dBurnUsd: number;
   };
   activity: {
@@ -79,7 +103,7 @@ export interface CeoDashboard {
     stage: string;
     opportunityScore: number;
     riskScore: number;
-    revenuePotentialUsd: number;
+    revenuePotential: number;
     estimatedHours: number;
     lastBuildAt: string | null;
   }>;
@@ -87,8 +111,8 @@ export interface CeoDashboard {
     channel: string;
     runs: number;
     leads: number;
-    costUsd: number;
-    costPerLeadUsd: number | null;
+    cost: number;
+    costPerLead: number | null;
     score: number;
   }>;
   alerts: Array<{
@@ -222,3 +246,102 @@ export const logLead = (payload: LeadPayload) =>
 
 export const logProject = (payload: ProjectPayload) =>
   api<{ id: string }>('/api/ceo/log/project', { method: 'POST', body: payload });
+
+// ============================================================
+// Album Production Pipeline
+// ============================================================
+
+export interface GenreOption {
+  id: string;
+  name: string;
+  description: string;
+  defaultSongCount: number;
+}
+
+export interface ProductionSummary {
+  id: string;
+  artistName: string;
+  genre: string;
+  albumCount: number;
+  status: string;
+  createdAt: string;
+  completedAt: string | null;
+  errorMessage: string | null;
+  totalSongs: number;
+  completedSongs: number;
+  failedSongs: number;
+}
+
+export interface SongDetail {
+  id: string;
+  trackNumber: number;
+  title: string;
+  direction: string | null;
+  style: string | null;
+  genrePreset: string | null;
+  workspacePath: string | null;
+  status: string;
+  revisionCount: number;
+  analysisIssues: string[] | null;
+  errorMessage: string | null;
+  completedAt: string | null;
+}
+
+export interface AlbumDetail {
+  id: string;
+  albumNumber: number;
+  albumTitle: string | null;
+  albumTheme: string | null;
+  coverArtPath: string | null;
+  songCount: number;
+  status: string;
+  songs: SongDetail[];
+}
+
+export interface ProductionDetail extends ProductionSummary {
+  productionNotes: string | null;
+  planningModel: string | null;
+  lyricsModel: string | null;
+  albums: AlbumDetail[];
+}
+
+export interface CreateProductionParams {
+  artistName: string;
+  genre: string;
+  productionNotes?: string;
+  albumCount?: number;
+  planningModel?: string;
+  lyricsModel?: string;
+}
+
+// Album productions
+export const fetchGenres = () =>
+  api<{ genres: GenreOption[] }>('/api/ceo/albums/genres');
+
+export const createProduction = (params: CreateProductionParams) =>
+  api<{ id: string; status: string }>('/api/ceo/albums', { method: 'POST', body: params });
+
+export const fetchProductions = () =>
+  api<{ productions: ProductionSummary[] }>('/api/ceo/albums');
+
+export const fetchProductionDetail = (id: string) =>
+  api<{ production: ProductionDetail }>(`/api/ceo/albums/${id}`);
+
+export const fetchProductionProgress = (id: string) =>
+  api<{ progress: Record<string, number> }>(`/api/ceo/albums/${id}/progress`);
+
+export const approveProduction = (id: string) =>
+  api<{ success: boolean }>(`/api/ceo/albums/${id}/approve`, { method: 'POST' });
+
+export const cancelProduction = (id: string) =>
+  api<{ success: boolean }>(`/api/ceo/albums/${id}/cancel`, { method: 'POST' });
+
+// Artist management
+export const fetchArtists = () =>
+  api<{ artists: string[] }>('/api/ceo/artists');
+
+export const fetchArtist = (name: string) =>
+  api<{ name: string; content: string }>(`/api/ceo/artists/${encodeURIComponent(name)}`);
+
+export const saveArtist = (name: string, content: string) =>
+  api<{ success: boolean }>(`/api/ceo/artists/${encodeURIComponent(name)}`, { method: 'PUT', body: { content } });

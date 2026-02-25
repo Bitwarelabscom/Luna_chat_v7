@@ -106,6 +106,49 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
 });
 
 /**
+ * GET /api/backgrounds/generated-images - List generated chat images for this user
+ */
+router.get('/generated-images', async (req: Request, res: Response) => {
+  try {
+    const images = await backgroundService.listUserGeneratedImages(getUserId(req));
+    res.json({ images });
+  } catch (error) {
+    logger.error('Failed to get generated images for backgrounds', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get generated images' });
+  }
+});
+
+/**
+ * POST /api/backgrounds/from-generated - Import generated chat image as background
+ */
+router.post('/from-generated', async (req: Request, res: Response) => {
+  try {
+    const { filename, setActive } = req.body;
+    if (!filename || typeof filename !== 'string') {
+      res.status(400).json({ error: 'filename is required' });
+      return;
+    }
+
+    const result = await backgroundService.importGeneratedImageAsBackground(getUserId(req), filename);
+    if (!result.success || !result.background) {
+      res.status(400).json({ error: result.error || 'Failed to import generated image' });
+      return;
+    }
+
+    const shouldSetActive = setActive !== false;
+    if (shouldSetActive) {
+      await backgroundService.setActiveBackground(getUserId(req), result.background.id);
+      result.background.isActive = true;
+    }
+
+    res.status(201).json({ background: result.background });
+  } catch (error) {
+    logger.error('Failed to import generated image as background', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to import generated image as background' });
+  }
+});
+
+/**
  * PUT /api/backgrounds/:id/activate - Set a background as active
  */
 router.put('/:id/activate', async (req: Request, res: Response) => {

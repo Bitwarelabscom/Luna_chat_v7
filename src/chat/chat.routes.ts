@@ -59,7 +59,9 @@ const sendMessageSchema = z.object({
   thinkingMode: z.boolean().optional(),
   novaMode: z.boolean().optional(),
   djStyleContext: z.string().max(500).optional(),
+  djGenreContext: z.string().max(500).optional(),
   ceoSystemLog: z.string().max(500).optional(),
+  skillContext: z.string().max(2000).optional(),
 });
 
 const updateSessionSchema = z.object({
@@ -316,7 +318,9 @@ router.post('/sessions/:id/send', rateLimit, upload.array('files', 5), async (re
         novaMode: data.novaMode,
         documentIds: documentIds.length > 0 ? documentIds : undefined,
         djStyleContext: data.djStyleContext,
+        djGenreContext: data.djGenreContext,
         ceoSystemLog: data.ceoSystemLog,
+        skillContext: data.skillContext,
       });
       let loggedReasoningVisible = false;
 
@@ -380,7 +384,9 @@ router.post('/sessions/:id/send', rateLimit, upload.array('files', 5), async (re
         novaMode: data.novaMode,
         documentIds: documentIds.length > 0 ? documentIds : undefined,
         djStyleContext: data.djStyleContext,
+        djGenreContext: data.djGenreContext,
         ceoSystemLog: data.ceoSystemLog,
+        skillContext: data.skillContext,
       });
 
       res.json(result);

@@ -1,5 +1,6 @@
 import { pool } from '../db/index.js';
 import logger from '../utils/logger.js';
+import { logActivityAndBroadcast, activityHelpers } from '../activity/activity.service.js';
 import crypto from 'crypto';
 import * as chatService from '../chat/chat.service.js';
 import * as sessionService from '../chat/session.service.js';
@@ -752,6 +753,19 @@ async function handleChatMessage(
     // Get or create session
     const sessionId = await getOrCreateTelegramSession(connection.userId, mode);
 
+    // Log activity
+    await logActivityAndBroadcast({
+      userId: connection.userId,
+      sessionId,
+      category: 'system',
+      eventType: 'telegram_message_received',
+      level: 'info',
+      title: 'Telegram message received',
+      message: `Telegram user ${connection.username || connection.chatId} sent a message`,
+      details: { chatId: connection.chatId, messageType: 'text', mode },
+      source: 'telegram',
+    });
+
     // Process message through Luna
     const response = await chatService.processMessage({
       sessionId,
@@ -796,6 +810,7 @@ async function handleChatMessage(
       userId: connection.userId,
       error: (error as Error).message,
     });
+    activityHelpers.logError(connection.userId, undefined, error as Error, { source: 'telegram', event: 'chat_message' }).catch(() => {});
 
     await sendTelegramMessage(
       connection.chatId,
@@ -1306,6 +1321,19 @@ async function handleVoiceMessage(
     // This bypasses the layered agent for speed and uses voice-specific tools
     const sessionId = await voiceChatService.getOrCreateVoiceSession(connection.userId);
 
+    // Log activity
+    await logActivityAndBroadcast({
+      userId: connection.userId,
+      sessionId,
+      category: 'system',
+      eventType: 'telegram_voice_transcribed',
+      level: 'info',
+      title: 'Telegram voice transcribed',
+      message: `Voice message transcribed (${transcript.length} chars)`,
+      details: { chatId, duration: message.voice.duration },
+      source: 'telegram',
+    });
+
     const chatResponse = await voiceChatService.processMessage({
       sessionId,
       userId: connection.userId,
@@ -1337,6 +1365,7 @@ async function handleVoiceMessage(
       userId: connection.userId,
       error: (error as Error).message,
     });
+    activityHelpers.logError(connection.userId, undefined, error as Error, { source: 'telegram', event: 'voice_message' }).catch(() => {});
     await sendTelegramMessage(
       chatId,
       'Sorry, I encountered an error processing your voice message.'
@@ -1388,6 +1417,19 @@ async function handlePhotoMessage(
     // Get or create session
     const sessionId = await getOrCreateTelegramSession(connection.userId);
 
+    // Log activity
+    await logActivityAndBroadcast({
+      userId: connection.userId,
+      sessionId,
+      category: 'system',
+      eventType: 'telegram_photo_received',
+      level: 'info',
+      title: 'Telegram photo received',
+      message: `Telegram user ${connection.username || connection.chatId} sent a photo`,
+      details: { chatId, hasCaption: !!caption },
+      source: 'telegram',
+    });
+
     // Process through Luna (vision-capable model will handle the URL)
     const response = await chatService.processMessage({
       sessionId,
@@ -1421,6 +1463,7 @@ async function handlePhotoMessage(
       userId: connection.userId,
       error: (error as Error).message,
     });
+    activityHelpers.logError(connection.userId, undefined, error as Error, { source: 'telegram', event: 'photo_message' }).catch(() => {});
     await sendTelegramMessage(
       chatId,
       'Sorry, I had trouble processing that image. Please try again.'

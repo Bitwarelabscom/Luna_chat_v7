@@ -983,7 +983,9 @@ export type ConfigurableTask =
   | 'rpg_architect'
   | 'rpg_character_forge'
   | 'rpg_narrator'
-  | 'rpg_adjudicator';
+  | 'rpg_adjudicator'
+  | 'ceo_luna'
+  | 'dj_luna';
 
 export interface TaskModelConfig {
   taskType: ConfigurableTask;
@@ -1112,6 +1114,20 @@ export const CONFIGURABLE_TASKS: TaskModelConfig[] = [
     description: 'Adjudicates custom RPG actions and stat deltas',
     defaultProvider: 'ollama',
     defaultModel: 'qwen2.5:7b',
+  },
+  {
+    taskType: 'ceo_luna',
+    displayName: 'CEO Luna',
+    description: 'CEO Luna business operations and strategy - always use pro or higher model',
+    defaultProvider: 'openai',
+    defaultModel: 'gpt-5.2-chat-latest',
+  },
+  {
+    taskType: 'dj_luna',
+    displayName: 'DJ Luna',
+    description: 'DJ Luna music production and lyrics - always use pro or higher model',
+    defaultProvider: 'openai',
+    defaultModel: 'gpt-5.2-chat-latest',
   },
 ];
 

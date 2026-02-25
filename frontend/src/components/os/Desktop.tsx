@@ -42,6 +42,7 @@ const RpgWindow = lazy(() => import('./apps/RpgWindow'));
 const ChatWindow = lazy(() => import('./apps/ChatWindow'));
 const DJLunaWindow = lazy(() => import('./apps/DJLunaWindow'));
 const CEOLunaWindow = lazy(() => import('./apps/CEOLunaWindow'));
+const CouncilWindow = lazy(() => import('./apps/CouncilWindow'));
 
 // Map appId to component
 function getAppComponent(appId: AppId): React.ReactNode {
@@ -96,6 +97,8 @@ function getAppComponent(appId: AppId): React.ReactNode {
       return <DJLunaWindow />;
     case 'ceo-luna':
       return <CEOLunaWindow />;
+    case 'council':
+      return <CouncilWindow />;
     default:
       return <PlaceholderWindow title="Unknown" message="Unknown app" />;
   }

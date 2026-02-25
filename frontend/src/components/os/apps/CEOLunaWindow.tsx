@@ -10,13 +10,17 @@ import { DashboardPanel } from '@/components/ceo-luna/DashboardPanel';
 import { RadarPanel } from '@/components/ceo-luna/RadarPanel';
 import { AutopostPanel } from '@/components/ceo-luna/AutopostPanel';
 import { QuickLogPanel } from '@/components/ceo-luna/QuickLogPanel';
+import { BuildsPanel } from '@/components/ceo-luna/BuildsPanel';
+import { AlbumCreatorTab } from '@/components/ceo-luna/AlbumCreatorTab';
 
 const TABS = [
   { id: 'viewer' as const, label: 'Viewer' },
   { id: 'chat' as const, label: 'Chat' },
   { id: 'dashboard' as const, label: 'Dashboard' },
+  { id: 'albums' as const, label: 'Albums' },
   { id: 'radar' as const, label: 'Radar' },
   { id: 'autopost' as const, label: 'Autopost' },
+  { id: 'builds' as const, label: 'Builds' },
   { id: 'log' as const, label: 'Log' },
 ] as const;
 
@@ -48,12 +52,12 @@ export default function CEOLunaWindow() {
         {/* Right panel: tabs + content (75%) */}
         <div className="flex flex-col flex-1 overflow-hidden">
           {/* Tab bar */}
-          <div className="flex items-center gap-1 px-3 py-2 border-b border-gray-700 bg-gray-900 shrink-0">
+          <div className="flex items-center gap-1 px-3 py-2 border-b border-gray-700 bg-gray-900 shrink-0 overflow-x-auto whitespace-nowrap">
             {TABS.map(({ id, label }) => (
               <button
                 key={id}
                 onClick={() => setActiveTab(id as Tab)}
-                className={`px-3 py-1 text-sm rounded transition-colors ${
+                className={`shrink-0 px-3 py-1 text-sm rounded transition-colors ${
                   activeTab === id
                     ? 'bg-slate-700 text-white'
                     : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
@@ -69,8 +73,10 @@ export default function CEOLunaWindow() {
             {activeTab === 'viewer' && <DocViewer />}
             {activeTab === 'chat' && <CEOChat />}
             {activeTab === 'dashboard' && <DashboardPanel />}
+            {activeTab === 'albums' && <AlbumCreatorTab />}
             {activeTab === 'radar' && <RadarPanel />}
             {activeTab === 'autopost' && <AutopostPanel />}
+            {activeTab === 'builds' && <BuildsPanel />}
             {activeTab === 'log' && <QuickLogPanel />}
           </div>
         </div>

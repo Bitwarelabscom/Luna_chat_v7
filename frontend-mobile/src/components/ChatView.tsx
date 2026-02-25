@@ -29,7 +29,7 @@ export function ChatView() {
     setStatusMessage,
   } = useChatStore();
 
-  const thinkingPhrase = useThinkingMessage(isSending && !streamingContent);
+  const thinkingPhrase = useThinkingMessage(isSending && !streamingContent, currentSession?.mode);
   const [showReasoning, setShowReasoning] = useState(true);
   const [input, setInput] = useState('');
   const [projectMode, setProjectMode] = useState(false);

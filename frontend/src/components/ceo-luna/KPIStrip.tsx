@@ -1,17 +1,9 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { TrendingUp, TrendingDown, Clock, Users, AlertTriangle } from 'lucide-react';
+import { TrendingUp, TrendingDown, Clock, Users, AlertTriangle, Wallet } from 'lucide-react';
 import { useCEOLunaStore } from '@/lib/ceo-luna-store';
-
-function formatMoney(usd: number): string {
-  const abs = Math.abs(usd);
-  const sign = usd < 0 ? '-' : '+';
-  if (abs >= 1000) {
-    return `${sign}$${(abs / 1000).toFixed(1)}k`;
-  }
-  return `${sign}$${abs.toFixed(0)}`;
-}
+import { formatMoney, formatMoneyPlain } from '@/lib/format-currency';
 
 export function KPIStrip() {
   const { dashboard, isLoadingDashboard, loadDashboard, setActiveTab } = useCEOLunaStore();
@@ -26,7 +18,8 @@ export function KPIStrip() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const net = dashboard?.financial.burnNetUsd ?? null;
+  const saldo = dashboard?.financial.saldo ?? null;
+  const expenseTotal = dashboard?.financial.expenseTotal ?? null;
   const buildHours = dashboard?.activity.buildHours ?? null;
   const leads = dashboard?.activity.leads ?? null;
   const alertCount = dashboard?.alerts.filter((a) => a.status === 'open').length ?? null;
@@ -34,19 +27,35 @@ export function KPIStrip() {
 
   return (
     <div className="flex items-center gap-4 px-4 py-2 bg-gray-900/80 border-b border-gray-700 text-xs shrink-0">
-      {/* Net P&L */}
+      {/* Saldo */}
       <div className="flex items-center gap-1.5">
-        {net === null || isLoadingDashboard ? (
-          <span className="text-gray-500 animate-pulse">Net --</span>
+        {saldo === null || isLoadingDashboard ? (
+          <span className="text-gray-500 animate-pulse">Saldo --</span>
         ) : (
           <>
-            {net >= 0 ? (
-              <TrendingUp size={12} className="text-emerald-400" />
-            ) : (
+            <Wallet size={12} className={saldo >= 0 ? 'text-emerald-400' : 'text-red-400'} />
+            <span className={saldo >= 0 ? 'text-emerald-400 font-medium' : 'text-red-400 font-medium'}>
+              Saldo {formatMoney(saldo)}
+            </span>
+          </>
+        )}
+      </div>
+
+      <div className="w-px h-3 bg-gray-700" />
+
+      {/* Period costs */}
+      <div className="flex items-center gap-1.5">
+        {expenseTotal === null || isLoadingDashboard ? (
+          <span className="text-gray-500 animate-pulse">Costs --</span>
+        ) : (
+          <>
+            {expenseTotal > 0 ? (
               <TrendingDown size={12} className="text-red-400" />
+            ) : (
+              <TrendingUp size={12} className="text-gray-500" />
             )}
-            <span className={net >= 0 ? 'text-emerald-400 font-medium' : 'text-red-400 font-medium'}>
-              Net {formatMoney(net)}
+            <span className="text-red-400 font-medium">
+              Costs {formatMoneyPlain(expenseTotal)}
             </span>
             <span className="text-gray-500">{dashboard?.financial.periodDays}d</span>
           </>

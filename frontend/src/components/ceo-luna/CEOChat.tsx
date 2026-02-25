@@ -5,6 +5,7 @@ import { Send, Loader2, Briefcase, Terminal } from 'lucide-react';
 import { streamMessage } from '@/lib/api/chat';
 import { chatApi } from '@/lib/api/chat';
 import { useCEOLunaStore } from '@/lib/ceo-luna-store';
+import { useThinkingMessage } from '../ThinkingStatus';
 import {
   startBuild,
   pauseBuild,
@@ -13,8 +14,13 @@ import {
   listBuilds,
   slashCost,
   slashIncome,
+  slashPay,
   type ActiveBuild,
 } from '@/lib/api/ceo';
+import { formatMoneyPrecise } from '@/lib/format-currency';
+import { useSlashCommands } from '@/hooks/useSlashCommands';
+import { SlashCommandDropdown } from '../shared/SlashCommandDropdown';
+import { ChatInputBadge } from '../shared/ChatInputBadge';
 
 const CEO_SESSION_KEY = 'ceo-luna-session-id';
 
@@ -31,7 +37,7 @@ interface SystemBubble {
   timestamp: Date;
 }
 
-const SLASH_HINT = '/build start <name>  /build pause <#>  /build done <#>  /build list\n/cost <amount> <keyword> [note]  /income <amount> <source> [note]';
+const SLASH_HINT = '/build start <name>  /build pause <#>  /build done <#>  /build list\n/cost <amount> <keyword> [note]  /income <amount> <source> [note]\n/pay <amount> <keyword> [note]';
 
 export function CEOChat() {
   const { sessionId, setSessionId } = useCEOLunaStore();
@@ -46,6 +52,13 @@ export function CEOChat() {
   const [showHint, setShowHint] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const thinkingPhrase = useThinkingMessage(isSending && !streamingContent, 'ceo_luna');
+
+  const slash = useSlashCommands({
+    addSystemBubble,
+    sessionId: sessionId,
+    mode: 'ceo_luna',
+  });
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -182,7 +195,7 @@ export function CEOChat() {
   async function handleCost(amount: number, keyword: string, note: string) {
     try {
       const result = await slashCost(amount, keyword, note);
-      addSystemBubble(`Expense $${amount.toFixed(2)} logged - ${result.data.category} (${keyword}${note ? ': ' + note : ''})`);
+      addSystemBubble(`Expense ${formatMoneyPrecise(amount)} logged - ${result.data.category} (${keyword}${note ? ': ' + note : ''})`);
       setPendingSystemLog(result.systemLog);
     } catch (err) {
       addSystemBubble(`Error: ${(err as Error).message}`);
@@ -192,7 +205,17 @@ export function CEOChat() {
   async function handleIncome(amount: number, source: string, note: string) {
     try {
       const result = await slashIncome(amount, source, note);
-      addSystemBubble(`Income +$${amount.toFixed(2)} logged - ${source}${note ? ': ' + note : ''}`);
+      addSystemBubble(`Income +${formatMoneyPrecise(amount)} logged - ${source}${note ? ': ' + note : ''}`);
+      setPendingSystemLog(result.systemLog);
+    } catch (err) {
+      addSystemBubble(`Error: ${(err as Error).message}`);
+    }
+  }
+
+  async function handlePay(amount: number, keyword: string, note: string) {
+    try {
+      const result = await slashPay(amount, keyword, note);
+      addSystemBubble(`Payment ${formatMoneyPrecise(amount)} logged - ${keyword}${note ? ': ' + note : ''}`);
       setPendingSystemLog(result.systemLog);
     } catch (err) {
       addSystemBubble(`Error: ${(err as Error).message}`);
@@ -222,6 +245,9 @@ export function CEOChat() {
     const income = trimmed.match(/^\/income\s+([\d.]+)\s+(\S+)\s*(.*)/i);
     if (income) return { isCommand: true, handler: () => handleIncome(parseFloat(income[1]), income[2], income[3].trim()) };
 
+    const pay = trimmed.match(/^\/pay\s+([\d.]+)\s+(\S+)\s*(.*)/i);
+    if (pay) return { isCommand: true, handler: () => handlePay(parseFloat(pay[1]), pay[2], pay[3].trim()) };
+
     return { isCommand: false };
   }
 
@@ -229,12 +255,23 @@ export function CEOChat() {
     const trimmed = input.trim();
     if (!trimmed || isSending || !sessionId) return;
 
+    // CEO-specific commands first
     const { isCommand, handler } = parseSlashCommand(trimmed);
     if (isCommand && handler) {
       setInput('');
       setShowHint(false);
       await handler();
       return;
+    }
+
+    // Shared slash commands (usage, model, skill, help)
+    if (trimmed.startsWith('/')) {
+      const handled = await slash.handleSubmit();
+      if (handled) {
+        setInput('');
+        setShowHint(false);
+        return;
+      }
     }
 
     // Regular message - consume pending system log
@@ -264,7 +301,9 @@ export function CEOChat() {
         undefined,
         undefined,
         undefined,
-        logToInject ?? undefined
+        logToInject ?? undefined,
+        undefined,
+        slash.activeSkill?.content
       );
 
       for await (const chunk of stream) {
@@ -298,19 +337,29 @@ export function CEOChat() {
       setIsSending(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [input, isSending, sessionId, pendingSystemLog]);
+  }, [input, isSending, sessionId, pendingSystemLog, slash]);
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleKeyDown = async (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (slash.showDropdown) {
+      const handled = await slash.handleKeyDown(e);
+      if (handled) return;
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendMessage();
     }
   };
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+  const handleInputChange = async (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
     setInput(val);
     setShowHint(val.startsWith('/'));
+    // Drive shared slash command dropdown for non-CEO commands
+    if (val.startsWith('/') && !val.match(/^\/(build|cost|income|pay)/i)) {
+      await slash.handleInputChange(val);
+    } else {
+      slash.setShowDropdown(false);
+    }
   };
 
   if (isInitializing) {
@@ -389,9 +438,9 @@ export function CEOChat() {
           </div>
         )}
 
-        {statusMessage && (
+        {(statusMessage || (isSending && !streamingContent)) && (
           <div className="flex justify-center">
-            <span className="text-xs text-gray-500 italic">{statusMessage}</span>
+            <span className="text-xs text-gray-500 italic">{statusMessage || `${thinkingPhrase}...`}</span>
           </div>
         )}
 
@@ -415,7 +464,19 @@ export function CEOChat() {
 
       {/* Input */}
       <div className="px-4 py-3 border-t border-gray-700 bg-gray-900">
-        <div className="flex gap-2 items-end">
+        <ChatInputBadge
+          activeSkillName={slash.activeBadgeLabel}
+          activeModelLabel={slash.activeModelLabel}
+          onRemoveSkill={slash.clearActiveSkill}
+        />
+        <div className="flex gap-2 items-end relative">
+          {slash.showDropdown && (
+            <SlashCommandDropdown
+              items={slash.dropdownItems}
+              selectedIndex={slash.selectedIndex}
+              onSelect={(idx) => { slash.handleSelect(idx); setInput(''); setShowHint(false); }}
+            />
+          )}
           <textarea
             ref={inputRef}
             value={input}

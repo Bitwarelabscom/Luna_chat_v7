@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Image, Upload, Wand2, Trash2, Check, RotateCcw, Loader2, X, RefreshCw } from 'lucide-react';
 import { useBackgroundStore, type Background } from '@/lib/background-store';
-import { backgroundApi, uploadBackgroundImage, getMediaUrl } from '@/lib/api';
+import { backgroundApi, uploadBackgroundImage, getMediaUrl, type GeneratedImageOption } from '@/lib/api';
 
 const STYLE_OPTIONS = [
   { id: 'abstract', name: 'Abstract', description: 'Flowing gradients and geometric shapes' },
@@ -31,18 +31,22 @@ export default function BackgroundTab() {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [generatedImages, setGeneratedImages] = useState<GeneratedImageOption[]>([]);
+  const [importingFilename, setImportingFilename] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Refresh function - can be called manually or from events
   const refreshBackgrounds = useCallback(async () => {
     setIsRefreshing(true);
     try {
-      const [bgResult, activeResult] = await Promise.all([
+      const [bgResult, activeResult, generatedResult] = await Promise.all([
         backgroundApi.getBackgrounds(),
         backgroundApi.getActiveBackground(),
+        backgroundApi.getGeneratedImages(),
       ]);
       setBackgrounds(bgResult.backgrounds);
       setActiveBackground(activeResult.background);
+      setGeneratedImages(generatedResult.images);
       setError(null);
     } catch (err) {
       console.error('Failed to fetch backgrounds:', err);
@@ -89,6 +93,21 @@ export default function BackgroundTab() {
       setIsGenerating(false);
     }
   }, [prompt, style, setIsGenerating, addBackground]);
+
+  const handleUseGeneratedImage = useCallback(async (image: GeneratedImageOption) => {
+    setError(null);
+    setImportingFilename(image.filename);
+
+    try {
+      const result = await backgroundApi.createFromGenerated(image.filename, true);
+      addBackground(result.background);
+      setActiveBackground(result.background);
+    } catch (err) {
+      setError((err as Error).message || 'Failed to apply generated image');
+    } finally {
+      setImportingFilename(null);
+    }
+  }, [addBackground, setActiveBackground]);
 
   // Handle file upload
   const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -218,6 +237,60 @@ export default function BackgroundTab() {
             </div>
           )}
         </div>
+      </div>
+
+      {/* Generated Images Section */}
+      <div>
+        <h3 className="text-sm font-medium text-theme-text-muted uppercase tracking-wider mb-4 flex items-center gap-2">
+          <Image className="w-4 h-4" />
+          Pick from Generated Images
+        </h3>
+        {generatedImages.length === 0 ? (
+          <div className="p-4 rounded-lg border border-theme-border bg-theme-bg-tertiary">
+            <p className="text-sm text-theme-text-muted">
+              No generated chat images found yet. Ask Luna to generate an image first.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            {generatedImages.map((image) => {
+              const isApplying = importingFilename === image.filename;
+              return (
+                <div
+                  key={image.filename}
+                  className="rounded-lg border border-theme-border overflow-hidden bg-theme-bg-tertiary"
+                >
+                  <div
+                    className="aspect-video bg-cover bg-center"
+                    style={{ backgroundImage: `url(${getMediaUrl(image.imageUrl)})` }}
+                  />
+                  <div className="p-2 space-y-2">
+                    <p className="text-xs text-theme-text-muted">
+                      {new Date(image.createdAt).toLocaleString()}
+                    </p>
+                    <button
+                      onClick={() => handleUseGeneratedImage(image)}
+                      disabled={!!importingFilename}
+                      className="w-full px-2 py-1.5 rounded bg-theme-accent-primary text-white text-xs font-medium hover:bg-theme-accent-primary/90 disabled:opacity-60 disabled:cursor-not-allowed transition flex items-center justify-center gap-1.5"
+                    >
+                      {isApplying ? (
+                        <>
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                          Applying...
+                        </>
+                      ) : (
+                        <>
+                          <Check className="w-3 h-3" />
+                          Use as Background
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Generate Section */}

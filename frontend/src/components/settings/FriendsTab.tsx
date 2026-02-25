@@ -4,7 +4,13 @@ import { useState, useEffect, useRef } from 'react';
 import { friendsApi, streamFriendDiscussion, FriendPersonality, FriendConversation, FriendDiscussionEvent } from '@/lib/api';
 import { Users, MessageCircle, Plus, Edit2, Trash2, ChevronDown, ChevronUp, Sparkles, X, Theater, Loader2 } from 'lucide-react';
 
-export default function FriendsTab() {
+interface FriendsTabProps {
+  onFriendsLoaded?: (friends: FriendPersonality[]) => void;
+  pendingDiscussion?: { topic: string; friendId?: string } | null;
+  onPendingConsumed?: () => void;
+}
+
+export default function FriendsTab({ onFriendsLoaded, pendingDiscussion, onPendingConsumed }: FriendsTabProps = {}) {
   const [friends, setFriends] = useState<FriendPersonality[]>([]);
   const [discussions, setDiscussions] = useState<FriendConversation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -56,6 +62,7 @@ export default function FriendsTab() {
       ]);
       setFriends(friendsRes.friends);
       setDiscussions(discussionsRes.discussions);
+      onFriendsLoaded?.(friendsRes.friends);
     } catch (err) {
       console.error('Failed to load friends data:', err);
       setError('Failed to load friends data');
@@ -64,8 +71,17 @@ export default function FriendsTab() {
     }
   };
 
-  const startTheaterDiscussion = async (friendId?: string) => {
-    const topic = discussionTopic.trim() || undefined;
+  // Watch for pending discussion from GossipQueuePanel
+  useEffect(() => {
+    if (pendingDiscussion) {
+      startTheaterDiscussion(pendingDiscussion.friendId, pendingDiscussion.topic);
+      onPendingConsumed?.();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingDiscussion]);
+
+  const startTheaterDiscussion = async (friendId?: string, topicOverride?: string) => {
+    const topic = topicOverride?.trim() || discussionTopic.trim() || undefined;
 
     // Reset theater state
     setTheaterMode(true);

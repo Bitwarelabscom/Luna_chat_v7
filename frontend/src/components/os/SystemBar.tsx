@@ -27,6 +27,8 @@ import {
   GitBranch,
   Newspaper,
   Gamepad2,
+  Headphones,
+  Briefcase,
 } from 'lucide-react';
 import { type AppId } from './app-registry';
 import { menuVariants, menuTransition } from '@/lib/animations';
@@ -68,6 +70,8 @@ export function SystemBar({ onSpotlightOpen, onAppOpen, onNewFile }: SystemBarPr
         { label: 'Email', icon: Mail, action: () => { onAppOpen('email'); setActiveMenu(null); } },
         { label: 'Voice', icon: Mic, action: () => { onAppOpen('voice'); setActiveMenu(null); } },
         { label: 'Friends', icon: Users, action: () => { onAppOpen('friends'); setActiveMenu(null); } },
+        { label: 'DJ Luna', icon: Headphones, action: () => { onAppOpen('dj-luna'); setActiveMenu(null); } },
+        { label: 'CEO Luna', icon: Briefcase, action: () => { onAppOpen('ceo-luna'); setActiveMenu(null); } },
       ],
     },
     productivity: {

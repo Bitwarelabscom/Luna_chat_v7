@@ -8,8 +8,9 @@ import { SongList } from '@/components/dj-luna/SongList';
 import { StylePanel } from '@/components/dj-luna/StylePanel';
 import { StartupModal } from '@/components/dj-luna/StartupModal';
 import { GenerationsPanel } from '@/components/dj-luna/GenerationsPanel';
+import { LyricCheckerTab } from '@/components/dj-luna/LyricCheckerTab';
 
-type RightTab = 'songs' | 'style' | 'factory';
+type RightTab = 'songs' | 'style' | 'factory' | 'check';
 
 export default function DJLunaWindow() {
   const { showStartupModal, loadSongList } = useDJLunaStore();
@@ -49,7 +50,7 @@ export default function DJLunaWindow() {
         <div className="flex flex-col border-l border-gray-700 overflow-hidden" style={{ width: '30%', minWidth: 240 }}>
           {/* Tab bar */}
           <div className="flex border-b border-gray-700 shrink-0">
-            {(['songs', 'style', 'factory'] as RightTab[]).map(tab => (
+            {(['songs', 'style', 'factory', 'check'] as RightTab[]).map(tab => (
               <button
                 key={tab}
                 onClick={() => setRightTab(tab)}
@@ -69,6 +70,7 @@ export default function DJLunaWindow() {
             {rightTab === 'songs' && <SongList />}
             {rightTab === 'style' && <StylePanel />}
             {rightTab === 'factory' && <GenerationsPanel />}
+            {rightTab === 'check' && <LyricCheckerTab />}
           </div>
         </div>
       </div>

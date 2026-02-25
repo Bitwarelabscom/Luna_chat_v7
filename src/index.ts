@@ -34,6 +34,7 @@ import canvasRoutes from './canvas/canvas.routes.js';
 import rpgRoutes from './rpg/rpg.routes.js';
 import ceoRoutes from './ceo/ceo.routes.js';
 import sunoRoutes, { sunoWebhookRouter } from './chat/suno.routes.js';
+import djLunaRoutes from './abilities/dj-luna.routes.js';
 import { startJobs, stopJobs } from './jobs/job-runner.js';
 import { setBroadcastFunction } from './activity/activity.service.js';
 import { initializeCritiqueQueue, shutdownCritiqueQueue } from './layered-agent/services/critique-queue.service.js';
@@ -206,6 +207,7 @@ app.use('/api/canvas', canvasRoutes);
 app.use('/api/rpg', rpgRoutes);
 app.use('/api/ceo', ceoRoutes);
 app.use('/api/suno', sunoRoutes);
+app.use('/api/dj', djLunaRoutes);
 app.use('/api/consolidation', consciousnessRoutes);  // Consolidation logs share routes
 
 // Connect activity service to delivery service's SSE broadcast

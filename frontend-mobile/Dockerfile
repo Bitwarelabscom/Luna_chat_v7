@@ -1,5 +1,11 @@
 FROM node:20-alpine AS deps
-RUN apk add --no-cache libc6-compat
+ARG ALPINE_REPO_BASE=http://ftp.halifax.rwth-aachen.de/alpine
+RUN set -eux; \
+    sed -i \
+      -e "s|https://dl-cdn.alpinelinux.org/alpine|${ALPINE_REPO_BASE}|g" \
+      -e "s|http://dl-cdn.alpinelinux.org/alpine|${ALPINE_REPO_BASE}|g" \
+      /etc/apk/repositories; \
+    apk add --no-cache libc6-compat
 WORKDIR /app
 
 COPY package*.json ./

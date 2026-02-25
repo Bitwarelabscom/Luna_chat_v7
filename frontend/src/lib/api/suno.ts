@@ -18,10 +18,10 @@ export interface SunoGeneration {
   completedAt: string | null;
 }
 
-export const triggerGeneration = (count: number, styleOverride?: string) =>
+export const triggerGeneration = (count: number, styleOverride?: string, lyrics?: string, title?: string) =>
   api<{ generations: SunoGeneration[]; count: number }>('/api/suno/generate', {
     method: 'POST',
-    body: { count, style_override: styleOverride },
+    body: { count, style_override: styleOverride, lyrics, title },
   });
 
 export const getGenerations = (limit = 50) =>
