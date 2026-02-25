@@ -257,6 +257,12 @@ const configSchema = z.object({
     testWebhookBaseUrl: z.string().url().default('http://luna-n8n:5678/webhook-test'),
     webhookAuthToken: z.string().optional(),
   }),
+
+  suno: z.object({
+    apiUrl: z.string().url().default('http://10.0.0.10:3000'),
+    ollamaUrl: z.string().url().default('http://10.0.0.30:11434'),
+    ollamaModel: z.string().default('HoseaDev/qwen2.5-7b-instruct-q4-gguf:latest'),
+  }),
 });
 
 const rawConfig = {
@@ -484,6 +490,12 @@ const rawConfig = {
     webhookBaseUrl: process.env.N8N_WEBHOOK_BASE_URL,
     testWebhookBaseUrl: process.env.N8N_TEST_WEBHOOK_BASE_URL,
     webhookAuthToken: process.env.N8N_WEBHOOK_AUTH_TOKEN,
+  },
+
+  suno: {
+    apiUrl: process.env.SUNO_API_URL,
+    ollamaUrl: process.env.SUNO_OLLAMA_URL,
+    ollamaModel: process.env.SUNO_OLLAMA_MODEL,
   },
 };
 

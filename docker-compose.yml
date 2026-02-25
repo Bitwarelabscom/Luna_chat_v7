@@ -189,6 +189,10 @@ services:
       - N8N_WEBHOOK_BASE_URL=${N8N_WEBHOOK_BASE_URL:-http://luna-n8n:5678/webhook}
       - N8N_TEST_WEBHOOK_BASE_URL=${N8N_TEST_WEBHOOK_BASE_URL:-http://luna-n8n:5678/webhook-test}
       - N8N_WEBHOOK_AUTH_TOKEN=${N8N_WEBHOOK_AUTH_TOKEN:-}
+      # Suno generation pipeline (direct, no n8n)
+      - SUNO_API_URL=${SUNO_API_URL:-http://10.0.0.10:3000}
+      - SUNO_OLLAMA_URL=${SUNO_OLLAMA_URL:-http://10.0.0.30:11434}
+      - SUNO_OLLAMA_MODEL=${SUNO_OLLAMA_MODEL:-HoseaDev/qwen2.5-7b-instruct-q4-gguf:latest}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     secrets:

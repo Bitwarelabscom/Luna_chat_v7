@@ -33,7 +33,7 @@ import mediaRoutes from './abilities/download.routes.js';
 import canvasRoutes from './canvas/canvas.routes.js';
 import rpgRoutes from './rpg/rpg.routes.js';
 import ceoRoutes from './ceo/ceo.routes.js';
-import sunoRoutes, { sunoWebhookRouter } from './chat/suno.routes.js';
+import sunoRoutes from './chat/suno.routes.js';
 import djLunaRoutes from './abilities/dj-luna.routes.js';
 import { startJobs, stopJobs } from './jobs/job-runner.js';
 import { setBroadcastFunction } from './activity/activity.service.js';
@@ -190,8 +190,6 @@ app.use('/api/email', localEmailRoutes);
 app.use('/api/autonomous', autonomousRoutes);
 // Telegram webhook - no auth required (comes from Telegram) - MUST be before authenticated routes
 app.use('/api/triggers', telegramWebhookRouter);
-// Suno completion webhook - no auth required (Docker-internal only)
-app.use('/api/webhooks', sunoWebhookRouter);
 app.use('/api/triggers', triggersRoutes);
 app.use('/api/mcp', mcpRoutes);
 app.use('/api/trading', tradingRoutes);
