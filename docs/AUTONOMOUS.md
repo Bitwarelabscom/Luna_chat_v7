@@ -346,10 +346,64 @@ Connects to Sanhedrin server (luna-sanhedrin container) which wraps Claude Code 
 }
 ```
 
+## Friends & Gossip System
+
+Luna has a set of AI "friend" personas she can discuss topics with. The Friends system enables richer understanding through diverse perspectives.
+
+### Friend Personas
+
+Each friend has a distinct personality profile stored in `friend_personalities`:
+- Name, emoji, color for UI representation
+- Personality traits and communication style
+- Areas of expertise and interest
+
+### Gossip Queue
+
+The gossip queue (`friend_topic_candidates`) manages topics Luna wants to discuss with friends:
+
+| Field | Description |
+|-------|-------------|
+| `importance` | 1-5 scale (higher = more urgent to discuss) |
+| `motivation` | Text explaining why Luna wants to discuss this |
+| `suggested_friend_id` | Optional -- which friend would be best for this topic |
+
+### Auto-Gossip
+
+The Friends window includes an auto-gossip timer (persisted in localStorage):
+- **Toggle**: Enable/disable automatic topic discussions
+- **Interval**: Configurable time between auto-triggered discussions
+- **Flow**: Timer fires -> picks highest-importance unprocessed topic -> starts theater discussion with suggested friend (or random)
+
+### Theater Discussions
+
+Friend discussions happen in "Theater Mode" -- a live-streamed deliberation visible in the UI:
+1. Topic is selected from the gossip queue
+2. Luna and the friend persona exchange perspectives
+3. Insights are extracted and can be applied to Luna's knowledge
+
+### Frontend Components
+
+| File | Purpose |
+|------|---------|
+| `frontend/src/components/friends/GossipQueuePanel.tsx` | Checklist with importance stars, motivation text |
+| `frontend/src/components/os/apps/FriendsWindow.tsx` | Two-panel layout (320px gossip queue + Friends tab) |
+| `frontend/src/components/settings/FriendsTab.tsx` | Friend management, theater discussion launcher |
+
+### Backend
+
+| File | Purpose |
+|------|---------|
+| `src/autonomous/friend.service.ts` | Friend relationship management |
+| `src/autonomous/friend-verification.service.ts` | Topic candidates CRUD, personality verification |
+| `src/autonomous/autonomous.routes.ts` | POST/PATCH/DELETE `/friends/topics` routes |
+| `src/db/migrations/088_gossip_queue_fields.sql` | importance, motivation, suggested_friend_id columns |
+
+---
+
 ## Future Enhancements
 
 - [ ] Multi-agent task decomposition
-- [ ] Persistent learning across sessions
+- [x] Persistent learning across sessions (MemoryCore integration)
 - [ ] Proactive goal reminders
 - [ ] Context-aware action suggestions
 - [ ] External trigger integration

@@ -14,12 +14,15 @@
 5. [Autonomous Mode](#autonomous-mode)
 6. [CEO Luna](#ceo-luna)
 7. [DJ Luna](#dj-luna)
-8. [Trading System](#trading-system)
-9. [Integrations](#integrations)
-10. [Developer Guide](#developer-guide)
-11. [API Reference](#api-reference)
-12. [Configuration](#configuration)
-13. [Troubleshooting](#troubleshooting)
+8. [Music Pipeline](#music-pipeline)
+9. [Trading System](#trading-system)
+10. [Friends System](#friends-system)
+11. [VR Luna](#vr-luna)
+12. [Integrations](#integrations)
+13. [Developer Guide](#developer-guide)
+14. [API Reference](#api-reference)
+15. [Configuration](#configuration)
+16. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -409,22 +412,22 @@ Prevents infinite loops:
 - Tracks action history per session
 - User notification via Theater Mode
 
-### Friend Mode
+### Friends & Gossip System
 
-AI friends discuss observations to build deeper understanding:
+Luna has AI "friend" personas she discusses topics with, providing diverse perspectives and deeper understanding.
 
-| Friend | Personality | Discussion Style |
-|--------|-------------|------------------|
-| **Nova** | Curious intellectual | Explores ideas, asks probing questions |
-| **Sage** | Wise philosopher | Finds deeper meaning, life themes |
-| **Celer** | Practical thinker | Focuses on actionable insights |
+**Gossip Queue**: Topics are managed in `friend_topic_candidates` with:
+- **Importance** (1-5 scale): Higher = more urgent to discuss
+- **Motivation**: Why Luna wants to discuss this topic
+- **Suggested friend**: Which friend persona is best suited
 
-**Process**:
-1. Friends analyze recent interactions
-2. Background conversations (not shown to user by default)
-3. Extract insights about communication patterns
-4. Identify needs and opportunities
-5. Share findings in Friends panel
+**Auto-Gossip Timer**: Configurable automatic discussion trigger (persisted in localStorage). When fired, picks the highest-importance unprocessed topic and starts a theater discussion.
+
+**Theater Discussions**: Live-streamed deliberations between Luna and a friend persona, visible in the Friends window. Insights are extracted and applied to Luna's knowledge base.
+
+**Frontend**: FriendsWindow (two-panel: 320px gossip queue + Friends tab), GossipQueuePanel with importance stars and motivation text.
+
+*👉 [Full Friends Documentation](AUTONOMOUS.md#friends--gossip-system)*
 
 ### Newsfetcher Integration
 
@@ -461,7 +464,7 @@ CEO Luna is a dedicated business operations workspace with an AI co-founder pers
 
 - **Top (KPI Strip)**: Net P&L, Build Hours, Leads, Alert count - refreshes every 5 minutes
 - **Left (File Tree)**: Workspace files under `ceo-luna/` grouped into Documents/Plans/Week folders
-- **Right (Tabs)**: Viewer | Chat | Dashboard | Radar | Autopost | Builds | Log
+- **Right (Tabs)**: Viewer | Chat | Dashboard | Radar | Autopost | Album Creator | Log
 
 ### Key Features
 
@@ -489,9 +492,11 @@ Keywords are auto-mapped to expense categories (infrastructure, software, market
 
 #### Dashboard & Reports
 
-- Monthly P&L chart and transaction history
+- Monthly P&L chart, transaction history, and owner pay tracking
 - Competitor radar (news signals for configured competitors)
-- Automated social posting to X, LinkedIn, Telegram, Blog
+- Music trend radar (Billboard, Pitchfork scraping every 2h with LLM analysis via Ollama)
+- Album Creator: Autonomous music production pipeline -- genre selection, lyric generation, Suno submission, progress tracking
+- Automated social posting to X, LinkedIn, Telegram, Reddit, Blog
 - Scheduled reports: daily morning brief, evening review, weekly P&L, biweekly audit
 
 ### CEO Modes
@@ -530,26 +535,95 @@ DJ Luna specializes in music theory, song structure, Suno tag format, and lyric 
 | Outlier highlighting | Lines >35% off from section median highlighted in amber |
 | Section toolbar | Hover any section to get a Regenerate button |
 
-#### Suno Integration
+#### 55 Genre Presets
 
-One-click generation from canvas lyrics via the n8n pipeline:
+Unified presets across 12 categories (Pop, Rock, Electronic, Hip-Hop, R&B, Chill, Folk/Country, Latin, World, Jazz/Blues, Cinematic, Experimental). Each preset includes lyrics template, Suno style tags, BPM range, energy level, and rhyme scheme. Category filter pills in the UI for quick navigation. Genre registry merges built-in + user-approved proposals (cached 5 minutes).
+
+#### Direct Suno Integration
+
+One-click generation from canvas lyrics via direct Suno API calls (no n8n dependency):
 
 ```
 Lyrics + Style string
-    -> Suno API (via n8n workflow)
+    -> Direct Suno API call (30s stagger for batch)
     -> MP3 saved to /mnt/data/media/Music/
     -> Status tracked in suno_generations table
 ```
 
+#### Lyric Checker
+
+Automated analysis of syllable counts, rhyme schemes, and structural issues before generation.
+
 #### Ambient Factory
 
-Batch-generate multiple ambient tracks from the Factory tab - useful for producing background music libraries. Set count (1-10) and style string, then trigger batch.
+Batch-generate multiple ambient tracks from the Factory tab -- useful for producing background music libraries. Set count (1-10) and style string, then trigger batch.
 
 #### Song Management
 
 Songs saved as Markdown files with YAML frontmatter in `dj-luna/<project>/` workspace directory. Style presets stored in `dj-luna/styles.json`.
 
 *👉 [Full DJ Luna Documentation](DJ_LUNA.md)*
+
+---
+
+## Music Pipeline
+
+The music production pipeline spans DJ Luna and CEO Luna, providing end-to-end music creation capabilities.
+
+### Genre System
+
+**55 unified genre presets** across 12 categories, each containing:
+- Lyrics template (song structure with required/optional sections)
+- Suno style tags (genre-specific prompt for Suno AI)
+- BPM range and energy level
+- Rhyme scheme and syllable range
+
+The **genre registry** (`genre-registry.service.ts`) merges built-in presets with user-approved proposals from the `proposed_genre_presets` table. Cached 5 minutes per user.
+
+### Album Production Pipeline
+
+CEO Luna can trigger autonomous multi-album productions:
+
+```
+Genre selection (55 presets or proposed)
+    |
+    v
+LLM generates album plan (Ollama / configured model)
+    |
+    v
+Per-song pipeline:
+    Write lyrics -> Review (lyric checker) -> Submit to Suno -> Track
+    |
+    v
+Album completion (all songs done)
+```
+
+- Productions stored in `album_productions` table with per-song entries in `album_songs`
+- 30-second stagger between Suno submissions (rate limiting)
+- Background job `runAlbumPipelineStep` processes one step at a time
+- MP3s saved to `/mnt/data/media/Music/<title>-<ts>.mp3`
+
+### Music Trend Scraper
+
+The `runMusicTrendScraper` job scrapes music sources every 2 hours:
+
+- **Sources**: Billboard, Pitchfork, custom newsfetcher
+- **Analysis**: Ollama (Qwen 2.5) identifies emerging genres, breakout artists, production trends
+- **Auto-production**: High-confidence trends can auto-approve a genre preset and queue album productions (3 albums, one per artist)
+- **Storage**: `music_trend_raw` table with LLM-generated analysis summaries
+- **UI**: CEO Luna Radar panel with "Music Trends" filter tab
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `src/abilities/genre-presets.ts` | 55 hardcoded genre presets |
+| `src/abilities/genre-registry.service.ts` | Preset registry (built-in + proposed) |
+| `src/abilities/suno-generator.service.ts` | Direct Suno API integration |
+| `src/abilities/lyric-checker.service.ts` | Lyric quality analysis |
+| `src/ceo/album-pipeline.service.ts` | Autonomous album production |
+| `src/ceo/music-trend-scraper.service.ts` | Trend scraping + LLM analysis |
+| `frontend/src/lib/genre-presets.ts` | Frontend genre definitions |
 
 ---
 
@@ -646,6 +720,101 @@ High-frequency paper trading for strategy testing:
 - Position tracking
 - Risk calculations
 - Rate limiting (exchange API)
+
+---
+
+## Friends System
+
+Luna has AI "friend" personas she discusses topics with to build deeper understanding through diverse perspectives.
+
+### Gossip Queue
+
+Topics Luna wants to discuss are managed in the `friend_topic_candidates` table:
+
+| Field | Description |
+|-------|-------------|
+| `importance` | 1-5 scale (higher = more urgent) |
+| `motivation` | Why Luna wants to discuss this |
+| `suggested_friend_id` | Which friend persona is best for this topic |
+
+### Auto-Gossip Timer
+
+Configurable automatic discussion trigger (persisted in localStorage):
+- Toggle enable/disable
+- Configurable interval between discussions
+- Picks highest-importance unprocessed topic
+- Starts theater discussion with suggested friend (or random)
+
+### Theater Discussions
+
+Live-streamed deliberations between Luna and a friend persona:
+1. Topic selected from gossip queue
+2. Luna and friend exchange perspectives
+3. Insights extracted and applied to Luna's knowledge
+
+### Frontend
+
+- **FriendsWindow**: Two-panel layout (320px gossip queue + Friends tab)
+- **GossipQueuePanel**: Checklist with importance stars and motivation text
+- **FriendsTab**: Friend management with theater discussion launcher
+
+### Backend
+
+| File | Purpose |
+|------|---------|
+| `src/autonomous/friend.service.ts` | Friend relationship management |
+| `src/autonomous/friend-verification.service.ts` | Topic candidates CRUD, personality verification |
+| `src/autonomous/autonomous.routes.ts` | POST/PATCH/DELETE `/friends/topics` routes |
+| `src/db/migrations/088_gossip_queue_fields.sql` | Gossip queue schema |
+
+*👉 [Full Friends Documentation](AUTONOMOUS.md#friends--gossip-system)*
+
+---
+
+## VR Luna
+
+VR Luna is a separate Unreal Engine 5.5 C++ project (`/opt/vr-luna/`) that brings Luna into virtual reality via Steam Index VR.
+
+### Architecture
+
+- **Codebase**: 46 source files, ~7,900 lines of C++
+- **Engine**: Unreal Engine 5.5
+- **Target**: Steam Index VR (cross-compiled to Windows)
+- **Network**: HTTP REST + SSE + WebSocket to Luna Chat API at 10.0.0.2:3003 over WireGuard
+
+### Three Themed Rooms
+
+| Room | Persona | Purpose |
+|------|---------|---------|
+| **Music Room** | DJ Luna (`dj_luna`) | Spatial audio music playback and production chat |
+| **CEO Office** | CEO Luna (`ceo_luna`) | Business strategy and operations discussions |
+| **Relax Room** | Companion | Casual conversation and relaxation |
+
+### Avatar System
+
+- **MetaHuman** avatar with full body rigging
+- **Goertzel lip sync**: Audio-driven mouth movements
+- **8 emotion states**: Mapped to conversation context
+- **Gaze IK tracking**: Eye contact with the player
+- **Proactive behavior**: Luna initiates conversation based on context
+
+### Voice Pipeline
+
+```
+Microphone -> VAD (Voice Activity Detection)
+    -> WebSocket to Luna Chat API
+    -> STT (Speech-to-Text)
+    -> LLM processing
+    -> TTS (Text-to-Speech)
+    -> Spatial audio playback
+```
+
+### Build
+
+```bash
+# Cross-compile to Windows for Steam Index VR
+Build/Scripts/build.sh package
+```
 
 ---
 
@@ -915,7 +1084,7 @@ docker compose up -d
 
 **Naming**: `XXX_descriptive_name.sql` (numbered sequentially)
 
-**Latest**: Migration 087 (Suno generations table)
+**Latest**: Migration 091 (Music trends and proposed genres)
 
 **Create Migration**:
 ```bash
@@ -935,6 +1104,13 @@ npm run migrate
 - `user_facts`: Extracted facts with confidence
 - `response_style_preferences`: Learned communication preferences
 - `memory_nodes` / `memory_edges`: Graph memory (if using local graph)
+- `suno_generations`: Suno music generation tracking
+- `album_productions` / `album_songs`: Album pipeline state
+- `ceo_active_builds` / `ceo_build_notes`: Build tracking
+- `ceo_configs`: CEO configuration (plural, NOT `ceo_config`)
+- `proposed_genre_presets`: User-submitted genre presets
+- `music_trend_raw`: Music trend scraping results
+- `friend_topic_candidates`: Gossip queue topics
 
 ### Common Patterns
 

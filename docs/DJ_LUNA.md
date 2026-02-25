@@ -152,22 +152,36 @@ lo-fi hip hop, rainy day, mellow, vinyl crackle, piano, 75 BPM
 synthwave, 80s, female vocal, neon, driving bassline, reverb
 ```
 
-### Preset Chips
+### Genre Presets
 
-8 built-in genre presets plus any custom presets you save:
+55 built-in genre presets organized across 12 categories, plus custom presets you can save and community-proposed presets via the genre registry.
 
-| Preset | Style string |
-|--------|-------------|
-| Lo-fi | lo-fi hip hop, mellow, vinyl crackle, piano |
-| Synthwave | synthwave, 80s electronic, driving bass, retro |
-| Ambient | ambient, atmospheric, slow evolving, cinematic |
-| Pop | pop, upbeat, catchy, modern production |
-| Rock | indie rock, guitar driven, energetic |
-| Jazz | jazz, swing, upright bass, saxophone |
-| EDM | edm, drop, high energy, 128 BPM, bass synth |
-| R&B | r&b, soul, warm, groove, smooth |
+**Categories:**
 
-Click **Save as preset** to add the current style as a custom chip.
+| Category | Example Presets |
+|----------|----------------|
+| Pop | Pop, Indie Pop, Dance Pop, Electro Pop, K-Pop, Bedroom Pop |
+| Rock | Rock, Alt Rock, Post-Punk, Punk Pop, Grunge |
+| Electronic | EDM, Synthwave, House, Techno, DnB |
+| Hip-Hop | Hip-Hop, Trap, Boom Bap, Phonk, Lo-fi Hip-Hop |
+| R&B | R&B, Neo-Soul, Afrobeats |
+| Chill | Lo-fi, Ambient, Chillwave, Downtempo |
+| Folk/Country | Folk, Country, Bluegrass, Singer-Songwriter |
+| Latin | Reggaeton, Latin Pop, Cumbia, Bossa Nova |
+| World | Afrobeats, K-Pop (fusion), J-Pop |
+| Jazz/Blues | Jazz, Blues, Swing |
+| Cinematic | Cinematic, Orchestral, Trailer Epic |
+| Experimental | Art Pop, Glitch, Noise, Shoegaze |
+
+Each preset includes:
+- **Lyrics template**: Song structure sections with required/optional tags
+- **Suno style tags**: Genre-specific style string for Suno AI
+- **BPM range**: Tempo guidance (min/max)
+- **Energy level**: Low, medium, or high
+- **Rhyme scheme**: AABB, ABAB, ABCB, loose, or none
+- **Syllable range**: Target syllables per line
+
+**Category filter pills** appear above the presets for quick filtering. Click **Save as preset** to add the current style as a custom chip. The **genre registry** merges built-in presets with user-approved proposals (cached 5 minutes).
 
 ---
 
@@ -193,12 +207,7 @@ Generate multiple ambient/instrumental tracks in one click -- useful for creatin
 3. Click **Trigger Ambient Batch**
 4. Tracks are queued and appear in the status list
 
-The batch generator uses the n8n workflow (`suno-ambience-generator.json`) which:
-1. Calls Qwen 2.5 to generate a suitable title and style variation
-2. Sends to the Suno API
-3. Polls for completion
-4. Saves MP3 to `/mnt/data/media/Music/<title>-<timestamp>.mp3`
-5. Triggers the MemoryCore callback to update Luna's knowledge
+The batch generator calls the Suno API directly (no external workflow dependency) with a 30-second stagger between submissions to respect Suno's rate limits. Completed MP3s are saved to `/mnt/data/media/Music/<title>-<timestamp>.mp3`.
 
 ### Generation Status List
 
@@ -238,6 +247,8 @@ DJ Luna is familiar with the full Suno tag system. A quick reference is availabl
 
 ## Suno Pipeline (Backend)
 
+The pipeline uses direct Suno API calls (no n8n dependency).
+
 ```
 DJ Luna Chat (lyrics + style)
     |
@@ -248,19 +259,16 @@ DJ Luna Chat (lyrics + style)
 POST /api/suno/generate
     |
     v
-n8n webhook: suno-generate
+suno-generator.service.ts
     |
     v
-Qwen 2.5 (title/style variation) @ 10.0.0.30
-    |
-    v
-Suno API @ 10.0.0.10:3000
+Direct Suno API call (30s stagger for batch)
     |
     v  (poll every 30s, up to 10min)
 Suno completes generation
     |
     v
-POST /api/webhooks/suno-complete
+POST /api/webhooks/suno-complete (callback)
     |
     v
 MP3 saved to /mnt/data/media/Music/<title>-<ts>.mp3
@@ -269,16 +277,76 @@ MP3 saved to /mnt/data/media/Music/<title>-<ts>.mp3
 Generation row updated (status: completed, file_path)
 ```
 
+### Album Production Pipeline
+
+CEO Luna can trigger full album productions autonomously:
+
+```
+Genre selection (from 55 presets or proposed)
+    |
+    v
+LLM generates album plan (title, themes, song directions)
+    |
+    v
+For each song:
+    Write lyrics (Ollama / configured LLM)
+        |
+        v
+    Review & analyze (lyric-checker.service.ts)
+        |
+        v
+    Submit to Suno (30s stagger between tracks)
+        |
+        v
+    Track completion
+    |
+    v
+Album marked complete
+```
+
+Album productions are tracked in the `album_productions` table with per-song status (writing / reviewing / submitted / completed / failed).
+
+---
+
+## Lyric Checker
+
+The lyric checker (`lyric-checker.service.ts`) analyzes lyrics before generation for quality issues:
+
+- **Syllable analysis**: Checks per-line syllable counts against the genre's expected range
+- **Rhyme scheme validation**: Verifies the lyrics follow the preset's rhyme pattern (AABB, ABAB, etc.)
+- **Structural completeness**: Ensures required sections (verse, chorus, etc.) are present
+- **Section balance**: Flags sections that are too long or too short relative to the song structure
+
+The lyric checker tab is accessible in the DJ Luna right panel alongside Songs, Style, and Factory tabs.
+
+---
+
+## Genre Registry
+
+The genre registry (`genre-registry.service.ts`) provides a unified interface for accessing genre presets:
+
+- **Built-in presets**: 55 hardcoded presets in `genre-presets.ts`
+- **User-proposed presets**: Stored in `proposed_genre_presets` table, pending approval
+- **Merged output**: Registry merges built-in + approved proposals per user
+- **Cache**: 5-minute TTL per user for fast access
+- **API**: `/api/ceo/genres/proposed` for listing and managing proposed presets
+
 ---
 
 ## Backend Files
 
 | File | Purpose |
 |------|---------|
-| `src/abilities/suno-generator.service.ts` | Suno generation CRUD, polling, stale cleanup |
+| `src/abilities/suno-generator.service.ts` | Suno generation CRUD, direct API calls, stale cleanup |
+| `src/abilities/genre-registry.service.ts` | Genre preset registry (built-in + proposed, cached) |
+| `src/abilities/genre-presets.ts` | 55 hardcoded genre presets with full metadata |
+| `src/abilities/lyric-checker.service.ts` | Lyric quality analysis (syllables, rhyme, structure) |
+| `src/ceo/album-pipeline.service.ts` | Autonomous album production pipeline |
 | `src/chat/suno.routes.ts` | REST endpoints for generation management |
+| `src/chat/dj-luna.routes.ts` | Rhyme suggestions endpoint |
 | `src/db/migrations/087_suno_generations.sql` | suno_generations table |
-| `n8n-workflows/suno-ambience-generator.json` | n8n workflow for ambient batch generation |
+| `src/db/migrations/090_album_productions.sql` | album_productions + album_songs tables |
+| `src/db/migrations/091_music_trends_and_proposed_genres.sql` | proposed_genre_presets + music_trend_raw tables |
 
 ## Frontend Files
 
@@ -290,7 +358,9 @@ Generation row updated (status: completed, file_path)
 | `frontend/src/components/dj-luna/SongList.tsx` | Project file tree |
 | `frontend/src/components/dj-luna/StylePanel.tsx` | Style manager with presets |
 | `frontend/src/components/dj-luna/GenerationsPanel.tsx` | Suno factory + status list |
+| `frontend/src/components/dj-luna/LyricCheckerTab.tsx` | Lyric quality analysis tab |
 | `frontend/src/components/dj-luna/StartupModal.tsx` | New/Open song modal |
+| `frontend/src/lib/genre-presets.ts` | 55 genre presets + category definitions |
 | `frontend/src/lib/dj-luna-store.ts` | Zustand store |
 | `frontend/src/lib/syllable-counter.ts` | Syllable counting and outlier detection |
 | `frontend/src/lib/api/suno.ts` | Suno API client |

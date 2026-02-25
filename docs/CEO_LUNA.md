@@ -104,12 +104,21 @@ Financial overview panel showing:
 
 ### Radar
 
-Competitive intelligence panel. CEO Luna monitors competitors specified in your CEO config and surfaces:
+Intelligence panel combining competitive and music trend monitoring. CEO Luna monitors competitors and music sources, surfacing actionable signals.
 
-- News mentions and sentiment
+**Filter tabs**: All | Market | Music Trends
+
+**Market signals:**
+- News mentions and sentiment for your competitor list
 - Product updates detected via web research
 - Signal priority (low / medium / high)
 - Newsfetcher-verified article summaries
+
+**Music trends:**
+- Billboard, Pitchfork, and custom source scraping (every 2 hours via `runMusicTrendScraper` job)
+- LLM analysis via Ollama (Qwen 2.5) to detect emerging genres, breakout artists, and production trends
+- Auto-production: Detected high-confidence trends can auto-approve a genre preset and queue album productions (3 albums, one per artist)
+- Stored in `music_trend_raw` table with LLM-generated analysis summaries
 
 ### Autopost
 
@@ -135,6 +144,18 @@ Full build tracker table with all sessions:
 - Progress notes logged via `ceo_note_build` tool
 
 Build check-in works automatically: every 30 minutes, CEO Luna sends you a check-in message asking how the current build is going. Your reply is saved as a progress note.
+
+### Album Creator
+
+Full autonomous album production pipeline integrated into the CEO dashboard:
+
+1. **Select genre**: Choose from 55 built-in presets or community-proposed genres
+2. **Configure production**: Set artist name, album count, production notes, and LLM models for planning/lyrics
+3. **Pipeline stages**: Planning -> Lyric writing -> Review (lyric checker) -> Suno submission -> Tracking
+4. **Status tracking**: Per-song status (writing / reviewing / submitted / completed / failed) with progress indicators
+5. **Background execution**: The `runAlbumPipelineStep` job processes one step at a time with 30-second stagger between Suno submissions
+
+Album productions are stored in the `album_productions` table with per-song entries in `album_songs`.
 
 ### Log (Quick Log)
 
@@ -195,6 +216,10 @@ Elapsed time accumulates correctly across pause/continue cycles:
 ### Income Sources
 
 Income is logged with a free-text source field (e.g., "client payment", "saas subscription", "consulting").
+
+### Owner Pay
+
+CEO Luna tracks owner salary/draws separately from regular expenses (migration 089). This allows accurate P&L reporting where owner compensation is visible but does not distort operational expense analysis.
 
 ---
 
@@ -263,10 +288,16 @@ CEO config is stored per-user and editable via Settings or the Settings tab:
 | `src/ceo/ceo.service.ts` | Finance logging, config management, alert generation |
 | `src/ceo/ceo.routes.ts` | REST endpoints (builds, slash commands, finance, config) |
 | `src/ceo/build-tracker.service.ts` | Build session CRUD and elapsed time tracking |
-| `src/jobs/job-runner.ts` | `ceoBuildCheckin` job (every 5min) |
+| `src/ceo/music-trend-scraper.service.ts` | Billboard/Pitchfork trend scraping + Ollama LLM analysis |
+| `src/ceo/album-pipeline.service.ts` | Autonomous album production pipeline (write/review/submit) |
+| `src/abilities/genre-registry.service.ts` | Genre preset registry (55 built-in + proposed) |
+| `src/jobs/job-runner.ts` | `ceoBuildCheckin`, `runMusicTrendScraper`, `runAlbumPipelineStep` jobs |
 | `src/llm/tools/chat-tools.ts` | `ceoNoteBuildTool` - saves build progress notes |
 | `src/persona/luna.persona.ts` | CEO_LUNA_MODE_PROMPT and system log injection |
 | `src/db/migrations/086_ceo_active_builds.sql` | ceo_active_builds + ceo_build_notes tables |
+| `src/db/migrations/089_ceo_owner_pay.sql` | Owner pay/salary tracking |
+| `src/db/migrations/090_album_productions.sql` | Album production + song tracking tables |
+| `src/db/migrations/091_music_trends_and_proposed_genres.sql` | music_trend_raw + proposed_genre_presets tables |
 
 ## Frontend Files
 
@@ -280,6 +311,7 @@ CEO config is stored per-user and editable via Settings or the Settings tab:
 | `frontend/src/components/ceo-luna/DashboardPanel.tsx` | Financial dashboard |
 | `frontend/src/components/ceo-luna/RadarPanel.tsx` | Competitor radar |
 | `frontend/src/components/ceo-luna/AutopostPanel.tsx` | Social media autopost |
+| `frontend/src/components/ceo-luna/AlbumCreatorTab.tsx` | Album production pipeline UI |
 | `frontend/src/components/ceo-luna/BuildsPanel.tsx` | Build tracker table |
 | `frontend/src/components/ceo-luna/QuickLogPanel.tsx` | Quick finance log form |
 | `frontend/src/lib/ceo-luna-store.ts` | Zustand store |
@@ -308,6 +340,13 @@ CEO config is stored per-user and editable via Settings or the Settings tab:
 | POST | `/api/ceo/builds/:num/note` | Add progress note |
 | POST | `/api/ceo/slash/cost` | Log cost via slash |
 | POST | `/api/ceo/slash/income` | Log income via slash |
+| GET | `/api/ceo/genres/proposed` | List proposed genre presets |
+| POST | `/api/ceo/genres/proposed` | Submit genre preset proposal |
+| POST | `/api/ceo/radar/scrape-now` | Trigger immediate music trend scrape |
+| GET | `/api/ceo/radar/music-trends` | List music trend analysis results |
+| POST | `/api/ceo/albums/create` | Start album production |
+| GET | `/api/ceo/albums` | List album productions |
+| GET | `/api/ceo/albums/:id` | Get album production details |
 
 ---
 
