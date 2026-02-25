@@ -687,7 +687,7 @@ export async function getUpcomingEvents(
 
   // First try to sync from Radicale if enabled
   if (config.radicale.enabled) {
-    await syncFromRadicale(userId).catch(() => {});
+    await syncFromRadicale(userId).catch(e => logger.debug('Radicale sync failed', { err: (e as Error).message }));
   }
 
   try {
@@ -726,7 +726,7 @@ export async function getUpcomingEvents(
 export async function getTodayEvents(userId: string): Promise<CalendarEvent[]> {
   // First try to sync from Radicale if enabled
   if (config.radicale.enabled) {
-    await syncFromRadicale(userId).catch(() => {});
+    await syncFromRadicale(userId).catch(e => logger.debug('Radicale sync failed', { err: (e as Error).message }));
   }
 
   try {

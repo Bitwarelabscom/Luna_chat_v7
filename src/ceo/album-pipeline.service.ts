@@ -1,7 +1,7 @@
 import { pool } from '../db/index.js';
 import { createCompletion } from '../llm/router.js';
 import { getUserModelConfig } from '../llm/model-config.service.js';
-import { DJ_LUNA_MODE_PROMPT, CEO_LUNA_MODE_PROMPT } from '../persona/luna.persona.js';
+import { CEO_LUNA_MODE_PROMPT } from '../persona/luna.persona.js';
 import * as workspaceService from '../abilities/workspace.service.js';
 import * as sunoService from '../abilities/suno-generator.service.js';
 import { analyzeLyrics } from '../abilities/lyric-checker.service.js';
@@ -15,6 +15,22 @@ const SUNO_STAGGER_MS = 30_000; // 30s between Suno submissions
 
 // Prevent concurrent pipeline runs per production
 const activePipelines = new Set<string>();
+
+// Lightweight system prompt for pipeline lyric generation/revision.
+// Replaces the full DJ Luna persona (~2000 tokens) with only lyric-relevant guidance (~200 tokens).
+const LYRIC_PIPELINE_PROMPT = `You are an expert lyric writer for an autonomous music production pipeline.
+
+Rhyme scheme definitions (referenced by name in the song prompt):
+- ABAB: Alternating rhyme — lines 1 & 3 rhyme, lines 2 & 4 rhyme.
+- AABB: Couplet rhyme — consecutive lines rhyme in pairs.
+- ABCB: Ballad rhyme — only lines 2 & 4 rhyme.
+- loose: Approximate or slant rhymes; no strict pattern required.
+- none: No rhyming constraint; focus on rhythm and meaning.
+
+Rules:
+- Section tags inside [] (e.g. [Verse 1], [Chorus], [Bridge]) must ALWAYS be in English, even if the lyric text is in another language.
+- Output ONLY the lyrics with section tags. No commentary, explanations, or markdown.
+- Start with the first section tag immediately.`;
 
 // ============================================================
 // Types
@@ -145,11 +161,13 @@ export async function createProduction(userId: string, params: CreateProductionP
 export async function listProductions(userId: string): Promise<ProductionSummary[]> {
   const result = await pool.query<ProductionRow & { total_songs: string; completed_songs: string; failed_songs: string }>(
     `SELECT p.*,
-       COALESCE((SELECT COUNT(*) FROM album_songs WHERE production_id = p.id), 0) AS total_songs,
-       COALESCE((SELECT COUNT(*) FROM album_songs WHERE production_id = p.id AND status = 'completed'), 0) AS completed_songs,
-       COALESCE((SELECT COUNT(*) FROM album_songs WHERE production_id = p.id AND status = 'failed'), 0) AS failed_songs
+       COUNT(s.id) AS total_songs,
+       COUNT(s.id) FILTER (WHERE s.status = 'completed') AS completed_songs,
+       COUNT(s.id) FILTER (WHERE s.status = 'failed') AS failed_songs
      FROM album_productions p
+     LEFT JOIN album_songs s ON s.production_id = p.id
      WHERE p.user_id = $1
+     GROUP BY p.id
      ORDER BY p.created_at DESC
      LIMIT 50`,
     [userId],
@@ -171,22 +189,24 @@ export async function listProductions(userId: string): Promise<ProductionSummary
 }
 
 export async function getProductionDetail(userId: string, productionId: string): Promise<ProductionDetail | null> {
-  const prodResult = await pool.query<ProductionRow>(
-    `SELECT * FROM album_productions WHERE id = $1 AND user_id = $2`,
-    [productionId, userId],
-  );
+  // Run all three queries in parallel since they are independent
+  const [prodResult, albumsResult, songsResult] = await Promise.all([
+    pool.query<ProductionRow>(
+      `SELECT * FROM album_productions WHERE id = $1 AND user_id = $2`,
+      [productionId, userId],
+    ),
+    pool.query<AlbumItemRow>(
+      `SELECT * FROM album_items WHERE production_id = $1 ORDER BY album_number`,
+      [productionId],
+    ),
+    pool.query<AlbumSongRow>(
+      `SELECT * FROM album_songs WHERE production_id = $1 ORDER BY track_number`,
+      [productionId],
+    ),
+  ]);
+
   if (prodResult.rows.length === 0) return null;
   const prod = prodResult.rows[0];
-
-  const albumsResult = await pool.query<AlbumItemRow>(
-    `SELECT * FROM album_items WHERE production_id = $1 ORDER BY album_number`,
-    [productionId],
-  );
-
-  const songsResult = await pool.query<AlbumSongRow>(
-    `SELECT * FROM album_songs WHERE production_id = $1 ORDER BY track_number`,
-    [productionId],
-  );
 
   const songsByAlbum = new Map<string, SongDetail[]>();
   for (const s of songsResult.rows) {
@@ -327,6 +347,11 @@ export async function planAlbums(productionId: string): Promise<void> {
       const result = await createCompletion(provider, model, messages, {
         temperature: 0.8,
         maxTokens: 4000,
+        loggingContext: {
+          userId,
+          source: 'album-pipeline',
+          nodeName: 'plan-album',
+        },
       });
 
       // Parse JSON from response - strip markdown fences if present
@@ -508,7 +533,7 @@ IMPORTANT:
   await pool.query(`UPDATE album_songs SET status = 'lyrics_wip' WHERE id = $1`, [songId]);
 
   const messages: ChatMessage[] = [
-    { role: 'system', content: DJ_LUNA_MODE_PROMPT + '\n\nYou are writing lyrics for an autonomous album production pipeline. Output ONLY the lyrics with section tags. No commentary.' },
+    { role: 'system', content: LYRIC_PIPELINE_PROMPT },
     { role: 'user', content: prompt },
   ];
 
@@ -516,6 +541,11 @@ IMPORTANT:
     const result = await createCompletion(provider, model, messages, {
       temperature: 0.9,
       maxTokens: 3000,
+      loggingContext: {
+        userId: prod.user_id,
+        source: 'album-pipeline',
+        nodeName: 'write-lyrics',
+      },
     });
 
     const lyrics = extractLyrics(result.content);
@@ -646,7 +676,7 @@ IMPORTANT:
 - All section tags MUST be in English inside brackets`;
 
   const messages: ChatMessage[] = [
-    { role: 'system', content: DJ_LUNA_MODE_PROMPT + '\n\nYou are revising lyrics for an autonomous album production pipeline. Output ONLY the revised lyrics with section tags. No commentary.' },
+    { role: 'system', content: LYRIC_PIPELINE_PROMPT },
     { role: 'user', content: revisionPrompt },
   ];
 
@@ -654,6 +684,11 @@ IMPORTANT:
     const result = await createCompletion(provider, model, messages, {
       temperature: 0.7,
       maxTokens: 3000,
+      loggingContext: {
+        userId: prod.user_id,
+        source: 'album-pipeline',
+        nodeName: 'revise-lyrics',
+      },
     });
 
     const revisedLyrics = extractLyrics(result.content);
@@ -906,13 +941,12 @@ async function runFullPipelineInner(productionId: string): Promise<void> {
       while (reviewing) {
         if (await isProductionCancelled(productionId)) return;
 
-        // Re-read current status
-        const current = await pool.query<AlbumSongRow>(`SELECT * FROM album_songs WHERE id = $1`, [song.id]);
+        // Re-read current status (only fetch status column, not full row)
+        const current = await pool.query<{ status: string }>(`SELECT status FROM album_songs WHERE id = $1`, [song.id]);
         if (current.rows.length === 0) break;
-        const s = current.rows[0];
 
-        if (s.status === 'lyrics_review') {
-          await reviewLyrics(s.id);
+        if (current.rows[0].status === 'lyrics_review') {
+          await reviewLyrics(song.id);
         } else {
           // lyrics_approved, failed, or something else - move on
           reviewing = false;

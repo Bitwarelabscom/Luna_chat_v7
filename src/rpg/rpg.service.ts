@@ -741,7 +741,7 @@ async function saveCharacters(gameRoot: string, characters: RpgCharacter[]): Pro
   await Promise.all(
     existing
       .filter((name) => name.endsWith('.json'))
-      .map((name) => fs.unlink(path.join(charsDir, name)).catch(() => {}))
+      .map((name) => fs.unlink(path.join(charsDir, name)).catch(e => logger.debug('RPG save file cleanup failed', { err: (e as Error).message })))
   );
 
   await Promise.all(

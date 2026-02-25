@@ -54,7 +54,7 @@ function logToDb(data: LLMCallLogData): void {
       data.success,
       data.errorMessage ?? null,
     ]
-  ).catch(() => {}); // Non-blocking, never throws
+  ).catch(e => logger.debug('DB log write failed', { err: (e as Error).message }));
 }
 
 /**
@@ -158,7 +158,7 @@ export async function createCompletion(
             finishReason: 'error',
           },
         }
-      ).catch(() => {});
+      ).catch(e => logger.debug('Activity log failed', { err: (e as Error).message }));
     }
     if (!EXCLUDED_PROVIDERS.has(providerId)) {
       logToDb({
@@ -229,7 +229,7 @@ export async function createCompletion(
           finishReason: 'stop',
         },
       }
-    ).catch(() => {}); // Non-blocking
+    ).catch(e => logger.debug('Activity log failed', { err: (e as Error).message }));
   }
 
   return result;
@@ -292,7 +292,7 @@ export async function* streamCompletion(
             finishReason: 'error',
           },
         }
-      ).catch(() => {});
+      ).catch(e => logger.debug('Activity log failed', { err: (e as Error).message }));
     }
     if (!EXCLUDED_PROVIDERS.has(providerId)) {
       logToDb({
@@ -357,7 +357,7 @@ export async function* streamCompletion(
           finishReason: 'stop',
         },
       }
-    ).catch(() => {});
+    ).catch(e => logger.debug('Activity log failed', { err: (e as Error).message }));
   }
 }
 

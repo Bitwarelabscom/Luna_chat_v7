@@ -187,7 +187,7 @@ export async function createChatCompletion(
             })),
           },
         }
-      ).catch(() => {}); // Non-blocking
+      ).catch(e => logger.debug('Activity log failed', { err: (e as Error).message }));
     }
   };
 
@@ -219,7 +219,7 @@ export async function createChatCompletion(
             finishReason: 'error',
           },
         }
-      ).catch(() => {});
+      ).catch(e => logger.debug('Activity log failed', { err: (e as Error).message }));
     }
   };
 
@@ -565,7 +565,7 @@ export async function* streamChatCompletion(
             finishReason,
           },
         }
-      ).catch(() => {});
+      ).catch(e => logger.debug('Activity log failed', { err: (e as Error).message }));
     }
   };
 

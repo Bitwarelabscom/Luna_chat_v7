@@ -99,11 +99,11 @@ export async function recordTaskAction(
     );
 
     // Update category stats asynchronously
-    updateCategoryStats(userId, taskId, action).catch(() => {});
+    updateCategoryStats(userId, taskId, action).catch(e => logger.debug('Category stats update failed', { err: (e as Error).message }));
 
     // Check for postponement patterns
     if (action === 'postponed') {
-      detectPostponementPattern(userId).catch(() => {});
+      detectPostponementPattern(userId).catch(e => logger.debug('Postponement pattern detection failed', { err: (e as Error).message }));
     }
 
     logger.debug('Recorded task action', { userId, taskId, action });

@@ -323,7 +323,9 @@ export function buildContextualPrompt(
   mode: 'assistant' | 'companion' | 'voice' | 'dj_luna' | 'ceo_luna',
   options: {
     userName?: string;
-    memoryContext?: string;
+    stableMemoryContext?: string;    // Tier 2 - stable memory (facts, learnings, abilities, prefs)
+    volatileMemoryContext?: string;  // Tier 4 - volatile memory (semantic search, per-message context)
+    memoryContext?: string;          // Legacy fallback - all memory combined (Tier 4)
     searchResults?: string;
     sessionContext?: string;
     sessionHistory?: string;
@@ -385,6 +387,11 @@ You have access to additional tools via MCP (Model Context Protocol). These exte
     sections.push(`[User Profile]\nThe user's name is ${options.userName}. Address them by name when appropriate.`);
   }
 
+  // Stable memory (facts, learnings, abilities, preferences) - rarely changes
+  if (options.stableMemoryContext) {
+    sections.push(options.stableMemoryContext);
+  }
+
   // ============================================
   // CACHE TIER 3: Session-level content (slow-changing)
   // ============================================
@@ -403,7 +410,11 @@ You have access to additional tools via MCP (Model Context Protocol). These exte
   // CACHE TIER 4: Dynamic content (per-message)
   // ============================================
 
-  if (options.memoryContext) {
+  // Volatile memory (semantic search results, per-message context) or legacy fallback
+  if (options.volatileMemoryContext) {
+    sections.push(options.volatileMemoryContext);
+  } else if (options.memoryContext) {
+    // Legacy fallback: all memory combined in Tier 4
     sections.push(options.memoryContext);
   }
 

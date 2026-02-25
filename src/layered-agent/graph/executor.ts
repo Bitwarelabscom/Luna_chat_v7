@@ -184,7 +184,7 @@ export async function executeGraph(
               result.tokenUsage.inputTokens,
               result.tokenUsage.outputTokens
             )
-          ).catch(() => {}); // Non-blocking
+          ).catch(e => logger.debug('Activity log failed', { err: (e as Error).message }));
         }
 
         // FAST PATH: After draft, skip critique and queue for background
@@ -286,12 +286,12 @@ export async function executeGraph(
     });
 
     // Finalize token tracking even on error
-    await tokenTracker.finalizeTurnTracking(tracker).catch(() => {});
+    await tokenTracker.finalizeTurnTracking(tracker).catch(e => logger.debug('Token tracking finalize failed', { err: (e as Error).message }));
 
     // Still log the turn (as failed)
     state.final_output = state.draft || "I'm sorry, something went wrong. Please try again.";
     const turnLog = stateToTurnLog(state);
-    await stateStore.logTurn(turnLog).catch(() => {});
+    await stateStore.logTurn(turnLog).catch(e => logger.debug('Turn log store failed', { err: (e as Error).message }));
 
     return {
       success: false,

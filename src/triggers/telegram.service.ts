@@ -796,7 +796,7 @@ async function handleChatMessage(
     resetTelegramIdleTimer(connection.userId, sessionId);
 
     // Check if we've exceeded token limit (async, don't block response)
-    checkTokenLimitAndSummarize(connection.userId, sessionId).catch(() => {});
+    checkTokenLimitAndSummarize(connection.userId, sessionId).catch(e => logger.debug('Token limit check failed', { err: (e as Error).message }));
 
     logger.info('Telegram chat message processed', {
       userId: connection.userId,
@@ -810,7 +810,7 @@ async function handleChatMessage(
       userId: connection.userId,
       error: (error as Error).message,
     });
-    activityHelpers.logError(connection.userId, undefined, error as Error, { source: 'telegram', event: 'chat_message' }).catch(() => {});
+    activityHelpers.logError(connection.userId, undefined, error as Error, { source: 'telegram', event: 'chat_message' }).catch(e => logger.debug('Activity error logging failed', { err: (e as Error).message }));
 
     await sendTelegramMessage(
       connection.chatId,
@@ -1365,7 +1365,7 @@ async function handleVoiceMessage(
       userId: connection.userId,
       error: (error as Error).message,
     });
-    activityHelpers.logError(connection.userId, undefined, error as Error, { source: 'telegram', event: 'voice_message' }).catch(() => {});
+    activityHelpers.logError(connection.userId, undefined, error as Error, { source: 'telegram', event: 'voice_message' }).catch(e => logger.debug('Activity error logging failed', { err: (e as Error).message }));
     await sendTelegramMessage(
       chatId,
       'Sorry, I encountered an error processing your voice message.'
@@ -1463,7 +1463,7 @@ async function handlePhotoMessage(
       userId: connection.userId,
       error: (error as Error).message,
     });
-    activityHelpers.logError(connection.userId, undefined, error as Error, { source: 'telegram', event: 'photo_message' }).catch(() => {});
+    activityHelpers.logError(connection.userId, undefined, error as Error, { source: 'telegram', event: 'photo_message' }).catch(e => logger.debug('Activity error logging failed', { err: (e as Error).message }));
     await sendTelegramMessage(
       chatId,
       'Sorry, I had trouble processing that image. Please try again.'

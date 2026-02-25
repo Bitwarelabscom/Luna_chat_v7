@@ -7,6 +7,7 @@ import { enqueueCeoMessage } from './ceo.service.js';
 import * as albumPipeline from './album-pipeline.service.js';
 import * as triggerService from '../triggers/trigger.service.js';
 import type { ChatMessage } from '../llm/types.js';
+import { logActivity } from '../activity/activity.service.js';
 import logger from '../utils/logger.js';
 
 // Default artist names used when auto-generating albums from trends
@@ -245,6 +246,11 @@ Only include genres with confidence >= 0.4. Only include signals that are action
     const result = await createCompletion(provider, model, messages, {
       temperature: 0.3,
       maxTokens: 3000,
+      loggingContext: {
+        userId,
+        source: 'music-trend-scraper',
+        nodeName: 'analyze-trends',
+      },
     });
 
     const cleaned = result.content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
@@ -268,6 +274,11 @@ Only include genres with confidence >= 0.4. Only include signals that are action
       const result = await createCompletion(fallback.provider, fallback.model, messages, {
         temperature: 0.3,
         maxTokens: 3000,
+        loggingContext: {
+          userId,
+          source: 'music-trend-scraper',
+          nodeName: 'analyze-trends-fallback',
+        },
       });
       const cleaned = result.content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
       return JSON.parse(cleaned);
@@ -520,24 +531,56 @@ export async function runMusicTrendPipeline(): Promise<void> {
 
   // Scrape
   const items = await scrapeMusicTrends();
-  if (items.length === 0) {
-    logger.info('No music trend items found, skipping analysis');
-    return;
-  }
 
   // Get active users (users with CEO config)
   const usersResult = await pool.query<{ user_id: string }>(
     `SELECT DISTINCT user_id FROM ceo_configs LIMIT 10`,
   );
 
+  if (items.length === 0) {
+    logger.info('No music trend items found, skipping analysis');
+    // Warn all CEO users that scraping returned 0 items
+    for (const row of usersResult.rows) {
+      logActivity({
+        userId: row.user_id,
+        category: 'background',
+        eventType: 'music_trend_scrape_empty',
+        level: 'warn',
+        title: 'Music trend scraper: all sources returned 0 items',
+        source: 'music-trend-scraper',
+      }).catch(e => logger.debug('Activity log failed', { err: (e as Error).message }));
+    }
+    return;
+  }
+
   for (const row of usersResult.rows) {
     try {
+      // Log scrape success
+      logActivity({
+        userId: row.user_id,
+        category: 'background',
+        eventType: 'music_trend_scrape_complete',
+        level: 'success',
+        title: `Music trend scraper: ${items.length} items scraped`,
+        details: { itemCount: items.length },
+        source: 'music-trend-scraper',
+      }).catch(e => logger.debug('Activity log failed', { err: (e as Error).message }));
+
       const analysis = await analyzeTrendsWithLLM(row.user_id, items);
       if (analysis) {
         await processAnalysisResults(row.user_id, analysis);
       }
     } catch (err) {
       logger.error('Music trend analysis failed for user', { userId: row.user_id, error: (err as Error).message });
+      logActivity({
+        userId: row.user_id,
+        category: 'error',
+        eventType: 'music_trend_analysis_failed',
+        level: 'error',
+        title: 'Music trend analysis failed',
+        message: (err as Error).message,
+        source: 'music-trend-scraper',
+      }).catch(e => logger.debug('Activity log failed', { err: (e as Error).message }));
     }
   }
 

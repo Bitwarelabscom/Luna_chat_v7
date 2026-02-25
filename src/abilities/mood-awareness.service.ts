@@ -199,7 +199,7 @@ export async function updateSessionMood(
 
     // Update energy patterns asynchronously
     if (currentMood?.energyLevel) {
-      updateEnergyPattern(userId, currentMood.energyLevel).catch(() => {});
+      updateEnergyPattern(userId, currentMood.energyLevel).catch(e => logger.debug('Energy pattern update failed', { err: (e as Error).message }));
     }
 
     const state: SessionMoodState = {

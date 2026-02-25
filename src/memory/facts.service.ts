@@ -164,7 +164,7 @@ export async function storeFact(
           logger.warn('Failed to sync fact to Neo4j', { error: (err as Error).message });
         });
       }
-    }).catch(() => {});
+    }).catch(e => logger.debug('Fact ID lookup for Neo4j sync failed', { err: (e as Error).message }));
   } catch (error) {
     logger.error('Failed to store fact', {
       error: (error as Error).message,

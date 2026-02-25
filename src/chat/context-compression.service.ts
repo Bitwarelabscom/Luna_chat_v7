@@ -140,9 +140,15 @@ export function compressMessage(message: Message, maxLength: number = DEFAULT_CO
 // ============================================
 
 const SUMMARY_PROMPT = `Summarize this conversation segment concisely in 2-3 sentences.
-Focus on: main topics discussed, decisions made, key facts shared.
-Preserve any important context the assistant needs to remember.
+Prioritize preserving:
+- What the user asked for or wants (requests, goals, preferences)
+- Decisions made and commitments given
+- Emotional tone and relationship context
+- Any ongoing tasks or follow-ups mentioned
+- Key facts the user shared about themselves
+
 Do NOT use em dashes. Use regular hyphens if needed.
+Write as context for a future assistant message, not as a standalone summary.
 
 Conversation:
 `;
@@ -300,7 +306,7 @@ export async function updateRollingSummary(
         userId: _userId,
         sessionId,
         feature: 'context_summary',
-        messages: [{ role: 'user', content: `Compress this conversation summary into 2-3 sentences, preserving the most important points:\n\n${combinedSummary}` }],
+        messages: [{ role: 'user', content: `Compress this conversation summary into 2-3 sentences. Preserve user requests, decisions, emotional context, and ongoing tasks above all else. Do NOT use em dashes.\n\n${combinedSummary}` }],
         temperature: 0.3,
         maxTokens: 5000,
         loggingContext: {

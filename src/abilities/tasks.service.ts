@@ -49,7 +49,7 @@ export async function createTask(
     taskPatterns.recordTaskAction(userId, task.id, 'created', {
       newDueAt: input.dueAt,
       newStatus: 'pending',
-    }).catch(() => {});
+    }).catch(e => logger.debug('Task pattern tracking failed', { err: (e as Error).message }));
 
     logger.info('Created task', { userId, title: input.title });
     return task;
@@ -193,7 +193,7 @@ export async function updateTaskStatus(
     taskPatterns.recordTaskAction(userId, taskId, action, {
       previousStatus,
       newStatus: status,
-    }).catch(() => {});
+    }).catch(e => logger.debug('Task pattern tracking failed', { err: (e as Error).message }));
 
     logger.info('Updated task status', { userId, taskId, status });
     return task;
@@ -272,7 +272,7 @@ export async function updateTask(
         taskPatterns.recordTaskAction(userId, taskId, 'postponed', {
           previousDueAt: prevDate,
           newDueAt: newDate,
-        }).catch(() => {});
+        }).catch(e => logger.debug('Task pattern tracking failed', { err: (e as Error).message }));
       }
     }
 
@@ -281,7 +281,7 @@ export async function updateTask(
       taskPatterns.recordTaskAction(userId, taskId, 'priority_changed', {
         previousStatus: previousPriority,
         newStatus: updates.priority,
-      }).catch(() => {});
+      }).catch(e => logger.debug('Task pattern tracking failed', { err: (e as Error).message }));
     }
 
     return task;

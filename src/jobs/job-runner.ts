@@ -620,7 +620,7 @@ async function enrichNewsArticles(): Promise<void> {
           });
           activityHelpers.logBackgroundJob(row.user_id, 'News Enrichment', 'completed', {
             enrichedCount,
-          }).catch(() => {}); // Non-blocking
+          }).catch(e => logger.debug('Activity log failed', { err: (e as Error).message }));
         }
       } catch (err) {
         logger.error('Failed to enrich articles for user', {
@@ -1572,6 +1572,24 @@ async function runMusicTrendScraper(): Promise<void> {
     await runMusicTrendPipeline();
   } catch (error) {
     logger.error('Music trend scraper failed', { error: (error as Error).message });
+    // Broadcast error to all CEO users
+    try {
+      const { logActivityAndBroadcast } = await import('../activity/activity.service.js');
+      const usersResult = await pool.query('SELECT DISTINCT user_id FROM ceo_configs LIMIT 10');
+      for (const row of usersResult.rows) {
+        logActivityAndBroadcast({
+          userId: row.user_id,
+          category: 'error',
+          eventType: 'music_trend_scraper_failed',
+          level: 'error',
+          title: 'Music trend scraper failed',
+          message: (error as Error).message,
+          source: 'music-trend-scraper',
+        }).catch(e => logger.debug('Activity log failed', { err: (e as Error).message }));
+      }
+    } catch (broadcastErr) {
+      logger.debug('Failed to broadcast scraper error', { err: (broadcastErr as Error).message });
+    }
   }
 }
 

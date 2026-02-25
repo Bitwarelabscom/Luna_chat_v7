@@ -166,6 +166,11 @@ Infer production metadata and return JSON:
     const result = await createCompletion(p, m, messages, {
       temperature: 0.2,
       maxTokens: 1000,
+      loggingContext: {
+        userId,
+        source: 'custom-genre-inferrer',
+        nodeName: 'infer-genre',
+      },
     });
     const cleaned = result.content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
     const data = JSON.parse(cleaned) as Record<string, unknown>;

@@ -672,7 +672,8 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   );
 
   const userName = user?.displayName || undefined;
-  const memoryPrompt = memoryService.formatMemoryForPrompt(memoryContext);
+  const stableMemoryPrompt = memoryService.formatStableMemory(memoryContext);
+  const volatileMemoryPrompt = memoryService.formatVolatileMemory(memoryContext);
   const abilityPrompt = abilities.formatAbilityContextForPrompt(abilityContext);
   const prefPrompt = preferencesService.formatGuidelinesForPrompt(prefGuidelines);
   const intentPrompt = intentContextService.formatIntentsForPrompt(intentContext);
@@ -732,8 +733,9 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     // Silently fail if canvas service unavailable
   }
 
-  // Combine all context
-  const fullContext = [memoryPrompt, abilityPrompt, prefPrompt, intentPrompt, abilityActionResult, canvasStylePrompt, canvasSessionPrompt].filter(Boolean).join('\n\n');
+  // Two-tier memory: stable context (Tier 2, cacheable) vs volatile context (Tier 4, per-message)
+  const stableContext = [stableMemoryPrompt, abilityPrompt, prefPrompt, canvasStylePrompt].filter(Boolean).join('\n\n');
+  const volatileContext = [volatileMemoryPrompt, intentPrompt, abilityActionResult, canvasSessionPrompt].filter(Boolean).join('\n\n');
 
   // Build messages array with MCP tool info and compressed context
   const mcpToolsForPrompt = mcpUserTools.map(t => ({
@@ -746,7 +748,8 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
       role: 'system',
       content: buildContextualPrompt(mode, {
         userName,
-        memoryContext: fullContext,
+        stableMemoryContext: stableContext,
+        volatileMemoryContext: volatileContext,
         sessionHistory: sessionHistoryContext,
         conversationSummary: compressedCtx.systemPrefix,
         mcpTools: mcpToolsForPrompt,
@@ -3345,7 +3348,8 @@ export async function* streamMessage(
   }
 
   const userName = user?.displayName || undefined;
-  const memoryPrompt = memoryService.formatMemoryForPrompt(memoryContext);
+  const stableMemoryPrompt = memoryService.formatStableMemory(memoryContext);
+  const volatileMemoryPrompt = memoryService.formatVolatileMemory(memoryContext);
   const abilityPrompt = abilities.formatAbilityContextForPrompt(abilityContext);
   const prefPrompt = preferencesService.formatGuidelinesForPrompt(prefGuidelines);
   const intentPrompt = intentContextService.formatIntentsForPrompt(intentContext);
@@ -3404,8 +3408,9 @@ export async function* streamMessage(
     // Silently fail if canvas service unavailable
   }
 
-  // Combine all context
-  const fullContext = [memoryPrompt, abilityPrompt, prefPrompt, intentPrompt, abilityActionResult, canvasStylePrompt, canvasSessionPrompt].filter(Boolean).join('\n\n');
+  // Two-tier memory: stable context (Tier 2, cacheable) vs volatile context (Tier 4, per-message)
+  const stableContext = [stableMemoryPrompt, abilityPrompt, prefPrompt, canvasStylePrompt].filter(Boolean).join('\n\n');
+  const volatileContext = [volatileMemoryPrompt, intentPrompt, abilityActionResult, canvasSessionPrompt].filter(Boolean).join('\n\n');
 
   // Build messages array with MCP tool info and compressed context
   const mcpToolsForPrompt = mcpUserTools.map(t => ({
@@ -3418,7 +3423,8 @@ export async function* streamMessage(
       role: 'system',
       content: buildContextualPrompt(mode, {
         userName,
-        memoryContext: fullContext,
+        stableMemoryContext: stableContext,
+        volatileMemoryContext: volatileContext,
         sessionHistory: sessionHistoryContext,
         conversationSummary: compressedCtx.systemPrefix,
         mcpTools: mcpToolsForPrompt,

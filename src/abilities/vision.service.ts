@@ -83,7 +83,7 @@ function logVisionActivity(
         finishReason: errorMessage ? 'error' : 'stop',
       },
     }
-  ).catch(() => {});
+  ).catch(e => logger.debug('Activity log failed', { err: (e as Error).message }));
 }
 
 /**
