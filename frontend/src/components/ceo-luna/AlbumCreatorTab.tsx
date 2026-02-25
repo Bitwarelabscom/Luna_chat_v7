@@ -179,6 +179,21 @@ function ProductionCard({ prod, onRefresh }: { prod: ProductionSummary; onRefres
     ? Math.round((prod.completedSongs / prod.totalSongs) * 100)
     : 0;
 
+  // Auto-refresh expanded detail every 30s when production is active
+  const isActive = ['planning', 'planned', 'in_progress'].includes(prod.status);
+  useEffect(() => {
+    if (!expanded || !isActive) return;
+    const interval = setInterval(async () => {
+      try {
+        const { production } = await fetchProductionDetail(prod.id);
+        setDetail(production);
+      } catch {
+        // ignore
+      }
+    }, 30_000);
+    return () => clearInterval(interval);
+  }, [expanded, isActive, prod.id]);
+
   const handleExpand = async () => {
     if (expanded) {
       setExpanded(false);
@@ -392,6 +407,14 @@ export function AlbumCreatorTab() {
       loadProductions();
     }
   }, [loadProductions]);
+
+  // Auto-refresh every 30s when any production is active
+  const hasActive = productions.some(p => ['planning', 'planned', 'in_progress'].includes(p.status));
+  useEffect(() => {
+    if (!hasActive) return;
+    const interval = setInterval(loadProductions, 30_000);
+    return () => clearInterval(interval);
+  }, [hasActive, loadProductions]);
 
   return (
     <div className="flex flex-col h-full overflow-hidden">

@@ -726,6 +726,26 @@ router.post('/albums/:id/approve', async (req: Request, res: Response) => {
   }
 });
 
+// POST /api/ceo/albums/:id/run - Re-trigger full pipeline for an in_progress production
+router.post('/albums/:id/run', async (req: Request, res: Response) => {
+  try {
+    const check = await pool.query(
+      `SELECT id FROM album_productions WHERE id = $1 AND user_id = $2 AND status = 'in_progress'`,
+      [req.params.id, req.user!.userId],
+    );
+    if (check.rows.length === 0) {
+      res.status(400).json({ error: 'Production not found or not in_progress' });
+      return;
+    }
+    // Kick off full pipeline in background
+    albumPipeline.triggerFullPipeline(req.params.id);
+    res.json({ success: true, message: 'Pipeline triggered' });
+  } catch (error) {
+    logger.error('Failed to trigger pipeline', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to trigger pipeline' });
+  }
+});
+
 // POST /api/ceo/albums/:id/cancel - Cancel production
 router.post('/albums/:id/cancel', async (req: Request, res: Response) => {
   try {

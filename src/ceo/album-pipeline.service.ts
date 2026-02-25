@@ -9,6 +9,9 @@ import { getPresetById, getDefaultSongCount, GENRE_PRESETS } from '../abilities/
 import type { ProviderId, ChatMessage } from '../llm/types.js';
 import logger from '../utils/logger.js';
 
+const OLLAMA_PROVIDERS = new Set<string>(['ollama', 'ollama_secondary', 'ollama_tertiary']);
+const SUNO_STAGGER_MS = 15_000; // 15s between Suno submissions
+
 // ============================================================
 // Types
 // ============================================================
@@ -585,21 +588,24 @@ async function reviewLyrics(songId: string): Promise<void> {
 
   // Issues found
   const currentRevisions = song.revision_count;
+  const { provider, model: _model } = await resolveModel(prod.user_id, prod.lyrics_model, 'dj_luna');
+  const isOllama = OLLAMA_PROVIDERS.has(provider);
+  const maxRevisions = isOllama ? 3 : 1; // paid models: 1 revision (2 calls total)
 
-  if (currentRevisions >= 3) {
+  if (currentRevisions >= maxRevisions) {
     // Max revisions reached - approve as-is
     await pool.query(
       `UPDATE album_songs SET status = 'lyrics_approved', analysis_issues = $1 WHERE id = $2`,
       [JSON.stringify(analysis.issues), songId],
     );
-    logger.info('Lyrics approved after max revisions', { songId, title: song.title, issues: analysis.issues });
+    logger.info('Lyrics approved after max revisions', { songId, title: song.title, maxRevisions, issues: analysis.issues });
     return;
   }
 
   // Try to fix issues via LLM
   logger.info('Lyrics need revision', { songId, title: song.title, revision: currentRevisions + 1, issues: analysis.issues });
 
-  const { provider, model } = await resolveModel(prod.user_id, prod.lyrics_model, 'dj_luna');
+  const { model } = await resolveModel(prod.user_id, prod.lyrics_model, 'dj_luna');
 
   const revisionPrompt = `Here are lyrics that need revision. Fix the following issues while keeping the song's spirit intact:
 
@@ -798,6 +804,12 @@ export async function approveProduction(userId: string, productionId: string): P
   );
 
   logger.info('Production approved for execution', { productionId });
+
+  // Kick off the full pipeline immediately in background
+  runFullPipeline(productionId).catch(err => {
+    logger.error('Background pipeline failed', { productionId, error: (err as Error).message });
+  });
+
   return true;
 }
 
@@ -816,11 +828,113 @@ export async function cancelProduction(userId: string, productionId: string): Pr
 }
 
 // ============================================================
-// Pipeline Worker (called by job runner)
+// Full Pipeline - runs all LLM calls back-to-back, then staggers Suno
+// ============================================================
+
+async function isProductionCancelled(productionId: string): Promise<boolean> {
+  const r = await pool.query<{ status: string }>(`SELECT status FROM album_productions WHERE id = $1`, [productionId]);
+  return r.rows.length === 0 || r.rows[0].status === 'failed';
+}
+
+/**
+ * External trigger for the full pipeline (e.g. from /run endpoint).
+ * Fire-and-forget.
+ */
+export function triggerFullPipeline(productionId: string): void {
+  runFullPipeline(productionId).catch(err => {
+    logger.error('Triggered pipeline failed', { productionId, error: (err as Error).message });
+  });
+}
+
+async function runFullPipeline(productionId: string): Promise<void> {
+  logger.info('Starting full pipeline run', { productionId });
+
+  // Phase 1: Write + review lyrics for ALL songs back-to-back (no delays)
+  const songsResult = await pool.query<AlbumSongRow>(
+    `SELECT * FROM album_songs
+     WHERE production_id = $1 AND status IN ('planned', 'lyrics_wip', 'lyrics_review')
+     ORDER BY track_number`,
+    [productionId],
+  );
+
+  for (const song of songsResult.rows) {
+    if (await isProductionCancelled(productionId)) {
+      logger.info('Pipeline aborted - production cancelled', { productionId });
+      return;
+    }
+
+    try {
+      // Write lyrics if needed
+      if (song.status === 'planned' || song.status === 'lyrics_wip') {
+        await writeLyrics(song.id);
+      }
+
+      // Review + revise loop until approved
+      let reviewing = true;
+      while (reviewing) {
+        if (await isProductionCancelled(productionId)) return;
+
+        // Re-read current status
+        const current = await pool.query<AlbumSongRow>(`SELECT * FROM album_songs WHERE id = $1`, [song.id]);
+        if (current.rows.length === 0) break;
+        const s = current.rows[0];
+
+        if (s.status === 'lyrics_review') {
+          await reviewLyrics(s.id);
+        } else {
+          // lyrics_approved, failed, or something else - move on
+          reviewing = false;
+        }
+      }
+
+      logger.info('Song lyrics phase complete', { songId: song.id, title: song.title });
+    } catch (err) {
+      logger.error('Song lyrics phase failed', { songId: song.id, title: song.title, error: (err as Error).message });
+    }
+  }
+
+  // Phase 2: Submit all approved songs to Suno with 15s stagger
+  const approvedSongs = await pool.query<AlbumSongRow>(
+    `SELECT * FROM album_songs
+     WHERE production_id = $1 AND status = 'lyrics_approved'
+     ORDER BY track_number`,
+    [productionId],
+  );
+
+  logger.info('Lyrics phase done, submitting to Suno', {
+    productionId,
+    approvedCount: approvedSongs.rows.length,
+  });
+
+  for (let i = 0; i < approvedSongs.rows.length; i++) {
+    if (await isProductionCancelled(productionId)) {
+      logger.info('Pipeline aborted before Suno - production cancelled', { productionId });
+      return;
+    }
+
+    if (i > 0) {
+      await new Promise(resolve => setTimeout(resolve, SUNO_STAGGER_MS));
+    }
+
+    try {
+      await submitToSuno(approvedSongs.rows[i].id);
+    } catch (err) {
+      logger.error('Suno submission failed in pipeline', {
+        songId: approvedSongs.rows[i].id,
+        error: (err as Error).message,
+      });
+    }
+  }
+
+  logger.info('Full pipeline run complete', { productionId });
+}
+
+// ============================================================
+// Pipeline Worker (safety net - called by job runner every 5 min)
 // ============================================================
 
 export async function runPipelineStep(): Promise<void> {
-  // Find active productions
+  // Find active productions that might have stuck songs
   const activeProds = await pool.query<{ id: string }>(
     `SELECT id FROM album_productions WHERE status = 'in_progress' ORDER BY created_at LIMIT 5`,
   );
@@ -829,79 +943,60 @@ export async function runPipelineStep(): Promise<void> {
 
   for (const prod of activeProds.rows) {
     try {
-      await processNextSongForProduction(prod.id);
+      await recoverStuckSongs(prod.id);
     } catch (err) {
-      logger.error('Pipeline step failed for production', { productionId: prod.id, error: (err as Error).message });
+      logger.error('Pipeline recovery step failed', { productionId: prod.id, error: (err as Error).message });
     }
   }
 }
 
-async function processNextSongForProduction(productionId: string): Promise<void> {
-  // 1. Check for lyrics_approved songs ready for Suno submission
-  const approvedSong = await pool.query<AlbumSongRow>(
-    `SELECT * FROM album_songs
-     WHERE production_id = $1 AND status = 'lyrics_approved'
-     ORDER BY track_number LIMIT 1`,
-    [productionId],
-  );
-
-  if (approvedSong.rows.length > 0) {
-    await submitToSuno(approvedSong.rows[0].id);
-    return; // One action per cycle to avoid overloading Suno
-  }
-
-  // 2. Check for songs needing lyrics review
-  const reviewSong = await pool.query<AlbumSongRow>(
-    `SELECT * FROM album_songs
-     WHERE production_id = $1 AND status = 'lyrics_review'
-     ORDER BY track_number LIMIT 1`,
-    [productionId],
-  );
-
-  if (reviewSong.rows.length > 0) {
-    await reviewLyrics(reviewSong.rows[0].id);
-    return;
-  }
-
-  // 3. Check for songs needing lyrics writing
-  const plannedSong = await pool.query<AlbumSongRow>(
-    `SELECT * FROM album_songs
-     WHERE production_id = $1 AND status IN ('planned', 'lyrics_wip')
-     ORDER BY track_number LIMIT 1`,
-    [productionId],
-  );
-
-  if (plannedSong.rows.length > 0) {
-    await writeLyrics(plannedSong.rows[0].id);
-    return;
-  }
-
-  // 4. Check for suno_pending songs that might have stalled
-  // (The Suno callback handles status transitions, but check for stale ones)
+async function recoverStuckSongs(productionId: string): Promise<void> {
+  // Check for suno_pending songs whose generation already completed (missed callback)
   const staleSuno = await pool.query(
-    `SELECT s.id FROM album_songs s
+    `SELECT s.id, s.suno_generation_id FROM album_songs s
      JOIN suno_generations g ON s.suno_generation_id = g.id
      WHERE s.production_id = $1
        AND s.status = 'suno_pending'
-       AND g.status IN ('completed', 'failed')
-     LIMIT 1`,
+       AND g.status IN ('completed', 'failed')`,
     [productionId],
   );
 
-  if (staleSuno.rows.length > 0) {
-    const song = staleSuno.rows[0] as { id: string };
-    // Re-check via the Suno generation
-    const genResult = await pool.query<{ id: string }>(
-      `SELECT suno_generation_id AS id FROM album_songs WHERE id = $1`,
-      [song.id],
-    );
-    if (genResult.rows[0]?.id) {
-      await handleSunoComplete(genResult.rows[0].id);
-    }
-    return;
+  for (const row of staleSuno.rows) {
+    const r = row as { id: string; suno_generation_id: string };
+    await handleSunoComplete(r.suno_generation_id);
   }
 
-  // 5. Nothing to do - check if production is complete
+  // Check if the full pipeline died mid-run (songs still in planned/lyrics_review/lyrics_wip)
+  // If so, re-trigger the full pipeline to continue where it left off
+  const unfinished = await pool.query<{ cnt: string }>(
+    `SELECT COUNT(*) AS cnt FROM album_songs
+     WHERE production_id = $1 AND status IN ('planned', 'lyrics_wip', 'lyrics_review')`,
+    [productionId],
+  );
+  if (parseInt(unfinished.rows[0].cnt, 10) > 0) {
+    logger.info('Recovery: re-triggering full pipeline for unfinished songs', {
+      productionId,
+      unfinished: unfinished.rows[0].cnt,
+    });
+    // Run inline (already inside the job runner) instead of fire-and-forget
+    await runFullPipeline(productionId);
+    return; // runFullPipeline handles everything including Suno submission
+  }
+
+  // Check for lyrics_approved songs that somehow weren't submitted to Suno
+  const orphanApproved = await pool.query<AlbumSongRow>(
+    `SELECT * FROM album_songs
+     WHERE production_id = $1 AND status = 'lyrics_approved'
+     ORDER BY track_number`,
+    [productionId],
+  );
+
+  for (let i = 0; i < orphanApproved.rows.length; i++) {
+    if (i > 0) await new Promise(resolve => setTimeout(resolve, SUNO_STAGGER_MS));
+    await submitToSuno(orphanApproved.rows[i].id);
+  }
+
+  // Check production completion
   await checkProductionCompletion(productionId);
 }
 

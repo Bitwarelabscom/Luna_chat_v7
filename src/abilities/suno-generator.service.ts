@@ -177,6 +177,14 @@ export async function handleCallback(payload: CallbackPayload): Promise<void> {
       [payload.error || 'Generation failed', taskId],
     );
     logger.info('Suno generation failed', { taskId, error: payload.error });
+
+    // Notify album pipeline of failure
+    try {
+      const { handleSunoComplete } = await import('../ceo/album-pipeline.service.js');
+      await handleSunoComplete(taskId);
+    } catch (err) {
+      logger.warn('Album pipeline failure callback check failed (non-fatal)', { taskId, error: (err as Error).message });
+    }
     return;
   }
 
