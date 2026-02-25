@@ -7,6 +7,7 @@ import * as albumPipeline from './album-pipeline.service.js';
 import * as musicTrendScraper from './music-trend-scraper.service.js';
 import { GENRE_PRESETS } from '../abilities/genre-presets.js';
 import * as genreRegistry from '../abilities/genre-registry.service.js';
+import * as customGenreInferrer from '../abilities/custom-genre-inferrer.service.js';
 import { pool } from '../db/index.js';
 import logger from '../utils/logger.js';
 
@@ -678,24 +679,35 @@ router.get('/albums', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/ceo/albums/genres - Get available genre presets (including user-approved)
+// GET /api/ceo/albums/genres - Get available genre presets (including user-approved and custom DJ Luna presets)
 router.get('/albums/genres', async (req: Request, res: Response) => {
+  const userId = req.user!.userId;
   try {
-    const presets = await genreRegistry.getAllPresets(req.user!.userId);
+    const [presets, customPresets] = await Promise.all([
+      genreRegistry.getAllPresets(userId),
+      customGenreInferrer.getCustomGenrePresets(userId),
+    ]);
+
+    const existingIds = new Set(presets.map(g => g.id));
+    const uniqueCustom = customPresets.filter(g => !existingIds.has(g.id));
+    const allPresets = [...presets, ...uniqueCustom];
+
     res.json({
-      genres: presets.map(g => ({
+      genres: allPresets.map(g => ({
         id: g.id, name: g.name, description: g.description,
         defaultSongCount: g.defaultSongCount, category: g.category,
         styleTags: g.styleTags, bpmRange: g.bpmRange, energy: g.energy,
+        source: existingIds.has(g.id) ? 'builtin' : 'custom',
       })),
     });
   } catch {
-    // Fallback to builtins
+    // Fallback to builtins only
     res.json({
       genres: GENRE_PRESETS.map(g => ({
         id: g.id, name: g.name, description: g.description,
         defaultSongCount: g.defaultSongCount, category: g.category,
         styleTags: g.styleTags, bpmRange: g.bpmRange, energy: g.energy,
+        source: 'builtin',
       })),
     });
   }

@@ -118,9 +118,17 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
             required
           >
             <option value="">Select genre...</option>
-            {genres.map(g => (
+            {genres.filter(g => g.source !== 'custom').map(g => (
               <option key={g.id} value={g.id}>{g.name} ({g.defaultSongCount} songs)</option>
             ))}
+            {genres.some(g => g.source === 'custom') && (
+              <>
+                <option disabled>──── Custom DJ Presets ────</option>
+                {genres.filter(g => g.source === 'custom').map(g => (
+                  <option key={g.id} value={g.id}>[Custom] {g.name} ({g.defaultSongCount} songs)</option>
+                ))}
+              </>
+            )}
           </select>
         </div>
       </div>

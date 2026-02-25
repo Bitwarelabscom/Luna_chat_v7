@@ -271,6 +271,7 @@ export interface GenreOption {
   styleTags?: string;
   bpmRange?: { min: number; max: number };
   energy?: string;
+  source?: 'builtin' | 'custom' | 'proposed';
 }
 
 export interface ProductionSummary {
