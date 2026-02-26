@@ -318,6 +318,8 @@ export interface ProductionDetail extends ProductionSummary {
   productionNotes: string | null;
   planningModel: string | null;
   lyricsModel: string | null;
+  forbiddenWords: string | null;
+  songsPerAlbum: number | null;
   albums: AlbumDetail[];
 }
 
@@ -328,6 +330,8 @@ export interface CreateProductionParams {
   albumCount?: number;
   planningModel?: string;
   lyricsModel?: string;
+  forbiddenWords?: string;
+  songsPerAlbum?: number;
 }
 
 // Album productions

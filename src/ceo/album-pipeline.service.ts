@@ -45,6 +45,8 @@ interface ProductionRow {
   album_count: number;
   planning_model: string | null;
   lyrics_model: string | null;
+  forbidden_words: string | null;
+  songs_per_album: number | null;
   status: string;
   error_message: string | null;
   created_at: string;
@@ -77,6 +79,7 @@ interface AlbumSongRow {
   workspace_path: string | null;
   lyrics_text: string | null;
   revision_count: number;
+  retry_count: number;
   analysis_issues: string | null;
   suno_generation_id: string | null;
   status: string;
@@ -92,6 +95,8 @@ export interface CreateProductionParams {
   albumCount?: number;
   planningModel?: string;
   lyricsModel?: string;
+  forbiddenWords?: string;
+  songsPerAlbum?: number;
 }
 
 export interface ProductionSummary {
@@ -112,6 +117,8 @@ export interface ProductionDetail extends ProductionSummary {
   productionNotes: string | null;
   planningModel: string | null;
   lyricsModel: string | null;
+  forbiddenWords: string | null;
+  songsPerAlbum: number | null;
   albums: AlbumDetail[];
 }
 
@@ -147,12 +154,13 @@ export interface SongDetail {
 
 export async function createProduction(userId: string, params: CreateProductionParams): Promise<string> {
   const albumCount = Math.max(1, Math.min(10, params.albumCount ?? 1));
+  const songsPerAlbum = params.songsPerAlbum ? Math.max(1, Math.min(20, params.songsPerAlbum)) : null;
 
   const result = await pool.query<{ id: string }>(
-    `INSERT INTO album_productions (user_id, artist_name, genre, production_notes, album_count, planning_model, lyrics_model)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO album_productions (user_id, artist_name, genre, production_notes, album_count, planning_model, lyrics_model, forbidden_words, songs_per_album)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING id`,
-    [userId, params.artistName, params.genre, params.productionNotes || null, albumCount, params.planningModel || null, params.lyricsModel || null],
+    [userId, params.artistName, params.genre, params.productionNotes || null, albumCount, params.planningModel || null, params.lyricsModel || null, params.forbiddenWords || null, songsPerAlbum],
   );
 
   return result.rows[0].id;
@@ -255,6 +263,8 @@ export async function getProductionDetail(userId: string, productionId: string):
     productionNotes: prod.production_notes,
     planningModel: prod.planning_model,
     lyricsModel: prod.lyrics_model,
+    forbiddenWords: prod.forbidden_words,
+    songsPerAlbum: prod.songs_per_album,
     totalSongs: totalSongs,
     completedSongs,
     failedSongs,
@@ -276,6 +286,30 @@ export async function getProductionProgress(userId: string, productionId: string
     counts[r.status] = parseInt(r.count, 10);
   }
   return counts;
+}
+
+// ============================================================
+// Forbidden Word Helpers
+// ============================================================
+
+function parseForbiddenWords(raw: string | null): string[] {
+  if (!raw) return [];
+  return raw.split(',').map(w => w.trim().toLowerCase()).filter(Boolean);
+}
+
+function containsForbiddenWords(text: string, forbidden: string[]): string[] {
+  if (!forbidden.length) return [];
+  const lower = text.toLowerCase();
+  return forbidden.filter(w => lower.includes(w));
+}
+
+function stripForbiddenWords(text: string, forbidden: string[]): string {
+  let result = text;
+  for (const word of forbidden) {
+    const regex = new RegExp(word, 'gi');
+    result = result.replace(regex, '***');
+  }
+  return result;
 }
 
 // ============================================================
@@ -331,7 +365,7 @@ export async function planAlbums(productionId: string): Promise<void> {
 
   // Use genre registry to include user-approved presets
   const genrePreset = await genreRegistry.getPresetById(userId, prod.genre) ?? getBuiltinPresetById(prod.genre) ?? GENRE_PRESETS[0];
-  const songCount = genrePreset.defaultSongCount ?? getDefaultSongCount(prod.genre);
+  const songCount = prod.songs_per_album ?? genrePreset.defaultSongCount ?? getDefaultSongCount(prod.genre);
 
   for (let albumNum = 1; albumNum <= prod.album_count; albumNum++) {
     const planPrompt = buildPlanningPrompt(prod, albumNum, artistContext, songCount, genrePreset);
@@ -364,6 +398,64 @@ export async function planAlbums(productionId: string): Promise<void> {
         [`Planning failed for album #${albumNum}: ${(err as Error).message}`, productionId],
       );
       return;
+    }
+
+    // Forbidden word validation on plan output
+    const forbidden = parseForbiddenWords(prod.forbidden_words);
+    if (forbidden.length > 0) {
+      const textsToCheck = [
+        planJson.albumTitle,
+        ...planJson.songs.map(s => s.title),
+        ...planJson.songs.map(s => s.direction),
+      ];
+      let found = textsToCheck.flatMap(t => containsForbiddenWords(t, forbidden));
+      found = [...new Set(found)];
+
+      if (found.length > 0) {
+        // Retry up to 2 times with explicit correction
+        let retried = false;
+        for (let retry = 0; retry < 2 && found.length > 0; retry++) {
+          logger.warn('Plan contains forbidden words, retrying', { productionId, albumNum, retry: retry + 1, found });
+          const correctionPrompt = `Your previous plan contained these FORBIDDEN words: [${found.join(', ')}].
+Rewrite the album plan without using any of these words: [${forbidden.join(', ')}].
+Keep the same number of songs and overall concept but replace any titles or directions that use forbidden words.
+
+Return ONLY valid JSON in the same format as before.`;
+
+          try {
+            const retryResult = await createCompletion(provider, model, [
+              { role: 'system', content: CEO_LUNA_MODE_PROMPT + '\n\nYou are planning an album for autonomous music production. Return ONLY valid JSON, no markdown fences.' },
+              { role: 'user', content: planPrompt },
+              { role: 'assistant', content: JSON.stringify(planJson) },
+              { role: 'user', content: correctionPrompt },
+            ], {
+              temperature: 0.8,
+              maxTokens: 4000,
+              loggingContext: { userId, source: 'album-pipeline', nodeName: 'plan-album-retry' },
+            });
+            const retryCleaned = retryResult.content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+            planJson = JSON.parse(retryCleaned);
+            const retryTexts = [planJson.albumTitle, ...planJson.songs.map(s => s.title), ...planJson.songs.map(s => s.direction)];
+            found = [...new Set(retryTexts.flatMap(t => containsForbiddenWords(t, forbidden)))];
+            retried = true;
+          } catch (retryErr) {
+            logger.warn('Forbidden word retry failed', { productionId, albumNum, error: (retryErr as Error).message });
+            break;
+          }
+        }
+
+        // Last resort: strip forbidden words from titles/directions
+        if (found.length > 0) {
+          logger.warn('Stripping forbidden words as last resort', { productionId, albumNum, found });
+          planJson.albumTitle = stripForbiddenWords(planJson.albumTitle, forbidden);
+          for (const song of planJson.songs) {
+            song.title = stripForbiddenWords(song.title, forbidden);
+            song.direction = stripForbiddenWords(song.direction, forbidden);
+          }
+        } else if (retried) {
+          logger.info('Forbidden words resolved after retry', { productionId, albumNum });
+        }
+      }
     }
 
     // Insert album item
@@ -429,10 +521,14 @@ function buildPlanningPrompt(
     ? `\nEnergy level: ${genrePreset.energy}`
     : '';
 
+  const forbiddenHint = prod.forbidden_words
+    ? `\n\nFORBIDDEN WORDS - These words must NOT appear anywhere in album title, song titles, or creative directions: [${prod.forbidden_words}]`
+    : '';
+
   return `Plan album #${albumNum} of ${prod.album_count} for the artist "${prod.artist_name}".
 
 Genre: ${prod.genre}${styleHint}${bpmHint}${energyHint}
-${prod.production_notes ? `Production notes: ${prod.production_notes}` : ''}
+${prod.production_notes ? `Production notes: ${prod.production_notes}` : ''}${forbiddenHint}
 
 Artist context:
 ${artistContext}
@@ -527,7 +623,7 @@ IMPORTANT:
 - Keep syllable counts within range
 - All section tags MUST be in English inside brackets
 - Output ONLY the lyrics with section tags. No commentary before or after.
-- Start with the first section tag immediately.`;
+- Start with the first section tag immediately.${prod.forbidden_words ? `\n- FORBIDDEN WORDS: Do NOT use these words anywhere in the lyrics: [${prod.forbidden_words}]` : ''}`;
 
   // Mark as WIP
   await pool.query(`UPDATE album_songs SET status = 'lyrics_wip' WHERE id = $1`, [songId]);
@@ -548,10 +644,42 @@ IMPORTANT:
       },
     });
 
-    const lyrics = extractLyrics(result.content);
+    let lyrics = extractLyrics(result.content);
 
     if (!lyrics || lyrics.trim().length < 50) {
       throw new Error('LLM returned insufficient lyrics content');
+    }
+
+    // Forbidden word check on lyrics
+    const lyricsForbidden = parseForbiddenWords(prod.forbidden_words);
+    if (lyricsForbidden.length > 0) {
+      let foundInLyrics = containsForbiddenWords(lyrics, lyricsForbidden);
+      for (let retry = 0; retry < 2 && foundInLyrics.length > 0; retry++) {
+        logger.warn('Lyrics contain forbidden words, retrying', { songId, retry: retry + 1, found: foundInLyrics });
+        const fixMessages: ChatMessage[] = [
+          { role: 'system', content: LYRIC_PIPELINE_PROMPT },
+          { role: 'assistant', content: lyrics },
+          { role: 'user', content: `Your lyrics contain FORBIDDEN words: [${foundInLyrics.join(', ')}]. Rewrite the lyrics without using any of these words: [${lyricsForbidden.join(', ')}]. Output ONLY the revised lyrics with section tags.` },
+        ];
+        try {
+          const fixResult = await createCompletion(provider, model, fixMessages, {
+            temperature: 0.7,
+            maxTokens: 3000,
+            loggingContext: { userId: prod.user_id, source: 'album-pipeline', nodeName: 'fix-forbidden-lyrics' },
+          });
+          const fixedLyrics = extractLyrics(fixResult.content);
+          if (fixedLyrics && fixedLyrics.trim().length >= 50) {
+            lyrics = fixedLyrics;
+          }
+          foundInLyrics = containsForbiddenWords(lyrics, lyricsForbidden);
+        } catch (fixErr) {
+          logger.warn('Forbidden word lyrics fix failed', { songId, error: (fixErr as Error).message });
+          break;
+        }
+      }
+      if (foundInLyrics.length > 0) {
+        logger.warn('Lyrics still contain forbidden words after retries, accepting as-is', { songId, found: foundInLyrics });
+      }
     }
 
     // Write to workspace
@@ -1005,7 +1133,14 @@ export async function runPipelineStep(): Promise<void> {
     `SELECT id FROM album_productions WHERE status = 'in_progress' ORDER BY created_at LIMIT 5`,
   );
 
-  if (activeProds.rows.length === 0) return;
+  if (activeProds.rows.length === 0) {
+    // Even with no active productions, check for retryable failed songs
+    // in completed productions
+    await retryFailedSongsGlobal();
+    // Auto-approve next planned trend production if previous completed
+    await autoApproveNextTrendProduction();
+    return;
+  }
 
   for (const prod of activeProds.rows) {
     try {
@@ -1014,6 +1149,11 @@ export async function runPipelineStep(): Promise<void> {
       logger.error('Pipeline recovery step failed', { productionId: prod.id, error: (err as Error).message });
     }
   }
+
+  // Retry failed songs across all completed/in_progress productions
+  await retryFailedSongsGlobal();
+  // Auto-approve next planned trend production if previous completed
+  await autoApproveNextTrendProduction();
 }
 
 async function recoverStuckSongs(productionId: string): Promise<void> {
@@ -1064,6 +1204,176 @@ async function recoverStuckSongs(productionId: string): Promise<void> {
 
   // Check production completion
   await checkProductionCompletion(productionId);
+}
+
+// ============================================================
+// Failed Song Retry Logic
+// ============================================================
+
+const MAX_SONG_RETRIES = 3;
+
+/**
+ * Find and retry failed songs across all non-cancelled productions.
+ * Called by runPipelineStep every 5 minutes.
+ */
+async function retryFailedSongsGlobal(): Promise<void> {
+  const failedSongs = await pool.query<AlbumSongRow>(
+    `SELECT s.* FROM album_songs s
+     JOIN album_productions p ON s.production_id = p.id
+     WHERE s.status = 'failed'
+       AND s.retry_count < $1
+       AND p.status IN ('in_progress', 'completed')
+     ORDER BY s.created_at ASC
+     LIMIT 5`,
+    [MAX_SONG_RETRIES],
+  );
+
+  if (failedSongs.rows.length === 0) return;
+
+  logger.info('Retrying failed songs', { count: failedSongs.rows.length });
+
+  for (const song of failedSongs.rows) {
+    try {
+      await retrySingleSong(song);
+    } catch (err) {
+      logger.error('Failed to retry song', { songId: song.id, error: (err as Error).message });
+    }
+  }
+}
+
+/**
+ * Retry a single failed song: increment retry_count, reset to lyrics_approved, re-submit to Suno.
+ */
+async function retrySingleSong(song: AlbumSongRow): Promise<void> {
+  const newRetryCount = song.retry_count + 1;
+  logger.info('Retrying failed song', {
+    songId: song.id,
+    title: song.title,
+    attempt: newRetryCount,
+    maxRetries: MAX_SONG_RETRIES,
+  });
+
+  // Increment retry_count and reset status to lyrics_approved for re-submission
+  await pool.query(
+    `UPDATE album_songs
+     SET status = 'lyrics_approved',
+         retry_count = $1,
+         error_message = NULL,
+         suno_generation_id = NULL
+     WHERE id = $2`,
+    [newRetryCount, song.id],
+  );
+
+  // Re-submit to Suno
+  await submitToSuno(song.id);
+}
+
+/**
+ * Manually retry all failed songs in a specific production.
+ * Called from the retry-failed API endpoint.
+ */
+export async function retryFailedSongs(userId: string, productionId: string): Promise<{ retriedCount: number }> {
+  // Verify the production belongs to the user and isn't cancelled
+  const prodCheck = await pool.query<{ status: string }>(
+    `SELECT status FROM album_productions WHERE id = $1 AND user_id = $2`,
+    [productionId, userId],
+  );
+
+  if (prodCheck.rows.length === 0) {
+    throw new Error('Production not found');
+  }
+
+  if (prodCheck.rows[0].status === 'failed') {
+    // Check if it was user-cancelled vs auto-failed
+    const cancelCheck = await pool.query<{ error_message: string | null }>(
+      `SELECT error_message FROM album_productions WHERE id = $1`,
+      [productionId],
+    );
+    if (cancelCheck.rows[0]?.error_message === 'Cancelled by user') {
+      throw new Error('Cannot retry a cancelled production');
+    }
+  }
+
+  const failedSongs = await pool.query<AlbumSongRow>(
+    `SELECT * FROM album_songs
+     WHERE production_id = $1
+       AND status = 'failed'
+       AND retry_count < $2
+     ORDER BY track_number`,
+    [productionId, MAX_SONG_RETRIES],
+  );
+
+  if (failedSongs.rows.length === 0) {
+    return { retriedCount: 0 };
+  }
+
+  // If production was marked completed, set it back to in_progress
+  await pool.query(
+    `UPDATE album_productions SET status = 'in_progress', completed_at = NULL
+     WHERE id = $1 AND status = 'completed'`,
+    [productionId],
+  );
+
+  // Also update album statuses back to in_progress
+  const albumIds = [...new Set(failedSongs.rows.map(s => s.album_id))];
+  for (const albumId of albumIds) {
+    await pool.query(
+      `UPDATE album_items SET status = 'in_progress' WHERE id = $1 AND status = 'completed'`,
+      [albumId],
+    );
+  }
+
+  let retriedCount = 0;
+  for (const song of failedSongs.rows) {
+    try {
+      await retrySingleSong(song);
+      retriedCount++;
+    } catch (err) {
+      logger.error('Manual retry failed for song', { songId: song.id, error: (err as Error).message });
+    }
+  }
+
+  logger.info('Manual retry triggered', { productionId, retriedCount, totalFailed: failedSongs.rows.length });
+  return { retriedCount };
+}
+
+// ============================================================
+// Auto-approve Next Trend Production
+// ============================================================
+
+/**
+ * When a trend-generated production completes, auto-approve the next
+ * one in 'planned' status from the same trend batch.
+ * This serializes album execution to prevent Suno overload.
+ */
+async function autoApproveNextTrendProduction(): Promise<void> {
+  // Find the oldest planned production that has trend-related notes
+  // but only if there are no currently in_progress productions
+  const inProgressCount = await pool.query<{ cnt: string }>(
+    `SELECT COUNT(*) AS cnt FROM album_productions WHERE status = 'in_progress'`,
+  );
+
+  if (parseInt(inProgressCount.rows[0].cnt, 10) > 0) {
+    return; // Still have active pipelines, don't approve more
+  }
+
+  const nextPlanned = await pool.query<{ id: string; user_id: string }>(
+    `SELECT id, user_id FROM album_productions
+     WHERE status = 'planned'
+       AND production_notes LIKE '%Auto-generated from music trend%'
+     ORDER BY created_at ASC
+     LIMIT 1`,
+  );
+
+  if (nextPlanned.rows.length === 0) return;
+
+  const { id: productionId, user_id: userId } = nextPlanned.rows[0];
+  logger.info('Auto-approving next trend production', { productionId });
+
+  const approved = await approveProduction(userId, productionId);
+  if (approved) {
+    logger.info('Next trend production auto-approved and pipeline started', { productionId });
+  }
 }
 
 // ============================================================

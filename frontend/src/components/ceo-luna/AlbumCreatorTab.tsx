@@ -9,6 +9,8 @@ import {
   approveProduction,
   cancelProduction,
 } from '@/lib/api/ceo';
+import { settingsApi } from '@/lib/api/settings';
+import type { LLMProvider } from '@/lib/api/settings';
 
 // ============================================================
 // Status badges
@@ -49,6 +51,11 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
   const [genre, setGenre] = useState('');
   const [notes, setNotes] = useState('');
   const [albumCount, setAlbumCount] = useState(1);
+  const [forbiddenWords, setForbiddenWords] = useState('neon, static');
+  const [songsPerAlbum, setSongsPerAlbum] = useState<number | ''>('');
+  const [provider, setProvider] = useState('');
+  const [modelId, setModelId] = useState('');
+  const [providers, setProviders] = useState<LLMProvider[]>([]);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
 
@@ -57,8 +64,29 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
       initialized.current = true;
       loadGenres();
       loadArtists();
+      settingsApi.getStaticModels().then(data => {
+        setProviders(data.providers.filter(p => p.enabled));
+      }).catch(() => { /* ignore */ });
     }
   }, [loadGenres, loadArtists]);
+
+  // Reset tracks when genre changes (pick up new genre default)
+  const prevGenre = useRef(genre);
+  useEffect(() => {
+    if (genre !== prevGenre.current) {
+      prevGenre.current = genre;
+      setSongsPerAlbum('');
+    }
+  }, [genre]);
+
+  // Get selected genre's default song count for placeholder
+  const selectedGenre = genres.find(g => g.id === genre);
+  const genreDefaultSongs = selectedGenre?.defaultSongCount ?? 10;
+
+  // Filter models for selected provider
+  const providerModels = provider
+    ? (providers.find(p => p.id === provider)?.models ?? [])
+    : [];
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -72,11 +100,19 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
         albumCount,
       };
       if (notes.trim()) params.productionNotes = notes.trim();
+      if (forbiddenWords.trim()) params.forbiddenWords = forbiddenWords.trim();
+      if (songsPerAlbum !== '' && songsPerAlbum > 0) params.songsPerAlbum = songsPerAlbum;
+      if (provider && modelId) {
+        const modelStr = `${provider}/${modelId}`;
+        params.planningModel = modelStr;
+        params.lyricsModel = modelStr;
+      }
       await createProduction(params);
       setArtistName('');
       setGenre('');
       setNotes('');
       setAlbumCount(1);
+      setSongsPerAlbum('');
       onCreated();
     } catch (err) {
       setError((err as Error).message || 'Failed to create production');
@@ -87,7 +123,33 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-3 p-4 bg-gray-900 rounded-lg border border-gray-700">
-      <h3 className="text-sm font-semibold text-gray-200">New Album Production</h3>
+      {/* Title row with model selectors */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <h3 className="text-sm font-semibold text-gray-200">New Album Production</h3>
+        <div className="flex items-center gap-2 ml-auto">
+          <select
+            value={provider}
+            onChange={e => { setProvider(e.target.value); setModelId(''); }}
+            className="px-2 py-1 text-xs bg-gray-800 border border-gray-600 rounded text-gray-300 focus:outline-none focus:border-slate-500"
+          >
+            <option value="">Provider (default)</option>
+            {providers.map(p => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+          <select
+            value={modelId}
+            onChange={e => setModelId(e.target.value)}
+            disabled={!provider}
+            className="px-2 py-1 text-xs bg-gray-800 border border-gray-600 rounded text-gray-300 disabled:opacity-50 focus:outline-none focus:border-slate-500"
+          >
+            <option value="">Model (default)</option>
+            {providerModels.map(m => (
+              <option key={m.id} value={m.id}>{m.name}</option>
+            ))}
+          </select>
+        </div>
+      </div>
 
       <div className="grid grid-cols-2 gap-3">
         {/* Artist name with autocomplete */}
@@ -123,7 +185,7 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
             ))}
             {genres.some(g => g.source === 'custom') && (
               <>
-                <option disabled>──── Custom DJ Presets ────</option>
+                <option disabled>---- Custom DJ Presets ----</option>
                 {genres.filter(g => g.source === 'custom').map(g => (
                   <option key={g.id} value={g.id}>[Custom] {g.name} ({g.defaultSongCount} songs)</option>
                 ))}
@@ -145,6 +207,18 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
         />
       </div>
 
+      {/* Forbidden words */}
+      <div>
+        <label className="block text-xs text-gray-400 mb-1">Forbidden Words (comma-separated)</label>
+        <input
+          type="text"
+          value={forbiddenWords}
+          onChange={e => setForbiddenWords(e.target.value)}
+          placeholder="neon, static, ..."
+          className="w-full px-2 py-1.5 text-sm bg-gray-800 border border-gray-600 rounded text-gray-200 placeholder-gray-500 focus:outline-none focus:border-slate-500"
+        />
+      </div>
+
       <div className="flex items-center gap-3">
         {/* Album count */}
         <div className="flex items-center gap-2">
@@ -156,6 +230,25 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
             value={albumCount}
             onChange={e => setAlbumCount(Math.max(1, Math.min(10, parseInt(e.target.value) || 1)))}
             className="w-16 px-2 py-1 text-sm bg-gray-800 border border-gray-600 rounded text-gray-200 focus:outline-none focus:border-slate-500"
+          />
+        </div>
+
+        {/* Tracks per album */}
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-gray-400">Tracks:</label>
+          <input
+            type="number"
+            min={1}
+            max={20}
+            value={songsPerAlbum}
+            onChange={e => {
+              const val = e.target.value;
+              if (val === '') { setSongsPerAlbum(''); return; }
+              const num = parseInt(val);
+              if (num >= 1 && num <= 20) setSongsPerAlbum(num);
+            }}
+            placeholder={String(genreDefaultSongs)}
+            className="w-16 px-2 py-1 text-sm bg-gray-800 border border-gray-600 rounded text-gray-200 placeholder-gray-500 focus:outline-none focus:border-slate-500"
           />
         </div>
 

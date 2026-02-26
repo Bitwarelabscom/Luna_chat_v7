@@ -644,6 +644,8 @@ const createProductionSchema = z.object({
   albumCount: z.number().int().min(1).max(10).optional(),
   planningModel: z.string().max(100).optional(),
   lyricsModel: z.string().max(100).optional(),
+  forbiddenWords: z.string().max(500).optional(),
+  songsPerAlbum: z.number().int().min(1).max(20).optional(),
 });
 
 // POST /api/ceo/albums - Create production + trigger planning
@@ -775,6 +777,26 @@ router.post('/albums/:id/run', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to trigger pipeline', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to trigger pipeline' });
+  }
+});
+
+// POST /api/ceo/albums/:id/retry-failed - Retry all failed songs in a production
+router.post('/albums/:id/retry-failed', async (req: Request, res: Response) => {
+  try {
+    const result = await albumPipeline.retryFailedSongs(req.user!.userId, req.params.id);
+    if (result.retriedCount === 0) {
+      res.json({ success: true, message: 'No retryable failed songs found', retriedCount: 0 });
+      return;
+    }
+    res.json({ success: true, message: `Retrying ${result.retriedCount} failed song(s)`, ...result });
+  } catch (error) {
+    const msg = (error as Error).message;
+    if (msg === 'Production not found' || msg === 'Cannot retry a cancelled production') {
+      res.status(400).json({ error: msg });
+      return;
+    }
+    logger.error('Failed to retry failed songs', { error: msg });
+    res.status(500).json({ error: 'Failed to retry failed songs' });
   }
 });
 
