@@ -86,6 +86,76 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// ============================================================
+// Global Suno Submission Queue
+// Only one Suno submission at a time across all pipelines
+// Prevents Playwright browser crashes from concurrent requests
+// ============================================================
+
+interface QueueItem {
+  gen: SunoGeneration;
+  userId: string;
+  styleOverride?: string;
+  lyrics?: string;
+  title?: string;
+  resolve: () => void;
+}
+
+const sunoQueue: QueueItem[] = [];
+let sunoQueueProcessing = false;
+
+async function processSunoQueue(): Promise<void> {
+  if (sunoQueueProcessing) return;
+  sunoQueueProcessing = true;
+
+  try {
+    while (sunoQueue.length > 0) {
+      const item = sunoQueue.shift()!;
+      try {
+        await processGeneration(item.gen, item.userId, item.styleOverride, item.lyrics, item.title);
+      } catch (err) {
+        logger.error('Suno queue processGeneration failed', { genId: item.gen.id, error: (err as Error).message });
+      }
+      item.resolve();
+
+      // Wait 30s between submissions to avoid overloading the Playwright browser
+      if (sunoQueue.length > 0) {
+        await delay(30_000);
+      }
+    }
+  } finally {
+    sunoQueueProcessing = false;
+  }
+}
+
+/**
+ * Enqueue a generation into the global Suno submission queue.
+ * Returns a promise that resolves when this specific generation completes.
+ */
+function enqueueGeneration(
+  gen: SunoGeneration,
+  userId: string,
+  styleOverride?: string,
+  lyrics?: string,
+  title?: string,
+): Promise<void> {
+  return new Promise<void>((resolve) => {
+    sunoQueue.push({ gen, userId, styleOverride, lyrics, title, resolve });
+    logger.info('Suno generation enqueued', { genId: gen.id, queueLength: sunoQueue.length });
+    // Kick off processing if not already running
+    processSunoQueue().catch(err => {
+      logger.error('Suno queue processor failed', { error: (err as Error).message });
+    });
+  });
+}
+
+/**
+ * Get the current queue length (for monitoring/logging).
+ */
+export function getSunoQueueLength(): number {
+  return sunoQueue.length;
+}
+
 /**
  * Generate a title and texture tags via Ollama (Qwen).
  */
@@ -306,25 +376,13 @@ export async function triggerBatch(
     generations.push(rowToGeneration(result.rows[0]));
   }
 
-  // Fire generations in background with 15s stagger between each.
-  // Suno-api uses Playwright internally and cannot handle concurrent browser ops.
-  const runPipeline = async () => {
-    for (let i = 0; i < generations.length; i++) {
-      if (i > 0) {
-        await delay(30_000);
-      }
-      const gen = generations[i];
-      // Each processGeneration is fire-and-forget within the loop
-      processGeneration(gen, userId, styleOverride, lyrics, title).catch((err) =>
-        logger.error('Suno processGeneration unhandled error', { genId: gen.id, error: (err as Error).message }),
-      );
-    }
-  };
-
-  // Don't await - fire and forget so the HTTP response returns immediately
-  runPipeline().catch((err) =>
-    logger.error('Suno batch pipeline loop failed', { error: (err as Error).message }),
-  );
+  // Enqueue all generations into the global queue.
+  // The queue processes one at a time with 30s stagger to avoid Playwright crashes.
+  for (const gen of generations) {
+    enqueueGeneration(gen, userId, styleOverride, lyrics, title).catch((err) =>
+      logger.error('Suno enqueue failed', { genId: gen.id, error: (err as Error).message }),
+    );
+  }
 
   return generations;
 }

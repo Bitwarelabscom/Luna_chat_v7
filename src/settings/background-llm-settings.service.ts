@@ -13,7 +13,9 @@ export type BackgroundLlmFeature =
   | 'session_gap_analysis'
   | 'knowledge_verification'
   | 'supervisor_critique'
-  | 'music_trend_analysis';
+  | 'music_trend_analysis'
+  | 'query_refinement'
+  | 'domain_evaluation';
 
 export interface FeatureModelSelection {
   provider: ProviderId;
@@ -108,6 +110,16 @@ export const BACKGROUND_LLM_FEATURES: BackgroundLlmFeatureMeta[] = [
     label: 'Music Trend Analysis',
     description: 'Analyzes scraped music trends to identify emerging genres and market signals.',
   },
+  {
+    id: 'query_refinement',
+    label: 'Query Refinement',
+    description: 'Refines search queries when initial autonomous research fails to find trusted sources.',
+  },
+  {
+    id: 'domain_evaluation',
+    label: 'Domain Evaluation',
+    description: 'Evaluates unknown domains found during research for trust score provisioning.',
+  },
 ];
 
 export const DEFAULT_BACKGROUND_LLM_SETTINGS: BackgroundLlmSettings = {
@@ -159,6 +171,14 @@ export const DEFAULT_BACKGROUND_LLM_SETTINGS: BackgroundLlmSettings = {
     primary: { provider: 'ollama_tertiary', model: 'HoseaDev/qwen2.5-7b-instruct-q4-gguf:latest' },
     fallback: { provider: 'openai', model: 'gpt-5-mini' },
   },
+  query_refinement: {
+    primary: { provider: 'ollama', model: 'llama3.2:3b' },
+    fallback: { provider: 'openai', model: 'gpt-5-mini' },
+  },
+  domain_evaluation: {
+    primary: { provider: 'ollama', model: 'llama3.2:3b' },
+    fallback: { provider: 'openai', model: 'gpt-5-mini' },
+  },
 };
 
 interface DbSettingsRow {
@@ -201,6 +221,8 @@ function mergeWithDefaults(raw: unknown): BackgroundLlmSettings {
     knowledge_verification: sanitizeFeatureConfig(obj.knowledge_verification, DEFAULT_BACKGROUND_LLM_SETTINGS.knowledge_verification),
     supervisor_critique: sanitizeFeatureConfig(obj.supervisor_critique, DEFAULT_BACKGROUND_LLM_SETTINGS.supervisor_critique),
     music_trend_analysis: sanitizeFeatureConfig(obj.music_trend_analysis, DEFAULT_BACKGROUND_LLM_SETTINGS.music_trend_analysis),
+    query_refinement: sanitizeFeatureConfig(obj.query_refinement, DEFAULT_BACKGROUND_LLM_SETTINGS.query_refinement),
+    domain_evaluation: sanitizeFeatureConfig(obj.domain_evaluation, DEFAULT_BACKGROUND_LLM_SETTINGS.domain_evaluation),
   };
 }
 
@@ -238,6 +260,8 @@ export async function updateBackgroundLlmSettings(
     knowledge_verification: updates.knowledge_verification ? sanitizeFeatureConfig(updates.knowledge_verification, current.knowledge_verification) : current.knowledge_verification,
     supervisor_critique: updates.supervisor_critique ? sanitizeFeatureConfig(updates.supervisor_critique, current.supervisor_critique) : current.supervisor_critique,
     music_trend_analysis: updates.music_trend_analysis ? sanitizeFeatureConfig(updates.music_trend_analysis, current.music_trend_analysis) : current.music_trend_analysis,
+    query_refinement: updates.query_refinement ? sanitizeFeatureConfig(updates.query_refinement, current.query_refinement) : current.query_refinement,
+    domain_evaluation: updates.domain_evaluation ? sanitizeFeatureConfig(updates.domain_evaluation, current.domain_evaluation) : current.domain_evaluation,
   };
 
   await query(

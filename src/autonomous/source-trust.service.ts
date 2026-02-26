@@ -287,3 +287,61 @@ export async function removeTrustedDomain(domain: string): Promise<void> {
   const normalizedDomain = normalizeDomain(domain);
   await query('DELETE FROM source_trust_scores WHERE domain = $1', [normalizedDomain]);
 }
+
+/**
+ * Get all auto-discovered domains for review
+ */
+export async function getAutoDiscoveredDomains(): Promise<Array<{
+  id: number;
+  domain: string;
+  trustScore: number;
+  category: string;
+  discoveredAt: Date;
+  discoveryContext: string | null;
+}>> {
+  const rows = await query<any>(
+    `SELECT id, domain, trust_score, category, discovered_at, discovery_context
+     FROM source_trust_scores
+     WHERE auto_discovered = true
+     ORDER BY discovered_at DESC`
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    domain: row.domain,
+    trustScore: parseFloat(row.trust_score),
+    category: row.category,
+    discoveredAt: row.discovered_at,
+    discoveryContext: row.discovery_context,
+  }));
+}
+
+/**
+ * Confirm an auto-discovered domain, optionally adjusting its trust score.
+ * Removes the auto_discovered flag so it behaves like a manually curated entry.
+ */
+export async function confirmDomain(
+  domain: string,
+  adjustedScore?: number
+): Promise<void> {
+  const normalizedDomain = normalizeDomain(domain);
+
+  if (adjustedScore !== undefined) {
+    if (adjustedScore < 0 || adjustedScore > 1) {
+      throw new Error('Trust score must be between 0 and 1');
+    }
+    await query(
+      `UPDATE source_trust_scores
+       SET auto_discovered = false, trust_score = $1, update_reason = 'Manually confirmed', last_updated = NOW()
+       WHERE domain = $2`,
+      [adjustedScore, normalizedDomain]
+    );
+  } else {
+    await query(
+      `UPDATE source_trust_scores
+       SET auto_discovered = false, update_reason = 'Manually confirmed', last_updated = NOW()
+       WHERE domain = $1`,
+      [normalizedDomain]
+    );
+  }
+}

@@ -179,6 +179,14 @@ const jobs: Job[] = [
     running: false,
     handler: runAutonomousLearning,
   },
+  // Autonomous Learning Retry Processor
+  {
+    name: 'autonomousLearningRetryProcessor',
+    intervalMs: 6 * 60 * 60 * 1000, // Every 6 hours - promote due retry_pending gaps back to pending
+    enabled: true,
+    running: false,
+    handler: runAutonomousLearningRetry,
+  },
   // Trading jobs
   {
     name: 'tradingOrderMonitor',
@@ -853,6 +861,25 @@ async function runAutonomousLearning(): Promise<void> {
     logger.info('Autonomous learning job completed', summary);
   } catch (error) {
     logger.error('Autonomous learning job failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+/**
+ * Process retry-pending knowledge gaps back to pending status with fresh queries.
+ * Runs every 6 hours to check for due retries.
+ */
+async function runAutonomousLearningRetry(): Promise<void> {
+  try {
+    const { processRetryGaps } = await import('../autonomous/autonomous-learning.orchestrator.js');
+
+    logger.info('Starting autonomous learning retry processor');
+    const result = await processRetryGaps();
+
+    logger.info('Autonomous learning retry processor completed', result);
+  } catch (error) {
+    logger.error('Autonomous learning retry processor failed', {
       error: (error as Error).message,
     });
   }
@@ -1656,6 +1683,13 @@ export function startJobs(): void {
       // Schedule at 00:08 every day
       cron.schedule('8 0 * * *', () => runJob(job));
       logger.info(`Scheduled job ${job.name} via cron`, { schedule: '00:08 daily' });
+      continue;
+    }
+
+    if (job.name === 'autonomousLearningRetryProcessor') {
+      // Schedule at 0:00, 6:00, 12:00, 18:00 every day
+      cron.schedule('0 0,6,12,18 * * *', () => runJob(job));
+      logger.info(`Scheduled job ${job.name} via cron`, { schedule: 'every 6 hours' });
       continue;
     }
 

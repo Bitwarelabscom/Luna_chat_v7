@@ -1658,6 +1658,45 @@ router.put('/learning/trust-scores/:domain', async (req: Request, res: Response)
 });
 
 /**
+ * GET /api/autonomous/learning/trust-scores/auto-discovered
+ * List auto-discovered domains for review
+ */
+router.get('/learning/trust-scores/auto-discovered', async (_req: Request, res: Response) => {
+  try {
+    const { getAutoDiscoveredDomains } = await import('./source-trust.service.js');
+    const domains = await getAutoDiscoveredDomains();
+
+    res.json({ domains });
+  } catch (error) {
+    logger.error('Error getting auto-discovered domains', { error });
+    res.status(500).json({ error: 'Failed to get auto-discovered domains' });
+  }
+});
+
+/**
+ * POST /api/autonomous/learning/trust-scores/:domain/confirm
+ * Confirm an auto-discovered domain, optionally adjusting its trust score
+ */
+router.post('/learning/trust-scores/:domain/confirm', async (req: Request, res: Response) => {
+  try {
+    const domain = req.params.domain;
+    const { trustScore } = req.body;
+
+    if (trustScore !== undefined && (typeof trustScore !== 'number' || trustScore < 0 || trustScore > 1)) {
+      return res.status(400).json({ error: 'trustScore must be a number between 0 and 1' });
+    }
+
+    const { confirmDomain } = await import('./source-trust.service.js');
+    await confirmDomain(domain, trustScore);
+
+    return res.json({ success: true });
+  } catch (error) {
+    logger.error('Error confirming domain', { error });
+    return res.status(500).json({ error: 'Failed to confirm domain' });
+  }
+});
+
+/**
  * GET /api/autonomous/learning/gaps
  * Get knowledge gaps identified by session analysis
  */
@@ -1693,6 +1732,13 @@ router.get('/learning/gaps', async (req: Request, res: Response) => {
       researchSessionId: row.research_session_id,
       failureReason: row.failure_reason,
       completedAt: row.completed_at,
+      retryCount: row.retry_count || 0,
+      retryAfter: row.retry_after,
+      lastRetryAt: row.last_retry_at,
+      bestQuery: row.best_query,
+      mentionCount: row.mention_count || 0,
+      sessionCount: row.session_count || 0,
+      lastMentionedAt: row.last_mentioned_at,
     }));
 
     res.json({ gaps });

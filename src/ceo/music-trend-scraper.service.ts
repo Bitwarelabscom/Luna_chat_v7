@@ -423,12 +423,20 @@ async function queueTrendAlbums(
       // Plan albums immediately
       await albumPipeline.planAlbums(productionId);
 
-      // Auto-approve to start the full pipeline (lyrics -> review -> Suno)
-      const approved = await albumPipeline.approveProduction(userId, productionId);
-      if (approved) {
-        queuedIds.push(productionId);
-        logger.info('Auto-approved album production', { productionId, genreId });
+      // Only approve the FIRST production immediately.
+      // Subsequent ones stay in 'planned' and get auto-approved by
+      // autoApproveNextTrendProduction() when the previous one completes.
+      // This prevents multiple concurrent pipelines from overloading Suno.
+      if (i === 0) {
+        const approved = await albumPipeline.approveProduction(userId, productionId);
+        if (approved) {
+          logger.info('Auto-approved first album production', { productionId, genreId });
+        }
+      } else {
+        logger.info('Album production planned, will auto-approve when previous completes', { productionId, genreId, queuePosition: i + 1 });
       }
+
+      queuedIds.push(productionId);
 
       // Small delay between productions to avoid hammering LLM
       if (i < ALBUMS_PER_TREND - 1) {

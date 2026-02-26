@@ -13,6 +13,17 @@ export interface KnowledgeGap {
   suggestedQueries: string[];
   category: 'technical' | 'current_events' | 'personal_interest' | 'academic';
   embedding?: number[];
+  importanceReasoning?: string;
+  mentionCount?: number;
+  sessionCount?: number;
+  lastMentionedAt?: Date;
+}
+
+export interface TopicMetrics {
+  mentionCount: number;
+  sessionCount: number;
+  lastMentionedAt: Date | null;
+  recencyDays: number;
 }
 
 export interface AnalysisResult {
@@ -75,8 +86,27 @@ export async function analyzeSessionsForGaps(
     // Prepare session summary for analysis
     const sessionSummary = prepareSessionSummary(sessions, messages);
 
-    // Use Groq to analyze sessions
-    const gaps = await analyzeWithGroq(sessionSummary, userId);
+    // Use LLM to analyze sessions and identify raw gaps (without priority)
+    const rawGaps = await analyzeWithGroq(sessionSummary, userId);
+
+    // Compute hybrid priority for each gap using real conversation metrics
+    const gaps: KnowledgeGap[] = [];
+    for (const rawGap of rawGaps) {
+      try {
+        const metrics = await computeTopicMetrics(userId, rawGap.description);
+        const priority = await computeHybridPriority(userId, metrics, rawGap.importanceReasoning || '');
+        gaps.push({
+          ...rawGap,
+          priority,
+          mentionCount: metrics.mentionCount,
+          sessionCount: metrics.sessionCount,
+          lastMentionedAt: metrics.lastMentionedAt || undefined,
+        });
+      } catch (err) {
+        logger.warn('Failed to compute hybrid priority, using fallback', { error: (err as Error).message, gap: rawGap.description });
+        gaps.push({ ...rawGap, priority: 0.3 });
+      }
+    }
 
     return {
       gaps,
@@ -161,9 +191,11 @@ Focus on:
 
 For each knowledge gap, provide:
 - description (concise, specific)
-- priority (0-1, based on frequency and user interest)
 - suggestedQueries (2-3 search queries to research this topic)
 - category (technical, current_events, personal_interest, academic)
+- importanceReasoning (1-2 sentences explaining why this topic matters to the user)
+
+Do NOT include a priority score - that will be computed separately from conversation metrics.
 
 Output ONLY valid JSON array of knowledge gaps. No markdown, no explanations, just the JSON array.
 
@@ -171,9 +203,9 @@ Example output:
 [
   {
     "description": "Recent developments in quantum computing algorithms",
-    "priority": 0.85,
     "suggestedQueries": ["quantum computing 2026 breakthroughs", "latest quantum algorithms", "quantum advantage applications"],
-    "category": "technical"
+    "category": "technical",
+    "importanceReasoning": "User asked about quantum computing in multiple sessions over the past month, indicating sustained interest in the field."
   }
 ]`;
 
@@ -213,23 +245,22 @@ Example output:
       gaps = [];
     }
 
-    // Validate and filter gaps
+    // Validate and filter gaps (priority is no longer from LLM - set to 0 placeholder)
     const validGaps = gaps.filter((gap) => {
       return (
         gap.description &&
-        typeof gap.priority === 'number' &&
-        gap.priority >= 0 &&
-        gap.priority <= 1 &&
         Array.isArray(gap.suggestedQueries) &&
         gap.suggestedQueries.length > 0 &&
         ['technical', 'current_events', 'personal_interest', 'academic'].includes(gap.category)
       );
-    });
+    }).map((gap) => ({
+      ...gap,
+      priority: 0, // Will be overwritten by hybrid scoring
+    }));
 
-    logger.info('Knowledge gaps identified', {
+    logger.info('Knowledge gaps identified (pre-scoring)', {
       userId,
       totalGaps: validGaps.length,
-      highPriorityGaps: validGaps.filter((g) => g.priority >= 0.7).length,
     });
 
     return validGaps;
@@ -278,7 +309,7 @@ export async function storeKnowledgeGaps(
         continue;
       }
 
-      // 3. Store new unique gap
+      // 3. Store new unique gap with metrics
       await query(
         `INSERT INTO knowledge_gaps (
            user_id,
@@ -287,15 +318,21 @@ export async function storeKnowledgeGaps(
            suggested_queries,
            category,
            status,
-           embedding
-         ) VALUES ($1, $2, $3, $4, $5, 'pending', $6)`,
+           embedding,
+           mention_count,
+           session_count,
+           last_mentioned_at
+         ) VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7, $8, $9)`,
         [
           userId,
           gap.description,
           gap.priority,
           gap.suggestedQueries,
           gap.category,
-          vectorString
+          vectorString,
+          gap.mentionCount || 0,
+          gap.sessionCount || 0,
+          gap.lastMentionedAt || null,
         ]
       );
     } catch (err) {
@@ -314,7 +351,8 @@ export async function getPendingGaps(
   limit: number = 10
 ): Promise<any[]> {
   const rows = await query<any>(
-    `SELECT id, gap_description, priority, suggested_queries, category, identified_at, status, embedding::text
+    `SELECT id, gap_description, priority, suggested_queries, category, identified_at, status, embedding::text,
+            retry_count, best_query, mention_count, session_count
      FROM knowledge_gaps
      WHERE user_id = $1 AND status = 'pending'
      ORDER BY priority DESC, identified_at DESC
@@ -339,6 +377,10 @@ export async function getPendingGaps(
       identifiedAt: row.identified_at,
       status: row.status,
       embedding,
+      retryCount: row.retry_count || 0,
+      bestQuery: row.best_query,
+      mentionCount: row.mention_count || 0,
+      sessionCount: row.session_count || 0,
     };
   });
 }
@@ -348,7 +390,7 @@ export async function getPendingGaps(
  */
 export async function updateGapStatus(
   gapId: number,
-  status: 'pending' | 'researching' | 'verified' | 'embedded' | 'rejected' | 'failed',
+  status: 'pending' | 'researching' | 'verified' | 'embedded' | 'rejected' | 'failed' | 'retry_pending' | 'expired',
   failureReason?: string
 ): Promise<void> {
   if (failureReason) {
@@ -359,7 +401,7 @@ export async function updateGapStatus(
       [status, failureReason, gapId]
     );
   } else {
-    const completedAt = ['verified', 'embedded', 'rejected', 'failed'].includes(status)
+    const completedAt = ['verified', 'embedded', 'rejected', 'failed', 'expired'].includes(status)
       ? 'NOW()'
       : 'NULL';
 
@@ -369,5 +411,157 @@ export async function updateGapStatus(
        WHERE id = $2`,
       [status, gapId]
     );
+  }
+}
+
+/**
+ * Compute topic metrics from actual conversation data.
+ * Extracts keywords from the gap description, then queries messages for mention counts.
+ */
+export async function computeTopicMetrics(
+  userId: string,
+  gapDescription: string
+): Promise<TopicMetrics> {
+  try {
+    // Use LLM to extract 2-3 core keywords
+    const keywordCompletion = await createBackgroundCompletionWithFallback({
+      userId,
+      feature: 'session_gap_analysis',
+      messages: [
+        {
+          role: 'system',
+          content: 'Extract 2-3 core search keywords from the following topic description. Output JSON only: {"keywords": ["keyword1", "keyword2"]}',
+        },
+        { role: 'user', content: gapDescription },
+      ],
+      temperature: 0.1,
+      maxTokens: 200,
+      loggingContext: {
+        userId,
+        source: 'autonomous_research',
+        nodeName: 'keyword_extraction',
+      },
+    });
+
+    const responseText = keywordCompletion.content.trim() || '{}';
+    const jsonText = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const parsed = JSON.parse(jsonText);
+    const keywords: string[] = Array.isArray(parsed.keywords)
+      ? parsed.keywords.filter((k: unknown) => typeof k === 'string' && k.length > 0).slice(0, 3)
+      : [];
+
+    if (keywords.length === 0) {
+      return { mentionCount: 0, sessionCount: 0, lastMentionedAt: null, recencyDays: 999 };
+    }
+
+    // Query messages for each keyword and union the results
+    let totalMentionCount = 0;
+    let totalSessionCount = 0;
+    let lastMentionedAt: Date | null = null;
+
+    for (const keyword of keywords) {
+      const rows = await query<any>(
+        `SELECT COUNT(*) as mention_count,
+                COUNT(DISTINCT m.session_id) as session_count,
+                MAX(m.created_at) as last_mentioned_at
+         FROM messages m JOIN sessions s ON m.session_id = s.id
+         WHERE s.user_id = $1 AND m.role = 'user'
+           AND m.created_at >= NOW() - INTERVAL '90 days'
+           AND m.content ILIKE '%' || $2 || '%'`,
+        [userId, keyword]
+      );
+
+      if (rows.length > 0) {
+        const mc = parseInt(rows[0].mention_count) || 0;
+        const sc = parseInt(rows[0].session_count) || 0;
+        const lma = rows[0].last_mentioned_at ? new Date(rows[0].last_mentioned_at) : null;
+
+        totalMentionCount = Math.max(totalMentionCount, mc);
+        totalSessionCount = Math.max(totalSessionCount, sc);
+        if (lma && (!lastMentionedAt || lma > lastMentionedAt)) {
+          lastMentionedAt = lma;
+        }
+      }
+    }
+
+    const recencyDays = lastMentionedAt
+      ? Math.floor((Date.now() - lastMentionedAt.getTime()) / (1000 * 60 * 60 * 24))
+      : 999;
+
+    return { mentionCount: totalMentionCount, sessionCount: totalSessionCount, lastMentionedAt, recencyDays };
+  } catch (error) {
+    logger.error('Error computing topic metrics', { error, userId, gapDescription });
+    return { mentionCount: 0, sessionCount: 0, lastMentionedAt: null, recencyDays: 999 };
+  }
+}
+
+/**
+ * Compute hybrid priority using hard conversation metrics + LLM reasoning.
+ * Returns a score between 0 and 1.
+ */
+export async function computeHybridPriority(
+  userId: string,
+  metrics: TopicMetrics,
+  importanceReasoning: string
+): Promise<number> {
+  try {
+    const systemPrompt = `You are a priority scoring assistant. Given conversation metrics and an importance assessment, assign a priority score between 0.0 and 1.0.
+
+Score rules:
+- 0 mentions or 1 mention in 1 session -> 0.2-0.4 (casual one-off)
+- 2-5 mentions across 2-3 sessions -> 0.5-0.7 (moderate interest)
+- 5+ mentions across 3+ sessions -> 0.7-0.95 (recurring topic)
+- Recency boosts: last 7 days +0.1, last 30 days +0.05
+- Cap at 1.0
+
+Output valid JSON only: {"priority": 0.XX}`;
+
+    const userMessage = `Topic metrics:
+- Mentioned in ${metrics.mentionCount} messages across ${metrics.sessionCount} sessions
+- Last discussed ${metrics.recencyDays} days ago
+- LLM assessment: "${importanceReasoning}"
+
+Assign a priority score.`;
+
+    const completion = await createBackgroundCompletionWithFallback({
+      userId,
+      feature: 'session_gap_analysis',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userMessage },
+      ],
+      temperature: 0.1,
+      maxTokens: 100,
+      loggingContext: {
+        userId,
+        source: 'autonomous_research',
+        nodeName: 'hybrid_priority_scoring',
+      },
+    });
+
+    const responseText = completion.content.trim() || '{}';
+    const jsonText = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const parsed = JSON.parse(jsonText);
+
+    const priority = typeof parsed.priority === 'number' ? Math.max(0, Math.min(1, parsed.priority)) : 0.3;
+
+    logger.debug('Hybrid priority computed', {
+      userId,
+      mentionCount: metrics.mentionCount,
+      sessionCount: metrics.sessionCount,
+      recencyDays: metrics.recencyDays,
+      priority,
+    });
+
+    return priority;
+  } catch (error) {
+    logger.error('Error computing hybrid priority', { error, userId });
+    // Fallback: simple formula without LLM
+    let score = 0.3;
+    if (metrics.mentionCount >= 5 && metrics.sessionCount >= 3) score = 0.8;
+    else if (metrics.mentionCount >= 2 && metrics.sessionCount >= 2) score = 0.6;
+    if (metrics.recencyDays <= 7) score = Math.min(1, score + 0.1);
+    else if (metrics.recencyDays <= 30) score = Math.min(1, score + 0.05);
+    return score;
   }
 }

@@ -12,6 +12,8 @@ import logger from '../utils/logger.js';
 import type { SearchResult } from '../types/index.js';
 
 const TRUST_THRESHOLD = 0.8; // Only use sources with trust >= 0.8
+const AUTO_DISCOVERED_TRUST_THRESHOLD = 0.7; // Lower threshold for auto-discovered domains
+const MIN_TRUSTED_RESULTS_FOR_DISCOVERY = 3; // Trigger domain discovery if fewer trusted results
 
 export interface ResearchSource {
   url: string;
@@ -83,8 +85,8 @@ export async function conductResearch(
       totalResults: allResults.length,
     });
 
-    // Filter by trust threshold
-    const trustedResults = await filterTrustedSources(allResults);
+    // Filter by trust threshold (with domain auto-discovery for unknown sources)
+    const trustedResults = await filterTrustedSources(userId, allResults);
 
     logger.info('Filtered by trust threshold', {
       sessionId,
@@ -137,18 +139,63 @@ export async function conductResearch(
 }
 
 /**
- * Filter search results by trust score
+ * Filter search results by trust score, with domain auto-discovery fallback.
+ * If fewer than MIN_TRUSTED_RESULTS_FOR_DISCOVERY pass the threshold,
+ * unknown domains are evaluated and auto-discovered ones re-checked.
  */
-async function filterTrustedSources(results: SearchResult[]): Promise<SearchResult[]> {
+async function filterTrustedSources(userId: string, results: SearchResult[]): Promise<SearchResult[]> {
   const urls = results.map((r) => r.url);
   const trustScores = await sourceTrust.getBulkTrustScores(urls);
 
+  // First pass: standard trust filter
   const trusted = results.filter((result) => {
     const score = trustScores.get(result.url);
     return score !== null && score !== undefined && score >= TRUST_THRESHOLD;
   });
 
-  return trusted;
+  // If we have enough trusted results, no need for auto-discovery
+  if (trusted.length >= MIN_TRUSTED_RESULTS_FOR_DISCOVERY) {
+    return trusted;
+  }
+
+  // Collect unknown URLs (null trust score)
+  const unknownUrls = results
+    .filter((result) => trustScores.get(result.url) === null)
+    .map((result) => result.url);
+
+  if (unknownUrls.length === 0) {
+    return trusted;
+  }
+
+  // Auto-discover unknown domains
+  try {
+    const { evaluateUnknownDomains } = await import('./domain-discovery.service.js');
+    await evaluateUnknownDomains(userId, unknownUrls);
+
+    // Re-check trust scores after discovery
+    const updatedScores = await sourceTrust.getBulkTrustScores(unknownUrls);
+
+    const newlyTrusted = results.filter((result) => {
+      // Skip already-trusted results
+      if (trusted.some((t) => t.url === result.url)) return false;
+
+      const score = updatedScores.get(result.url);
+      // Use lower threshold for auto-discovered domains
+      return score !== null && score !== undefined && score >= AUTO_DISCOVERED_TRUST_THRESHOLD;
+    });
+
+    logger.info('Domain auto-discovery expanded trusted results', {
+      userId,
+      originalTrusted: trusted.length,
+      newlyTrusted: newlyTrusted.length,
+      unknownEvaluated: unknownUrls.length,
+    });
+
+    return [...trusted, ...newlyTrusted];
+  } catch (error) {
+    logger.warn('Domain auto-discovery failed, using original trusted set', { error });
+    return trusted;
+  }
 }
 
 /**

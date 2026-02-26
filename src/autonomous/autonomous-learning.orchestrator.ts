@@ -15,6 +15,8 @@ const PRIMARY_PRIORITY_THRESHOLD = 0.7;
 const MAX_GAPS_PER_RUN = 5;
 const LOW_PRIORITY_FALLBACK_MIN_PRIORITY = 0.5;
 const LOW_PRIORITY_FALLBACK_MAX_PER_RUN = 2;
+const MAX_RETRY_COUNT = 2; // 3 total attempts (0, 1, 2)
+const RETRY_DELAY_DAYS = 3;
 
 export interface OrchestrationResult {
   userId: string;
@@ -202,29 +204,84 @@ export async function orchestrateAutonomousLearning(
         );
 
         if (!verificationResult.passed) {
-          // Mark as rejected and flag for manual approval if confidence is decent (>= 0.3)
+          const currentRetryCount = gap.retryCount || 0;
           const needsManualApproval = verificationResult.confidence >= 0.3;
-          await sessionAnalyzer.updateGapStatus(
-            gap.id,
-            'rejected',
-            verificationResult.reasoning
-          );
-          
-          if (needsManualApproval) {
-            await query(
-              `UPDATE knowledge_gaps SET manual_approval_required = true WHERE id = $1`,
-              [gap.id]
-            );
-            result.manualApproval++;
-          }
 
-          logger.info('Knowledge gap rejected after verification', {
-            userId,
-            gapId: gap.id,
-            confidence: verificationResult.confidence,
-            manualApprovalSet: needsManualApproval,
-            reason: verificationResult.reasoning,
-          });
+          if (currentRetryCount < MAX_RETRY_COUNT) {
+            // Schedule retry with refined queries
+            try {
+              const { refineSearchQueries } = await import('./query-refinement.service.js');
+              const previousSources = findings.sources.map((s) => ({
+                url: s.url,
+                rejected: (s.trustScore ?? 0) < 0.8,
+                reason: (s.trustScore ?? 0) < 0.8 ? 'Low trust score' : undefined,
+              }));
+
+              const { queries: refinedQueries, bestOriginalQuery } = await refineSearchQueries(
+                userId,
+                gap.gapDescription,
+                gap.suggestedQueries,
+                verificationResult.reasoning,
+                previousSources
+              );
+
+              const retryAfter = new Date(Date.now() + RETRY_DELAY_DAYS * 24 * 60 * 60 * 1000);
+
+              await query(
+                `UPDATE knowledge_gaps
+                 SET status = 'retry_pending',
+                     retry_count = retry_count + 1,
+                     retry_after = $1,
+                     last_retry_at = NOW(),
+                     best_query = $2,
+                     suggested_queries = $3,
+                     failure_reason = $4
+                 WHERE id = $5`,
+                [retryAfter, bestOriginalQuery, refinedQueries, verificationResult.reasoning, gap.id]
+              );
+
+              if (needsManualApproval) {
+                await query(
+                  `UPDATE knowledge_gaps SET manual_approval_required = true WHERE id = $1`,
+                  [gap.id]
+                );
+                result.manualApproval++;
+              }
+
+              logger.info('Knowledge gap scheduled for retry', {
+                userId,
+                gapId: gap.id,
+                retryCount: currentRetryCount + 1,
+                retryAfter,
+                refinedQueries: refinedQueries.length,
+              });
+            } catch (retryError) {
+              logger.error('Failed to schedule retry, marking as rejected', { retryError, gapId: gap.id });
+              await sessionAnalyzer.updateGapStatus(gap.id, 'rejected', verificationResult.reasoning);
+            }
+          } else {
+            // Max retries exhausted - expire the gap
+            await sessionAnalyzer.updateGapStatus(
+              gap.id,
+              'expired',
+              `Max retries (${MAX_RETRY_COUNT}) exhausted. Last failure: ${verificationResult.reasoning}`
+            );
+
+            if (needsManualApproval) {
+              await query(
+                `UPDATE knowledge_gaps SET manual_approval_required = true WHERE id = $1`,
+                [gap.id]
+              );
+              result.manualApproval++;
+            }
+
+            logger.info('Knowledge gap expired after max retries', {
+              userId,
+              gapId: gap.id,
+              retryCount: currentRetryCount,
+              reason: verificationResult.reasoning,
+            });
+          }
           continue;
         }
 
@@ -536,5 +593,83 @@ export async function embedApprovedGap(gapId: number, userId: string): Promise<v
   } catch (error) {
     logger.error('Error embedding approved gap', { gapId, userId, error });
     throw error;
+  }
+}
+
+/**
+ * Process retry-pending gaps that are due.
+ * Promotes them back to 'pending' with fresh queries for the nightly orchestrator to pick up.
+ * Called by the retry processor job (every 6 hours).
+ */
+export async function processRetryGaps(): Promise<{ processed: number; errors: number }> {
+  const result = { processed: 0, errors: 0 };
+
+  try {
+    const users = await getEligibleUsers();
+
+    for (const userId of users) {
+      try {
+        // Find due retry_pending gaps
+        const dueGaps = await query<any>(
+          `SELECT id, gap_description, suggested_queries, best_query, retry_count
+           FROM knowledge_gaps
+           WHERE user_id = $1
+             AND status = 'retry_pending'
+             AND retry_after IS NOT NULL
+             AND retry_after <= NOW()
+           ORDER BY retry_after ASC
+           LIMIT 10`,
+          [userId]
+        );
+
+        if (dueGaps.length === 0) continue;
+
+        const { generateRetryQueries } = await import('./query-refinement.service.js');
+
+        for (const gap of dueGaps) {
+          try {
+            const allPreviousQueries = Array.isArray(gap.suggested_queries) ? gap.suggested_queries : [];
+            const retryQueries = await generateRetryQueries(
+              userId,
+              gap.gap_description,
+              gap.best_query,
+              allPreviousQueries
+            );
+
+            // Promote back to pending with fresh queries
+            await query(
+              `UPDATE knowledge_gaps
+               SET status = 'pending',
+                   suggested_queries = $1,
+                   failure_reason = NULL,
+                   completed_at = NULL
+               WHERE id = $2`,
+              [retryQueries, gap.id]
+            );
+
+            result.processed++;
+
+            logger.info('Retry gap promoted to pending', {
+              userId,
+              gapId: gap.id,
+              retryCount: gap.retry_count,
+              newQueries: retryQueries.length,
+            });
+          } catch (gapError) {
+            logger.error('Error processing retry gap', { gapError, gapId: gap.id, userId });
+            result.errors++;
+          }
+        }
+      } catch (userError) {
+        logger.error('Error processing retry gaps for user', { userError, userId });
+        result.errors++;
+      }
+    }
+
+    logger.info('Retry gap processing complete', result);
+    return result;
+  } catch (error) {
+    logger.error('Fatal error in processRetryGaps', { error });
+    return result;
   }
 }
