@@ -193,6 +193,12 @@ services:
       - SUNO_API_URL=${SUNO_API_URL:-http://10.0.0.10:3000}
       - SUNO_OLLAMA_URL=${SUNO_OLLAMA_URL:-http://10.0.0.30:11434}
       - SUNO_OLLAMA_MODEL=${SUNO_OLLAMA_MODEL:-HoseaDev/qwen2.5-7b-instruct-q4-gguf:latest}
+      # MemoryCore direct DB access (for Memory Lab graph queries)
+      - MEMORYCORE_DB_HOST=memorycore-postgres
+      - MEMORYCORE_DB_PORT=5432
+      - MEMORYCORE_DB_USER=memorycore
+      - MEMORYCORE_DB_PASSWORD=
+      - MEMORYCORE_DB_NAME=memorycore
     extra_hosts:
       - "host.docker.internal:host-gateway"
     secrets:

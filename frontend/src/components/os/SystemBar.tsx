@@ -105,7 +105,7 @@ export function SystemBar({ onSpotlightOpen, onAppOpen, onNewFile }: SystemBarPr
       items: [
         { label: 'Trading', icon: TrendingUp, action: () => { onAppOpen('trading'); setActiveMenu(null); } },
         { label: 'Activity', icon: Activity, action: () => { onAppOpen('activity'); setActiveMenu(null); } },
-        { label: 'Consciousness', icon: Brain, action: () => { onAppOpen('consciousness'); setActiveMenu(null); } },
+        { label: 'Memory Lab', icon: Brain, action: () => { onAppOpen('memory-lab'); setActiveMenu(null); } },
         { label: 'Learning', icon: Brain, action: () => { onAppOpen('autonomous-learning'); setActiveMenu(null); } },
         { label: 'News', icon: Newspaper, action: () => { onAppOpen('news'); setActiveMenu(null); } },
       ],

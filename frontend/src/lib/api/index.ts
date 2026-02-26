@@ -21,3 +21,4 @@ export * from './consciousness';
 export * from './autonomous-learning';
 export * from './abilities';
 export * from './rpg';
+export * from './memory-lab';

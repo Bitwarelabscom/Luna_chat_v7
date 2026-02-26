@@ -45,7 +45,7 @@ export type AppId =
   | 'trading'
   | 'settings'
   | 'activity'
-  | 'consciousness'
+  | 'memory-lab'
   | 'autonomous-learning'
   | 'news'
   | 'irc'
@@ -206,13 +206,14 @@ export const appConfig: Record<AppId, AppConfig> = {
     defaultSize: { width: 400, height: 500 },
     showInDock: true,
   },
-  consciousness: {
-    id: 'consciousness',
-    title: 'Consciousness',
+  'memory-lab': {
+    id: 'memory-lab',
+    title: 'Memory Lab',
     icon: Brain,
     color: 'from-cyan-400 to-purple-500',
-    defaultSize: { width: 900, height: 700 },
+    defaultSize: { width: 1400, height: 860 },
     showInDock: true,
+    keepAlive: true,
   },
   'autonomous-learning': {
     id: 'autonomous-learning',
@@ -303,7 +304,7 @@ export const dockApps: AppId[] = [
   'videos',
   'trading',
   'activity',
-  'consciousness',
+  'memory-lab',
   'autonomous-learning',
   'games',
   'dj-luna',

@@ -30,7 +30,7 @@ const VideosWindow = lazy(() => import('./apps/VideosWindow'));
 const TradingWindow = lazy(() => import('./apps/TradingWindow'));
 const SettingsWindow = lazy(() => import('./apps/SettingsWindow'));
 const ActivityWindow = lazy(() => import('./apps/ActivityWindow'));
-const ConsciousnessWindow = lazy(() => import('./apps/ConsciousnessWindow'));
+const MemoryLabWindow = lazy(() => import('./apps/MemoryLabWindow'));
 const AutonomousLearningWindow = lazy(() => import('./apps/AutonomousLearningWindow'));
 const NewsWindow = lazy(() => import('./apps/NewsWindow'));
 const PlannerWindow = lazy(() => import('./apps/PlannerWindow'));
@@ -81,8 +81,8 @@ function getAppComponent(appId: AppId): React.ReactNode {
       return <SettingsWindow />;
     case 'activity':
       return <ActivityWindow />;
-    case 'consciousness':
-      return <ConsciousnessWindow />;
+    case 'memory-lab':
+      return <MemoryLabWindow />;
     case 'autonomous-learning':
       return <AutonomousLearningWindow />;
     case 'news':

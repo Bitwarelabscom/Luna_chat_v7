@@ -9,6 +9,7 @@ import { healthCheck as postgresHealth, closePool } from './db/postgres.js';
 import { healthCheck as redisHealth, closeRedis } from './db/redis.js';
 import { healthCheck as searxngHealth } from './search/searxng.client.js';
 import { healthCheck as memorycoreHealth } from './memory/memorycore.client.js';
+import { closeMemorycorePool } from './db/memorycore-pool.js';
 import { neo4jService, neo4jClient } from './graph/index.js';
 import authRoutes from './auth/auth.routes.js';
 import chatRoutes from './chat/chat.routes.js';
@@ -35,6 +36,7 @@ import rpgRoutes from './rpg/rpg.routes.js';
 import ceoRoutes from './ceo/ceo.routes.js';
 import sunoRoutes from './chat/suno.routes.js';
 import djLunaRoutes from './abilities/dj-luna.routes.js';
+import memoryLabRoutes from './memory/memory-lab.routes.js';
 import { startJobs, stopJobs } from './jobs/job-runner.js';
 import { setBroadcastFunction } from './activity/activity.service.js';
 import { initializeCritiqueQueue, shutdownCritiqueQueue } from './layered-agent/services/critique-queue.service.js';
@@ -206,6 +208,7 @@ app.use('/api/rpg', rpgRoutes);
 app.use('/api/ceo', ceoRoutes);
 app.use('/api/suno', sunoRoutes);
 app.use('/api/dj', djLunaRoutes);
+app.use('/api/memory-lab', memoryLabRoutes);
 app.use('/api/consolidation', consciousnessRoutes);  // Consolidation logs share routes
 
 // Connect activity service to delivery service's SSE broadcast
@@ -234,6 +237,7 @@ async function shutdown() {
   await shutdownCritiqueQueue();
   await neo4jService.close();
   await closePool();
+  await closeMemorycorePool().catch(() => {});
   await closeRedis();
   process.exit(0);
 }
