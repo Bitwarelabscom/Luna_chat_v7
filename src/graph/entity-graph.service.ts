@@ -60,6 +60,14 @@ const ENGLISH_STOPWORDS = new Set([
   'update', 'remove', 'delete', 'enable', 'define', 'require',
   'include', 'process', 'handle', 'manage', 'contain', 'display',
   'support', 'connect', 'trigger', 'provide', 'resolve',
+  // Common verb conjugations that leak through as entity names
+  'does', 'goes', 'gets', 'makes', 'takes', 'comes', 'gives',
+  'says', 'sees', 'puts', 'runs', 'lets', 'uses', 'asks',
+  'told', 'said', 'done', 'gone', 'taken', 'given', 'known',
+  'shown', 'found', 'left', 'meant', 'kept', 'felt', 'became',
+  'tried', 'asked', 'needed', 'called', 'turned', 'started',
+  'looked', 'wanted', 'thought', 'working', 'looking', 'getting',
+  'making', 'taking', 'trying', 'using', 'saying', 'coming',
 ]);
 
 const SWEDISH_STOPWORDS = new Set([

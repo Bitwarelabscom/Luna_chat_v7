@@ -1091,9 +1091,9 @@ interface ActivatedNode {
 
 // Spreading activation constants
 const DECAY_FACTOR = 0.65;
-const HOP1_SIGNAL_THRESHOLD = 0.15;
-const HOP2_SIGNAL_THRESHOLD = 0.25;
-const HUB_FAN_LIMIT = 30;
+const HOP1_SIGNAL_THRESHOLD = 0.10;
+const HOP2_SIGNAL_THRESHOLD = 0.20;
+const HUB_FAN_LIMIT = 15;
 const HOP2_EXPAND_COUNT = 15;
 const MAX_RESULTS = 25;
 const SESSION_BONUS_THRESHOLD = 3;
@@ -1129,6 +1129,7 @@ async function matchMessageEntities(userId: string, message: string): Promise<Se
   const candidateArray = Array.from(candidates);
   if (candidateArray.length === 0) return [];
 
+  // Phase 1: Exact match on lowercased node labels
   const rows = await mcQuery<Record<string, unknown>>(
     `SELECT id, node_type, node_label, edge_count, centrality_score,
             emotional_intensity, last_activated
@@ -1141,7 +1142,7 @@ async function matchMessageEntities(userId: string, message: string): Promise<Se
     [userId, candidateArray]
   );
 
-  return rows.map(row => ({
+  const mapRow = (row: Record<string, unknown>): SeedEntity => ({
     id: row.id as string,
     nodeType: row.node_type as string,
     nodeLabel: row.node_label as string,
@@ -1150,7 +1151,48 @@ async function matchMessageEntities(userId: string, message: string): Promise<Se
     emotionalIntensity: parseFloat((row.emotional_intensity as string) ?? '0'),
     lastActivated: (row.last_activated as Date)?.toISOString() || '',
     activation: 1.0,
-  }));
+  });
+
+  const seeds = rows.map(mapRow);
+
+  // Phase 2: Substring fallback when exact match yields < 2 seeds.
+  // Catches "Tesla" matching "Nikola Tesla", "Flask" matching "Flask API", etc.
+  // Higher bar: edge_count >= 5 and centrality_score >= 0.01 to avoid false positives.
+  if (seeds.length < 2 && candidateArray.length > 0) {
+    const exactIds = seeds.map(s => s.id);
+    // Only use single-word candidates >= 4 chars for substring to limit noise
+    const substringCandidates = candidateArray
+      .filter(c => !c.includes(' ') && c.length >= 4);
+    if (substringCandidates.length > 0) {
+      // Build OR conditions for LOWER(node_label) LIKE '%candidate%'
+      const likeClauses = substringCandidates.map((_c, i) => `LOWER(node_label) LIKE $${i + 3}`);
+      const likeParams = substringCandidates.map(c => `%${c}%`);
+      const excludeClause = exactIds.length > 0 ? `AND id != ALL($${substringCandidates.length + 3}::uuid[])` : '';
+      const allParams: unknown[] = [userId, 10 - seeds.length, ...likeParams];
+      if (exactIds.length > 0) allParams.push(exactIds);
+
+      const fuzzyRows = await mcQuery<Record<string, unknown>>(
+        `SELECT id, node_type, node_label, edge_count, centrality_score,
+                emotional_intensity, last_activated
+         FROM memory_nodes
+         WHERE user_id = $1 AND is_active = true
+           AND (${likeClauses.join(' OR ')})
+           AND edge_count >= 5
+           AND centrality_score >= 0.01
+           ${excludeClause}
+         ORDER BY centrality_score DESC
+         LIMIT $2`,
+        allParams
+      );
+
+      // Give substring matches slightly lower initial activation
+      for (const row of fuzzyRows) {
+        seeds.push({ ...mapRow(row), activation: 0.8 });
+      }
+    }
+  }
+
+  return seeds;
 }
 
 /**
@@ -1327,7 +1369,9 @@ function formatActivationContext(seeds: SeedEntity[], activated: ActivatedNode[]
   const seedLabels = seeds.map(s => s.nodeLabel).join(', ');
   const lines: string[] = [
     '[Graph Memory]',
-    `Active associations for this conversation:`,
+    'Associations retrieved from memory graph via spreading activation.',
+    'Confidence tiers: Direct = high confidence, Related = medium, Weak = speculative.',
+    'Prioritize Direct connections in reasoning; treat Weak signals as possible but unconfirmed.',
     '',
     `Seeds: ${seedLabels}`,
   ];
@@ -1348,7 +1392,7 @@ function formatActivationContext(seeds: SeedEntity[], activated: ActivatedNode[]
   }
 
   if (direct.length > 0) {
-    lines.push('', 'Direct connections:');
+    lines.push('', 'Direct connections (high confidence):');
     for (const node of direct) {
       const pathStr = node.path.join(' > ');
       const sessionInfo = node.sessionCount >= 2 ? `${node.sessionCount} sessions, ` : '';
@@ -1357,7 +1401,7 @@ function formatActivationContext(seeds: SeedEntity[], activated: ActivatedNode[]
   }
 
   if (related.length > 0) {
-    lines.push('', 'Related context:');
+    lines.push('', 'Related context (medium confidence):');
     for (const node of related) {
       const pathStr = node.path.join(' > ');
       const sessionInfo = node.sessionCount >= 2 ? `${node.sessionCount} sessions, ` : '';
@@ -1367,7 +1411,7 @@ function formatActivationContext(seeds: SeedEntity[], activated: ActivatedNode[]
 
   // Only include weak signals if higher tiers are sparse
   if (weak.length > 0 && (direct.length + related.length) < 5) {
-    lines.push('', 'Weak signals:');
+    lines.push('', 'Weak signals (speculative - do not assert as fact):');
     for (const node of weak) {
       const pathStr = node.path.join(' > ');
       const sessionInfo = node.sessionCount >= 2 ? `${node.sessionCount} sessions, ` : '';
