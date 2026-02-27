@@ -118,9 +118,9 @@ async function processSunoQueue(): Promise<void> {
       }
       item.resolve();
 
-      // Wait 30s between submissions to avoid overloading the Playwright browser
+      // Wait 5s between submissions (submission-only, no polling)
       if (sunoQueue.length > 0) {
-        await delay(30_000);
+        await delay(5_000);
       }
     }
   } finally {
@@ -245,8 +245,9 @@ async function pollSuno(sunoId: string): Promise<PollResult> {
 }
 
 /**
- * Run the full generation pipeline for a single track.
- * Fire-and-forget - errors are caught and logged.
+ * Submit a single track to Suno. Does NOT poll -- polling is handled
+ * separately by pollProcessingGenerations() on a 60s job timer.
+ * This keeps the queue fast (~5s per item instead of ~10min).
  */
 async function processGeneration(
   gen: SunoGeneration,
@@ -303,41 +304,13 @@ async function processGeneration(
       };
     }
 
-    // Submit to Suno
+    // Submit to Suno and store sunoId - no polling
     const sunoId = await submitToSuno(sunoPayload);
+    await pool.query(
+      `UPDATE suno_generations SET suno_id = $1, title = $2, style = $3, bpm = $4, key = $5 WHERE id = $6`,
+      [sunoId, finalTitle, finalStyle, bpm, key, taskId],
+    );
     logger.info('Suno track submitted', { taskId, sunoId });
-
-    // Poll loop: wait 7min, then up to 2 retries at 90s intervals
-    const pollDelays = [420_000, 90_000, 90_000]; // 7min, 90s, 90s
-    let trackResult: PollResult = { status: 'unknown', audioUrl: '', duration: 0 };
-
-    for (let i = 0; i < pollDelays.length; i++) {
-      await delay(pollDelays[i]);
-      trackResult = await pollSuno(sunoId);
-      logger.info('Suno poll result', { taskId, sunoId, attempt: i + 1, status: trackResult.status });
-
-      if (trackResult.status === 'complete') break;
-    }
-
-    if (trackResult.status === 'complete') {
-      await handleCallback({
-        taskId,
-        userId,
-        title: finalTitle,
-        style: finalStyle,
-        bpm,
-        key,
-        audioUrl: trackResult.audioUrl,
-        duration: trackResult.duration,
-        sunoId,
-      });
-    } else {
-      await handleCallback({
-        taskId,
-        status: 'failed',
-        error: `Track not complete after polling (last status: ${trackResult.status})`,
-      });
-    }
   } catch (err) {
     logger.error('Suno processGeneration failed', { taskId, error: (err as Error).message });
     await handleCallback({
@@ -347,6 +320,46 @@ async function processGeneration(
     }).catch((cbErr) => {
       logger.error('Failed to record generation failure', { taskId, error: (cbErr as Error).message });
     });
+  }
+}
+
+/**
+ * Poll all in-flight Suno generations and handle completed/failed ones.
+ * Called by the job runner every 60 seconds.
+ */
+export async function pollProcessingGenerations(): Promise<void> {
+  const processing = await pool.query<GenerationRow>(
+    `SELECT * FROM suno_generations
+     WHERE status = 'processing' AND suno_id IS NOT NULL
+       AND created_at > NOW() - INTERVAL '30 minutes'`,
+  );
+
+  if (processing.rows.length === 0) return;
+
+  logger.info('Polling processing Suno generations', { count: processing.rows.length });
+
+  for (const row of processing.rows) {
+    const gen = rowToGeneration(row);
+    if (!gen.sunoId) continue;
+    try {
+      const result = await pollSuno(gen.sunoId);
+      logger.info('Suno poll result', { genId: gen.id, sunoId: gen.sunoId, status: result.status });
+
+      if (result.status === 'complete') {
+        await handleCallback({
+          taskId: gen.id,
+          userId: gen.userId ?? undefined,
+          title: gen.title,
+          style: gen.style,
+          audioUrl: result.audioUrl,
+          duration: result.duration,
+          sunoId: gen.sunoId,
+        });
+      }
+      // If still processing, leave it - next poll cycle or failStaleGenerations handles timeout
+    } catch (err) {
+      logger.warn('Poll failed for generation', { genId: gen.id, error: (err as Error).message });
+    }
   }
 }
 
@@ -534,6 +547,24 @@ export async function failStaleGenerations(): Promise<number> {
        AND created_at < NOW() - INTERVAL '30 minutes'
      RETURNING id`,
   );
+
+  // Notify album pipeline for each failed generation so linked album_songs
+  // transition out of suno_pending
+  if ((result.rowCount ?? 0) > 0) {
+    try {
+      const { handleSunoComplete } = await import('../ceo/album-pipeline.service.js');
+      for (const row of result.rows) {
+        try {
+          await handleSunoComplete(row.id);
+        } catch (err) {
+          logger.warn('Failed to notify album pipeline of stale generation', { genId: row.id, error: (err as Error).message });
+        }
+      }
+    } catch {
+      // album-pipeline import failed - non-fatal
+    }
+  }
+
   return result.rowCount ?? 0;
 }
 

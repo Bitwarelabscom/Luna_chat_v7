@@ -1118,16 +1118,16 @@ export const CONFIGURABLE_TASKS: TaskModelConfig[] = [
   {
     taskType: 'ceo_luna',
     displayName: 'CEO Luna',
-    description: 'CEO Luna business operations and strategy - always use pro or higher model',
+    description: 'CEO Luna business operations and strategy',
     defaultProvider: 'openai',
-    defaultModel: 'gpt-5.2-chat-latest',
+    defaultModel: 'gpt-5-mini',
   },
   {
     taskType: 'dj_luna',
     displayName: 'DJ Luna',
-    description: 'DJ Luna music production and lyrics - always use pro or higher model',
+    description: 'DJ Luna music production and lyrics',
     defaultProvider: 'openai',
-    defaultModel: 'gpt-5.2-chat-latest',
+    defaultModel: 'gpt-5-mini',
   },
 ];
 

@@ -339,7 +339,30 @@ async function resolveModel(
     }
     // Fall through to user config
   }
-  return getUserModelConfig(userId, taskType);
+  // Try task-specific config first, then fall back to main_chat (what the user actually picked)
+  const config = await getUserModelConfig(userId, taskType);
+  // getUserModelConfig returns hardcoded defaults when no user config exists.
+  // Check if user actually configured this task type; if not, use their main_chat model.
+  if (taskType !== 'main_chat') {
+    const taskResult = await pool.query(
+      `SELECT 1 FROM user_model_config WHERE user_id = $1 AND task_type = $2`,
+      [userId, taskType],
+    );
+    if (taskResult.rows.length === 0) {
+      return getUserModelConfig(userId, 'main_chat');
+    }
+  }
+  return config;
+}
+
+/**
+ * Reasoning models (gpt-5, o1, o3, o4) spend most of max_completion_tokens on
+ * internal reasoning tokens, leaving nothing for visible output if the budget
+ * is too low.  This helper scales the requested token budget up for those models.
+ */
+function adjustMaxTokens(model: string, baseTokens: number): number {
+  const isReasoningModel = /gpt-5|^o[134]-/.test(model);
+  return isReasoningModel ? Math.max(baseTokens, 16000) : baseTokens;
 }
 
 export async function planAlbums(productionId: string): Promise<void> {
@@ -380,7 +403,7 @@ export async function planAlbums(productionId: string): Promise<void> {
     try {
       const result = await createCompletion(provider, model, messages, {
         temperature: 0.8,
-        maxTokens: 4000,
+        maxTokens: adjustMaxTokens(model, 4000),
         loggingContext: {
           userId,
           source: 'album-pipeline',
@@ -430,7 +453,7 @@ Return ONLY valid JSON in the same format as before.`;
               { role: 'user', content: correctionPrompt },
             ], {
               temperature: 0.8,
-              maxTokens: 4000,
+              maxTokens: adjustMaxTokens(model, 4000),
               loggingContext: { userId, source: 'album-pipeline', nodeName: 'plan-album-retry' },
             });
             const retryCleaned = retryResult.content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
@@ -636,7 +659,7 @@ IMPORTANT:
   try {
     const result = await createCompletion(provider, model, messages, {
       temperature: 0.9,
-      maxTokens: 3000,
+      maxTokens: adjustMaxTokens(model, 3000),
       loggingContext: {
         userId: prod.user_id,
         source: 'album-pipeline',
@@ -664,7 +687,7 @@ IMPORTANT:
         try {
           const fixResult = await createCompletion(provider, model, fixMessages, {
             temperature: 0.7,
-            maxTokens: 3000,
+            maxTokens: adjustMaxTokens(model, 3000),
             loggingContext: { userId: prod.user_id, source: 'album-pipeline', nodeName: 'fix-forbidden-lyrics' },
           });
           const fixedLyrics = extractLyrics(fixResult.content);
@@ -811,7 +834,7 @@ IMPORTANT:
   try {
     const result = await createCompletion(provider, model, messages, {
       temperature: 0.7,
-      maxTokens: 3000,
+      maxTokens: adjustMaxTokens(model, 3000),
       loggingContext: {
         userId: prod.user_id,
         source: 'album-pipeline',
@@ -1128,6 +1151,36 @@ async function runFullPipelineInner(productionId: string): Promise<void> {
 // ============================================================
 
 export async function runPipelineStep(): Promise<void> {
+  // Recover orphaned suno_pending songs in completed productions
+  // (their suno_generation already failed but handleSunoComplete was never called)
+  try {
+    const orphanedPending = await pool.query<{ id: string; suno_generation_id: string; production_id: string }>(
+      `SELECT s.id, s.suno_generation_id, s.production_id
+       FROM album_songs s
+       JOIN suno_generations g ON s.suno_generation_id = g.id
+       JOIN album_productions p ON s.production_id = p.id
+       WHERE s.status = 'suno_pending'
+         AND g.status = 'failed'
+         AND p.status = 'completed'
+       LIMIT 20`,
+    );
+
+    if (orphanedPending.rows.length > 0) {
+      logger.info('Recovering orphaned suno_pending songs in completed productions', {
+        count: orphanedPending.rows.length,
+      });
+      for (const row of orphanedPending.rows) {
+        try {
+          await handleSunoComplete(row.suno_generation_id);
+        } catch (err) {
+          logger.warn('Failed to recover orphaned song', { songId: row.id, error: (err as Error).message });
+        }
+      }
+    }
+  } catch (err) {
+    logger.error('Orphaned suno_pending recovery failed', { error: (err as Error).message });
+  }
+
   // Find active productions that might have stuck songs
   const activeProds = await pool.query<{ id: string }>(
     `SELECT id FROM album_productions WHERE status = 'in_progress' ORDER BY created_at LIMIT 5`,
@@ -1231,6 +1284,26 @@ async function retryFailedSongsGlobal(): Promise<void> {
   if (failedSongs.rows.length === 0) return;
 
   logger.info('Retrying failed songs', { count: failedSongs.rows.length });
+
+  // Reopen completed productions so recoverStuckSongs handles them after retry
+  const productionIds = [...new Set(failedSongs.rows.map(s => s.production_id))];
+  for (const prodId of productionIds) {
+    await pool.query(
+      `UPDATE album_productions SET status = 'in_progress', completed_at = NULL
+       WHERE id = $1 AND status = 'completed'`,
+      [prodId],
+    );
+  }
+
+  // Also reopen affected albums
+  const albumIds = [...new Set(failedSongs.rows.map(s => s.album_id))];
+  for (const albumId of albumIds) {
+    await pool.query(
+      `UPDATE album_items SET status = 'in_progress'
+       WHERE id = $1 AND status = 'completed'`,
+      [albumId],
+    );
+  }
 
   for (const song of failedSongs.rows) {
     try {
