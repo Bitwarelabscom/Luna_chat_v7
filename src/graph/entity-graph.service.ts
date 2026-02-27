@@ -26,6 +26,15 @@ const ENGLISH_STOPWORDS = new Set([
   'right', 'about', 'could', 'would', 'should', 'there', 'their', 'these',
   'those', 'which', 'while', 'after', 'again', 'being', 'other', 'where',
   'still', 'really', 'maybe', 'actually', 'basically', 'literally',
+  // Common verb artifacts that leak through as entities
+  'pick', 'call', 'play', 'hold', 'move', 'live', 'love', 'hate',
+  'help', 'feel', 'talk', 'read', 'hear', 'send', 'open', 'close',
+  'pull', 'push', 'drop', 'fill', 'hang', 'join', 'mark', 'miss',
+  'pass', 'plan', 'post', 'rest', 'roll', 'save', 'sign', 'sing',
+  'sit', 'step', 'test', 'type', 'view', 'vote', 'walk', 'wash',
+  'note', 'line', 'link', 'list', 'page', 'point', 'check',
+  'start', 'stop', 'watch', 'wait', 'leave', 'bring', 'build',
+  'write', 'speak', 'learn', 'share', 'place', 'change', 'follow',
 ]);
 
 const SWEDISH_STOPWORDS = new Set([

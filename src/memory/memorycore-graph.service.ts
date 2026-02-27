@@ -1,4 +1,5 @@
 import { mcQuery, mcQueryOne } from '../db/memorycore-pool.js';
+import { isNoiseToken } from '../graph/entity-graph.service.js';
 import logger from '../utils/logger.js';
 
 // Types matching MemoryCore's PostgreSQL schema
@@ -344,31 +345,68 @@ export async function deleteNode(nodeId: string, userId: string): Promise<boolea
 }
 
 /**
- * Create a new edge between nodes
+ * Create a new edge between nodes.
+ * On conflict: increments activation_count, tracks distinct sessions,
+ * keeps the higher strength value, and updates last_activated.
  */
 export async function createEdge(
   userId: string,
-  data: { sourceId: string; targetId: string; type: string; strength?: number }
+  data: { sourceId: string; targetId: string; type: string; strength?: number; sessionId?: string }
 ): Promise<GraphEdge | null> {
   try {
+    const strength = data.strength ?? 0.5;
+    const sessionId = data.sessionId || null;
+
     const sql = `
-      INSERT INTO memory_edges (user_id, source_node_id, target_node_id, edge_type, strength, weight)
-      VALUES ($1, $2, $3, $4, $5, $5)
-      ON CONFLICT (user_id, source_node_id, target_node_id, edge_type) DO UPDATE
-        SET strength = EXCLUDED.strength, last_activated = NOW()
+      INSERT INTO memory_edges (user_id, source_node_id, target_node_id, edge_type, strength, weight, metadata)
+      VALUES ($1, $2, $3, $4, $5, $5, CASE WHEN $6::text IS NOT NULL THEN jsonb_build_object('sessions', jsonb_build_object($6::text, NOW())) ELSE '{}'::jsonb END)
+      ON CONFLICT (user_id, source_node_id, target_node_id, edge_type) DO UPDATE SET
+        activation_count = memory_edges.activation_count + 1,
+        strength = GREATEST(memory_edges.strength, EXCLUDED.strength),
+        distinct_session_count = CASE
+          WHEN $6::text IS NOT NULL AND NOT (
+            COALESCE(memory_edges.metadata->'sessions', '{}'::jsonb) ? $6::text
+          ) THEN memory_edges.distinct_session_count + 1
+          ELSE memory_edges.distinct_session_count
+        END,
+        metadata = CASE
+          WHEN $6::text IS NOT NULL THEN
+            jsonb_set(
+              COALESCE(memory_edges.metadata, '{}'::jsonb),
+              '{sessions}',
+              COALESCE(memory_edges.metadata->'sessions', '{}'::jsonb)
+                || jsonb_build_object($6::text, NOW())
+            )
+          ELSE COALESCE(memory_edges.metadata, '{}'::jsonb)
+        END,
+        last_activated = NOW()
       RETURNING id, source_node_id, target_node_id, edge_type,
                 weight, strength, recency, trust, is_active,
                 activation_count, distinct_session_count
     `;
 
     const row = await mcQueryOne<Record<string, unknown>>(sql, [
-      userId, data.sourceId, data.targetId, data.type, data.strength ?? 0.5,
+      userId, data.sourceId, data.targetId, data.type, strength, sessionId,
     ]);
     return row ? mapEdgeRow(row) : null;
   } catch (error) {
     logger.error('Failed to create edge', { error: (error as Error).message });
     return null;
   }
+}
+
+/**
+ * Reinforce an existing edge by calling createEdge with just IDs + type + sessionId.
+ * Convenience wrapper for when you only want to bump activation_count.
+ */
+export async function reinforceEdge(
+  userId: string,
+  sourceId: string,
+  targetId: string,
+  type: string,
+  sessionId?: string
+): Promise<GraphEdge | null> {
+  return createEdge(userId, { sourceId, targetId, type, sessionId });
 }
 
 /**
@@ -545,6 +583,475 @@ export async function getGraphOverview(userId: string): Promise<GraphOverview> {
   }
 }
 
+/**
+ * Purge noise nodes from MemoryCore graph.
+ * Identifies active nodes whose labels match stopwords/noise patterns,
+ * then soft-deletes them and all connected edges.
+ */
+export async function purgeNoiseNodes(
+  userId: string
+): Promise<{ deactivatedNodes: number; deactivatedEdges: number }> {
+  try {
+    // Node types that are exempt from noise purging - these represent
+    // real-world entities where stopwords can be legitimate names
+    const NOISE_EXEMPT_TYPES = new Set([
+      'song', 'album', 'artist', 'person', 'place', 'brand', 'product',
+      'organization', 'project', 'game', 'movie', 'show', 'book',
+    ]);
+
+    // Get all active node labels for this user
+    const nodes = await mcQuery<{ id: string; node_label: string; node_type: string }>(
+      `SELECT id, node_label, node_type FROM memory_nodes WHERE user_id = $1 AND is_active = true`,
+      [userId]
+    );
+
+    const noiseNodeIds: string[] = [];
+    for (const node of nodes) {
+      if (NOISE_EXEMPT_TYPES.has(node.node_type)) continue;
+      if (isNoiseToken(node.node_label)) {
+        noiseNodeIds.push(node.id);
+      }
+    }
+
+    if (noiseNodeIds.length === 0) {
+      return { deactivatedNodes: 0, deactivatedEdges: 0 };
+    }
+
+    // Soft-delete edges connected to noise nodes
+    const edgeResult = await mcQueryOne<{ count: string }>(
+      `WITH deactivated AS (
+        UPDATE memory_edges SET is_active = false, last_activated = NOW()
+        WHERE user_id = $1 AND is_active = true
+          AND (source_node_id = ANY($2) OR target_node_id = ANY($2))
+        RETURNING id
+      )
+      SELECT COUNT(*) as count FROM deactivated`,
+      [userId, noiseNodeIds]
+    );
+
+    // Soft-delete noise nodes
+    const nodeResult = await mcQueryOne<{ count: string }>(
+      `WITH deactivated AS (
+        UPDATE memory_nodes SET is_active = false, last_activated = NOW()
+        WHERE user_id = $1 AND id = ANY($2) AND is_active = true
+        RETURNING id
+      )
+      SELECT COUNT(*) as count FROM deactivated`,
+      [userId, noiseNodeIds]
+    );
+
+    const deactivatedNodes = parseInt(nodeResult?.count || '0');
+    const deactivatedEdges = parseInt(edgeResult?.count || '0');
+
+    logger.info('Purged noise nodes from MemoryCore graph', {
+      userId, deactivatedNodes, deactivatedEdges,
+    });
+
+    return { deactivatedNodes, deactivatedEdges };
+  } catch (error) {
+    logger.error('Failed to purge noise nodes', { error: (error as Error).message, userId });
+    return { deactivatedNodes: 0, deactivatedEdges: 0 };
+  }
+}
+
+/**
+ * Daily NeuralSleep graph consolidation.
+ * Runs for all users with active graph data:
+ * 1. EMA edge weight evolution based on activation_count + time decay
+ * 2. Deactivate weak edges (weight < 0.1)
+ * 3. Recalculate edge_count on nodes
+ * 4. Recalculate centrality_score (weighted degree)
+ * 5. Update recency on edges
+ * 6. Promote provisional/unverified nodes to permanent (cross-session reinforcement)
+ */
+export async function runDailyGraphConsolidation(): Promise<void> {
+  try {
+    // Get all users with active graph data
+    const users = await mcQuery<{ user_id: string }>(
+      `SELECT DISTINCT user_id FROM memory_nodes WHERE is_active = true`
+    );
+
+    logger.info('NeuralSleep daily consolidation starting', { userCount: users.length });
+
+    for (const { user_id: userId } of users) {
+      try {
+        await consolidateUserDaily(userId);
+      } catch (error) {
+        logger.error('Daily consolidation failed for user', {
+          error: (error as Error).message, userId,
+        });
+      }
+    }
+
+    logger.info('NeuralSleep daily consolidation complete', { userCount: users.length });
+  } catch (error) {
+    logger.error('NeuralSleep daily consolidation failed', { error: (error as Error).message });
+  }
+}
+
+async function consolidateUserDaily(userId: string): Promise<void> {
+  // 1. EMA edge weight evolution
+  // tau values per edge_type (in seconds):
+  //   co_occurrence: 14 days, semantic: 90 days, temporal: 30 days, causal: 60 days
+  // alpha = 1 - exp(-deltaT / tau)
+  // targetWeight = min(1.0, defaultWeight + 0.05 * ln(activation_count + 1))
+  // newWeight = weight * (1 - alpha) + targetWeight * alpha
+  await mcQuery(
+    `UPDATE memory_edges SET
+      weight = LEAST(1.0, GREATEST(0.0,
+        weight * (1.0 - (1.0 - exp(
+          -EXTRACT(EPOCH FROM (NOW() - COALESCE(last_activated, created_at)))
+          / CASE edge_type
+              WHEN 'co_occurrence' THEN 1209600   -- 14 days
+              WHEN 'semantic' THEN 7776000         -- 90 days
+              WHEN 'temporal' THEN 2592000         -- 30 days
+              WHEN 'causal' THEN 5184000           -- 60 days
+              ELSE 2592000                         -- 30 days default
+            END
+        )))
+        + LEAST(1.0, 0.5 + 0.05 * LN(activation_count + 1))
+          * (1.0 - exp(
+            -EXTRACT(EPOCH FROM (NOW() - COALESCE(last_activated, created_at)))
+            / CASE edge_type
+                WHEN 'co_occurrence' THEN 1209600
+                WHEN 'semantic' THEN 7776000
+                WHEN 'temporal' THEN 2592000
+                WHEN 'causal' THEN 5184000
+                ELSE 2592000
+              END
+          ))
+      ))
+    WHERE user_id = $1 AND is_active = true`,
+    [userId]
+  );
+
+  // 2. Deactivate weak edges (but never same_as edges)
+  const weakResult = await mcQueryOne<{ count: string }>(
+    `WITH deactivated AS (
+      UPDATE memory_edges SET is_active = false
+      WHERE user_id = $1 AND is_active = true AND weight < 0.1 AND edge_type != 'same_as'
+      RETURNING id
+    )
+    SELECT COUNT(*) as count FROM deactivated`,
+    [userId]
+  );
+
+  // 3. Recalculate edge_count on all active nodes
+  await mcQuery(
+    `UPDATE memory_nodes n SET
+      edge_count = (
+        SELECT COUNT(*) FROM memory_edges e
+        WHERE e.is_active = true AND e.user_id = $1
+          AND (e.source_node_id = n.id OR e.target_node_id = n.id)
+      )
+    WHERE n.user_id = $1 AND n.is_active = true`,
+    [userId]
+  );
+
+  // 4. Recalculate centrality_score (weighted degree normalized)
+  // centrality = sum(weight of connected edges) / max_possible
+  // We use a simple weighted degree / max(weighted_degree) normalization
+  await mcQuery(
+    `WITH weighted_degrees AS (
+      SELECT n.id,
+        COALESCE(SUM(e.weight), 0) as wd
+      FROM memory_nodes n
+      LEFT JOIN memory_edges e ON e.is_active = true AND e.user_id = $1
+        AND (e.source_node_id = n.id OR e.target_node_id = n.id)
+      WHERE n.user_id = $1 AND n.is_active = true
+      GROUP BY n.id
+    ),
+    max_wd AS (
+      SELECT GREATEST(MAX(wd), 1.0) as max_val FROM weighted_degrees
+    )
+    UPDATE memory_nodes n SET
+      centrality_score = wd.wd / mx.max_val
+    FROM weighted_degrees wd, max_wd mx
+    WHERE n.id = wd.id AND n.user_id = $1`,
+    [userId]
+  );
+
+  // 5. Update recency on edges: decays from 1.0 toward 0 over days
+  await mcQuery(
+    `UPDATE memory_edges SET
+      recency = 1.0 / (1.0 + EXTRACT(EPOCH FROM (NOW() - COALESCE(last_activated, created_at))) / 86400.0)
+    WHERE user_id = $1 AND is_active = true`,
+    [userId]
+  );
+
+  // 6. Promote provisional/unverified nodes to permanent
+  // Criteria: connected edges span >= 3 distinct sessions, node has >= 3 edges,
+  // and has been activated within the last 14 days
+  const promotedResult = await mcQueryOne<{ count: string }>(
+    `WITH promotion_candidates AS (
+      SELECT n.id
+      FROM memory_nodes n
+      WHERE n.user_id = $1 AND n.is_active = true
+        AND n.identity_status IN ('provisional', 'unverified')
+        AND n.edge_count >= 3
+        AND n.last_activated > NOW() - INTERVAL '14 days'
+        AND (
+          SELECT COALESCE(MAX(e.distinct_session_count), 0)
+          FROM memory_edges e
+          WHERE e.is_active = true AND e.user_id = $1
+            AND (e.source_node_id = n.id OR e.target_node_id = n.id)
+        ) >= 3
+    ),
+    promoted AS (
+      UPDATE memory_nodes SET identity_status = 'permanent'
+      WHERE id IN (SELECT id FROM promotion_candidates) AND user_id = $1
+      RETURNING id
+    )
+    SELECT COUNT(*) as count FROM promoted`,
+    [userId]
+  );
+
+  const weakCount = parseInt(weakResult?.count || '0');
+  const promotedCount = parseInt(promotedResult?.count || '0');
+
+  if (weakCount > 0 || promotedCount > 0) {
+    logger.info('Daily consolidation results', {
+      userId, weakEdgesDeactivated: weakCount, nodesPromoted: promotedCount,
+    });
+  }
+}
+
+/**
+ * Weekly NeuralSleep graph consolidation.
+ * Runs Sunday 3AM. Per user:
+ * 1. Prune stale low-value nodes
+ * 2. Purge noise nodes (stopword entities)
+ * 3. Anti-centrality pressure on hub nodes
+ * 4. Merge candidate analysis (log-only)
+ */
+export async function runWeeklyGraphConsolidation(): Promise<void> {
+  try {
+    const users = await mcQuery<{ user_id: string }>(
+      `SELECT DISTINCT user_id FROM memory_nodes WHERE is_active = true`
+    );
+
+    logger.info('NeuralSleep weekly consolidation starting', { userCount: users.length });
+
+    for (const { user_id: userId } of users) {
+      try {
+        await consolidateUserWeekly(userId);
+      } catch (error) {
+        logger.error('Weekly consolidation failed for user', {
+          error: (error as Error).message, userId,
+        });
+      }
+    }
+
+    logger.info('NeuralSleep weekly consolidation complete', { userCount: users.length });
+  } catch (error) {
+    logger.error('NeuralSleep weekly consolidation failed', { error: (error as Error).message });
+  }
+}
+
+async function consolidateUserWeekly(userId: string): Promise<void> {
+  // 1. Prune stale low-value nodes:
+  //    edge_count < 2, emotional_intensity < 0.3, last_activated > 30 days ago
+  const pruneResult = await mcQueryOne<{ count: string }>(
+    `WITH pruned AS (
+      UPDATE memory_nodes SET is_active = false, last_activated = NOW()
+      WHERE user_id = $1 AND is_active = true
+        AND edge_count < 2
+        AND emotional_intensity < 0.3
+        AND last_activated < NOW() - INTERVAL '30 days'
+      RETURNING id
+    )
+    SELECT COUNT(*) as count FROM pruned`,
+    [userId]
+  );
+
+  // Deactivate edges connected to pruned nodes
+  await mcQuery(
+    `UPDATE memory_edges SET is_active = false
+    WHERE user_id = $1 AND is_active = true
+      AND (source_node_id IN (SELECT id FROM memory_nodes WHERE user_id = $1 AND is_active = false)
+           OR target_node_id IN (SELECT id FROM memory_nodes WHERE user_id = $1 AND is_active = false))`,
+    [userId]
+  );
+
+  // 2. Purge noise nodes
+  const noiseResult = await purgeNoiseNodes(userId);
+
+  // 3. Anti-centrality pressure on hub nodes (graduated scale)
+  // Exempt person/place nodes - they are naturally high-connectivity
+  // 50-99 edges: light pressure (penalty capped at 0.1)
+  // 100-199 edges: moderate pressure (penalty capped at 0.25)
+  // 200+ edges: heavy pressure (penalty capped at 0.4)
+  await mcQuery(
+    `UPDATE memory_nodes SET
+      centrality_score = centrality_score * (1.0 - CASE
+        WHEN edge_count >= 200 THEN LEAST(0.40, LN(edge_count::float / 50.0) / 8.0)
+        WHEN edge_count >= 100 THEN LEAST(0.25, LN(edge_count::float / 50.0) / 10.0)
+        WHEN edge_count >= 50  THEN LEAST(0.10, LN(edge_count::float / 50.0) / 15.0)
+        ELSE 0
+      END)
+    WHERE user_id = $1 AND is_active = true
+      AND edge_count >= 50
+      AND node_type NOT IN ('person', 'place', 'artist')`,
+    [userId]
+  );
+
+  // 4. Merge candidate analysis (log-only)
+  // Find node pairs with same type, co-occurrence edge, similar labels
+  // Require both labels >= 4 chars to avoid "Pi"/"Piano" false positives
+  const mergeCandidates = await mcQuery<{
+    node1_id: string; node1_label: string;
+    node2_id: string; node2_label: string;
+    edge_weight: string;
+  }>(
+    `SELECT
+      n1.id as node1_id, n1.node_label as node1_label,
+      n2.id as node2_id, n2.node_label as node2_label,
+      e.weight as edge_weight
+    FROM memory_edges e
+    JOIN memory_nodes n1 ON n1.id = e.source_node_id AND n1.is_active = true
+    JOIN memory_nodes n2 ON n2.id = e.target_node_id AND n2.is_active = true
+    WHERE e.user_id = $1 AND e.is_active = true
+      AND n1.node_type = n2.node_type
+      AND e.edge_type = 'co_occurrence'
+      AND e.activation_count >= 3
+      AND LENGTH(n1.node_label) >= 4
+      AND LENGTH(n2.node_label) >= 4
+      AND (
+        n1.node_label ILIKE '%' || n2.node_label || '%'
+        OR n2.node_label ILIKE '%' || n1.node_label || '%'
+      )
+    ORDER BY e.activation_count DESC
+    LIMIT 20`,
+    [userId]
+  );
+
+  const prunedCount = parseInt(pruneResult?.count || '0');
+  if (prunedCount > 0 || noiseResult.deactivatedNodes > 0 || mergeCandidates.length > 0) {
+    logger.info('Weekly consolidation results', {
+      userId,
+      prunedNodes: prunedCount,
+      noiseNodes: noiseResult.deactivatedNodes,
+      noiseEdges: noiseResult.deactivatedEdges,
+      mergeCandidates: mergeCandidates.length,
+      candidates: mergeCandidates.map(c => `${c.node1_label} <-> ${c.node2_label}`),
+    });
+  }
+}
+
+/**
+ * Analyze merge candidates for a user.
+ * Finds pairs of nodes that might represent the same concept:
+ * - Same node_type
+ * - Label substring match or embedding similarity
+ * - Co-occurrence edge between them
+ */
+export async function analyzeMergeCandidates(
+  userId: string,
+  options: { minActivation?: number; limit?: number } = {}
+): Promise<Array<{
+  node1: GraphNode;
+  node2: GraphNode;
+  similarity: number;
+  coOccurrenceCount: number;
+  reason: string;
+}>> {
+  const { minActivation = 2, limit = 50 } = options;
+
+  try {
+    // Find candidates via label substring matching
+    const labelCandidates = await mcQuery<{
+      n1_id: string; n1_type: string; n1_label: string; n1_origin: string;
+      n1_origin_confidence: string; n1_identity_status: string;
+      n1_activation_strength: string; n1_edge_count: string;
+      n1_centrality_score: string; n1_emotional_intensity: string;
+      n1_is_active: boolean; n1_created_at: Date; n1_last_activated: Date;
+      n1_metadata: Record<string, unknown> | null;
+      n2_id: string; n2_type: string; n2_label: string; n2_origin: string;
+      n2_origin_confidence: string; n2_identity_status: string;
+      n2_activation_strength: string; n2_edge_count: string;
+      n2_centrality_score: string; n2_emotional_intensity: string;
+      n2_is_active: boolean; n2_created_at: Date; n2_last_activated: Date;
+      n2_metadata: Record<string, unknown> | null;
+      edge_activation_count: string;
+    }>(
+      `SELECT
+        n1.id as n1_id, n1.node_type as n1_type, n1.node_label as n1_label,
+        n1.origin as n1_origin, n1.origin_confidence as n1_origin_confidence,
+        n1.identity_status as n1_identity_status, n1.activation_strength as n1_activation_strength,
+        n1.edge_count as n1_edge_count, n1.centrality_score as n1_centrality_score,
+        n1.emotional_intensity as n1_emotional_intensity, n1.is_active as n1_is_active,
+        n1.created_at as n1_created_at, n1.last_activated as n1_last_activated,
+        n1.metadata as n1_metadata,
+        n2.id as n2_id, n2.node_type as n2_type, n2.node_label as n2_label,
+        n2.origin as n2_origin, n2.origin_confidence as n2_origin_confidence,
+        n2.identity_status as n2_identity_status, n2.activation_strength as n2_activation_strength,
+        n2.edge_count as n2_edge_count, n2.centrality_score as n2_centrality_score,
+        n2.emotional_intensity as n2_emotional_intensity, n2.is_active as n2_is_active,
+        n2.created_at as n2_created_at, n2.last_activated as n2_last_activated,
+        n2.metadata as n2_metadata,
+        COALESCE(e.activation_count, 0) as edge_activation_count
+      FROM memory_nodes n1
+      JOIN memory_nodes n2 ON n1.node_type = n2.node_type
+        AND n1.id < n2.id
+        AND n2.user_id = $1 AND n2.is_active = true
+      LEFT JOIN memory_edges e ON e.user_id = $1 AND e.is_active = true
+        AND ((e.source_node_id = n1.id AND e.target_node_id = n2.id)
+          OR (e.source_node_id = n2.id AND e.target_node_id = n1.id))
+      WHERE n1.user_id = $1 AND n1.is_active = true
+        AND LENGTH(n1.node_label) >= 4
+        AND LENGTH(n2.node_label) >= 4
+        AND (
+          n1.node_label ILIKE '%' || n2.node_label || '%'
+          OR n2.node_label ILIKE '%' || n1.node_label || '%'
+        )
+        AND COALESCE(e.activation_count, 0) >= $2
+      ORDER BY COALESCE(e.activation_count, 0) DESC
+      LIMIT $3`,
+      [userId, minActivation, limit]
+    );
+
+    return labelCandidates.map(row => {
+      // Calculate a simple similarity score based on label overlap
+      const l1 = row.n1_label.toLowerCase();
+      const l2 = row.n2_label.toLowerCase();
+      const shorter = l1.length <= l2.length ? l1 : l2;
+      const longer = l1.length > l2.length ? l1 : l2;
+      const similarity = shorter.length / longer.length;
+
+      const reason = l1.includes(l2) || l2.includes(l1)
+        ? 'Label substring match'
+        : 'Label overlap';
+
+      return {
+        node1: mapNodeRow({
+          id: row.n1_id, node_type: row.n1_type, node_label: row.n1_label,
+          origin: row.n1_origin, origin_confidence: row.n1_origin_confidence,
+          identity_status: row.n1_identity_status, activation_strength: row.n1_activation_strength,
+          edge_count: row.n1_edge_count, centrality_score: row.n1_centrality_score,
+          emotional_intensity: row.n1_emotional_intensity, is_active: row.n1_is_active,
+          created_at: row.n1_created_at, last_activated: row.n1_last_activated,
+          metadata: row.n1_metadata,
+        }),
+        node2: mapNodeRow({
+          id: row.n2_id, node_type: row.n2_type, node_label: row.n2_label,
+          origin: row.n2_origin, origin_confidence: row.n2_origin_confidence,
+          identity_status: row.n2_identity_status, activation_strength: row.n2_activation_strength,
+          edge_count: row.n2_edge_count, centrality_score: row.n2_centrality_score,
+          emotional_intensity: row.n2_emotional_intensity, is_active: row.n2_is_active,
+          created_at: row.n2_created_at, last_activated: row.n2_last_activated,
+          metadata: row.n2_metadata,
+        }),
+        similarity,
+        coOccurrenceCount: parseInt(row.edge_activation_count),
+        reason,
+      };
+    });
+  } catch (error) {
+    logger.error('Failed to analyze merge candidates', { error: (error as Error).message, userId });
+    return [];
+  }
+}
+
 export default {
   getGraphNodes,
   getGraphEdges,
@@ -552,8 +1059,13 @@ export default {
   updateNode,
   deleteNode,
   createEdge,
+  reinforceEdge,
   deleteEdge,
   mergeNodes,
   splitNode,
   getGraphOverview,
+  purgeNoiseNodes,
+  runDailyGraphConsolidation,
+  runWeeklyGraphConsolidation,
+  analyzeMergeCandidates,
 };

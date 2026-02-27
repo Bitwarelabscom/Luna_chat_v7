@@ -31,6 +31,7 @@ import * as buildTracker from '../ceo/build-tracker.service.js';
 import { activityHelpers } from '../activity/activity.service.js';
 import logger from '../utils/logger.js';
 import * as sunoService from '../abilities/suno-generator.service.js';
+import * as memorycoreGraphService from '../memory/memorycore-graph.service.js';
 
 // ============================================
 // Job Definitions
@@ -348,6 +349,13 @@ const jobs: Job[] = [
     handler: cleanupSunoStale,
   },
   {
+    name: 'sunoPollProcessing',
+    intervalMs: 60 * 1000, // Every 60 seconds
+    enabled: true,
+    running: false,
+    handler: pollSunoProcessing,
+  },
+  {
     name: 'albumPipelineWorker',
     intervalMs: 5 * 60 * 1000, // Every 5 minutes
     enabled: true,
@@ -360,6 +368,21 @@ const jobs: Job[] = [
     enabled: true,
     running: false,
     handler: runMusicTrendScraper,
+  },
+  // NeuralSleep graph consolidation jobs
+  {
+    name: 'neuralSleepDailyConsolidation',
+    intervalMs: 24 * 60 * 60 * 1000, // Daily (cron-scheduled at 2AM)
+    enabled: true,
+    running: false,
+    handler: runNeuralSleepDaily,
+  },
+  {
+    name: 'neuralSleepWeeklyConsolidation',
+    intervalMs: 7 * 24 * 60 * 60 * 1000, // Weekly (cron-scheduled Sunday 3AM)
+    enabled: true,
+    running: false,
+    handler: runNeuralSleepWeekly,
   },
 ];
 
@@ -1578,6 +1601,14 @@ async function cleanupSunoStale(): Promise<void> {
   }
 }
 
+async function pollSunoProcessing(): Promise<void> {
+  try {
+    await sunoService.pollProcessingGenerations();
+  } catch (error) {
+    logger.error('Suno poll processing job failed', { error: (error as Error).message });
+  }
+}
+
 /**
  * Album production pipeline - write lyrics, analyze, submit to Suno
  */
@@ -1617,6 +1648,28 @@ async function runMusicTrendScraper(): Promise<void> {
     } catch (broadcastErr) {
       logger.debug('Failed to broadcast scraper error', { err: (broadcastErr as Error).message });
     }
+  }
+}
+
+/**
+ * NeuralSleep daily graph consolidation - EMA weight evolution, decay, centrality recalc
+ */
+async function runNeuralSleepDaily(): Promise<void> {
+  try {
+    await memorycoreGraphService.runDailyGraphConsolidation();
+  } catch (error) {
+    logger.error('NeuralSleep daily consolidation failed', { error: (error as Error).message });
+  }
+}
+
+/**
+ * NeuralSleep weekly graph consolidation - pruning, noise cleanup, merge analysis
+ */
+async function runNeuralSleepWeekly(): Promise<void> {
+  try {
+    await memorycoreGraphService.runWeeklyGraphConsolidation();
+  } catch (error) {
+    logger.error('NeuralSleep weekly consolidation failed', { error: (error as Error).message });
   }
 }
 
@@ -1690,6 +1743,20 @@ export function startJobs(): void {
       // Schedule at 0:00, 6:00, 12:00, 18:00 every day
       cron.schedule('0 0,6,12,18 * * *', () => runJob(job));
       logger.info(`Scheduled job ${job.name} via cron`, { schedule: 'every 6 hours' });
+      continue;
+    }
+
+    if (job.name === 'neuralSleepDailyConsolidation') {
+      // Schedule at 2AM daily
+      cron.schedule('0 2 * * *', () => runJob(job));
+      logger.info(`Scheduled job ${job.name} via cron`, { schedule: '2AM daily' });
+      continue;
+    }
+
+    if (job.name === 'neuralSleepWeeklyConsolidation') {
+      // Schedule at 3AM Sunday
+      cron.schedule('0 3 * * 0', () => runJob(job));
+      logger.info(`Scheduled job ${job.name} via cron`, { schedule: '3AM Sunday' });
       continue;
     }
 

@@ -147,7 +147,8 @@ router.post('/graph/edges', async (req: Request, res: Response) => {
       return;
     }
 
-    const edge = await graphService.createEdge(userId, { sourceId, targetId, type, strength });
+    const { sessionId } = req.body;
+    const edge = await graphService.createEdge(userId, { sourceId, targetId, type, strength, sessionId });
     res.json({ edge });
   } catch (error) {
     logger.error('Failed to create edge', { error: (error as Error).message });
@@ -206,6 +207,39 @@ router.post('/graph/split/:mergeId', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to split node', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to split node' });
+  }
+});
+
+/**
+ * GET /api/memory-lab/graph/merge-candidates
+ * Query params: minActivation, limit
+ */
+router.get('/graph/merge-candidates', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const candidates = await graphService.analyzeMergeCandidates(userId, {
+      minActivation: parseInt(req.query.minActivation as string) || 2,
+      limit: parseInt(req.query.limit as string) || 50,
+    });
+    res.json({ candidates });
+  } catch (error) {
+    logger.error('Failed to get merge candidates', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get merge candidates' });
+  }
+});
+
+/**
+ * POST /api/memory-lab/graph/purge-noise
+ * Trigger noise cleanup for the authenticated user
+ */
+router.post('/graph/purge-noise', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const result = await graphService.purgeNoiseNodes(userId);
+    res.json(result);
+  } catch (error) {
+    logger.error('Failed to purge noise nodes', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to purge noise nodes' });
   }
 });
 
