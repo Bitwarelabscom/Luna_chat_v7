@@ -98,7 +98,7 @@ export const appConfig: Record<AppId, AppConfig> = {
     title: 'Files',
     icon: Folder,
     color: 'from-blue-400 to-indigo-500',
-    defaultSize: { width: 800, height: 600 },
+    defaultSize: { width: 960, height: 680 },
     showInDock: true,
   },
   terminal: {

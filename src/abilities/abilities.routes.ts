@@ -433,6 +433,124 @@ router.post('/workspace/execute/:filename', async (req: Request, res: Response) 
   }
 });
 
+// Rename workspace file
+router.post('/workspace/rename', async (req: Request, res: Response) => {
+  try {
+    const { oldFilename, newFilename } = req.body;
+    if (!oldFilename || !newFilename) {
+      res.status(400).json({ error: 'oldFilename and newFilename are required' });
+      return;
+    }
+    const file = await workspace.renameFile(getUserId(req), oldFilename, newFilename);
+    res.json(file);
+  } catch (error) {
+    const message = (error as Error).message;
+    if (message.includes('not found')) {
+      res.status(404).json({ error: message });
+      return;
+    }
+    logger.error('Failed to rename workspace file', { error: message });
+    res.status(400).json({ error: message });
+  }
+});
+
+// Rename workspace directory
+router.post('/workspace/rename-directory', async (req: Request, res: Response) => {
+  try {
+    const { oldPath, newPath } = req.body;
+    if (!oldPath || !newPath) {
+      res.status(400).json({ error: 'oldPath and newPath are required' });
+      return;
+    }
+    const result = await workspace.renameDirectory(getUserId(req), oldPath, newPath);
+    res.json(result);
+  } catch (error) {
+    const message = (error as Error).message;
+    if (message.includes('not found')) {
+      res.status(404).json({ error: message });
+      return;
+    }
+    logger.error('Failed to rename workspace directory', { error: message });
+    res.status(400).json({ error: message });
+  }
+});
+
+// Create workspace directory
+router.post('/workspace/mkdir', async (req: Request, res: Response) => {
+  try {
+    const { path: dirPath } = req.body;
+    if (!dirPath) {
+      res.status(400).json({ error: 'path is required' });
+      return;
+    }
+    await workspace.createDirectory(getUserId(req), dirPath);
+    res.status(201).json({ success: true, path: dirPath });
+  } catch (error) {
+    const message = (error as Error).message;
+    logger.error('Failed to create workspace directory', { error: message });
+    res.status(400).json({ error: message });
+  }
+});
+
+// Set file permissions
+router.post('/workspace/chmod', async (req: Request, res: Response) => {
+  try {
+    const { filename, mode } = req.body;
+    if (!filename || mode === undefined) {
+      res.status(400).json({ error: 'filename and mode are required' });
+      return;
+    }
+    const modeNum = typeof mode === 'string' ? parseInt(mode, 8) : mode;
+    const info = await workspace.setPermissions(getUserId(req), filename, modeNum);
+    res.json(info);
+  } catch (error) {
+    const message = (error as Error).message;
+    logger.error('Failed to set file permissions', { error: message });
+    res.status(400).json({ error: message });
+  }
+});
+
+// Get file info
+router.get('/workspace/info/*', async (req: Request, res: Response) => {
+  try {
+    const filename = (req.params as Record<string, string>)[0];
+    const info = await workspace.getFileInfo(getUserId(req), filename);
+    res.json(info);
+  } catch (error) {
+    const message = (error as Error).message;
+    if (message.includes('ENOENT') || message.includes('not found')) {
+      res.status(404).json({ error: `File not found: ${(req.params as Record<string, string>)[0]}` });
+      return;
+    }
+    logger.error('Failed to get file info', { error: message });
+    res.status(500).json({ error: 'Failed to get file info' });
+  }
+});
+
+// Delete workspace directory
+router.delete('/workspace/directory/*', async (req: Request, res: Response) => {
+  try {
+    const dirPath = (req.params as Record<string, string>)[0];
+    const result = await workspace.deleteDirectory(getUserId(req), dirPath);
+    res.json(result);
+  } catch (error) {
+    const message = (error as Error).message;
+    logger.error('Failed to delete workspace directory', { error: message });
+    res.status(400).json({ error: message });
+  }
+});
+
+// List workspace directories
+router.get('/workspace/directories', async (req: Request, res: Response) => {
+  try {
+    const dirs = await workspace.listDirectories(getUserId(req));
+    res.json(dirs);
+  } catch (error) {
+    logger.error('Failed to list workspace directories', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to list workspace directories' });
+  }
+});
+
 // ============================================
 // DOCUMENTS
 // ============================================

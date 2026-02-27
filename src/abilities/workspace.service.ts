@@ -32,6 +32,19 @@ export interface WorkspaceStats {
   maxFileSize: number;
 }
 
+export interface FileInfo {
+  name: string;
+  path: string;
+  size: number;
+  mimeType: string;
+  permissions: string; // octal e.g. "644"
+  isDirectory: boolean;
+  isExecutable: boolean;
+  createdAt: Date;
+  modifiedAt: Date;
+  accessedAt: Date;
+}
+
 /**
  * Get user's workspace directory path
  */
@@ -290,6 +303,295 @@ export function getSandboxFilePath(userId: string, filename: string): string {
 }
 
 /**
+ * Validate a directory path for security (no extension check needed)
+ */
+function validateDirPath(dirPath: string): { valid: boolean; error?: string } {
+  if (path.isAbsolute(dirPath) || dirPath.includes('..') || dirPath.includes('\\')) {
+    return { valid: false, error: 'Invalid path - path traversal not allowed' };
+  }
+  const parts = dirPath.split('/');
+  for (const part of parts) {
+    if (!part) return { valid: false, error: 'Invalid path - empty path segment' };
+  }
+  if (dirPath.length > 500) {
+    return { valid: false, error: 'Path too long (max 500 characters)' };
+  }
+  return { valid: true };
+}
+
+// Allowed chmod modes whitelist
+const ALLOWED_MODES = new Set([0o644, 0o640, 0o755, 0o750, 0o700, 0o600]);
+
+/**
+ * Rename/move a file within user's workspace
+ */
+export async function renameFile(
+  userId: string,
+  oldFilename: string,
+  newFilename: string
+): Promise<WorkspaceFile> {
+  const oldValidation = validateFilename(oldFilename);
+  if (!oldValidation.valid) throw new Error(oldValidation.error);
+  const newValidation = validateFilename(newFilename);
+  if (!newValidation.valid) throw new Error(newValidation.error);
+
+  const userDir = getUserWorkspacePath(userId);
+  const oldPath = path.join(userDir, oldFilename);
+  const newPath = path.join(userDir, newFilename);
+
+  // Check source exists
+  try {
+    await fs.access(oldPath);
+  } catch {
+    throw new Error(`File not found: ${oldFilename}`);
+  }
+
+  // Check destination doesn't exist
+  try {
+    await fs.access(newPath);
+    throw new Error(`Destination already exists: ${newFilename}`);
+  } catch (error) {
+    if ((error as Error).message.includes('Destination already exists')) throw error;
+    // ENOENT is expected - destination doesn't exist
+  }
+
+  // Ensure parent directory of destination exists
+  await fs.mkdir(path.dirname(newPath), { recursive: true });
+
+  // Rename on filesystem first
+  await fs.rename(oldPath, newPath);
+
+  try {
+    // Update database
+    const fileStat = await fs.stat(newPath);
+    await pool.query(
+      `UPDATE workspace_files
+       SET filename = $1, file_path = $2, mime_type = $3, updated_at = NOW()
+       WHERE user_id = $4 AND filename = $5`,
+      [newFilename, newPath, getMimeType(newFilename), userId, oldFilename]
+    );
+
+    logger.info('Workspace file renamed', { userId, oldFilename, newFilename });
+
+    return {
+      id: '', // DB doesn't return id on update
+      name: newFilename,
+      path: newFilename,
+      size: fileStat.size,
+      mimeType: getMimeType(newFilename),
+      createdAt: fileStat.birthtime,
+      updatedAt: new Date(),
+    };
+  } catch (error) {
+    // Rollback filesystem change on DB failure
+    try { await fs.rename(newPath, oldPath); } catch { /* best effort */ }
+    throw error;
+  }
+}
+
+/**
+ * Rename/move a directory and all files under it
+ */
+export async function renameDirectory(
+  userId: string,
+  oldPrefix: string,
+  newPrefix: string
+): Promise<{ success: boolean; filesUpdated: number }> {
+  const oldValidation = validateDirPath(oldPrefix);
+  if (!oldValidation.valid) throw new Error(oldValidation.error);
+  const newValidation = validateDirPath(newPrefix);
+  if (!newValidation.valid) throw new Error(newValidation.error);
+
+  const userDir = getUserWorkspacePath(userId);
+  const oldDirPath = path.join(userDir, oldPrefix);
+  const newDirPath = path.join(userDir, newPrefix);
+
+  // Check source exists
+  try {
+    const stat = await fs.stat(oldDirPath);
+    if (!stat.isDirectory()) throw new Error(`Not a directory: ${oldPrefix}`);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(`Directory not found: ${oldPrefix}`);
+    }
+    throw error;
+  }
+
+  // Check destination doesn't exist
+  try {
+    await fs.access(newDirPath);
+    throw new Error(`Destination already exists: ${newPrefix}`);
+  } catch (error) {
+    if ((error as Error).message.includes('Destination already exists')) throw error;
+  }
+
+  // Ensure parent of destination exists
+  await fs.mkdir(path.dirname(newDirPath), { recursive: true });
+
+  // Get client for transaction
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Find all files under old prefix
+    const result = await client.query(
+      `SELECT filename FROM workspace_files
+       WHERE user_id = $1 AND filename LIKE $2`,
+      [userId, oldPrefix + '/%']
+    );
+
+    // Update each filename in DB
+    for (const row of result.rows) {
+      const oldName = (row as Record<string, string>).filename;
+      const newName = newPrefix + oldName.substring(oldPrefix.length);
+      const newFilePath = path.join(userDir, newName);
+      await client.query(
+        `UPDATE workspace_files
+         SET filename = $1, file_path = $2, mime_type = $3, updated_at = NOW()
+         WHERE user_id = $4 AND filename = $5`,
+        [newName, newFilePath, getMimeType(newName), userId, oldName]
+      );
+    }
+
+    // Rename directory on filesystem
+    await fs.rename(oldDirPath, newDirPath);
+
+    await client.query('COMMIT');
+    logger.info('Workspace directory renamed', { userId, oldPrefix, newPrefix, filesUpdated: result.rows.length });
+    return { success: true, filesUpdated: result.rows.length };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    // Attempt filesystem rollback
+    try { await fs.rename(newDirPath, oldDirPath); } catch { /* best effort */ }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Create a directory in user's workspace (filesystem only - dirs are implicit from file paths)
+ */
+export async function createDirectory(userId: string, dirPath: string): Promise<void> {
+  const validation = validateDirPath(dirPath);
+  if (!validation.valid) throw new Error(validation.error);
+
+  const userDir = await ensureUserWorkspace(userId);
+  const fullPath = path.join(userDir, dirPath);
+  await fs.mkdir(fullPath, { recursive: true, mode: 0o750 });
+  logger.info('Workspace directory created', { userId, dirPath });
+}
+
+/**
+ * Delete a directory and all files under it
+ */
+export async function deleteDirectory(
+  userId: string,
+  dirPath: string
+): Promise<{ success: boolean; deletedCount: number }> {
+  const validation = validateDirPath(dirPath);
+  if (!validation.valid) throw new Error(validation.error);
+
+  const userDir = getUserWorkspacePath(userId);
+  const fullPath = path.join(userDir, dirPath);
+
+  // Delete matching files from DB
+  const result = await pool.query(
+    `DELETE FROM workspace_files
+     WHERE user_id = $1 AND (filename LIKE $2 OR filename = $3)
+     RETURNING id`,
+    [userId, dirPath + '/%', dirPath]
+  );
+
+  // Remove directory from filesystem
+  try {
+    await fs.rm(fullPath, { recursive: true, force: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      logger.warn('Failed to remove directory from filesystem', { error: (error as Error).message, dirPath });
+    }
+  }
+
+  logger.info('Workspace directory deleted', { userId, dirPath, deletedCount: result.rows.length });
+  return { success: true, deletedCount: result.rows.length };
+}
+
+/**
+ * Set file permissions (chmod) with allowed modes whitelist
+ */
+export async function setPermissions(
+  userId: string,
+  filename: string,
+  mode: number
+): Promise<FileInfo> {
+  const validation = validateFilename(filename);
+  if (!validation.valid) throw new Error(validation.error);
+
+  if (!ALLOWED_MODES.has(mode)) {
+    throw new Error(`Permission mode ${mode.toString(8)} not allowed. Allowed: ${[...ALLOWED_MODES].map(m => m.toString(8)).join(', ')}`);
+  }
+
+  const userDir = getUserWorkspacePath(userId);
+  const filePath = path.join(userDir, filename);
+
+  await fs.chmod(filePath, mode);
+  return getFileInfo(userId, filename);
+}
+
+/**
+ * Get detailed file info including permissions
+ */
+export async function getFileInfo(userId: string, filename: string): Promise<FileInfo> {
+  const validation = validateFilename(filename);
+  if (!validation.valid) throw new Error(validation.error);
+
+  const userDir = getUserWorkspacePath(userId);
+  const filePath = path.join(userDir, filename);
+
+  const stat = await fs.stat(filePath);
+  const modeOctal = (stat.mode & 0o777).toString(8);
+
+  return {
+    name: path.basename(filename),
+    path: filename,
+    size: stat.size,
+    mimeType: getMimeType(filename),
+    permissions: modeOctal,
+    isDirectory: stat.isDirectory(),
+    isExecutable: !!(stat.mode & 0o111),
+    createdAt: stat.birthtime,
+    modifiedAt: stat.mtime,
+    accessedAt: stat.atime,
+  };
+}
+
+/**
+ * List actual directories in user's workspace (supports showing empty folders)
+ */
+export async function listDirectories(userId: string): Promise<string[]> {
+  const userDir = getUserWorkspacePath(userId);
+  try {
+    await fs.access(userDir);
+  } catch {
+    return [];
+  }
+
+  const dirs: string[] = [];
+  async function walk(dir: string, prefix: string) {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+        dirs.push(relPath);
+        await walk(path.join(dir, entry.name), relPath);
+      }
+    }
+  }
+  await walk(userDir, '');
+  return dirs.sort();
+}
+
+/**
  * Get MIME type from filename
  */
 function getMimeType(filename: string): string {
@@ -334,4 +636,11 @@ export default {
   getSandboxFilePath,
   getUserWorkspacePath,
   getWorkspaceFileUrl,
+  renameFile,
+  renameDirectory,
+  createDirectory,
+  deleteDirectory,
+  setPermissions,
+  getFileInfo,
+  listDirectories,
 };

@@ -17,6 +17,19 @@ export interface WorkspaceStats {
   scripts: number;
 }
 
+export interface FileInfo {
+  name: string;
+  path: string;
+  size: number;
+  mimeType: string;
+  permissions: string;
+  isDirectory: boolean;
+  isExecutable: boolean;
+  createdAt: string;
+  modifiedAt: string;
+  accessedAt: string;
+}
+
 export const workspaceApi = {
   listFiles: () =>
     api<WorkspaceFile[]>('/api/abilities/workspace'),
@@ -36,7 +49,26 @@ export const workspaceApi = {
   deleteFile: (filename: string) =>
     api<{ success: boolean }>(`/api/abilities/workspace/file/${encodeURIComponent(filename)}`, { method: 'DELETE' }),
 
-  // Upload requires FormData - use uploadFile helper below
+  renameFile: (oldFilename: string, newFilename: string) =>
+    api<WorkspaceFile>('/api/abilities/workspace/rename', { method: 'POST', body: { oldFilename, newFilename } }),
+
+  renameDirectory: (oldPath: string, newPath: string) =>
+    api<{ success: boolean; filesUpdated: number }>('/api/abilities/workspace/rename-directory', { method: 'POST', body: { oldPath, newPath } }),
+
+  createDirectory: (path: string) =>
+    api<{ success: boolean; path: string }>('/api/abilities/workspace/mkdir', { method: 'POST', body: { path } }),
+
+  deleteDirectory: (dirPath: string) =>
+    api<{ success: boolean; deletedCount: number }>(`/api/abilities/workspace/directory/${encodeURIComponent(dirPath)}`, { method: 'DELETE' }),
+
+  setPermissions: (filename: string, mode: string) =>
+    api<FileInfo>('/api/abilities/workspace/chmod', { method: 'POST', body: { filename, mode } }),
+
+  getFileInfo: (filename: string) =>
+    api<FileInfo>(`/api/abilities/workspace/info/${encodeURIComponent(filename)}`),
+
+  listDirectories: () =>
+    api<string[]>('/api/abilities/workspace/directories'),
 };
 
 // Upload workspace file using FormData
