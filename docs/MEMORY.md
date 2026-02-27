@@ -675,9 +675,9 @@ async function buildMemoryContext(userId, sessionId, message) {
 ## Future Improvements
 
 - [ ] Emotion-aware memory retrieval
-- [ ] Cross-session topic tracking
+- [x] Cross-session topic tracking (via distinct_session_count on graph edges)
 - [x] Memory consolidation (MemoryCore integration - see below)
-- [ ] Forgetting curve (reduce confidence over time)
+- [x] Forgetting curve (EMA weight decay in NeuralSleep daily consolidation)
 - [ ] User-controllable memory settings
 
 ---
@@ -796,3 +796,101 @@ MemoryCore implements **NeuralSleep** principles for machine consciousness resea
 - **Temporal continuity**: Past shapes present through integrated structure
 
 For more details, see `/opt/memorycore/CLAUDE.md` and `/opt/neuralsleep/NeuralSleep.md`.
+
+---
+
+## NeuralSleep Graph Consolidation
+
+The MemoryCore graph has two scheduled consolidation jobs that evolve edge weights, prune noise, and promote entities over time. These run on the Luna Chat backend (not MemoryCore itself) against the MemoryCore PostgreSQL database.
+
+### Edge Weight Reinforcement
+
+When `createEdge()` is called (e.g., from entity co-occurrence during chat), the ON CONFLICT clause:
+- Increments `activation_count` (how many times this edge has been seen)
+- Tracks `distinct_session_count` via session IDs stored in `metadata->'sessions'` JSONB
+- Keeps `GREATEST(strength)` (never reduces strength on re-observation)
+- Accepts optional `sessionId` parameter for cross-session tracking
+
+This means repeated co-occurrences strengthen edges, and the system distinguishes between "50 mentions in one obsessive session" vs "mentioned across 15 separate sessions over a month."
+
+### Daily Consolidation (2 AM)
+
+Job: `neuralSleepDailyConsolidation` -- Cron: `0 2 * * *` (Helsinki time)
+
+Runs for all users with active graph data:
+
+1. **EMA Edge Weight Evolution** -- Exponential moving average blends current weight toward a target based on activation count. Different edge types decay at different rates:
+
+   | Edge Type | Tau (days) | Rationale |
+   |-----------|-----------|-----------|
+   | `co_occurrence` | 14 | Casual mentions fade in ~2 weeks |
+   | `semantic` | 90 | Explicit relationships are long-lived |
+   | `temporal` | 30 | Time-based associations |
+   | `causal` | 60 | Cause/effect relationships |
+
+   Formula: `alpha = 1 - exp(-deltaT / tau)`, `targetWeight = min(1.0, 0.5 + 0.05 * ln(activation_count + 1))`, `newWeight = weight * (1 - alpha) + targetWeight * alpha`
+
+2. **Weak Edge Pruning** -- Deactivate edges with `weight < 0.1` (except `same_as` edges which are identity links)
+
+3. **Edge Count Recalculation** -- Update `edge_count` on all active nodes from actual active edge counts
+
+4. **Centrality Score Recalculation** -- Weighted degree normalized: `centrality = sum(connected edge weights) / max(all weighted degrees)`
+
+5. **Recency Update** -- `recency = 1.0 / (1.0 + days_since_last_activated)` -- decays from 1.0 toward 0 over days
+
+6. **Provisional Node Promotion** -- Nodes with `identity_status = 'provisional'` or `'unverified'` are promoted to `'permanent'` when:
+   - `edge_count >= 3`
+   - At least one connected edge has `distinct_session_count >= 3`
+   - `last_activated` within 14 days
+
+### Weekly Consolidation (Sunday 3 AM)
+
+Job: `neuralSleepWeeklyConsolidation` -- Cron: `0 3 * * 0` (Helsinki time)
+
+1. **Stale Node Pruning** -- Deactivate nodes meeting ALL criteria:
+   - `edge_count < 2`
+   - `emotional_intensity < 0.3`
+   - `last_activated > 30 days ago`
+
+2. **Noise Node Purge** -- Runs `purgeNoiseNodes()` which:
+   - Fetches all active nodes for the user
+   - Filters through `isNoiseToken()` (expanded stopword list with ~50 verb artifacts)
+   - **Exempts** entity types: song, album, artist, person, place, brand, product, organization, project, game, movie, show, book
+   - Soft-deletes matching nodes and all their connected edges
+
+3. **Anti-Centrality Pressure** -- Graduated penalty on hub nodes to prevent "black hole" entities from dominating the graph:
+
+   | Edge Count | Max Penalty | Exempt Types |
+   |-----------|-------------|--------------|
+   | 50-99 | 10% | person, place, artist |
+   | 100-199 | 25% | person, place, artist |
+   | 200+ | 40% | person, place, artist |
+
+4. **Merge Candidate Analysis** (log-only) -- Finds node pairs with:
+   - Same `node_type`
+   - Label substring match (both labels >= 4 chars to prevent "Pi"/"Piano" false positives)
+   - `activation_count >= 3` on co-occurrence edge
+   - Logs candidates for review in Memory Lab
+
+### API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/memory-lab/graph/merge-candidates` | List merge candidates (params: minActivation, limit) |
+| POST | `/api/memory-lab/graph/purge-noise` | Trigger noise cleanup for authenticated user |
+
+### Manual Triggering
+
+```bash
+# Trigger daily consolidation manually
+curl -X POST http://localhost:3003/api/jobs/trigger/neuralSleepDailyConsolidation
+
+# Trigger weekly consolidation manually
+curl -X POST http://localhost:3003/api/jobs/trigger/neuralSleepWeeklyConsolidation
+
+# Check graph stats after consolidation
+docker exec memorycore-postgres psql -U memorycore -d memorycore -c \
+  "SELECT COUNT(*) as active_nodes FROM memory_nodes WHERE is_active = true;
+   SELECT COUNT(*) as active_edges FROM memory_edges WHERE is_active = true;
+   SELECT identity_status, COUNT(*) FROM memory_nodes WHERE is_active = true GROUP BY identity_status;"
+```

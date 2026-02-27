@@ -134,6 +134,23 @@ I notice I made a mistake. Let me add this to Luna for next time.
 
 ---
 
+### MemoryCore noise filter must respect entity types (2026-02-27)
+- **Mistake:** `purgeNoiseNodes` initially filtered ALL nodes matching stopwords regardless of type
+- **Correct:** Nodes of type song, album, artist, person, place, brand, product, organization, project, game, movie, show, book are exempt from stopword purging. "Love" as a song is signal, "Love" as an untyped concept is noise.
+- **Prevention:** Always check `node_type` before applying stopword/noise filters to MemoryCore graph entities
+
+### Anti-centrality threshold must be graduated (2026-02-27)
+- **Mistake:** Used flat `edge_count > 20` threshold for anti-centrality pressure
+- **Correct:** 20 is too low (Luna has 1,182 edges, Piano has 318). Use graduated: 50+ light, 100+ moderate, 200+ heavy. Exempt person/place/artist types entirely since they are naturally high-connectivity.
+- **Prevention:** Consider the actual data distribution before setting thresholds on graph operations
+
+### Merge candidate label length guard (2026-02-27)
+- **Mistake:** Substring matching without minimum label length allows "Pi" to match "Piano"
+- **Correct:** Require both labels >= 4 characters for substring-based merge candidate detection
+- **Prevention:** Always add length guards when doing ILIKE substring matching on graph labels
+
+---
+
 ## Project-Specific Gotchas
 
 <!-- Document quirks, non-obvious behaviors, or things that are easy to forget -->

@@ -228,6 +228,45 @@ When the user stops chatting, consolidation is triggered:
 
 Consolidation flow: Working Memory -> Episodic Memory (immediate) -> Semantic Memory (daily/weekly)
 
+### Graph Consolidation (NeuralSleep)
+
+In addition to session consolidation, the MemoryCore graph has two scheduled jobs:
+
+```
+[neuralSleepDailyConsolidation] 2 AM daily
+    |
+    v
+Per user with active graph data:
+    |-- EMA edge weight evolution (per-type tau: co_occurrence 14d, semantic 90d, temporal 30d, causal 60d)
+    |-- Prune weak edges (weight < 0.1, except same_as)
+    |-- Recalculate edge_count on nodes
+    |-- Recalculate centrality_score (weighted degree / max)
+    |-- Update recency (1 / (1 + days_since_activation))
+    |-- Promote provisional/unverified nodes to permanent
+    |   (edge_count >= 3, distinct_session_count >= 3, active within 14d)
+
+[neuralSleepWeeklyConsolidation] 3 AM Sunday
+    |
+    v
+Per user:
+    |-- Prune stale nodes (edge_count < 2, emotional_intensity < 0.3, inactive > 30d)
+    |-- Purge noise nodes (stopword entities, but exempt song/album/person/place/artist types)
+    |-- Anti-centrality pressure (graduated: 50+ light, 100+ moderate, 200+ heavy; exempt person/place/artist)
+    |-- Merge candidate analysis (log-only: same type, label substring, activation >= 3)
+```
+
+Edge creation (`createEdge`) is reinforcement-aware:
+```
+createEdge(userId, { sourceId, targetId, type, sessionId })
+    |
+    v
+ON CONFLICT (user_id, source_node_id, target_node_id, edge_type):
+    |-- activation_count += 1
+    |-- distinct_session_count += 1 (if new session)
+    |-- strength = GREATEST(existing, new)
+    |-- metadata.sessions += { sessionId: timestamp }
+```
+
 ---
 
 ## Memory Context Building
