@@ -26,23 +26,20 @@ const ExplorerView = dynamic(() => import('./ExplorerView').then(m => ({ default
 export function GraphTab() {
   const {
     graphViewMode, setGraphViewMode,
-    graphOverview, brainNodes, brainEdges,
-    isLoadingGraph, isBrainLoading,
-    loadFullGraph, loadGraphOverview,
+    brainNodes, brainEdges,
+    isBrainLoading,
+    loadFullGraph,
   } = useMemoryLabStore();
 
-  // Load data when switching modes
+  // Both views use full graph data - load it on mount
   useEffect(() => {
-    if (graphViewMode === 'brain' && brainNodes.length === 0 && !isBrainLoading) {
+    if (brainNodes.length === 0 && !isBrainLoading) {
       loadFullGraph();
     }
-    if (graphViewMode === 'explorer' && !graphOverview && !isLoadingGraph) {
-      loadGraphOverview();
-    }
-  }, [graphViewMode, brainNodes.length, isBrainLoading, loadFullGraph, graphOverview, isLoadingGraph, loadGraphOverview]);
+  }, [brainNodes.length, isBrainLoading, loadFullGraph]);
 
-  const nodeCount = graphViewMode === 'brain' ? brainNodes.length : (graphOverview?.totalNodes ?? 0);
-  const edgeCount = graphViewMode === 'brain' ? brainEdges.length : (graphOverview?.totalEdges ?? 0);
+  const nodeCount = brainNodes.length;
+  const edgeCount = brainEdges.length;
 
   return (
     <div className="h-full flex flex-col">

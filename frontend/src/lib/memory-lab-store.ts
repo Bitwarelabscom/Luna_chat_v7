@@ -26,6 +26,8 @@ interface MemoryLabState {
   brainEdges: SlimGraphEdge[];
   isBrainLoading: boolean;
   brainHoveredNodeId: string | null;
+  brainMinEdges: number;
+  setBrainMinEdges: (val: number) => void;
 
   // Facts
   facts: UserFact[];
@@ -98,6 +100,8 @@ export const useMemoryLabStore = create<MemoryLabState>((set, get) => ({
   brainEdges: [],
   isBrainLoading: false,
   brainHoveredNodeId: null,
+  brainMinEdges: 500,
+  setBrainMinEdges: (val) => set({ brainMinEdges: val }),
 
   // Facts initial
   facts: [],

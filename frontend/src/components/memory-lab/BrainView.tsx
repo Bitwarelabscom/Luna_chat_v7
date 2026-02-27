@@ -82,6 +82,7 @@ export function BrainView() {
   const {
     brainNodes, brainEdges, isBrainLoading,
     selectedNodeId, setSelectedNodeId,
+    brainMinEdges, setBrainMinEdges,
   } = useMemoryLabStore();
 
   // Track container size
@@ -101,7 +102,10 @@ export function BrainView() {
   }, []);
 
   const graphData = useMemo(() => {
-    const nodes: FG3DNode[] = brainNodes.map((n: GraphNode) => ({
+    const filteredNodes = brainNodes.filter((n: GraphNode) => n.edgeCount >= brainMinEdges);
+    const nodeSet = new Set(filteredNodes.map((n: GraphNode) => n.id));
+
+    const nodes: FG3DNode[] = filteredNodes.map((n: GraphNode) => ({
       id: n.id,
       label: n.nodeLabel,
       nodeType: n.nodeType,
@@ -110,7 +114,6 @@ export function BrainView() {
       emotionalIntensity: n.emotionalIntensity,
     }));
 
-    const nodeSet = new Set(brainNodes.map((n: GraphNode) => n.id));
     const links: FG3DLink[] = brainEdges
       .filter((e: SlimGraphEdge) => nodeSet.has(e.sourceNodeId) && nodeSet.has(e.targetNodeId))
       .map((e: SlimGraphEdge) => ({
@@ -121,7 +124,7 @@ export function BrainView() {
       }));
 
     return { nodes, links };
-  }, [brainNodes, brainEdges]);
+  }, [brainNodes, brainEdges, brainMinEdges]);
 
   const handleClick = useCallback((node: FG3DNode) => {
     setSelectedNodeId(node.id);
@@ -262,6 +265,35 @@ export function BrainView() {
             <span className="text-[10px]" style={{ color: '#94a3b8' }}>{item.label}</span>
           </div>
         ))}
+      </div>
+
+      {/* Min edges threshold slider (top-left) */}
+      <div
+        className="absolute top-3 left-3 z-10 px-3 py-2 rounded-lg"
+        style={{ background: 'rgba(15, 23, 42, 0.85)', border: '1px solid rgba(148, 163, 184, 0.15)' }}
+      >
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-[10px] font-medium" style={{ color: '#e2e8f0' }}>
+            Min edges: {brainMinEdges}
+          </span>
+          <span className="text-[10px]" style={{ color: '#64748b' }}>
+            {graphData.nodes.length.toLocaleString()} nodes | {graphData.links.length.toLocaleString()} edges
+          </span>
+        </div>
+        <input
+          type="range"
+          min={1}
+          max={1000}
+          step={1}
+          value={brainMinEdges}
+          onChange={e => setBrainMinEdges(Number(e.target.value))}
+          className="w-36 h-1 accent-blue-500 cursor-pointer"
+          style={{ accentColor: '#3b82f6' }}
+        />
+        <div className="flex justify-between text-[9px] mt-0.5" style={{ color: '#64748b' }}>
+          <span>1</span>
+          <span>1000</span>
+        </div>
       </div>
 
       {/* Zoom controls (top-right) */}
