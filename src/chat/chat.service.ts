@@ -118,6 +118,7 @@ import * as memorycoreClient from '../memory/memorycore.client.js';
 import * as preferencesService from '../memory/preferences.service.js';
 import * as abilities from '../abilities/orchestrator.js';
 import { buildContextualPrompt } from '../persona/luna.persona.js';
+import { getDesktopContext, hasDesktopBrowser, executeRemoteBrowserCommand } from '../desktop/desktop.websocket.js';
 import * as sessionService from './session.service.js';
 import * as contextCompression from './context-compression.service.js';
 import * as backgroundSummarization from './background-summarization.service.js';
@@ -177,11 +178,86 @@ function getBrowserToolStatusLine(toolName: string, args: Record<string, any>): 
   return 'Running browser action';
 }
 
+async function executeRemoteBrowserToolCall(
+  userId: string,
+  toolName: string,
+  args: Record<string, any>,
+): Promise<{ toolResponse: string; openUrl: string }> {
+  let command: Record<string, unknown>;
+  let description: string;
+
+  if (toolName === 'browser_navigate') {
+    if (!args.url || typeof args.url !== 'string') throw new Error('browser_navigate requires url');
+    command = { action: 'navigate', url: args.url };
+    description = `Navigated browser session.`;
+  } else if (toolName === 'browser_click') {
+    if (!args.selector || typeof args.selector !== 'string') throw new Error('browser_click requires selector');
+    const commands: Record<string, unknown>[] = [];
+    if (args.url && typeof args.url === 'string') {
+      commands.push({ action: 'navigate', url: args.url });
+    }
+    commands.push({ action: 'clickSelector', selector: args.selector });
+    // Execute navigate first if needed, then click
+    let result: any;
+    for (const cmd of commands) {
+      result = await executeRemoteBrowserCommand(userId, cmd);
+    }
+    const openUrl = result?.url || args.url || '';
+    return {
+      openUrl,
+      toolResponse: `Clicked selector "${args.selector}".\n\n${formatBrowserPageContentForTool(result)}`,
+    };
+  } else if (toolName === 'browser_type') {
+    if (!args.selector || typeof args.selector !== 'string') throw new Error('browser_type requires selector');
+    if (typeof args.text !== 'string') throw new Error('browser_type requires text');
+    if (args.url && typeof args.url === 'string') {
+      await executeRemoteBrowserCommand(userId, { action: 'navigate', url: args.url });
+    }
+    await executeRemoteBrowserCommand(userId, { action: 'fillSelector', selector: args.selector, value: args.text });
+    if (args.submit === true) {
+      await executeRemoteBrowserCommand(userId, { action: 'keypress', key: 'Enter' });
+    }
+    const result = await executeRemoteBrowserCommand(userId, { action: 'get_page_content' });
+    const openUrl = result?.url || args.url || '';
+    const submissionNote = args.submit === true ? '\nSubmitted with Enter.' : '';
+    return {
+      openUrl,
+      toolResponse: `Filled selector "${args.selector}".${submissionNote}\n\n${formatBrowserPageContentForTool(result)}`,
+    };
+  } else if (toolName === 'browser_get_page_content') {
+    if (args.url && typeof args.url === 'string') {
+      command = { action: 'navigate', url: args.url };
+      await executeRemoteBrowserCommand(userId, command);
+    }
+    const result = await executeRemoteBrowserCommand(userId, { action: 'get_page_content' });
+    const openUrl = result?.url || args.url || '';
+    return {
+      openUrl,
+      toolResponse: formatBrowserPageContentForTool(result),
+    };
+  } else {
+    throw new Error(`Unsupported remote browser tool: ${toolName}`);
+  }
+
+  // Default path (navigate)
+  const result = await executeRemoteBrowserCommand(userId, command!);
+  const openUrl = result?.url || (args.url as string) || '';
+  return {
+    openUrl,
+    toolResponse: `${description}\n\n${formatBrowserPageContentForTool(result)}`,
+  };
+}
+
 async function executeSharedBrowserToolCall(
   userId: string,
   toolName: string,
   args: Record<string, any>,
 ): Promise<{ toolResponse: string; openUrl: string }> {
+  // Route to local desktop browser when available
+  if (hasDesktopBrowser(userId)) {
+    return executeRemoteBrowserToolCall(userId, toolName, args);
+  }
+
   if (toolName === 'browser_navigate') {
     if (!args.url || typeof args.url !== 'string') {
       throw new Error('browser_navigate requires url');
@@ -759,6 +835,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
         djGenreContext,
         ceoSystemLog,
         skillContext,
+        desktopContext: getDesktopContext(userId),
       }),
     },
   ];
@@ -3434,6 +3511,7 @@ export async function* streamMessage(
         djGenreContext,
         ceoSystemLog,
         skillContext,
+        desktopContext: getDesktopContext(userId),
       }),
     },
   ];

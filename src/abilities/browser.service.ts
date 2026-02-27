@@ -4,6 +4,7 @@ import * as path from 'path';
 import { validateExternalUrl } from '../utils/url-validator.js';
 import logger from '../utils/logger.js';
 import * as browserScreencast from './browser-screencast.service.js';
+import { hasDesktopBrowser, executeRemoteBrowserCommand } from '../desktop/desktop.websocket.js';
 
 // Workspace directory constant (must match workspace.service.ts)
 const WORKSPACE_DIR = process.env.WORKSPACE_DIR || '/app/workspace';
@@ -369,6 +370,26 @@ export async function navigate(
     }
   }
 
+  // Route to local desktop browser when available
+  if (hasDesktopBrowser(userId)) {
+    try {
+      await executeRemoteBrowserCommand(userId, { action: 'navigate', url: actualUrl });
+      logger.info('Browser navigate via desktop', { userId, url: actualUrl });
+      return {
+        success: true,
+        pageUrl: actualUrl,
+        executionTimeMs: Date.now() - startTime,
+      };
+    } catch (error) {
+      logger.error('Browser navigate via desktop failed', { userId, url: actualUrl, error: (error as Error).message });
+      return {
+        success: false,
+        error: (error as Error).message,
+        executionTimeMs: Date.now() - startTime,
+      };
+    }
+  }
+
   // If there's an active screencast session, use it instead of creating a new one
   if (browserScreencast.hasActiveSession(userId)) {
     try {
@@ -625,6 +646,26 @@ export async function click(
     }
   }
 
+  // Route to local desktop browser when available
+  if (hasDesktopBrowser(userId)) {
+    try {
+      await executeRemoteBrowserCommand(userId, { action: 'clickSelector', selector });
+      logger.info('Browser click via desktop', { userId, selector });
+      return {
+        success: true,
+        data: { message: `Clicked element: ${selector}` },
+        executionTimeMs: Date.now() - startTime,
+      };
+    } catch (error) {
+      logger.error('Browser click via desktop failed', { userId, selector, error: (error as Error).message });
+      return {
+        success: false,
+        error: (error as Error).message,
+        executionTimeMs: Date.now() - startTime,
+      };
+    }
+  }
+
   // If there's an active screencast session, use it instead of creating a new one
   if (browserScreencast.hasActiveSession(userId)) {
     try {
@@ -726,6 +767,26 @@ export async function fill(
       return {
         success: false,
         error: `URL validation failed: ${(error as Error).message}`,
+        executionTimeMs: Date.now() - startTime,
+      };
+    }
+  }
+
+  // Route to local desktop browser when available
+  if (hasDesktopBrowser(userId)) {
+    try {
+      await executeRemoteBrowserCommand(userId, { action: 'fillSelector', selector, value });
+      logger.info('Browser fill via desktop', { userId, selector });
+      return {
+        success: true,
+        data: { message: `Filled field: ${selector}` },
+        executionTimeMs: Date.now() - startTime,
+      };
+    } catch (error) {
+      logger.error('Browser fill via desktop failed', { userId, selector, error: (error as Error).message });
+      return {
+        success: false,
+        error: (error as Error).message,
         executionTimeMs: Date.now() - startTime,
       };
     }

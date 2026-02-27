@@ -337,6 +337,7 @@ export function buildContextualPrompt(
     djGenreContext?: string;
     ceoSystemLog?: string;
     skillContext?: string;
+    desktopContext?: string;
   }
 ): string {
   const sections: string[] = [];
@@ -444,6 +445,11 @@ You have access to additional tools via MCP (Model Context Protocol). These exte
   // CEO Luna system log injection (from slash commands/build tracker)
   if (options.ceoSystemLog && mode === 'ceo_luna') {
     sections.push(`[SYSTEM LOG]\n${options.ceoSystemLog}\nAcknowledge this action naturally in your response.`);
+  }
+
+  // Desktop context (from KDE integration - what the user currently has open)
+  if (options.desktopContext) {
+    sections.push(`[Desktop Context]\n${options.desktopContext}\nThis shows what the user currently has open. Reference naturally if relevant.`);
   }
 
   // Date/time last (rounded to 15-min for some caching benefit)

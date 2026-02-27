@@ -50,6 +50,7 @@ import {
 } from './trading/trading.websocket.js';
 import { handleBrowserWsConnection } from './abilities/browser.websocket.js';
 import { handleVoiceWsConnection } from './voice/voice.websocket.js';
+import { handleDesktopWsConnection } from './desktop/desktop.websocket.js';
 import { handleEditorWsUpgrade } from './editor/editor.websocket.js';
 import { shutdownHocuspocusServer } from './editor/hocuspocus.server.js';
 import { verifyToken } from './auth/jwt.js';
@@ -257,6 +258,9 @@ const browserWss = new WebSocketServer({ noServer: true });
 // Create WebSocket server for voice
 const voiceWss = new WebSocketServer({ noServer: true });
 
+// Create WebSocket server for desktop (KDE integration)
+const desktopWss = new WebSocketServer({ noServer: true });
+
 // Handle WebSocket upgrade requests
 server.on('upgrade', (request, socket, head) => {
   const pathname = new URL(request.url || '', `http://${request.headers.host}`).pathname;
@@ -294,6 +298,10 @@ server.on('upgrade', (request, socket, head) => {
   } else if (pathname === '/ws/voice') {
     voiceWss.handleUpgrade(request, socket, head, (ws) => {
       handleVoiceWsConnection(ws, request);
+    });
+  } else if (pathname === '/ws/desktop') {
+    desktopWss.handleUpgrade(request, socket, head, (ws) => {
+      handleDesktopWsConnection(ws, request);
     });
   } else if (pathname === '/ws/editor') {
     // Hocuspocus handles the upgrade internally
