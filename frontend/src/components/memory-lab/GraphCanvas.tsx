@@ -11,6 +11,7 @@ if (typeof window !== 'undefined') {
 }
 
 const NODE_COLORS: Record<string, string> = {
+  entity: '#3b82f6',
   person: '#3b82f6',
   topic: '#22c55e',
   concept: '#a855f7',

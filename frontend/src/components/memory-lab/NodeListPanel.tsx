@@ -5,6 +5,7 @@ import { Search } from 'lucide-react';
 import { useMemoryLabStore } from '@/lib/memory-lab-store';
 
 const NODE_TYPE_COLORS: Record<string, string> = {
+  entity: 'text-blue-400',
   person: 'text-blue-400',
   topic: 'text-green-400',
   concept: 'text-purple-400',

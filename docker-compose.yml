@@ -197,7 +197,7 @@ services:
       - MEMORYCORE_DB_HOST=memorycore-postgres
       - MEMORYCORE_DB_PORT=5432
       - MEMORYCORE_DB_USER=memorycore
-      - MEMORYCORE_DB_PASSWORD=
+      - MEMORYCORE_DB_PASSWORD=memorycore_dev
       - MEMORYCORE_DB_NAME=memorycore
     extra_hosts:
       - "host.docker.internal:host-gateway"

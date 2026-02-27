@@ -42,10 +42,10 @@ export interface GraphOverview {
 
 interface MergeLedgerEntry {
   id: string;
-  survivorNodeId: string;
-  mergedNodeId: string;
-  reason: string | null;
-  createdAt: string;
+  source_node_id: string;
+  target_node_id: string;
+  merge_reason: string | null;
+  created_at: Date;
 }
 
 function mapNodeRow(row: Record<string, unknown>): GraphNode {
@@ -139,7 +139,7 @@ export async function getGraphNodes(
              n.identity_status, n.activation_strength, n.edge_count,
              n.centrality_score, n.emotional_intensity, n.is_active,
              n.created_at, n.last_activated, n.metadata
-      FROM graph_nodes n
+      FROM memory_nodes n
       WHERE ${conditions.join(' AND ')}
       ORDER BY ${orderBy}
       LIMIT $${paramIdx} OFFSET $${paramIdx + 1}
@@ -202,7 +202,7 @@ export async function getGraphEdges(
       SELECT e.id, e.source_node_id, e.target_node_id, e.edge_type,
              e.weight, e.strength, e.recency, e.trust, e.is_active,
              e.activation_count, e.distinct_session_count
-      FROM graph_edges e
+      FROM memory_edges e
       WHERE ${conditions.join(' AND ')}
       ${extraJoin}
       ORDER BY e.strength DESC
@@ -233,7 +233,7 @@ export async function getNodeNeighbors(
       SELECT e.id, e.source_node_id, e.target_node_id, e.edge_type,
              e.weight, e.strength, e.recency, e.trust, e.is_active,
              e.activation_count, e.distinct_session_count
-      FROM graph_edges e
+      FROM memory_edges e
       WHERE e.user_id = $1 AND e.is_active = true
         AND (e.source_node_id = $2 OR e.target_node_id = $2)
       ORDER BY e.strength DESC
@@ -258,7 +258,7 @@ export async function getNodeNeighbors(
              n.identity_status, n.activation_strength, n.edge_count,
              n.centrality_score, n.emotional_intensity, n.is_active,
              n.created_at, n.last_activated, n.metadata
-      FROM graph_nodes n
+      FROM memory_nodes n
       WHERE n.id = ANY($1) AND n.is_active = true
     `;
 
@@ -305,10 +305,10 @@ export async function updateNode(
 
     if (setClauses.length === 0) return null;
 
-    setClauses.push('updated_at = NOW()');
+    setClauses.push('last_activated = NOW()');
 
     const sql = `
-      UPDATE graph_nodes
+      UPDATE memory_nodes
       SET ${setClauses.join(', ')}
       WHERE id = $1 AND user_id = $2
       RETURNING id, node_type, node_label, origin, origin_confidence,
@@ -331,8 +331,8 @@ export async function updateNode(
 export async function deleteNode(nodeId: string, userId: string): Promise<boolean> {
   try {
     const sql = `
-      UPDATE graph_nodes
-      SET is_active = false, updated_at = NOW()
+      UPDATE memory_nodes
+      SET is_active = false, last_activated = NOW()
       WHERE id = $1 AND user_id = $2
     `;
     await mcQuery(sql, [nodeId, userId]);
@@ -352,9 +352,10 @@ export async function createEdge(
 ): Promise<GraphEdge | null> {
   try {
     const sql = `
-      INSERT INTO graph_edges (user_id, source_node_id, target_node_id, edge_type, strength, weight)
+      INSERT INTO memory_edges (user_id, source_node_id, target_node_id, edge_type, strength, weight)
       VALUES ($1, $2, $3, $4, $5, $5)
-      ON CONFLICT DO NOTHING
+      ON CONFLICT (user_id, source_node_id, target_node_id, edge_type) DO UPDATE
+        SET strength = EXCLUDED.strength, last_activated = NOW()
       RETURNING id, source_node_id, target_node_id, edge_type,
                 weight, strength, recency, trust, is_active,
                 activation_count, distinct_session_count
@@ -376,8 +377,8 @@ export async function createEdge(
 export async function deleteEdge(edgeId: string, userId: string): Promise<boolean> {
   try {
     const sql = `
-      UPDATE graph_edges
-      SET is_active = false, updated_at = NOW()
+      UPDATE memory_edges
+      SET is_active = false, last_activated = NOW()
       WHERE id = $1 AND user_id = $2
     `;
     await mcQuery(sql, [edgeId, userId]);
@@ -398,40 +399,40 @@ export async function mergeNodes(
   reason?: string
 ): Promise<GraphNode | null> {
   try {
-    // Record in merge ledger
+    // Record in merge ledger (source = merged, target = survivor)
     await mcQuery(
-      `INSERT INTO merge_ledger (user_id, survivor_node_id, merged_node_id, reason)
-       VALUES ($1, $2, $3, $4)`,
-      [userId, survivorId, mergedId, reason || null]
+      `INSERT INTO merge_ledger (user_id, source_node_id, target_node_id, merge_confidence, merge_reason)
+       VALUES ($1, $2, $3, 1.0, $4)`,
+      [userId, mergedId, survivorId, reason || null]
     );
 
     // Transfer edges from merged to survivor
     await mcQuery(
-      `UPDATE graph_edges SET source_node_id = $1, updated_at = NOW()
+      `UPDATE memory_edges SET source_node_id = $1, last_activated = NOW()
        WHERE source_node_id = $2 AND user_id = $3 AND source_node_id != target_node_id`,
       [survivorId, mergedId, userId]
     );
     await mcQuery(
-      `UPDATE graph_edges SET target_node_id = $1, updated_at = NOW()
+      `UPDATE memory_edges SET target_node_id = $1, last_activated = NOW()
        WHERE target_node_id = $2 AND user_id = $3 AND source_node_id != target_node_id`,
       [survivorId, mergedId, userId]
     );
 
     // Deactivate merged node
     await mcQuery(
-      `UPDATE graph_nodes SET is_active = false, updated_at = NOW()
+      `UPDATE memory_nodes SET is_active = false, last_activated = NOW()
        WHERE id = $1 AND user_id = $2`,
       [mergedId, userId]
     );
 
     // Recalculate survivor edge count
     await mcQuery(
-      `UPDATE graph_nodes SET
+      `UPDATE memory_nodes SET
          edge_count = (
-           SELECT COUNT(*) FROM graph_edges
+           SELECT COUNT(*) FROM memory_edges
            WHERE (source_node_id = $1 OR target_node_id = $1) AND is_active = true AND user_id = $2
          ),
-         updated_at = NOW()
+         last_activated = NOW()
        WHERE id = $1 AND user_id = $2`,
       [survivorId, userId]
     );
@@ -442,7 +443,7 @@ export async function mergeNodes(
               identity_status, activation_strength, edge_count,
               centrality_score, emotional_intensity, is_active,
               created_at, last_activated, metadata
-       FROM graph_nodes WHERE id = $1`,
+       FROM memory_nodes WHERE id = $1`,
       [survivorId]
     );
     return row ? mapNodeRow(row) : null;
@@ -460,24 +461,28 @@ export async function splitNode(
   mergeId: string
 ): Promise<GraphNode[]> {
   try {
-    // Find the merge record
+    // Find the merge record (source = merged node, target = survivor)
     const ledger = await mcQueryOne<MergeLedgerEntry>(
-      `SELECT id, survivor_node_id, merged_node_id, reason, created_at
+      `SELECT id, source_node_id, target_node_id, merge_reason, created_at
        FROM merge_ledger WHERE id = $1 AND user_id = $2`,
       [mergeId, userId]
     );
 
     if (!ledger) return [];
 
-    // Reactivate the merged node
+    // Reactivate the merged node (source_node_id)
     await mcQuery(
-      `UPDATE graph_nodes SET is_active = true, updated_at = NOW()
+      `UPDATE memory_nodes SET is_active = true, last_activated = NOW()
        WHERE id = $1 AND user_id = $2`,
-      [ledger.mergedNodeId, userId]
+      [ledger.source_node_id, userId]
     );
 
-    // Remove the merge record
-    await mcQuery(`DELETE FROM merge_ledger WHERE id = $1`, [mergeId]);
+    // Mark merge as inactive rather than deleting
+    await mcQuery(
+      `UPDATE merge_ledger SET is_active = false, unmerged_at = NOW(), unmerge_reason = 'manual split'
+       WHERE id = $1`,
+      [mergeId]
+    );
 
     // Return both nodes
     const rows = await mcQuery<Record<string, unknown>>(
@@ -485,8 +490,8 @@ export async function splitNode(
               identity_status, activation_strength, edge_count,
               centrality_score, emotional_intensity, is_active,
               created_at, last_activated, metadata
-       FROM graph_nodes WHERE id = ANY($1)`,
-      [[ledger.survivorNodeId, ledger.mergedNodeId]]
+       FROM memory_nodes WHERE id = ANY($1)`,
+      [[ledger.target_node_id, ledger.source_node_id]]
     );
 
     return rows.map(mapNodeRow);
@@ -504,15 +509,15 @@ export async function getGraphOverview(userId: string): Promise<GraphOverview> {
     // Get total counts
     const countResult = await mcQueryOne<{ total_nodes: string; total_edges: string }>(
       `SELECT
-        (SELECT COUNT(*) FROM graph_nodes WHERE user_id = $1 AND is_active = true) as total_nodes,
-        (SELECT COUNT(*) FROM graph_edges WHERE user_id = $1 AND is_active = true) as total_edges`,
+        (SELECT COUNT(*) FROM memory_nodes WHERE user_id = $1 AND is_active = true) as total_nodes,
+        (SELECT COUNT(*) FROM memory_edges WHERE user_id = $1 AND is_active = true) as total_edges`,
       [userId]
     );
 
     // Get nodes by type
     const typeRows = await mcQuery<{ node_type: string; count: string }>(
       `SELECT node_type, COUNT(*) as count
-       FROM graph_nodes WHERE user_id = $1 AND is_active = true
+       FROM memory_nodes WHERE user_id = $1 AND is_active = true
        GROUP BY node_type ORDER BY count DESC`,
       [userId]
     );

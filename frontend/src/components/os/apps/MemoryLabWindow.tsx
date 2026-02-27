@@ -39,10 +39,6 @@ export default function MemoryLabWindow() {
     loadLnnData,
   } = useMemoryLabStore();
 
-  const [isRefreshing, setIsRefreshing] = [
-    useRef(false),
-    (val: boolean) => { isRefreshingRef.current = val; },
-  ];
   const isRefreshingRef = useRef(false);
 
   // Initialize on mount
