@@ -33,6 +33,54 @@ export interface GraphEdge {
   distinctSessionCount: number;
 }
 
+export interface SlimGraphEdge {
+  id: string;
+  sourceNodeId: string;
+  targetNodeId: string;
+  edgeType: string;
+  weight: number;
+  strength: number;
+}
+
+export interface FullGraphData {
+  nodes: GraphNode[];
+  edges: SlimGraphEdge[];
+}
+
+export interface SeedEntity {
+  id: string;
+  nodeType: string;
+  nodeLabel: string;
+  edgeCount: number;
+  centralityScore: number;
+  emotionalIntensity: number;
+  lastActivated: string;
+  activation: number;
+}
+
+export interface ActivatedNode {
+  id: string;
+  nodeType: string;
+  nodeLabel: string;
+  edgeCount: number;
+  centralityScore: number;
+  emotionalIntensity: number;
+  activation: number;
+  depth: number;
+  sessionCount: number;
+  edgeWeight: number;
+  path: string[];
+}
+
+export interface ActivationTrace {
+  timestamp: string;
+  message: string;
+  seeds: SeedEntity[];
+  activated: ActivatedNode[];
+  elapsedMs: number;
+  tieredSummary: { direct: number; related: number; weak: number };
+}
+
 export interface GraphOverview {
   totalNodes: number;
   totalEdges: number;
@@ -61,6 +109,9 @@ export const memoryLabApi = {
   // Graph
   getGraphOverview: () =>
     api<GraphOverview>('/api/memory-lab/graph/overview'),
+
+  getFullGraph: () =>
+    api<FullGraphData>('/api/memory-lab/graph/full'),
 
   getGraphNodes: (params?: {
     limit?: number; offset?: number; type?: string;
@@ -157,6 +208,9 @@ export const memoryLabApi = {
     api<{ logs: ConsolidationEvent[] }>(`/api/memory-lab/consolidation/logs?limit=${limit}`),
 
   // LNN Live
+  getActivationTrace: () =>
+    api<{ trace: ActivationTrace | null }>('/api/memory-lab/lnn/activation-trace'),
+
   getEmotionalTrajectory: (limit = 100) =>
     api<{ trajectory: EmotionalPoint[] }>(`/api/memory-lab/lnn/emotional-trajectory?limit=${limit}`),
 

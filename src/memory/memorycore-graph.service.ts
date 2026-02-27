@@ -1061,10 +1061,69 @@ export async function analyzeMergeCandidates(
 }
 
 // ============================================
+// Full Graph Export (for 3D Brain View)
+// ============================================
+
+export interface SlimGraphEdge {
+  id: string;
+  sourceNodeId: string;
+  targetNodeId: string;
+  edgeType: string;
+  weight: number;
+  strength: number;
+}
+
+export interface FullGraphData {
+  nodes: GraphNode[];
+  edges: SlimGraphEdge[];
+}
+
+function mapSlimEdgeRow(row: Record<string, unknown>): SlimGraphEdge {
+  return {
+    id: row.id as string,
+    sourceNodeId: row.source_node_id as string,
+    targetNodeId: row.target_node_id as string,
+    edgeType: row.edge_type as string,
+    weight: parseFloat((row.weight as string) ?? '0'),
+    strength: parseFloat((row.strength as string) ?? '0'),
+  };
+}
+
+/**
+ * Return ALL active nodes + edges for the full 3D brain view.
+ * Edges use a slim format (6 fields) to reduce payload from ~8MB to ~4MB.
+ */
+export async function getFullGraph(userId: string): Promise<FullGraphData> {
+  const [nodeRows, edgeRows] = await Promise.all([
+    mcQuery<Record<string, unknown>>(
+      `SELECT id, node_type, node_label, origin, origin_confidence,
+              identity_status, activation_strength, edge_count,
+              centrality_score, emotional_intensity, is_active,
+              created_at, last_activated, metadata
+       FROM memory_nodes
+       WHERE user_id = $1 AND is_active = true
+       ORDER BY centrality_score DESC`,
+      [userId]
+    ),
+    mcQuery<Record<string, unknown>>(
+      `SELECT id, source_node_id, target_node_id, edge_type, weight, strength
+       FROM memory_edges
+       WHERE user_id = $1 AND is_active = true`,
+      [userId]
+    ),
+  ]);
+
+  return {
+    nodes: nodeRows.map(mapNodeRow),
+    edges: edgeRows.map(mapSlimEdgeRow),
+  };
+}
+
+// ============================================
 // Spreading Activation Graph Retrieval
 // ============================================
 
-interface SeedEntity {
+export interface SeedEntity {
   id: string;
   nodeType: string;
   nodeLabel: string;
@@ -1075,7 +1134,7 @@ interface SeedEntity {
   activation: number; // 1.0 for seeds
 }
 
-interface ActivatedNode {
+export interface ActivatedNode {
   id: string;
   nodeType: string;
   nodeLabel: string;
@@ -1087,6 +1146,22 @@ interface ActivatedNode {
   sessionCount: number;
   edgeWeight: number;
   path: string[]; // provenance: seed label > hop1 label > ...
+}
+
+export interface ActivationTrace {
+  timestamp: string;
+  message: string;
+  seeds: SeedEntity[];
+  activated: ActivatedNode[];
+  elapsedMs: number;
+  tieredSummary: { direct: number; related: number; weak: number };
+}
+
+// Module-level cache: last activation trace per user
+const lastActivationTraceByUser = new Map<string, ActivationTrace>();
+
+export function getLastActivationTrace(userId: string): ActivationTrace | null {
+  return lastActivationTraceByUser.get(userId) || null;
 }
 
 // Spreading activation constants
@@ -1472,6 +1547,19 @@ export async function graphContextForMessage(
     const activated = await spreadActivation(userId, seeds);
     const elapsed = Date.now() - start;
 
+    // Cache activation trace for the LNN diagnostics tab
+    const direct = activated.filter(a => a.depth === 1).length;
+    const related = activated.filter(a => a.depth === 2).length;
+    const weak = activated.filter(a => a.depth > 2).length;
+    lastActivationTraceByUser.set(userId, {
+      timestamp: new Date().toISOString(),
+      message: message.slice(0, 200),
+      seeds,
+      activated,
+      elapsedMs: elapsed,
+      tieredSummary: { direct, related, weak },
+    });
+
     logger.info('Graph context for message', {
       userId,
       seeds: seeds.length,
@@ -1499,6 +1587,8 @@ export default {
   mergeNodes,
   splitNode,
   getGraphOverview,
+  getFullGraph,
+  getLastActivationTrace,
   purgeNoiseNodes,
   runDailyGraphConsolidation,
   runWeeklyGraphConsolidation,

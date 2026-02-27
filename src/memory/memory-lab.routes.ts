@@ -18,6 +18,21 @@ router.use(authenticate);
 // ==============================
 
 /**
+ * GET /api/memory-lab/graph/full
+ * All active nodes + slim edges for 3D brain view
+ */
+router.get('/graph/full', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const data = await graphService.getFullGraph(userId);
+    res.json(data);
+  } catch (error) {
+    logger.error('Failed to get full graph', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get full graph' });
+  }
+});
+
+/**
  * GET /api/memory-lab/graph/overview
  * Summary stats and top nodes by centrality
  */
@@ -561,6 +576,21 @@ router.get('/lnn/centroid-drift', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to get centroid drift', { error: (error as Error).message });
     res.json({ drift: [] });
+  }
+});
+
+/**
+ * GET /api/memory-lab/lnn/activation-trace
+ * Last spreading activation trace for the user
+ */
+router.get('/lnn/activation-trace', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const trace = graphService.getLastActivationTrace(userId);
+    res.json({ trace });
+  } catch (error) {
+    logger.error('Failed to get activation trace', { error: (error as Error).message });
+    res.json({ trace: null });
   }
 });
 

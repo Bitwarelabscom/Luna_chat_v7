@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { GraphNode, GraphEdge, GraphOverview, EmotionalPoint, DriftPoint } from './api/memory-lab';
+import type { GraphNode, GraphEdge, SlimGraphEdge, GraphOverview, EmotionalPoint, DriftPoint, ActivationTrace } from './api/memory-lab';
 import type { UserFact, FactCorrection } from './api/friends';
 import type { ConsciousnessMetrics, ConsciousnessHistory, ConsolidationEvent } from './api/consciousness';
 
@@ -10,6 +10,7 @@ interface MemoryLabState {
   setActiveTab: (tab: TabId) => void;
 
   // Graph
+  graphViewMode: 'explorer' | 'brain';
   graphNodes: GraphNode[];
   graphEdges: GraphEdge[];
   graphOverview: GraphOverview | null;
@@ -19,6 +20,12 @@ interface MemoryLabState {
   graphFilterType: string | null;
   strengthThreshold: number;
   isLoadingGraph: boolean;
+
+  // Brain (full graph)
+  brainNodes: GraphNode[];
+  brainEdges: SlimGraphEdge[];
+  isBrainLoading: boolean;
+  brainHoveredNodeId: string | null;
 
   // Facts
   facts: UserFact[];
@@ -38,8 +45,11 @@ interface MemoryLabState {
   // LNN Live
   emotionalTrajectory: EmotionalPoint[];
   centroidDrift: DriftPoint[];
+  activationTrace: ActivationTrace | null;
 
   // Actions
+  setGraphViewMode: (mode: 'explorer' | 'brain') => void;
+  loadFullGraph: () => Promise<void>;
   loadGraphOverview: () => Promise<void>;
   expandNode: (nodeId: string) => Promise<void>;
   searchNodes: (query: string) => Promise<void>;
@@ -72,6 +82,7 @@ export const useMemoryLabStore = create<MemoryLabState>((set, get) => ({
   setActiveTab: (tab) => set({ activeTab: tab }),
 
   // Graph initial
+  graphViewMode: 'brain',
   graphNodes: [],
   graphEdges: [],
   graphOverview: null,
@@ -81,6 +92,12 @@ export const useMemoryLabStore = create<MemoryLabState>((set, get) => ({
   graphFilterType: null,
   strengthThreshold: 0.3,
   isLoadingGraph: false,
+
+  // Brain initial
+  brainNodes: [],
+  brainEdges: [],
+  isBrainLoading: false,
+  brainHoveredNodeId: null,
 
   // Facts initial
   facts: [],
@@ -100,8 +117,28 @@ export const useMemoryLabStore = create<MemoryLabState>((set, get) => ({
   // LNN initial
   emotionalTrajectory: [],
   centroidDrift: [],
+  activationTrace: null,
 
   // Graph actions
+  setGraphViewMode: (mode) => set({ graphViewMode: mode }),
+
+  loadFullGraph: async () => {
+    if (get().isBrainLoading) return;
+    set({ isBrainLoading: true });
+    try {
+      const { memoryLabApi } = await import('./api/memory-lab');
+      const data = await memoryLabApi.getFullGraph();
+      set({
+        brainNodes: data.nodes,
+        brainEdges: data.edges,
+        isBrainLoading: false,
+      });
+    } catch (err) {
+      console.error('Failed to load full graph:', err);
+      set({ isBrainLoading: false });
+    }
+  },
+
   loadGraphOverview: async () => {
     set({ isLoadingGraph: true });
     try {
@@ -330,14 +367,16 @@ export const useMemoryLabStore = create<MemoryLabState>((set, get) => ({
   loadLnnData: async () => {
     try {
       const { memoryLabApi } = await import('./api/memory-lab');
-      const [trajectoryRes, driftRes] = await Promise.all([
+      const [trajectoryRes, driftRes, traceRes] = await Promise.all([
         memoryLabApi.getEmotionalTrajectory(100).catch(() => ({ trajectory: [] as EmotionalPoint[] })),
         memoryLabApi.getCentroidDrift(50).catch(() => ({ drift: [] as DriftPoint[] })),
+        memoryLabApi.getActivationTrace().catch(() => ({ trace: null as ActivationTrace | null })),
       ]);
 
       set({
         emotionalTrajectory: trajectoryRes.trajectory,
         centroidDrift: driftRes.drift,
+        activationTrace: traceRes.trace,
       });
     } catch (err) {
       console.error('Failed to load LNN data:', err);

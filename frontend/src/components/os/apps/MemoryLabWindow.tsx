@@ -32,8 +32,10 @@ export default function MemoryLabWindow() {
 
   const {
     activeTab, setActiveTab,
+    graphViewMode,
     isHealthy, neuralsleepConnected,
     loadGraphOverview,
+    loadFullGraph,
     loadFacts,
     loadConsciousness,
     loadLnnData,
@@ -46,18 +48,22 @@ export default function MemoryLabWindow() {
     if (initialized.current) return;
     initialized.current = true;
     loadConsciousness();
-    loadGraphOverview();
-  }, [loadConsciousness, loadGraphOverview]);
+    if (graphViewMode === 'brain') {
+      loadFullGraph();
+    } else {
+      loadGraphOverview();
+    }
+  }, [loadConsciousness, loadGraphOverview, loadFullGraph, graphViewMode]);
 
   // Refresh active tab data
   const refreshActiveTab = useCallback(() => {
     switch (activeTab) {
-      case 'graph': return loadGraphOverview();
+      case 'graph': return graphViewMode === 'brain' ? loadFullGraph() : loadGraphOverview();
       case 'facts': return loadFacts();
       case 'consciousness': return loadConsciousness();
       case 'lnn': return loadLnnData();
     }
-  }, [activeTab, loadGraphOverview, loadFacts, loadConsciousness, loadLnnData]);
+  }, [activeTab, graphViewMode, loadGraphOverview, loadFullGraph, loadFacts, loadConsciousness, loadLnnData]);
 
   // Load data when switching tabs
   useEffect(() => {
