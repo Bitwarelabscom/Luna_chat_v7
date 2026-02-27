@@ -354,6 +354,9 @@ export async function createEdge(
   data: { sourceId: string; targetId: string; type: string; strength?: number; sessionId?: string }
 ): Promise<GraphEdge | null> {
   try {
+    // Prevent self-loop edges
+    if (data.sourceId === data.targetId) return null;
+
     const strength = data.strength ?? 0.5;
     const sessionId = data.sessionId || null;
 
@@ -725,11 +728,15 @@ async function consolidateUserDaily(userId: string): Promise<void> {
     [userId]
   );
 
-  // 2. Deactivate weak edges (but never same_as edges)
+  // 2. Deactivate weak edges (but never same_as edges) and self-loops
   const weakResult = await mcQueryOne<{ count: string }>(
     `WITH deactivated AS (
       UPDATE memory_edges SET is_active = false
-      WHERE user_id = $1 AND is_active = true AND weight < 0.1 AND edge_type != 'same_as'
+      WHERE user_id = $1 AND is_active = true
+        AND (
+          (weight < 0.1 AND edge_type != 'same_as')
+          OR source_node_id = target_node_id
+        )
       RETURNING id
     )
     SELECT COUNT(*) as count FROM deactivated`,
@@ -911,6 +918,7 @@ async function consolidateUserWeekly(userId: string): Promise<void> {
     JOIN memory_nodes n1 ON n1.id = e.source_node_id AND n1.is_active = true
     JOIN memory_nodes n2 ON n2.id = e.target_node_id AND n2.is_active = true
     WHERE e.user_id = $1 AND e.is_active = true
+      AND e.source_node_id != e.target_node_id
       AND n1.node_type = n2.node_type
       AND e.edge_type = 'co_occurrence'
       AND e.activation_count >= 3
@@ -1052,6 +1060,389 @@ export async function analyzeMergeCandidates(
   }
 }
 
+// ============================================
+// Spreading Activation Graph Retrieval
+// ============================================
+
+interface SeedEntity {
+  id: string;
+  nodeType: string;
+  nodeLabel: string;
+  edgeCount: number;
+  centralityScore: number;
+  emotionalIntensity: number;
+  lastActivated: string;
+  activation: number; // 1.0 for seeds
+}
+
+interface ActivatedNode {
+  id: string;
+  nodeType: string;
+  nodeLabel: string;
+  edgeCount: number;
+  centralityScore: number;
+  emotionalIntensity: number;
+  activation: number;
+  depth: number;
+  sessionCount: number;
+  edgeWeight: number;
+  path: string[]; // provenance: seed label > hop1 label > ...
+}
+
+// Spreading activation constants
+const DECAY_FACTOR = 0.65;
+const HOP1_SIGNAL_THRESHOLD = 0.15;
+const HOP2_SIGNAL_THRESHOLD = 0.25;
+const HUB_FAN_LIMIT = 30;
+const HOP2_EXPAND_COUNT = 15;
+const MAX_RESULTS = 25;
+const SESSION_BONUS_THRESHOLD = 3;
+const SESSION_BONUS_MULTIPLIER = 1.5;
+
+/**
+ * Tokenize a message into candidate entity mentions, match against graph nodes.
+ * Generates 1-grams, 2-grams, and 3-grams, filters noise, returns top seeds by centrality.
+ */
+async function matchMessageEntities(userId: string, message: string): Promise<SeedEntity[]> {
+  // Split on whitespace, strip punctuation
+  const rawTokens = message
+    .split(/\s+/)
+    .map(t => t.replace(/[^\w\u00C0-\u024F'-]/g, '').trim())
+    .filter(t => t.length >= 2);
+
+  // Filter through isNoiseToken
+  const cleanTokens = rawTokens.filter(t => !isNoiseToken(t));
+  if (cleanTokens.length === 0) return [];
+
+  // Generate n-grams (1, 2, 3)
+  const candidates = new Set<string>();
+  for (let i = 0; i < cleanTokens.length; i++) {
+    candidates.add(cleanTokens[i].toLowerCase());
+    if (i + 1 < cleanTokens.length) {
+      candidates.add(`${cleanTokens[i]} ${cleanTokens[i + 1]}`.toLowerCase());
+    }
+    if (i + 2 < cleanTokens.length) {
+      candidates.add(`${cleanTokens[i]} ${cleanTokens[i + 1]} ${cleanTokens[i + 2]}`.toLowerCase());
+    }
+  }
+
+  const candidateArray = Array.from(candidates);
+  if (candidateArray.length === 0) return [];
+
+  const rows = await mcQuery<Record<string, unknown>>(
+    `SELECT id, node_type, node_label, edge_count, centrality_score,
+            emotional_intensity, last_activated
+     FROM memory_nodes
+     WHERE user_id = $1 AND is_active = true
+       AND LOWER(node_label) = ANY($2::text[])
+       AND edge_count >= 2
+     ORDER BY centrality_score DESC
+     LIMIT 10`,
+    [userId, candidateArray]
+  );
+
+  return rows.map(row => ({
+    id: row.id as string,
+    nodeType: row.node_type as string,
+    nodeLabel: row.node_label as string,
+    edgeCount: parseInt((row.edge_count as string) ?? '0'),
+    centralityScore: parseFloat((row.centrality_score as string) ?? '0'),
+    emotionalIntensity: parseFloat((row.emotional_intensity as string) ?? '0'),
+    lastActivated: (row.last_activated as Date)?.toISOString() || '',
+    activation: 1.0,
+  }));
+}
+
+/**
+ * Spreading activation BFS from seed nodes.
+ * Hop-1: neighbors of seeds with hub fan-limiting.
+ * Hop-2: top hop-1 nodes expand further with higher threshold.
+ * Returns scored, deduplicated, ranked results.
+ */
+async function spreadActivation(
+  userId: string,
+  seeds: SeedEntity[]
+): Promise<ActivatedNode[]> {
+  const startTime = Date.now();
+  const seedIds = seeds.map(s => s.id);
+  const seedMap = new Map(seeds.map(s => [s.id, s]));
+  const activated = new Map<string, ActivatedNode>();
+
+  // Hop-1: neighbors of seed nodes with hub fan-out limiting
+  const hop1Rows = await mcQuery<Record<string, unknown>>(
+    `WITH ranked_edges AS (
+      SELECT
+        e.edge_type, e.weight, e.recency, e.activation_count, e.distinct_session_count,
+        n.id as neighbor_id, n.node_type, n.node_label, n.edge_count as neighbor_edge_count,
+        n.centrality_score as neighbor_centrality, n.emotional_intensity as neighbor_emotional,
+        CASE WHEN e.source_node_id = ANY($2::uuid[]) THEN e.source_node_id ELSE e.target_node_id END as seed_id,
+        ROW_NUMBER() OVER (
+          PARTITION BY CASE WHEN e.source_node_id = ANY($2::uuid[]) THEN e.source_node_id ELSE e.target_node_id END
+          ORDER BY e.weight * e.recency DESC
+        ) as rn
+      FROM memory_edges e
+      JOIN memory_nodes n ON n.id = CASE
+        WHEN e.source_node_id = ANY($2::uuid[]) THEN e.target_node_id
+        ELSE e.source_node_id
+      END AND n.is_active = true
+      WHERE e.user_id = $1 AND e.is_active = true
+        AND e.source_node_id != e.target_node_id
+        AND (e.source_node_id = ANY($2::uuid[]) OR e.target_node_id = ANY($2::uuid[]))
+        AND e.weight * e.recency > $3
+    )
+    SELECT * FROM ranked_edges WHERE rn <= $4`,
+    [userId, seedIds, HOP1_SIGNAL_THRESHOLD, HUB_FAN_LIMIT]
+  );
+
+  for (const row of hop1Rows) {
+    const neighborId = row.neighbor_id as string;
+    if (seedIds.includes(neighborId)) continue; // skip seeds themselves
+
+    const seedId = row.seed_id as string;
+    const seed = seedMap.get(seedId);
+    if (!seed) continue;
+
+    const edgeWeight = parseFloat((row.weight as string) ?? '0');
+    const edgeRecency = parseFloat((row.recency as string) ?? '0');
+    const centralityScore = parseFloat((row.neighbor_centrality as string) ?? '0');
+    const sessionCount = parseInt((row.distinct_session_count as string) ?? '0');
+
+    const activation =
+      seed.activation * DECAY_FACTOR * edgeWeight * edgeRecency
+      * (1.0 + centralityScore * 0.3)
+      * (sessionCount >= SESSION_BONUS_THRESHOLD ? SESSION_BONUS_MULTIPLIER : 1.0);
+
+    const existing = activated.get(neighborId);
+    if (!existing || activation > existing.activation) {
+      activated.set(neighborId, {
+        id: neighborId,
+        nodeType: row.node_type as string,
+        nodeLabel: row.node_label as string,
+        edgeCount: parseInt((row.neighbor_edge_count as string) ?? '0'),
+        centralityScore,
+        emotionalIntensity: parseFloat((row.neighbor_emotional as string) ?? '0'),
+        activation,
+        depth: 1,
+        sessionCount,
+        edgeWeight,
+        path: [seed.nodeLabel, row.node_label as string],
+      });
+    }
+  }
+
+  // Progressive timeout: skip hop-2 if we've already used >100ms
+  const elapsed = Date.now() - startTime;
+  if (elapsed > 100 || activated.size === 0) {
+    return rankResults(activated);
+  }
+
+  // Hop-2: expand top hop-1 nodes
+  const hop1Sorted = Array.from(activated.values())
+    .sort((a, b) => b.activation - a.activation)
+    .slice(0, HOP2_EXPAND_COUNT);
+  const hop1Ids = hop1Sorted.map(n => n.id);
+  const excludeIds = [...seedIds, ...hop1Ids];
+
+  const hop2Rows = await mcQuery<Record<string, unknown>>(
+    `WITH ranked_edges AS (
+      SELECT
+        e.edge_type, e.weight, e.recency, e.activation_count, e.distinct_session_count,
+        n.id as neighbor_id, n.node_type, n.node_label, n.edge_count as neighbor_edge_count,
+        n.centrality_score as neighbor_centrality, n.emotional_intensity as neighbor_emotional,
+        CASE WHEN e.source_node_id = ANY($2::uuid[]) THEN e.source_node_id ELSE e.target_node_id END as parent_id,
+        ROW_NUMBER() OVER (
+          PARTITION BY CASE WHEN e.source_node_id = ANY($2::uuid[]) THEN e.source_node_id ELSE e.target_node_id END
+          ORDER BY e.weight * e.recency DESC
+        ) as rn
+      FROM memory_edges e
+      JOIN memory_nodes n ON n.id = CASE
+        WHEN e.source_node_id = ANY($2::uuid[]) THEN e.target_node_id
+        ELSE e.source_node_id
+      END AND n.is_active = true
+      WHERE e.user_id = $1 AND e.is_active = true
+        AND e.source_node_id != e.target_node_id
+        AND (e.source_node_id = ANY($2::uuid[]) OR e.target_node_id = ANY($2::uuid[]))
+        AND e.weight * e.recency > $3
+        AND n.id != ALL($5::uuid[])
+    )
+    SELECT * FROM ranked_edges WHERE rn <= $4`,
+    [userId, hop1Ids, HOP2_SIGNAL_THRESHOLD, HUB_FAN_LIMIT, excludeIds]
+  );
+
+  const hop1Map = new Map(hop1Sorted.map(n => [n.id, n]));
+
+  for (const row of hop2Rows) {
+    const neighborId = row.neighbor_id as string;
+    const parentId = row.parent_id as string;
+    const parent = hop1Map.get(parentId);
+    if (!parent) continue;
+
+    const edgeWeight = parseFloat((row.weight as string) ?? '0');
+    const edgeRecency = parseFloat((row.recency as string) ?? '0');
+    const centralityScore = parseFloat((row.neighbor_centrality as string) ?? '0');
+    const sessionCount = parseInt((row.distinct_session_count as string) ?? '0');
+
+    const activation =
+      parent.activation * DECAY_FACTOR * edgeWeight * edgeRecency
+      * (1.0 + centralityScore * 0.3)
+      * (sessionCount >= SESSION_BONUS_THRESHOLD ? SESSION_BONUS_MULTIPLIER : 1.0);
+
+    const existing = activated.get(neighborId);
+    if (!existing || activation > existing.activation) {
+      activated.set(neighborId, {
+        id: neighborId,
+        nodeType: row.node_type as string,
+        nodeLabel: row.node_label as string,
+        edgeCount: parseInt((row.neighbor_edge_count as string) ?? '0'),
+        centralityScore,
+        emotionalIntensity: parseFloat((row.neighbor_emotional as string) ?? '0'),
+        activation,
+        depth: 2,
+        sessionCount,
+        edgeWeight,
+        path: [...parent.path, row.node_label as string],
+      });
+    }
+  }
+
+  return rankResults(activated);
+}
+
+/**
+ * Rank and limit activated nodes to top MAX_RESULTS.
+ */
+function rankResults(activated: Map<string, ActivatedNode>): ActivatedNode[] {
+  return Array.from(activated.values())
+    .sort((a, b) => b.activation - a.activation)
+    .slice(0, MAX_RESULTS);
+}
+
+/**
+ * Format activated nodes into a [Graph Memory] block with provenance paths.
+ * Groups into 3 tiers: Direct connections, Related context, Weak signals.
+ */
+function formatActivationContext(seeds: SeedEntity[], activated: ActivatedNode[]): string {
+  if (activated.length === 0 && seeds.length === 0) return '';
+
+  const seedLabels = seeds.map(s => s.nodeLabel).join(', ');
+  const lines: string[] = [
+    '[Graph Memory]',
+    `Active associations for this conversation:`,
+    '',
+    `Seeds: ${seedLabels}`,
+  ];
+
+  // Tier classification
+  const direct: ActivatedNode[] = [];
+  const related: ActivatedNode[] = [];
+  const weak: ActivatedNode[] = [];
+
+  for (const node of activated) {
+    if (node.depth === 1 && node.activation > 0.4) {
+      direct.push(node);
+    } else if (node.depth === 2 || (node.depth === 1 && node.activation > 0.15)) {
+      related.push(node);
+    } else {
+      weak.push(node);
+    }
+  }
+
+  if (direct.length > 0) {
+    lines.push('', 'Direct connections:');
+    for (const node of direct) {
+      const pathStr = node.path.join(' > ');
+      const sessionInfo = node.sessionCount >= 2 ? `${node.sessionCount} sessions, ` : '';
+      lines.push(`- ${node.nodeLabel} (${node.nodeType}) -- via ${pathStr} [${sessionInfo}weight: ${node.edgeWeight.toFixed(2)}]`);
+    }
+  }
+
+  if (related.length > 0) {
+    lines.push('', 'Related context:');
+    for (const node of related) {
+      const pathStr = node.path.join(' > ');
+      const sessionInfo = node.sessionCount >= 2 ? `${node.sessionCount} sessions, ` : '';
+      lines.push(`- ${node.nodeLabel} (${node.nodeType}) -- via ${pathStr} [${sessionInfo}weight: ${node.edgeWeight.toFixed(2)}]`);
+    }
+  }
+
+  // Only include weak signals if higher tiers are sparse
+  if (weak.length > 0 && (direct.length + related.length) < 5) {
+    lines.push('', 'Weak signals:');
+    for (const node of weak) {
+      const pathStr = node.path.join(' > ');
+      const sessionInfo = node.sessionCount >= 2 ? `${node.sessionCount} sessions, ` : '';
+      lines.push(`- ${node.nodeLabel} (${node.nodeType}) -- via ${pathStr} [${sessionInfo}weight: ${node.edgeWeight.toFixed(2)}]`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Fallback graph context when no entity matches or for stable-only mode.
+ * Returns top nodes ranked by centrality * recency.
+ */
+export async function graphContextFallback(userId: string): Promise<string> {
+  try {
+    const rows = await mcQuery<Record<string, unknown>>(
+      `SELECT node_label, node_type, centrality_score, edge_count, last_activated
+       FROM memory_nodes
+       WHERE user_id = $1 AND is_active = true AND edge_count >= 5
+       ORDER BY centrality_score * (1.0 / (1.0 + EXTRACT(EPOCH FROM (NOW() - last_activated)) / 86400.0)) DESC
+       LIMIT 10`,
+      [userId]
+    );
+
+    if (rows.length === 0) return '';
+
+    const lines = ['[Graph Memory]', 'Key memory nodes:'];
+    for (const row of rows) {
+      const label = row.node_label as string;
+      const type = row.node_type as string;
+      const centrality = parseFloat((row.centrality_score as string) ?? '0');
+      const edgeCount = parseInt((row.edge_count as string) ?? '0');
+      lines.push(`- ${label} (${type}) -- centrality: ${centrality.toFixed(2)}, ${edgeCount} connections`);
+    }
+
+    return lines.join('\n');
+  } catch (error) {
+    logger.warn('Graph context fallback failed', { error: (error as Error).message, userId });
+    return '';
+  }
+}
+
+/**
+ * Main orchestrator: build graph context for a specific message using spreading activation.
+ * Replaces the static narrative blob from MemoryCore API.
+ */
+export async function graphContextForMessage(
+  userId: string,
+  message: string,
+  _sessionId: string
+): Promise<string> {
+  const start = Date.now();
+  try {
+    const seeds = await matchMessageEntities(userId, message);
+    if (seeds.length === 0) return graphContextFallback(userId);
+
+    const activated = await spreadActivation(userId, seeds);
+    const elapsed = Date.now() - start;
+
+    logger.info('Graph context for message', {
+      userId,
+      seeds: seeds.length,
+      seedLabels: seeds.map(s => s.nodeLabel),
+      activated: activated.length,
+      elapsedMs: elapsed,
+    });
+
+    return formatActivationContext(seeds, activated);
+  } catch (error) {
+    logger.warn('Graph context failed, using fallback', { error: (error as Error).message, userId });
+    return graphContextFallback(userId);
+  }
+}
+
 export default {
   getGraphNodes,
   getGraphEdges,
@@ -1068,4 +1459,6 @@ export default {
   runDailyGraphConsolidation,
   runWeeklyGraphConsolidation,
   analyzeMergeCandidates,
+  graphContextForMessage,
+  graphContextFallback,
 };

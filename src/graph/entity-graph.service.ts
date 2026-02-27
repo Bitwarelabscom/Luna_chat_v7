@@ -35,6 +35,31 @@ const ENGLISH_STOPWORDS = new Set([
   'note', 'line', 'link', 'list', 'page', 'point', 'check',
   'start', 'stop', 'watch', 'wait', 'leave', 'bring', 'build',
   'write', 'speak', 'learn', 'share', 'place', 'change', 'follow',
+  // Adjectives, modifiers, and generic words that aren't entities
+  'small', 'dark', 'fast', 'slow', 'real', 'full', 'deep', 'soft',
+  'hard', 'free', 'late', 'true', 'pure', 'raw', 'cold', 'warm',
+  'cool', 'nice', 'easy', 'best', 'less', 'main', 'sure', 'done',
+  'clear', 'local', 'final', 'total', 'extra', 'basic', 'quick',
+  'early', 'great', 'short', 'light', 'rough', 'heavy', 'exact',
+  'calm', 'loud', 'rich', 'wide', 'thin', 'flat', 'rare', 'safe',
+  'fine', 'fair', 'wild', 'bold', 'vast', 'dull', 'lean', 'keen',
+  'perfect', 'correct', 'complete', 'slightly', 'mostly', 'direct',
+  'internal', 'external', 'technical', 'minimal', 'emotional',
+  'original', 'personal', 'general', 'special', 'simple',
+  'specific', 'explicit', 'distinct', 'separate', 'standard',
+  // Greetings and filler words that start phrase-entities
+  'hey', 'hello', 'alright', 'morning', 'evening', 'night',
+  'okay', 'okayyy', 'honestly', 'another', 'detect',
+  // Fragments and truncations
+  'don', 'pre', 'pro', 'non', 'sub', 'add', 'one', 'two', 'auto',
+  // Song structure markers (domain-specific -- TODO: make context-aware)
+  'chorus', 'verse', 'bridge', 'intro', 'outro', 'breakdown',
+  'hook', 'drop', 'solo', 'instrumental', 'interlude', 'refrain',
+  // Generic action/process words
+  'generate', 'analyze', 'detect', 'output', 'input', 'create',
+  'update', 'remove', 'delete', 'enable', 'define', 'require',
+  'include', 'process', 'handle', 'manage', 'contain', 'display',
+  'support', 'connect', 'trigger', 'provide', 'resolve',
 ]);
 
 const SWEDISH_STOPWORDS = new Set([
@@ -51,18 +76,35 @@ const SWEDISH_STOPWORDS = new Set([
 const MIN_ENTITY_LENGTH = 3;
 
 /**
- * Check if a label/name is a stopword or noise
+ * Check if a label/name is a stopword or noise.
+ * Catches: single stopwords, phrase fragments starting with stopwords,
+ * sentence-like strings, and degenerate tokens.
  */
 export function isNoiseToken(text: string): boolean {
   if (!text || text.length < MIN_ENTITY_LENGTH) return true;
   const lower = text.toLowerCase().trim();
   if (lower.length < MIN_ENTITY_LENGTH) return true;
+
+  // Single-word check against stoplists
   if (ENGLISH_STOPWORDS.has(lower)) return true;
   if (SWEDISH_STOPWORDS.has(lower)) return true;
+
   // Reject purely numeric tokens
   if (/^\d+$/.test(lower)) return true;
   // Reject single repeated characters like "aaa"
   if (/^(.)\1+$/.test(lower)) return true;
+
+  // Multi-word phrase checks
+  const words = lower.split(/\s+/);
+  if (words.length > 1) {
+    // Phrase starting with a stopword: "Hey Henke", "The Linux", "Would Do If"
+    if (ENGLISH_STOPWORDS.has(words[0]) || SWEDISH_STOPWORDS.has(words[0])) return true;
+    // Sentence-like: contains punctuation typical of sentences (not names/titles)
+    if (/[.!?]$/.test(lower) && words.length >= 4) return true;
+    // Too many words to be an entity (> 5 words is a sentence fragment)
+    if (words.length > 5) return true;
+  }
+
   return false;
 }
 

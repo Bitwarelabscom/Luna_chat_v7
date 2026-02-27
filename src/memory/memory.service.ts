@@ -3,6 +3,7 @@ import * as factsService from './facts.service.js';
 import * as insightsService from '../autonomous/insights.service.js';
 import * as memorycoreClient from './memorycore.client.js';
 import * as neo4jService from '../graph/neo4j.service.js';
+import { graphContextForMessage, graphContextFallback } from './memorycore-graph.service.js';
 import { queryOne } from '../db/postgres.js';
 import logger from '../utils/logger.js';
 import type { Session } from '../types/index.js';
@@ -149,8 +150,8 @@ export async function buildMemoryContext(
       memorycoreClient.getConsciousnessMetrics(userId),
       // Get consolidated model from NeuralSleep (bi-directional flow)
       memorycoreClient.getConsolidatedModel(userId),
-      // Get graph memory context (narrative format)
-      memorycoreClient.getGraphContext(userId),
+      // Get graph memory via spreading activation (replaces static narrative blob)
+      graphContextForMessage(userId, currentMessage, currentSessionId),
       // Get local graph context from Neo4j (fallback/supplement)
       neo4jService.buildLocalGraphContext(userId),
       // Get semantic memory from MemoryCore (high-tier consolidated knowledge)
@@ -211,8 +212,8 @@ export async function buildMemoryContext(
       semanticMemory = `[Semantic Memory]\n${patterns.join('\n')}`;
     }
 
-    // Get formatted graph memory (narrative format from MemoryCore)
-    const graphMemory = memorycoreClient.formatGraphContext(graphContext);
+    // Graph memory is already formatted by spreading activation
+    const graphMemory = graphContext || '';
 
     // Get local graph memory (Neo4j - fallback/supplement)
     const localGraphMemory = neo4jService.formatLocalGraphContext(localGraphContext);
@@ -298,7 +299,7 @@ export async function buildStableMemoryOnly(userId: string): Promise<MemoryConte
       insightsService.getActiveLearningsForContext(userId, 10),
       memorycoreClient.getConsciousnessMetrics(userId),
       memorycoreClient.getConsolidatedModel(userId),
-      memorycoreClient.getGraphContext(userId),
+      graphContextFallback(userId),
       neo4jService.buildLocalGraphContext(userId),
       memorycoreClient.getSemanticMemory(userId),
     ]);
@@ -362,8 +363,8 @@ export async function buildStableMemoryOnly(userId: string): Promise<MemoryConte
       semanticMemory = `[Semantic Memory]\n${patterns.join('\n')}`;
     }
 
-    // Get formatted graph memory (narrative format from MemoryCore)
-    const graphMemory = memorycoreClient.formatGraphContext(graphContext);
+    // Graph memory is already formatted by fallback
+    const graphMemory = graphContext || '';
 
     // Get local graph memory (Neo4j - fallback/supplement)
     const localGraphMemory = neo4jService.formatLocalGraphContext(localGraphContext);
