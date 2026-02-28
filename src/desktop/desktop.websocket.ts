@@ -83,7 +83,7 @@ export function getDesktopContext(userId: string): string | undefined {
 
   const parts: string[] = [];
   parts.push('Platform: KDE Plasma desktop (user\'s local computer)');
-  parts.push('Local browser: available — browser tools open a real Chromium window on the user\'s desktop via Playwright. Use browser_navigate, browser_click, browser_type, browser_get_page_content to browse the web for the user. The user can see the browser window.');
+  parts.push('Desktop browser: use the open_url tool to open any URL in Firefox on the user\'s desktop. This is fire-and-forget - the page opens but no content is returned. Use fetch_url if you need to read page content programmatically.');
   if (state.currentApp) {
     parts.push(`Current app: ${state.currentApp}`);
   }

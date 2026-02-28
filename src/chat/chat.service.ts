@@ -12,7 +12,6 @@ import {
   localMediaSearchTool,
   localMediaPlayTool,
   mediaDownloadTool,
-  browserVisualSearchTool,
   delegateToAgentTool,
   workspaceWriteTool,
   workspaceExecuteTool,
@@ -40,16 +39,7 @@ import {
   createReminderTool,
   listRemindersTool,
   cancelReminderTool,
-  browserNavigateTool,
-  browserScreenshotTool,
-  browserClickTool,
-  browserTypeTool,
-  browserGetPageContentTool,
-  browserFillTool,
-  browserExtractTool,
-  browserWaitTool,
-  browserCloseTool,
-  browserRenderHtmlTool,
+  openUrlTool,
   generateImageTool,
   generateBackgroundTool,
   researchTool,
@@ -118,7 +108,7 @@ import * as memorycoreClient from '../memory/memorycore.client.js';
 import * as preferencesService from '../memory/preferences.service.js';
 import * as abilities from '../abilities/orchestrator.js';
 import { buildContextualPrompt } from '../persona/luna.persona.js';
-import { getDesktopContext, hasDesktopBrowser, executeRemoteBrowserCommand } from '../desktop/desktop.websocket.js';
+import { getDesktopContext, hasDesktopBrowser, executeRemoteBrowserCommand, sendDesktopAction } from '../desktop/desktop.websocket.js';
 import * as sessionService from './session.service.js';
 import * as contextCompression from './context-compression.service.js';
 import * as backgroundSummarization from './background-summarization.service.js';
@@ -888,14 +878,13 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   // Companion tools - conversational (includes workspace tools)
   const companionTools = [
     searchTool, youtubeSearchTool, localMediaSearchTool, localMediaPlayTool, mediaDownloadTool,
-    browserVisualSearchTool, fetchUrlTool,
+    fetchUrlTool,
     sendEmailTool, checkEmailTool, readEmailTool, deleteEmailTool, replyEmailTool, markEmailReadTool,
     sendTelegramTool, sendFileToTelegramTool, searchDocumentsTool, suggestGoalTool,
     listTodosTool, createTodoTool, completeTodoTool, updateTodoTool,
     createCalendarEventTool, listCalendarEventsTool,
     sessionNoteTool, createReminderTool, listRemindersTool, cancelReminderTool,
-    browserNavigateTool, browserScreenshotTool, browserClickTool, browserTypeTool, browserGetPageContentTool, browserFillTool,
-    browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool,
+    openUrlTool,
     generateImageTool, generateBackgroundTool, researchTool, n8nWebhookTool, delegateToAgentTool,
     loadContextTool, correctSummaryTool,
     workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool,
@@ -1706,6 +1695,24 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
             content: `Failed to cancel reminder: ${(error as Error).message}`,
           } as ChatMessage);
         }
+      } else if (toolCall.function.name === 'open_url') {
+        const args = JSON.parse(toolCall.function.arguments || '{}');
+        logger.info('open_url tool', { userId, url: args.url });
+        let content: string;
+        try {
+          const parsed = new URL(args.url);
+          if (!['http:', 'https:'].includes(parsed.protocol)) {
+            content = `Rejected: only http and https URLs are allowed (got ${parsed.protocol})`;
+          } else {
+            const sent = sendDesktopAction(userId, 'open_url', { url: parsed.href });
+            content = sent
+              ? `Opened ${parsed.href} in Firefox on the desktop.`
+              : 'Desktop not connected - could not open URL.';
+          }
+        } catch {
+          content = `Invalid URL: ${args.url}`;
+        }
+        messages.push({ role: 'tool', tool_call_id: toolCall.id, content } as ChatMessage);
       } else if (
         toolCall.function.name === 'browser_navigate' ||
         toolCall.function.name === 'browser_click' ||
@@ -3567,14 +3574,13 @@ export async function* streamMessage(
   // Companion tools - conversational (includes workspace tools)
   const companionTools = [
     searchTool, youtubeSearchTool, localMediaSearchTool, localMediaPlayTool, mediaDownloadTool,
-    browserVisualSearchTool, fetchUrlTool,
+    fetchUrlTool,
     sendEmailTool, checkEmailTool, readEmailTool, deleteEmailTool, replyEmailTool, markEmailReadTool,
     sendTelegramTool, sendFileToTelegramTool, searchDocumentsTool, suggestGoalTool,
     listTodosTool, createTodoTool, completeTodoTool, updateTodoTool,
     createCalendarEventTool, listCalendarEventsTool,
     sessionNoteTool, createReminderTool, listRemindersTool, cancelReminderTool,
-    browserNavigateTool, browserScreenshotTool, browserClickTool, browserFillTool,
-    browserExtractTool, browserWaitTool, browserCloseTool, browserRenderHtmlTool,
+    openUrlTool,
     generateImageTool, generateBackgroundTool, researchTool, n8nWebhookTool, delegateToAgentTool,
     loadContextTool, correctSummaryTool,
     workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool,
@@ -4365,6 +4371,24 @@ export async function* streamMessage(
             content: `Failed to cancel reminder: ${(error as Error).message}`,
           } as ChatMessage);
         }
+      } else if (toolCall.function.name === 'open_url') {
+        const args = JSON.parse(toolCall.function.arguments || '{}');
+        logger.info('open_url tool (stream)', { userId, url: args.url });
+        let content: string;
+        try {
+          const parsed = new URL(args.url);
+          if (!['http:', 'https:'].includes(parsed.protocol)) {
+            content = `Rejected: only http and https URLs are allowed (got ${parsed.protocol})`;
+          } else {
+            const sent = sendDesktopAction(userId, 'open_url', { url: parsed.href });
+            content = sent
+              ? `Opened ${parsed.href} in Firefox on the desktop.`
+              : 'Desktop not connected - could not open URL.';
+          }
+        } catch {
+          content = `Invalid URL: ${args.url}`;
+        }
+        messages.push({ role: 'tool', tool_call_id: toolCall.id, content } as ChatMessage);
       } else if (
         toolCall.function.name === 'browser_navigate' ||
         toolCall.function.name === 'browser_click' ||
@@ -4998,6 +5022,24 @@ export async function* streamMessage(
             tool_call_id: toolCall.id,
             content: `Browser opened to ${searchUrl} for visual browsing.\n\nSearch results for context:\n${searchContext}`,
           } as ChatMessage);
+        } else if (toolCall.function.name === 'open_url') {
+          const args = JSON.parse(toolCall.function.arguments || '{}');
+          logger.info('open_url tool (follow-up)', { userId, url: args.url });
+          let content: string;
+          try {
+            const parsed = new URL(args.url);
+            if (!['http:', 'https:'].includes(parsed.protocol)) {
+              content = `Rejected: only http and https URLs are allowed (got ${parsed.protocol})`;
+            } else {
+              const sent = sendDesktopAction(userId, 'open_url', { url: parsed.href });
+              content = sent
+                ? `Opened ${parsed.href} in Firefox on the desktop.`
+                : 'Desktop not connected - could not open URL.';
+            }
+          } catch {
+            content = `Invalid URL: ${args.url}`;
+          }
+          messages.push({ role: 'tool', tool_call_id: toolCall.id, content } as ChatMessage);
         } else if (
           toolCall.function.name === 'browser_navigate' ||
           toolCall.function.name === 'browser_click' ||

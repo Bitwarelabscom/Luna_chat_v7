@@ -206,6 +206,24 @@ export const browserCloseTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   },
 };
 
+export const openUrlTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'open_url',
+    description: `Open a URL in Firefox on the user's desktop. This is fire-and-forget - the URL opens in the user's real browser, not the Playwright automation browser. No page content is returned. Use this when the user asks you to open a website or link for them.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'The URL to open (must start with http:// or https://)',
+        },
+      },
+      required: ['url'],
+    },
+  },
+};
+
 export const browserRenderHtmlTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: 'function',
   function: {
