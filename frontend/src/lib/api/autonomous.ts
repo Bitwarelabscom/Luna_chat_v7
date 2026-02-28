@@ -101,12 +101,37 @@ export interface Achievement {
   createdAt: string;
 }
 
+export type NewsCategory =
+  | 'conflicts' | 'tech' | 'good_news' | 'politics'
+  | 'science' | 'finance' | 'health' | 'environment'
+  | 'security' | 'other';
+
+export interface NewsCategoryInfo {
+  id: NewsCategory;
+  label: string;
+  color: string;
+  count: number;
+}
+
+export interface AlertThreshold {
+  category: string;
+  minPriority: string;
+  deliveryMethod: string;
+}
+
 export interface NewsArticle {
   id: number;
   title: string;
   url: string | null;
   publishedAt: string | null;
   sourceName: string;
+  category: NewsCategory | null;
+  priority: 'P1' | 'P2' | 'P3' | 'P4' | null;
+  priorityReason: string | null;
+  sourceType: string | null;
+  enrichedAt: string | null;
+  notificationSent: boolean;
+  // Backwards compat
   verificationStatus: 'Verified' | 'Likely' | 'Unconfirmed' | 'Conflicted' | 'False/Retraction';
   confidenceScore: number;
   signal: 'low' | 'medium' | 'high' | null;
@@ -305,15 +330,29 @@ export const autonomousApi = {
     api<{ achievement: Achievement }>(`/api/autonomous/achievements/${id}/celebrate`, { method: 'POST' }),
 
   // News (Newsfetcher)
-  getNewsArticles: (options?: { q?: string; status?: string; minScore?: number; limit?: number }) => {
+  getNewsArticles: (options?: { q?: string; status?: string; minScore?: number; limit?: number; category?: string; priority?: string }) => {
     const params = new URLSearchParams();
     if (options?.q) params.set('q', options.q);
     if (options?.status) params.set('status', options.status);
     if (options?.minScore) params.set('min_score', options.minScore.toString());
     if (options?.limit) params.set('limit', options.limit.toString());
+    if (options?.category) params.set('category', options.category);
+    if (options?.priority) params.set('priority', options.priority);
     const query = params.toString();
-    return api<{ articles: NewsArticle[] }>(`/api/autonomous/news/articles${query ? `?${query}` : ''}`);
+    return api<NewsArticle[]>(`/api/autonomous/news/articles${query ? `?${query}` : ''}`);
   },
+
+  getNewsCategories: () =>
+    api<NewsCategoryInfo[]>('/api/autonomous/news/categories'),
+
+  getAlertThresholds: () =>
+    api<AlertThreshold[]>('/api/autonomous/news/alerts/thresholds'),
+
+  setAlertThresholds: (thresholds: Array<{ category: string; minPriority: string; deliveryMethod?: string }>) =>
+    api<{ success: boolean }>('/api/autonomous/news/alerts/thresholds', { method: 'PUT', body: { thresholds } }),
+
+  syncNews: () =>
+    api<{ synced: number; enriched: number; alerts: number }>('/api/autonomous/news/sync', { method: 'POST' }),
 
   getNewsClaims: (options?: { status?: string; minScore?: number; limit?: number }) => {
     const params = new URLSearchParams();

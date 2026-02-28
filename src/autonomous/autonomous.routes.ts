@@ -11,6 +11,10 @@ import * as researchService from './research.service.js';
 import * as friendService from './friend.service.js';
 import * as friendVerificationService from './friend-verification.service.js';
 import * as webfetchService from '../search/webfetch.service.js';
+import { query } from '../db/postgres.js';
+import { NEWS_CATEGORIES } from './news-filter.service.js';
+import { syncAndEnrichNews } from './news-sync.service.js';
+import * as newsAlertService from './news-alert.service.js';
 import logger from '../utils/logger.js';
 
 const router = Router();
@@ -536,16 +540,58 @@ router.post('/achievements/:id/celebrate', async (req: Request, res: Response) =
 
 /**
  * GET /api/autonomous/news/articles
- * Query newsfetcher articles with optional filters
+ * Query local enriched articles with optional filters (category, priority, q, limit)
  */
 router.get('/news/articles', async (req: Request, res: Response) => {
   try {
-    const q = req.query.q as string | undefined;
-    const status = req.query.status as string | undefined;
-    const minScore = req.query.min_score ? parseInt(req.query.min_score as string) : undefined;
-    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+    const { q, limit, category, priority } = req.query;
 
-    const articles = await newsfetcherService.getArticles({ q, status, minScore, limit });
+    // Query from local enriched articles
+    let sql = `SELECT id, title, url, source_name, published_at, category, priority,
+               priority_reason, source_type, enriched_at, notification_sent,
+               newsfetcher_id, created_at
+               FROM rss_articles WHERE 1=1`;
+    const params: any[] = [];
+    let paramIdx = 1;
+
+    if (category && category !== 'all') {
+      sql += ` AND category = $${paramIdx++}`;
+      params.push(category);
+    }
+    if (priority && priority !== 'all') {
+      sql += ` AND priority = $${paramIdx++}`;
+      params.push(priority);
+    }
+    if (q) {
+      sql += ` AND title ILIKE $${paramIdx++}`;
+      params.push(`%${q}%`);
+    }
+
+    sql += ` ORDER BY created_at DESC LIMIT $${paramIdx++}`;
+    params.push(parseInt(limit as string) || 50);
+
+    const rows = await query(sql, params);
+
+    const articles = rows.map((r: any) => ({
+      id: r.id,
+      title: r.title,
+      url: r.url,
+      publishedAt: r.published_at,
+      sourceName: r.source_name,
+      category: r.category,
+      priority: r.priority,
+      priorityReason: r.priority_reason,
+      sourceType: r.source_type,
+      enrichedAt: r.enriched_at,
+      notificationSent: r.notification_sent,
+      // Backwards compat fields
+      verificationStatus: 'Unconfirmed',
+      confidenceScore: 0,
+      signal: r.priority === 'P1' ? 'high' : r.priority === 'P2' ? 'medium' : 'low',
+      signalReason: r.priority_reason,
+      topics: [],
+      signalConfidence: null,
+    }));
 
     res.json({ articles });
   } catch (error) {
@@ -644,6 +690,73 @@ router.get('/news/health', async (_req: Request, res: Response) => {
   } catch (error) {
     logger.error('Error checking newsfetcher health', { error });
     res.status(500).json({ healthy: false, error: 'Health check failed' });
+  }
+});
+
+/**
+ * GET /api/autonomous/news/categories
+ * List categories with article counts
+ */
+router.get('/news/categories', async (_req: Request, res: Response) => {
+  try {
+    const counts = await query(
+      `SELECT category, COUNT(*) as count FROM rss_articles
+       WHERE category IS NOT NULL GROUP BY category ORDER BY count DESC`
+    );
+    const countMap = new Map((counts as any[]).map((r: any) => [r.category, parseInt(r.count)]));
+    const categories = NEWS_CATEGORIES.map(c => ({
+      ...c,
+      count: countMap.get(c.id) || 0,
+    }));
+    res.json(categories);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch categories' });
+  }
+});
+
+/**
+ * GET /api/autonomous/news/alerts/thresholds
+ * Get user's alert thresholds
+ */
+router.get('/news/alerts/thresholds', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const thresholds = await newsAlertService.getThresholds(userId);
+    res.json(thresholds);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch thresholds' });
+  }
+});
+
+/**
+ * PUT /api/autonomous/news/alerts/thresholds
+ * Set alert thresholds for a user
+ */
+router.put('/news/alerts/thresholds', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const { thresholds } = req.body;
+    if (!Array.isArray(thresholds)) {
+      return res.status(400).json({ error: 'thresholds must be an array' });
+    }
+    await newsAlertService.setThresholds(userId, thresholds);
+    return res.json({ success: true });
+  } catch (error) {
+    return res.status(500).json({ error: 'Failed to set thresholds' });
+  }
+});
+
+/**
+ * POST /api/autonomous/news/sync
+ * Manual trigger of sync + enrich + alert cycle
+ */
+router.post('/news/sync', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const result = await syncAndEnrichNews(userId);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to sync news' });
   }
 });
 

@@ -4,6 +4,7 @@ import * as preferencesService from '../memory/preferences.service.js';
 import * as taskPatterns from '../abilities/task-patterns.service.js';
 import * as oauthService from '../integrations/oauth.service.js';
 import * as newsfetcherService from '../autonomous/newsfetcher.service.js';
+import { syncAndEnrichNews } from '../autonomous/news-sync.service.js';
 import * as insightsService from '../autonomous/insights.service.js';
 import * as friendVerificationService from '../autonomous/friend-verification.service.js';
 import * as triggerService from '../triggers/trigger.service.js';
@@ -28,10 +29,10 @@ import * as graphSyncService from '../graph/graph-sync.service.js';
 import * as neo4jService from '../graph/neo4j.service.js';
 import * as ceoService from '../ceo/ceo.service.js';
 import * as buildTracker from '../ceo/build-tracker.service.js';
-import { activityHelpers } from '../activity/activity.service.js';
 import logger from '../utils/logger.js';
 import * as sunoService from '../abilities/suno-generator.service.js';
 import * as memorycoreGraphService from '../memory/memorycore-graph.service.js';
+import * as ceoOrgService from '../ceo/ceo-org.service.js';
 
 // ============================================
 // Job Definitions
@@ -98,18 +99,11 @@ const jobs: Job[] = [
   },
   // Autonomous mode jobs
   {
-    name: 'newsfetcherIngestion',
-    intervalMs: 30 * 60 * 1000, // Every 30 minutes
+    name: 'newsSyncAndEnrich',
+    intervalMs: 15 * 60 * 1000, // Every 15 minutes
     enabled: true,
     running: false,
-    handler: triggerNewsfetcherIngestion,
-  },
-  {
-    name: 'newsEnrichment',
-    intervalMs: 60 * 60 * 1000, // Hourly
-    enabled: true,
-    running: false,
-    handler: enrichNewsArticles,
+    handler: runNewsSyncAndEnrich,
   },
   {
     name: 'sessionLearningConsolidator',
@@ -384,6 +378,21 @@ const jobs: Job[] = [
     running: false,
     handler: runNeuralSleepWeekly,
   },
+  // CEO Organization system
+  {
+    name: 'ceoOrgWeeklyPlanner',
+    intervalMs: 60 * 60 * 1000, // Hourly (gated by claimRunSlot to once/week)
+    enabled: true,
+    running: false,
+    handler: runCeoOrgWeeklyPlanner,
+  },
+  {
+    name: 'ceoOrgDailyDepartmentCheck',
+    intervalMs: 60 * 60 * 1000, // Hourly (gated by claimRunSlot to once/day)
+    enabled: true,
+    running: false,
+    handler: runCeoOrgDailyCheck,
+  },
 ];
 
 // ============================================
@@ -600,70 +609,33 @@ async function refreshSuggestions(): Promise<void> {
 // ============================================
 
 /**
- * Trigger newsfetcher ingestion (replaces old RSS feed fetching)
+ * Unified news sync + enrich + alert job.
+ * Pulls from newsfetcher, syncs to local rss_articles, classifies with LLM, and fires alerts.
  */
-async function triggerNewsfetcherIngestion(): Promise<void> {
+async function runNewsSyncAndEnrich(): Promise<void> {
   try {
-    // Check if any user has RSS ingestion enabled
-    const checkResult = await pool.query(`
-      SELECT COUNT(*) as count 
-      FROM autonomous_config 
-      WHERE rss_enabled = true AND enabled = true
-    `);
-    
-    if (parseInt(checkResult.rows[0].count) === 0) {
-      logger.debug('Skipping newsfetcher ingestion - no users have RSS enabled');
+    // Trigger newsfetcher to pull fresh articles from upstream sources
+    try {
+      await newsfetcherService.triggerIngestion();
+    } catch (err) {
+      logger.warn('Newsfetcher ingestion trigger failed', { error: (err as Error).message });
+    }
+
+    // Use DEFAULT_USER_ID for background operations
+    const defaultUserId = process.env.DEFAULT_USER_ID || '';
+    if (!defaultUserId) {
+      logger.debug('Skipping news sync - DEFAULT_USER_ID not set');
       return;
     }
 
-    const result = await newsfetcherService.triggerIngestion();
-    if (result.ingested > 0) {
-      logger.info('Newsfetcher ingestion completed', { ingested: result.ingested });
+    const result = await syncAndEnrichNews(defaultUserId);
+    if (result.synced > 0 || result.enriched > 0 || result.alerts > 0) {
+      logger.info('News sync and enrich completed', result);
     } else {
-      logger.debug('Newsfetcher ingestion completed - no new articles');
+      logger.debug('News sync and enrich completed - no changes');
     }
   } catch (error) {
-    logger.error('Newsfetcher ingestion job failed', {
-      error: (error as Error).message
-    });
-  }
-}
-
-/**
- * Enrich news articles with AI signal filtering (replaces old RSS relevance analysis)
- */
-async function enrichNewsArticles(): Promise<void> {
-  try {
-    // Get users with autonomous mode AND RSS ingestion enabled
-    const result = await pool.query(`
-      SELECT DISTINCT user_id
-      FROM autonomous_config
-      WHERE enabled = true AND rss_enabled = true
-    `);
-
-    for (const row of result.rows) {
-      try {
-        const enrichedCount = await newsfetcherService.batchEnrichArticles(row.user_id, 25);
-        if (enrichedCount > 0) {
-          logger.debug('Enriched news articles for user', {
-            userId: row.user_id,
-            enrichedCount,
-          });
-          activityHelpers.logBackgroundJob(row.user_id, 'News Enrichment', 'completed', {
-            enrichedCount,
-          }).catch(e => logger.debug('Activity log failed', { err: (e as Error).message }));
-        }
-      } catch (err) {
-        logger.error('Failed to enrich articles for user', {
-          error: (err as Error).message,
-          userId: row.user_id
-        });
-      }
-    }
-
-    logger.debug('News enrichment job completed', { usersProcessed: result.rows.length });
-  } catch (error) {
-    logger.error('News enrichment job failed', {
+    logger.error('News sync and enrich job failed', {
       error: (error as Error).message
     });
   }
@@ -1811,6 +1783,28 @@ export function getJobStatus(): Array<{
 /**
  * Manually trigger a job
  */
+/**
+ * CEO Organization: weekly planning (gated to once per week by claimRunSlot)
+ */
+async function runCeoOrgWeeklyPlanner(): Promise<void> {
+  try {
+    await ceoOrgService.runWeeklyPlanningForAllUsers();
+  } catch (error) {
+    logger.error('CEO org weekly planner failed', { error: (error as Error).message });
+  }
+}
+
+/**
+ * CEO Organization: daily department check (gated to once per day by claimRunSlot)
+ */
+async function runCeoOrgDailyCheck(): Promise<void> {
+  try {
+    await ceoOrgService.runDailyCheckForAllUsers();
+  } catch (error) {
+    logger.error('CEO org daily check failed', { error: (error as Error).message });
+  }
+}
+
 export async function triggerJob(jobName: string): Promise<boolean> {
   const job = jobs.find(j => j.name === jobName);
   if (!job) return false;

@@ -15,6 +15,7 @@ import OpenAI from 'openai';
 import { config } from '../config/index.js';
 import * as intentService from '../intents/intent.service.js';
 import * as newsfetcherService from '../autonomous/newsfetcher.service.js';
+import * as newsAlertService from '../autonomous/news-alert.service.js';
 import * as sandbox from '../abilities/sandbox.service.js';
 import * as ceoService from '../ceo/ceo.service.js';
 
@@ -911,6 +912,12 @@ export async function processUpdate(update: TelegramUpdate): Promise<void> {
     return;
   }
 
+  if (/^\/news-alerts(\s|$)/.test(text)) {
+    const args = text.slice('/news-alerts'.length).trim();
+    await handleNewsAlertsCommand(chatId, args || null);
+    return;
+  }
+
   if (/^\/news(\s|$)/.test(text)) {
     const topic = text.slice('/news'.length).trim();
     await handleNewsCommand(chatId, topic || null);
@@ -1111,9 +1118,11 @@ function formatNewsArticleLine(index: number, article: newsfetcherService.NewsAr
   const published = article.publishedAt
     ? new Date(article.publishedAt).toLocaleString()
     : 'unknown time';
+  const category = article.defaultCategory ? article.defaultCategory.toUpperCase() : '';
   const signal = article.signal ? ` | signal: ${article.signal}` : '';
+  const categoryTag = category ? `[${category}] ` : '';
   const url = article.url || 'no URL';
-  return `${index + 1}. ${article.title}\n   ${article.sourceName} | ${article.verificationStatus} (${article.confidenceScore})${signal} | ${published}\n   ${url}`;
+  return `${index + 1}. ${categoryTag}${article.title}\n   ${article.sourceName} | ${article.verificationStatus} (${article.confidenceScore})${signal} | ${published}\n   ${url}`;
 }
 
 async function handleNewsCommand(chatId: number, topic: string | null): Promise<void> {
@@ -1172,6 +1181,69 @@ async function handleNewsCommand(chatId: number, topic: string | null): Promise<
       error: (error as Error).message,
     });
     await sendTelegramMessage(chatId, 'Failed to fetch news right now. Please try again later.');
+  }
+}
+
+async function handleNewsAlertsCommand(chatId: number, args: string | null): Promise<void> {
+  const connection = await getConnectionByChatId(chatId);
+  if (!connection) {
+    await sendTelegramMessage(chatId, 'Not connected to any Luna account.');
+    return;
+  }
+
+  try {
+    // Reset command
+    if (args === 'reset') {
+      const allCategories = ['conflicts', 'tech', 'good_news', 'politics', 'science', 'finance', 'health', 'environment', 'security', 'other'];
+      await newsAlertService.setThresholds(
+        connection.userId,
+        allCategories.map(cat => ({ category: cat, minPriority: 'P1', deliveryMethod: 'telegram' }))
+      );
+      await sendTelegramMessage(chatId, 'Alert thresholds reset to defaults (P1 for all categories).');
+      return;
+    }
+
+    // Set thresholds: /news-alerts tech=P2 conflicts=P1 good_news=off
+    if (args && args.includes('=')) {
+      const pairs = args.split(/\s+/);
+      const updates: Array<{ category: string; minPriority: string; deliveryMethod?: string }> = [];
+      const validPriorities = ['P1', 'P2', 'P3', 'P4', 'off'];
+
+      for (const pair of pairs) {
+        const [cat, prio] = pair.split('=');
+        if (!cat || !prio) continue;
+        const priority = prio.toUpperCase() === 'OFF' ? 'off' : prio.toUpperCase();
+        if (!validPriorities.includes(priority)) {
+          await sendTelegramMessage(chatId, `Invalid priority "${prio}" for ${cat}. Use P1-P4 or off.`);
+          return;
+        }
+        updates.push({ category: cat, minPriority: priority });
+      }
+
+      if (updates.length > 0) {
+        await newsAlertService.setThresholds(connection.userId, updates);
+        const summary = updates.map(u => `${u.category}=${u.minPriority}`).join(', ');
+        await sendTelegramMessage(chatId, `Alert thresholds updated: ${summary}`);
+        return;
+      }
+    }
+
+    // Show current thresholds
+    const thresholds = await newsAlertService.getThresholds(connection.userId);
+    if (thresholds.length === 0) {
+      await sendTelegramMessage(chatId, 'No alert thresholds configured. Defaults: P1 for all categories.\n\nSet thresholds with:\n/news-alerts tech=P2 conflicts=P1 good_news=off\n/news-alerts reset');
+      return;
+    }
+
+    const lines = thresholds.map(t => `  ${t.category}: ${t.minPriority} (${t.deliveryMethod})`);
+    await sendTelegramMessage(chatId, `Current alert thresholds:\n${lines.join('\n')}\n\nSet with: /news-alerts category=priority\nReset: /news-alerts reset`);
+  } catch (error) {
+    logger.error('Failed to handle /news-alerts command', {
+      chatId,
+      userId: connection.userId,
+      error: (error as Error).message,
+    });
+    await sendTelegramMessage(chatId, 'Failed to manage alert thresholds. Please try again.');
   }
 }
 

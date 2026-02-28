@@ -20,6 +20,7 @@ export interface NewsArticle {
   signalReason: string | null;
   topics: string[] | null;
   signalConfidence: number | null;
+  defaultCategory: string | null;
 }
 
 export interface NewsClaim {
@@ -49,6 +50,7 @@ interface RawArticle {
   verification_status: string;
   confidence_score: number;
   source_name: string;
+  default_category: string | null;
 }
 
 interface RawClaim {
@@ -178,10 +180,11 @@ export async function getArticles(options: {
         sourceName: r.source_name,
         verificationStatus: r.verification_status as NewsArticle['verificationStatus'],
         confidenceScore: r.confidence_score,
-        signal: enrichment?.signal || null,
+        signal: enrichment ? (enrichment.priority === 'P1' ? 'high' : enrichment.priority === 'P2' ? 'medium' : 'low') : null,
         signalReason: enrichment?.reason || null,
         topics: enrichment?.topics || null,
         signalConfidence: enrichment?.confidence || null,
+        defaultCategory: r.default_category || null,
       };
     })
   );
@@ -262,7 +265,7 @@ export async function enrichArticleById(articleId: number, userId: string): Prom
 
   return {
     ...article,
-    signal: result.signal,
+    signal: result.priority === 'P1' ? 'high' : result.priority === 'P2' ? 'medium' : 'low',
     signalReason: result.reason,
     topics: result.topics,
     signalConfidence: result.confidence,
