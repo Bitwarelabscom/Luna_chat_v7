@@ -195,7 +195,7 @@ interface CeoConfigRow {
   updated_at: Date;
 }
 
-interface TimeParts {
+export interface TimeParts {
   year: number;
   month: number;
   day: number;
@@ -436,7 +436,7 @@ function isoWeekNumber(isoDate: string): number {
   return 1 + Math.round((date.getTime() - firstThursday.getTime()) / (7 * 24 * 60 * 60 * 1000));
 }
 
-function getLocalTimeParts(timeZone: string, date = new Date()): TimeParts {
+export function getLocalTimeParts(timeZone: string, date = new Date()): TimeParts {
   const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone,
     year: 'numeric',
@@ -705,7 +705,7 @@ async function flushSuppressedAlerts(userId: string, localTime: TimeParts): Prom
   return ids.length;
 }
 
-async function claimRunSlot(userId: string, jobKey: string, slotKey: string): Promise<boolean> {
+export async function claimRunSlot(userId: string, jobKey: string, slotKey: string): Promise<boolean> {
   const result = await pool.query(
     `INSERT INTO ceo_job_state (user_id, job_key, last_run_slot, last_run_at)
      VALUES ($1, $2, $3, NOW())
@@ -2263,7 +2263,7 @@ export async function getDashboard(userId: string, periodDays = 30): Promise<Ceo
     [userId]
   );
 
-  const saldo = financial.ownerPayTotalUsd - financial.expenseTotalUsd;
+  const saldo = financial.ownerPayTotalUsd + financial.incomeTotalUsd - financial.expenseTotalUsd;
   const burnNet = financial.expenseTotalUsd - financial.incomeTotalUsd;
   const projected30dBurnUsd = periodDays > 0 ? burnNet * (30 / periodDays) : burnNet;
 

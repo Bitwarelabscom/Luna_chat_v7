@@ -15,7 +15,8 @@ export type BackgroundLlmFeature =
   | 'supervisor_critique'
   | 'music_trend_analysis'
   | 'query_refinement'
-  | 'domain_evaluation';
+  | 'domain_evaluation'
+  | 'ceo_org_execution';
 
 export interface FeatureModelSelection {
   provider: ProviderId;
@@ -120,6 +121,11 @@ export const BACKGROUND_LLM_FEATURES: BackgroundLlmFeatureMeta[] = [
     label: 'Domain Evaluation',
     description: 'Evaluates unknown domains found during research for trust score provisioning.',
   },
+  {
+    id: 'ceo_org_execution',
+    label: 'CEO Org Execution',
+    description: 'Runs department tasks, weekly planning, and daily checks for CEO organization system.',
+  },
 ];
 
 export const DEFAULT_BACKGROUND_LLM_SETTINGS: BackgroundLlmSettings = {
@@ -179,6 +185,10 @@ export const DEFAULT_BACKGROUND_LLM_SETTINGS: BackgroundLlmSettings = {
     primary: { provider: 'ollama', model: 'llama3.2:3b' },
     fallback: { provider: 'openai', model: 'gpt-5-mini' },
   },
+  ceo_org_execution: {
+    primary: { provider: 'ollama_tertiary', model: 'HoseaDev/qwen2.5-7b-instruct-q4-gguf:latest' },
+    fallback: { provider: 'ollama_secondary', model: 'llama3.2:3b' },
+  },
 };
 
 interface DbSettingsRow {
@@ -223,6 +233,7 @@ function mergeWithDefaults(raw: unknown): BackgroundLlmSettings {
     music_trend_analysis: sanitizeFeatureConfig(obj.music_trend_analysis, DEFAULT_BACKGROUND_LLM_SETTINGS.music_trend_analysis),
     query_refinement: sanitizeFeatureConfig(obj.query_refinement, DEFAULT_BACKGROUND_LLM_SETTINGS.query_refinement),
     domain_evaluation: sanitizeFeatureConfig(obj.domain_evaluation, DEFAULT_BACKGROUND_LLM_SETTINGS.domain_evaluation),
+    ceo_org_execution: sanitizeFeatureConfig(obj.ceo_org_execution, DEFAULT_BACKGROUND_LLM_SETTINGS.ceo_org_execution),
   };
 }
 
@@ -262,6 +273,7 @@ export async function updateBackgroundLlmSettings(
     music_trend_analysis: updates.music_trend_analysis ? sanitizeFeatureConfig(updates.music_trend_analysis, current.music_trend_analysis) : current.music_trend_analysis,
     query_refinement: updates.query_refinement ? sanitizeFeatureConfig(updates.query_refinement, current.query_refinement) : current.query_refinement,
     domain_evaluation: updates.domain_evaluation ? sanitizeFeatureConfig(updates.domain_evaluation, current.domain_evaluation) : current.domain_evaluation,
+    ceo_org_execution: updates.ceo_org_execution ? sanitizeFeatureConfig(updates.ceo_org_execution, current.ceo_org_execution) : current.ceo_org_execution,
   };
 
   await query(

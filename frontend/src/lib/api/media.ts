@@ -65,7 +65,25 @@ export const lunaMediaApi = {
 };
 
 // Media Download API
+export interface BrowseEntry {
+  name: string;
+  path: string;
+  type: 'audio' | 'video';
+  streamUrl: string;
+  size: number;
+}
+
+export interface BrowseResult {
+  currentPath: string;
+  parent: string | null;
+  directories: { name: string; path: string }[];
+  files: BrowseEntry[];
+}
+
 export const mediaApi = {
+  browseLibrary: (browsePath = '') =>
+    api<BrowseResult>(`/api/media/browse?path=${encodeURIComponent(browsePath)}`),
+
   downloadMedia: (videoId: string, title: string, format: 'video' | 'audio') =>
     api<{ downloadId: string; status: string }>('/api/media/download', {
       method: 'POST',

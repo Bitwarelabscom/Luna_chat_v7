@@ -4,10 +4,10 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Video, Clock, Radio, Music, Download, Loader2, Check,
   Library, MonitorPlay, Play, ChevronDown, ChevronRight,
-  ChevronLeft, Copy,
+  ChevronLeft, Copy, Folder, FolderOpen, ArrowLeft, HardDrive,
 } from 'lucide-react';
 import { useWindowStore, type VideoResult, type MediaItem } from '@/lib/window-store';
-import { mediaApi } from '@/lib/api';
+import { mediaApi, type BrowseResult } from '@/lib/api';
 
 type ActiveItem =
   | { kind: 'youtube'; video: VideoResult }
@@ -250,7 +250,170 @@ export default function VideosWindow() {
     return false;
   };
 
+  // Browse state
+  const [browsing, setBrowsing] = useState(false);
+  const [browseData, setBrowseData] = useState<BrowseResult | null>(null);
+  const [browseLoading, setBrowseLoading] = useState(false);
+  const [browsePath, setBrowsePath] = useState('');
+
+  const loadBrowse = useCallback(async (dirPath: string) => {
+    setBrowseLoading(true);
+    try {
+      const data = await mediaApi.browseLibrary(dirPath);
+      setBrowseData(data);
+      setBrowsePath(dirPath);
+    } catch (err) {
+      console.error('Browse failed:', err);
+    } finally {
+      setBrowseLoading(false);
+    }
+  }, []);
+
+  const handleBrowseOpen = useCallback(() => {
+    setBrowsing(true);
+    loadBrowse('');
+  }, [loadBrowse]);
+
+  const handleBrowsePlayFile = useCallback((file: { name: string; type: 'audio' | 'video'; streamUrl: string }) => {
+    const item: MediaItem = {
+      id: file.streamUrl,
+      name: file.name.replace(/\.[^.]+$/, ''),
+      type: file.type === 'audio' ? 'media-audio' : 'media-video',
+      streamUrl: file.streamUrl,
+    };
+    setMediaItems(prev => {
+      const exists = prev.some(m => m.streamUrl === file.streamUrl);
+      if (exists) return prev;
+      return [...prev, item];
+    });
+    setActiveItem({ kind: 'media', item });
+    setQuery('Library');
+    setBrowsing(false);
+  }, []);
+
+  const handleBrowsePlayAll = useCallback(() => {
+    if (!browseData) return;
+    const items: MediaItem[] = browseData.files.map(f => ({
+      id: f.streamUrl,
+      name: f.name.replace(/\.[^.]+$/, ''),
+      type: f.type === 'audio' ? 'media-audio' as const : 'media-video' as const,
+      streamUrl: f.streamUrl,
+    }));
+    if (items.length === 0) return;
+    setMediaItems(items);
+    setActiveItem({ kind: 'media', item: items[0] });
+    setQuery(browsePath || 'Library');
+    setBrowsing(false);
+  }, [browseData, browsePath]);
+
   const hasContent = youtubeVideos.length > 0 || mediaItems.length > 0;
+
+  // Browse view
+  if (browsing) {
+    return (
+      <div className="flex flex-col h-full" style={{ background: 'var(--theme-bg-primary)' }}>
+        {/* Browse header */}
+        <div
+          className="flex items-center gap-2 px-4 py-3 border-b"
+          style={{ borderColor: 'var(--theme-border)', background: 'var(--theme-bg-secondary)' }}
+        >
+          <button
+            onClick={() => setBrowsing(false)}
+            className="p-1 rounded hover:opacity-70 transition-opacity"
+            style={{ color: 'var(--theme-text-muted)' }}
+            title="Back"
+          >
+            <ArrowLeft className="w-4 h-4" />
+          </button>
+          <HardDrive className="w-4 h-4" style={{ color: 'var(--theme-accent-primary)' }} />
+          <span className="text-sm font-medium" style={{ color: 'var(--theme-text-primary)' }}>
+            {browsePath || '/mnt/data/media'}
+          </span>
+          {browseData && browseData.parent !== null && (
+            <button
+              onClick={() => loadBrowse(browseData.parent || '')}
+              className="ml-auto text-xs px-2 py-1 rounded hover:opacity-80 transition-opacity"
+              style={{ background: 'var(--theme-bg-tertiary)', color: 'var(--theme-text-secondary)' }}
+            >
+              Up
+            </button>
+          )}
+          {browseData && browseData.files.length > 0 && (
+            <button
+              onClick={handleBrowsePlayAll}
+              className="text-xs px-2.5 py-1 rounded font-medium hover:opacity-80 transition-opacity"
+              style={{ background: 'var(--theme-accent-primary)', color: '#fff' }}
+            >
+              Play All ({browseData.files.length})
+            </button>
+          )}
+        </div>
+
+        {/* Browse content */}
+        <div className="flex-1 overflow-y-auto">
+          {browseLoading && (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="w-6 h-6 animate-spin" style={{ color: 'var(--theme-text-muted)' }} />
+            </div>
+          )}
+
+          {!browseLoading && browseData && (
+            <div className="divide-y" style={{ borderColor: 'var(--theme-border)' }}>
+              {/* Directories */}
+              {browseData.directories.map(dir => (
+                <button
+                  key={dir.path}
+                  onClick={() => loadBrowse(dir.path)}
+                  className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:brightness-110 transition-all"
+                  style={{ background: 'transparent' }}
+                >
+                  <Folder className="w-5 h-5 flex-shrink-0" style={{ color: 'var(--theme-accent-primary)' }} />
+                  <span className="text-sm font-medium truncate" style={{ color: 'var(--theme-text-primary)' }}>
+                    {dir.name}
+                  </span>
+                </button>
+              ))}
+
+              {/* Files */}
+              {browseData.files.map(file => (
+                <button
+                  key={file.path}
+                  onClick={() => handleBrowsePlayFile(file)}
+                  className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:brightness-110 transition-all group"
+                  style={{ background: 'transparent' }}
+                >
+                  {file.type === 'audio' ? (
+                    <Music className="w-5 h-5 flex-shrink-0" style={{ color: 'var(--theme-text-muted)' }} />
+                  ) : (
+                    <Video className="w-5 h-5 flex-shrink-0" style={{ color: 'var(--theme-text-muted)' }} />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm truncate" style={{ color: 'var(--theme-text-primary)' }}>
+                      {file.name}
+                    </p>
+                    <p className="text-[11px]" style={{ color: 'var(--theme-text-muted)' }}>
+                      {file.type === 'audio' ? 'Audio' : 'Video'} - {formatSize(file.size)}
+                    </p>
+                  </div>
+                  <Play
+                    className="w-4 h-4 opacity-0 group-hover:opacity-60 transition-opacity flex-shrink-0"
+                    style={{ color: 'var(--theme-text-secondary)' }}
+                  />
+                </button>
+              ))}
+
+              {browseData.directories.length === 0 && browseData.files.length === 0 && (
+                <div className="flex flex-col items-center justify-center py-12" style={{ color: 'var(--theme-text-muted)' }}>
+                  <FolderOpen className="w-10 h-10 opacity-30 mb-2" />
+                  <p className="text-sm">Empty folder</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (!hasContent) {
     return (
@@ -265,12 +428,13 @@ export default function VideosWindow() {
           >
             Search YouTube
           </span>
-          <span
-            className="px-3 py-1.5 rounded-full text-xs font-medium"
+          <button
+            onClick={handleBrowseOpen}
+            className="px-3 py-1.5 rounded-full text-xs font-medium cursor-pointer hover:opacity-80 transition-opacity"
             style={{ background: 'var(--theme-bg-tertiary)', color: 'var(--theme-text-secondary)', border: '1px solid var(--theme-border)' }}
           >
             Browse Library
-          </span>
+          </button>
         </div>
       </div>
     );
@@ -798,6 +962,13 @@ function DownloadButton({
       {isDownloading ? progressLabel : isComplete ? 'Saved' : label}
     </button>
   );
+}
+
+function formatSize(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return `${(bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
 }
 
 function formatTicks(ticks: number): string {

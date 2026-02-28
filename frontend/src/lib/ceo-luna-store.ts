@@ -2,7 +2,10 @@
 
 import { create } from 'zustand';
 import { workspaceApi } from './api/workspace';
-import type { CeoDashboard, RadarSignal, AutopostItem, ProductionSummary, GenreOption, ProposedGenre } from './api/ceo';
+import type {
+  CeoDashboard, RadarSignal, AutopostItem, ProductionSummary, GenreOption, ProposedGenre,
+  OrgTask, WeeklyGoal, AbilityProposal, RecommendedAction, DepartmentSummary,
+} from './api/ceo';
 
 export interface CeoFileEntry {
   name: string;
@@ -10,7 +13,7 @@ export interface CeoFileEntry {
   folder: 'Documents' | 'Plans' | 'Week' | 'Other';
 }
 
-type ActiveTab = 'viewer' | 'chat' | 'dashboard' | 'radar' | 'autopost' | 'builds' | 'log' | 'albums';
+type ActiveTab = 'viewer' | 'chat' | 'dashboard' | 'org' | 'radar' | 'autopost' | 'builds' | 'log' | 'albums';
 
 interface CEOLunaState {
   // Session
@@ -42,6 +45,15 @@ interface CEOLunaState {
   autopostQueue: AutopostItem[];
   isLoadingAutopost: boolean;
 
+  // Organization
+  orgDepartments: DepartmentSummary[];
+  orgTasks: OrgTask[];
+  orgGoals: WeeklyGoal[];
+  orgProposals: AbilityProposal[];
+  orgActions: RecommendedAction[];
+  isLoadingOrg: boolean;
+  orgDeptFilter: string;
+
   // Albums
   productions: ProductionSummary[];
   genres: GenreOption[];
@@ -66,6 +78,15 @@ interface CEOLunaState {
   loadProductions: () => Promise<void>;
   loadGenres: () => Promise<void>;
   loadArtists: () => Promise<void>;
+
+  // Org actions
+  loadOrgOverview: () => Promise<void>;
+  setOrgDeptFilter: (dept: string) => void;
+  approveOrgTask: (id: string) => Promise<void>;
+  rejectOrgTask: (id: string) => Promise<void>;
+  updateOrgAction: (id: string, status: 'dismissed' | 'done') => Promise<void>;
+  approveOrgProposal: (id: string) => Promise<void>;
+  rejectOrgProposal: (id: string) => Promise<void>;
 }
 
 function classifyFolder(path: string): CeoFileEntry['folder'] {
@@ -96,6 +117,14 @@ export const useCEOLunaStore = create<CEOLunaState>((set, get) => ({
   isLoadingProposedGenres: false,
   autopostQueue: [],
   isLoadingAutopost: false,
+  orgDepartments: [],
+  orgTasks: [],
+  orgGoals: [],
+  orgProposals: [],
+  orgActions: [],
+  isLoadingOrg: false,
+  orgDeptFilter: 'all',
+
   productions: [],
   genres: [],
   artists: [],
@@ -253,6 +282,87 @@ export const useCEOLunaStore = create<CEOLunaState>((set, get) => ({
       set({ artists });
     } catch (err) {
       console.error('Failed to load artists:', err);
+    }
+  },
+
+  // Organization actions
+  loadOrgOverview: async () => {
+    set({ isLoadingOrg: true });
+    try {
+      const { fetchOrgDepartments, fetchOrgTasks, fetchOrgGoals, fetchOrgProposals, fetchOrgActions } = await import('./api/ceo');
+      const deptFilter = get().orgDeptFilter;
+      const taskParams = deptFilter !== 'all' ? { department: deptFilter } : undefined;
+
+      const [deptRes, tasksRes, goalsRes, proposalsRes, actionsRes] = await Promise.all([
+        fetchOrgDepartments(),
+        fetchOrgTasks(taskParams),
+        fetchOrgGoals(),
+        fetchOrgProposals('proposed'),
+        fetchOrgActions('open'),
+      ]);
+      set({
+        orgDepartments: deptRes.departments,
+        orgTasks: tasksRes.tasks,
+        orgGoals: goalsRes.goals,
+        orgProposals: proposalsRes.proposals,
+        orgActions: actionsRes.actions,
+      });
+    } catch (err) {
+      console.error('Failed to load org overview:', err);
+    } finally {
+      set({ isLoadingOrg: false });
+    }
+  },
+
+  setOrgDeptFilter: (dept) => set({ orgDeptFilter: dept }),
+
+  approveOrgTask: async (id) => {
+    try {
+      const { approveOrgTask: apiApprove } = await import('./api/ceo');
+      await apiApprove(id);
+      await get().loadOrgOverview();
+    } catch (err) {
+      console.error('Failed to approve task:', err);
+    }
+  },
+
+  rejectOrgTask: async (id) => {
+    try {
+      const { rejectOrgTask: apiReject } = await import('./api/ceo');
+      await apiReject(id);
+      await get().loadOrgOverview();
+    } catch (err) {
+      console.error('Failed to reject task:', err);
+    }
+  },
+
+  updateOrgAction: async (id, status) => {
+    try {
+      const { updateOrgAction: apiUpdate } = await import('./api/ceo');
+      await apiUpdate(id, status);
+      set({ orgActions: get().orgActions.filter((a) => a.id !== id) });
+    } catch (err) {
+      console.error('Failed to update action:', err);
+    }
+  },
+
+  approveOrgProposal: async (id) => {
+    try {
+      const { approveOrgProposal: apiApprove } = await import('./api/ceo');
+      await apiApprove(id);
+      set({ orgProposals: get().orgProposals.filter((p) => p.id !== id) });
+    } catch (err) {
+      console.error('Failed to approve proposal:', err);
+    }
+  },
+
+  rejectOrgProposal: async (id) => {
+    try {
+      const { rejectOrgProposal: apiReject } = await import('./api/ceo');
+      await apiReject(id);
+      set({ orgProposals: get().orgProposals.filter((p) => p.id !== id) });
+    } catch (err) {
+      console.error('Failed to reject proposal:', err);
     }
   },
 

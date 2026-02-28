@@ -387,3 +387,127 @@ export const editGenre = (id: string, presetData: Record<string, unknown>) =>
 
 export const triggerMusicScrape = () =>
   api<{ success: boolean; items: number; genres: number; signals: number }>('/api/ceo/radar/scrape-now', { method: 'POST' });
+
+// ============================================================
+// Organization System
+// ============================================================
+
+export type DepartmentSlug = 'economy' | 'marketing' | 'development' | 'research';
+
+export interface OrgTask {
+  id: string;
+  userId: string;
+  departmentSlug: DepartmentSlug;
+  title: string;
+  description: string | null;
+  riskLevel: 'low' | 'high';
+  status: 'pending' | 'in_progress' | 'done' | 'approved' | 'rejected';
+  priority: number;
+  source: string;
+  assignedBy: string | null;
+  resultSummary: string | null;
+  resultFilePath: string | null;
+  weekLabel: string | null;
+  dueDate: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+}
+
+export interface WeeklyGoal {
+  id: string;
+  weekLabel: string;
+  departmentSlug: DepartmentSlug;
+  goalText: string;
+  status: 'active' | 'completed' | 'dropped';
+  progressPct: number;
+}
+
+export interface AbilityProposal {
+  id: string;
+  departmentSlug: DepartmentSlug;
+  title: string;
+  description: string | null;
+  rationale: string | null;
+  estimatedEffort: string | null;
+  status: 'proposed' | 'approved' | 'rejected' | 'implemented';
+  createdAt: string;
+}
+
+export interface RecommendedAction {
+  id: string;
+  departmentSlug: DepartmentSlug;
+  title: string;
+  description: string | null;
+  priority: number;
+  category: string | null;
+  status: 'open' | 'dismissed' | 'done';
+  createdAt: string;
+}
+
+export interface DepartmentSummary {
+  slug: DepartmentSlug;
+  name: string;
+  persona: string;
+  focus: string[];
+  pendingTasks: number;
+  doneTasks: number;
+  highRiskPending: number;
+}
+
+export const fetchOrgDepartments = () =>
+  api<{ departments: DepartmentSummary[] }>('/api/ceo/org/departments');
+
+export const fetchOrgTasks = (params?: { department?: string; status?: string; week?: string }) => {
+  const qs = new URLSearchParams();
+  if (params?.department) qs.set('department', params.department);
+  if (params?.status) qs.set('status', params.status);
+  if (params?.week) qs.set('week', params.week);
+  const q = qs.toString();
+  return api<{ tasks: OrgTask[] }>(`/api/ceo/org/tasks${q ? `?${q}` : ''}`);
+};
+
+export const createOrgTask = (data: { departmentSlug: DepartmentSlug; title: string; description?: string; riskLevel?: 'low' | 'high'; priority?: number }) =>
+  api<{ task: OrgTask }>('/api/ceo/org/tasks', { method: 'POST', body: data });
+
+export const updateOrgTask = (id: string, data: { status?: string; priority?: number }) =>
+  api<{ task: OrgTask }>(`/api/ceo/org/tasks/${id}`, { method: 'PATCH', body: data });
+
+export const approveOrgTask = (id: string) =>
+  api<{ task: OrgTask }>(`/api/ceo/org/tasks/${id}/approve`, { method: 'POST' });
+
+export const rejectOrgTask = (id: string) =>
+  api<{ success: boolean }>(`/api/ceo/org/tasks/${id}/reject`, { method: 'POST' });
+
+export const fetchOrgGoals = (week?: string) => {
+  const q = week ? `?week=${week}` : '';
+  return api<{ goals: WeeklyGoal[] }>(`/api/ceo/org/goals${q}`);
+};
+
+export const updateOrgGoal = (id: string, data: { status?: string; progressPct?: number }) =>
+  api<{ goal: WeeklyGoal }>(`/api/ceo/org/goals/${id}`, { method: 'PATCH', body: data });
+
+export const fetchOrgProposals = (status?: string) => {
+  const q = status ? `?status=${status}` : '';
+  return api<{ proposals: AbilityProposal[] }>(`/api/ceo/org/proposals${q}`);
+};
+
+export const approveOrgProposal = (id: string) =>
+  api<{ success: boolean }>(`/api/ceo/org/proposals/${id}/approve`, { method: 'POST' });
+
+export const rejectOrgProposal = (id: string) =>
+  api<{ success: boolean }>(`/api/ceo/org/proposals/${id}/reject`, { method: 'POST' });
+
+export const fetchOrgActions = (status?: string) => {
+  const q = status ? `?status=${status}` : '';
+  return api<{ actions: RecommendedAction[] }>(`/api/ceo/org/actions${q}`);
+};
+
+export const updateOrgAction = (id: string, status: 'dismissed' | 'done') =>
+  api<{ success: boolean }>(`/api/ceo/org/actions/${id}`, { method: 'PATCH', body: { status } });
+
+export const triggerWeeklyPlan = () =>
+  api<{ success: boolean; goalsCreated: number; tasksCreated: number; actionsCreated: number }>('/api/ceo/org/run/weekly-plan', { method: 'POST' });
+
+export const triggerDailyCheck = () =>
+  api<{ success: boolean; executed: number; skipped: number }>('/api/ceo/org/run/daily-check', { method: 'POST' });

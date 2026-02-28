@@ -12,11 +12,13 @@ import { AutopostPanel } from '@/components/ceo-luna/AutopostPanel';
 import { QuickLogPanel } from '@/components/ceo-luna/QuickLogPanel';
 import { BuildsPanel } from '@/components/ceo-luna/BuildsPanel';
 import { AlbumCreatorTab } from '@/components/ceo-luna/AlbumCreatorTab';
+import { OrgPanel } from '@/components/ceo-luna/OrgPanel';
 
 const TABS = [
   { id: 'viewer' as const, label: 'Viewer' },
   { id: 'chat' as const, label: 'Chat' },
   { id: 'dashboard' as const, label: 'Dashboard' },
+  { id: 'org' as const, label: 'Org' },
   { id: 'albums' as const, label: 'Albums' },
   { id: 'radar' as const, label: 'Radar' },
   { id: 'autopost' as const, label: 'Autopost' },
@@ -73,6 +75,7 @@ export default function CEOLunaWindow() {
             {activeTab === 'viewer' && <DocViewer />}
             {activeTab === 'chat' && <CEOChat />}
             {activeTab === 'dashboard' && <DashboardPanel />}
+            {activeTab === 'org' && <OrgPanel />}
             {activeTab === 'albums' && <AlbumCreatorTab />}
             {activeTab === 'radar' && <RadarPanel />}
             {activeTab === 'autopost' && <AutopostPanel />}

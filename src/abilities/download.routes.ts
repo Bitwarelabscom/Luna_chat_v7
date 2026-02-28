@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from 'express';
-import { createReadStream, statSync } from 'fs';
+import { createReadStream, statSync, readdirSync } from 'fs';
 import path from 'path';
 import { authenticate } from '../auth/auth.middleware.js';
 import * as ytdlp from './ytdlp.service.js';
@@ -14,7 +14,14 @@ const MIME_TYPES: Record<string, string> = {
   '.flac': 'audio/flac',
   '.wav': 'audio/wav',
   '.m4a': 'audio/mp4',
+  '.mkv': 'video/x-matroska',
+  '.webm': 'video/webm',
+  '.avi': 'video/x-msvideo',
+  '.ogg': 'audio/ogg',
 };
+
+const AUDIO_EXTS = new Set(['.mp3', '.flac', '.wav', '.m4a', '.ogg']);
+const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.webm', '.avi']);
 
 // Media root for path validation
 const MEDIA_ROOT = '/mnt/data/media';
@@ -26,6 +33,84 @@ router.use(authenticate);
 router.use((_req: Request, res: Response, next) => {
   res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
   next();
+});
+
+/**
+ * GET /api/media/browse - Browse local media files
+ * Query params:
+ *   path - relative path under /mnt/data/media (default: "")
+ * Returns directories and media files at the given path.
+ */
+router.get('/browse', (req: Request, res: Response): void => {
+  try {
+    const relPath = (req.query.path as string) || '';
+
+    // Resolve and validate path is under media root
+    const resolved = path.resolve(MEDIA_ROOT, relPath);
+    if (!resolved.startsWith(MEDIA_ROOT)) {
+      res.status(403).json({ error: 'Access denied' });
+      return;
+    }
+
+    let stat;
+    try {
+      stat = statSync(resolved);
+    } catch (_err) {
+      res.status(404).json({ error: 'Path not found' });
+      return;
+    }
+
+    if (!stat.isDirectory()) {
+      res.status(400).json({ error: 'Not a directory' });
+      return;
+    }
+
+    const entries = readdirSync(resolved, { withFileTypes: true });
+    const dirs: { name: string; path: string }[] = [];
+    const files: { name: string; path: string; type: 'audio' | 'video'; streamUrl: string; size: number }[] = [];
+
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue;
+      const entryRelPath = relPath ? `${relPath}/${entry.name}` : entry.name;
+
+      if (entry.isDirectory()) {
+        dirs.push({ name: entry.name, path: entryRelPath });
+      } else {
+        const ext = path.extname(entry.name).toLowerCase();
+        let fileType: 'audio' | 'video' | null = null;
+        if (AUDIO_EXTS.has(ext)) fileType = 'audio';
+        else if (VIDEO_EXTS.has(ext)) fileType = 'video';
+
+        if (fileType) {
+          const fullPath = path.join(resolved, entry.name);
+          const id = Buffer.from(fullPath).toString('base64url');
+          let size = 0;
+          try { size = statSync(fullPath).size; } catch { /* skip */ }
+          files.push({
+            name: entry.name,
+            path: entryRelPath,
+            type: fileType,
+            streamUrl: `/api/media/stream/${id}`,
+            size,
+          });
+        }
+      }
+    }
+
+    // Sort: dirs alphabetically, files alphabetically
+    dirs.sort((a, b) => a.name.localeCompare(b.name));
+    files.sort((a, b) => a.name.localeCompare(b.name));
+
+    res.json({
+      currentPath: relPath || '/',
+      parent: relPath ? path.dirname(relPath) === '.' ? '' : path.dirname(relPath) : null,
+      directories: dirs,
+      files,
+    });
+  } catch (error) {
+    logger.error('Browse failed', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to browse media' });
+  }
 });
 
 /**

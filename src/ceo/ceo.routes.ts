@@ -2,6 +2,7 @@ import { Router, Request, Response, RequestHandler } from 'express';
 import { z } from 'zod';
 import { authenticate } from '../auth/auth.middleware.js';
 import * as ceoService from './ceo.service.js';
+import * as ceoOrg from './ceo-org.service.js';
 import * as buildTracker from './build-tracker.service.js';
 import * as albumPipeline from './album-pipeline.service.js';
 import * as musicTrendScraper from './music-trend-scraper.service.js';
@@ -964,6 +965,254 @@ router.post('/radar/scrape-now', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to run music trend scrape', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to run scrape' });
+  }
+});
+
+// ============================================================
+// Organization System
+// ============================================================
+
+// GET /org/departments - Department overview with task counts
+router.get('/org/departments', async (req: Request, res: Response) => {
+  try {
+    const departments = await ceoOrg.getDepartmentOverview(req.user!.userId);
+    res.json({ departments });
+  } catch (error) {
+    logger.error('Failed to get department overview', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to load departments' });
+  }
+});
+
+// GET /org/tasks - List tasks
+router.get('/org/tasks', async (req: Request, res: Response) => {
+  try {
+    const tasks = await ceoOrg.listTasks(req.user!.userId, {
+      department: req.query.department as string | undefined,
+      status: req.query.status as string | undefined,
+      week: req.query.week as string | undefined,
+    });
+    res.json({ tasks });
+  } catch (error) {
+    logger.error('Failed to list org tasks', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to list tasks' });
+  }
+});
+
+const orgTaskSchema = z.object({
+  departmentSlug: z.enum(['economy', 'marketing', 'development', 'research']),
+  title: z.string().min(1).max(200),
+  description: z.string().max(2000).optional(),
+  riskLevel: z.enum(['low', 'high']).optional(),
+  priority: z.number().int().min(1).max(10).optional(),
+  dueDate: z.string().optional(),
+});
+
+// POST /org/tasks - Create manual task
+router.post('/org/tasks', async (req: Request, res: Response) => {
+  try {
+    const data = orgTaskSchema.parse(req.body);
+    const task = await ceoOrg.createTask(req.user!.userId, {
+      ...data,
+      source: 'manual',
+      assignedBy: 'Human',
+    });
+    res.json({ task });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: 'Validation error', details: error.errors });
+      return;
+    }
+    logger.error('Failed to create org task', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to create task' });
+  }
+});
+
+const orgTaskUpdateSchema = z.object({
+  status: z.enum(['pending', 'in_progress', 'done', 'approved', 'rejected']).optional(),
+  priority: z.number().int().min(1).max(10).optional(),
+});
+
+// PATCH /org/tasks/:id - Update task
+router.patch('/org/tasks/:id', async (req: Request, res: Response) => {
+  try {
+    const updates = orgTaskUpdateSchema.parse(req.body);
+    const task = await ceoOrg.updateTask(req.user!.userId, req.params.id, updates);
+    if (!task) {
+      res.status(404).json({ error: 'Task not found' });
+      return;
+    }
+    res.json({ task });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: 'Validation error', details: error.errors });
+      return;
+    }
+    logger.error('Failed to update org task', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to update task' });
+  }
+});
+
+// POST /org/tasks/:id/approve - Approve high-risk task
+router.post('/org/tasks/:id/approve', async (req: Request, res: Response) => {
+  try {
+    const task = await ceoOrg.approveOrgTask(req.user!.userId, req.params.id);
+    if (!task) {
+      res.status(404).json({ error: 'Task not found or not eligible for approval' });
+      return;
+    }
+    res.json({ task });
+  } catch (error) {
+    logger.error('Failed to approve org task', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to approve task' });
+  }
+});
+
+// POST /org/tasks/:id/reject - Reject task
+router.post('/org/tasks/:id/reject', async (req: Request, res: Response) => {
+  try {
+    const ok = await ceoOrg.rejectOrgTask(req.user!.userId, req.params.id);
+    if (!ok) {
+      res.status(404).json({ error: 'Task not found or not pending' });
+      return;
+    }
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Failed to reject org task', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to reject task' });
+  }
+});
+
+// GET /org/goals - List weekly goals
+router.get('/org/goals', async (req: Request, res: Response) => {
+  try {
+    const goals = await ceoOrg.listGoals(req.user!.userId, req.query.week as string | undefined);
+    res.json({ goals });
+  } catch (error) {
+    logger.error('Failed to list weekly goals', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to list goals' });
+  }
+});
+
+const goalUpdateSchema = z.object({
+  status: z.enum(['active', 'completed', 'dropped']).optional(),
+  progressPct: z.number().int().min(0).max(100).optional(),
+});
+
+// PATCH /org/goals/:id - Update goal
+router.patch('/org/goals/:id', async (req: Request, res: Response) => {
+  try {
+    const updates = goalUpdateSchema.parse(req.body);
+    const goal = await ceoOrg.updateGoal(req.user!.userId, req.params.id, updates);
+    if (!goal) {
+      res.status(404).json({ error: 'Goal not found' });
+      return;
+    }
+    res.json({ goal });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: 'Validation error', details: error.errors });
+      return;
+    }
+    logger.error('Failed to update weekly goal', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to update goal' });
+  }
+});
+
+// GET /org/proposals - List ability proposals
+router.get('/org/proposals', async (req: Request, res: Response) => {
+  try {
+    const proposals = await ceoOrg.listProposals(req.user!.userId, req.query.status as string | undefined);
+    res.json({ proposals });
+  } catch (error) {
+    logger.error('Failed to list proposals', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to list proposals' });
+  }
+});
+
+// POST /org/proposals/:id/approve - Approve proposal
+router.post('/org/proposals/:id/approve', async (req: Request, res: Response) => {
+  try {
+    const ok = await ceoOrg.updateProposalStatus(req.user!.userId, req.params.id, 'approved');
+    if (!ok) {
+      res.status(404).json({ error: 'Proposal not found or not pending' });
+      return;
+    }
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Failed to approve proposal', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to approve proposal' });
+  }
+});
+
+// POST /org/proposals/:id/reject - Reject proposal
+router.post('/org/proposals/:id/reject', async (req: Request, res: Response) => {
+  try {
+    const ok = await ceoOrg.updateProposalStatus(req.user!.userId, req.params.id, 'rejected');
+    if (!ok) {
+      res.status(404).json({ error: 'Proposal not found or not pending' });
+      return;
+    }
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Failed to reject proposal', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to reject proposal' });
+  }
+});
+
+// GET /org/actions - List recommended actions
+router.get('/org/actions', async (req: Request, res: Response) => {
+  try {
+    const actions = await ceoOrg.listActions(req.user!.userId, req.query.status as string | undefined);
+    res.json({ actions });
+  } catch (error) {
+    logger.error('Failed to list actions', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to list actions' });
+  }
+});
+
+const actionUpdateSchema = z.object({
+  status: z.enum(['dismissed', 'done']),
+});
+
+// PATCH /org/actions/:id - Dismiss or mark done
+router.patch('/org/actions/:id', async (req: Request, res: Response) => {
+  try {
+    const { status } = actionUpdateSchema.parse(req.body);
+    const ok = await ceoOrg.updateActionStatus(req.user!.userId, req.params.id, status);
+    if (!ok) {
+      res.status(404).json({ error: 'Action not found or not open' });
+      return;
+    }
+    res.json({ success: true });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: 'Validation error', details: error.errors });
+      return;
+    }
+    logger.error('Failed to update action', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to update action' });
+  }
+});
+
+// POST /org/run/weekly-plan - Manual trigger weekly planning
+router.post('/org/run/weekly-plan', async (req: Request, res: Response) => {
+  try {
+    const result = await ceoOrg.runWeeklyPlanning(req.user!.userId);
+    res.json({ success: true, ...result });
+  } catch (error) {
+    logger.error('Failed to run weekly planning', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to run weekly planning' });
+  }
+});
+
+// POST /org/run/daily-check - Manual trigger daily check
+router.post('/org/run/daily-check', async (req: Request, res: Response) => {
+  try {
+    const result = await ceoOrg.runDailyDepartmentCheck(req.user!.userId);
+    res.json({ success: true, ...result });
+  } catch (error) {
+    logger.error('Failed to run daily check', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to run daily check' });
   }
 });
 
