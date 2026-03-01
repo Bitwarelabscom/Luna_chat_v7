@@ -706,9 +706,16 @@ async function consolidateUserDaily(userId: string): Promise<void> {
           -EXTRACT(EPOCH FROM (NOW() - COALESCE(last_activated, created_at)))
           / CASE edge_type
               WHEN 'co_occurrence' THEN 1209600   -- 14 days
+              WHEN 'discussed' THEN 1209600       -- 14 days
               WHEN 'semantic' THEN 7776000         -- 90 days
               WHEN 'temporal' THEN 2592000         -- 30 days
               WHEN 'causal' THEN 5184000           -- 60 days
+              WHEN 'interested_in' THEN 5184000   -- 60 days
+              WHEN 'working_on' THEN 2592000      -- 30 days
+              WHEN 'knows_person' THEN 7776000    -- 90 days
+              WHEN 'dislikes' THEN 5184000        -- 60 days
+              WHEN 'geopolitical' THEN 2592000    -- 30 days
+              WHEN 'technical_tool' THEN 7776000  -- 90 days
               ELSE 2592000                         -- 30 days default
             END
         )))
@@ -717,9 +724,16 @@ async function consolidateUserDaily(userId: string): Promise<void> {
             -EXTRACT(EPOCH FROM (NOW() - COALESCE(last_activated, created_at)))
             / CASE edge_type
                 WHEN 'co_occurrence' THEN 1209600
+                WHEN 'discussed' THEN 1209600
                 WHEN 'semantic' THEN 7776000
                 WHEN 'temporal' THEN 2592000
                 WHEN 'causal' THEN 5184000
+                WHEN 'interested_in' THEN 5184000
+                WHEN 'working_on' THEN 2592000
+                WHEN 'knows_person' THEN 7776000
+                WHEN 'dislikes' THEN 5184000
+                WHEN 'geopolitical' THEN 2592000
+                WHEN 'technical_tool' THEN 7776000
                 ELSE 2592000
               END
           ))
@@ -734,7 +748,7 @@ async function consolidateUserDaily(userId: string): Promise<void> {
       UPDATE memory_edges SET is_active = false
       WHERE user_id = $1 AND is_active = true
         AND (
-          (weight < 0.1 AND edge_type != 'same_as')
+          (weight < 0.1 AND edge_type NOT IN ('same_as', 'temporal_pattern'))
           OR source_node_id = target_node_id
         )
       RETURNING id
@@ -1145,6 +1159,7 @@ export interface ActivatedNode {
   depth: number;
   sessionCount: number;
   edgeWeight: number;
+  edgeType: string;
   path: string[]; // provenance: seed label > hop1 label > ...
 }
 
@@ -1173,6 +1188,23 @@ const HOP2_EXPAND_COUNT = 15;
 const MAX_RESULTS = 25;
 const SESSION_BONUS_THRESHOLD = 3;
 const SESSION_BONUS_MULTIPLIER = 1.5;
+
+// Edge-type activation multipliers: reward semantic edges over generic co_occurrence
+const EDGE_TYPE_WEIGHTS: Record<string, number> = {
+  interested_in: 1.3,
+  working_on: 1.2,
+  knows_person: 1.15,
+  temporal_pattern: 1.2,
+  technical_tool: 1.15,
+  dislikes: 1.1,
+  geopolitical: 1.0,
+  discussed: 1.0,
+  co_occurrence: 1.0,
+  semantic: 1.1,
+  causal: 1.15,
+  temporal: 1.1,
+  same_as: 1.0,
+};
 
 /**
  * Tokenize a message into candidate entity mentions, match against graph nodes.
@@ -1323,11 +1355,14 @@ async function spreadActivation(
     const edgeRecency = parseFloat((row.recency as string) ?? '0');
     const centralityScore = parseFloat((row.neighbor_centrality as string) ?? '0');
     const sessionCount = parseInt((row.distinct_session_count as string) ?? '0');
+    const edgeType = (row.edge_type as string) || 'co_occurrence';
+    const typeMultiplier = EDGE_TYPE_WEIGHTS[edgeType] ?? 1.0;
 
     const activation =
       seed.activation * DECAY_FACTOR * edgeWeight * edgeRecency
       * (1.0 + centralityScore * 0.3)
-      * (sessionCount >= SESSION_BONUS_THRESHOLD ? SESSION_BONUS_MULTIPLIER : 1.0);
+      * (sessionCount >= SESSION_BONUS_THRESHOLD ? SESSION_BONUS_MULTIPLIER : 1.0)
+      * typeMultiplier;
 
     const existing = activated.get(neighborId);
     if (!existing || activation > existing.activation) {
@@ -1342,6 +1377,7 @@ async function spreadActivation(
         depth: 1,
         sessionCount,
         edgeWeight,
+        edgeType,
         path: [seed.nodeLabel, row.node_label as string],
       });
     }
@@ -1398,11 +1434,14 @@ async function spreadActivation(
     const edgeRecency = parseFloat((row.recency as string) ?? '0');
     const centralityScore = parseFloat((row.neighbor_centrality as string) ?? '0');
     const sessionCount = parseInt((row.distinct_session_count as string) ?? '0');
+    const edgeType = (row.edge_type as string) || 'co_occurrence';
+    const typeMultiplier = EDGE_TYPE_WEIGHTS[edgeType] ?? 1.0;
 
     const activation =
       parent.activation * DECAY_FACTOR * edgeWeight * edgeRecency
       * (1.0 + centralityScore * 0.3)
-      * (sessionCount >= SESSION_BONUS_THRESHOLD ? SESSION_BONUS_MULTIPLIER : 1.0);
+      * (sessionCount >= SESSION_BONUS_THRESHOLD ? SESSION_BONUS_MULTIPLIER : 1.0)
+      * typeMultiplier;
 
     const existing = activated.get(neighborId);
     if (!existing || activation > existing.activation) {
@@ -1417,6 +1456,7 @@ async function spreadActivation(
         depth: 2,
         sessionCount,
         edgeWeight,
+        edgeType,
         path: [...parent.path, row.node_label as string],
       });
     }
@@ -1435,8 +1475,30 @@ function rankResults(activated: Map<string, ActivatedNode>): ActivatedNode[] {
 }
 
 /**
+ * Human-readable label for an edge type.
+ * co_occurrence is omitted (no label) since it carries no semantic signal.
+ */
+function formatEdgeTypeLabel(edgeType: string): string {
+  const labels: Record<string, string> = {
+    interested_in: 'interested in',
+    working_on: 'working on',
+    knows_person: 'knows',
+    dislikes: 'dislikes',
+    geopolitical: 'geopolitical',
+    temporal_pattern: 'recurring pattern',
+    technical_tool: 'uses tool',
+    discussed: 'discussed',
+    semantic: 'semantic',
+    causal: 'causes',
+    temporal: 'temporal',
+  };
+  return labels[edgeType] || '';
+}
+
+/**
  * Format activated nodes into a [Graph Memory] block with provenance paths.
  * Groups into 3 tiers: Direct connections, Related context, Weak signals.
+ * Includes edge type labels when available (e.g. [interested in]).
  */
 function formatActivationContext(seeds: SeedEntity[], activated: ActivatedNode[]): string {
   if (activated.length === 0 && seeds.length === 0) return '';
@@ -1445,6 +1507,7 @@ function formatActivationContext(seeds: SeedEntity[], activated: ActivatedNode[]
   const lines: string[] = [
     '[Graph Memory]',
     'Associations retrieved from memory graph via spreading activation.',
+    'Edge labels (e.g. [interested in]) indicate the relationship type.',
     'Confidence tiers: Direct = high confidence, Related = medium, Weak = speculative.',
     'Prioritize Direct connections in reasoning; treat Weak signals as possible but unconfirmed.',
     '',
@@ -1466,21 +1529,25 @@ function formatActivationContext(seeds: SeedEntity[], activated: ActivatedNode[]
     }
   }
 
+  const formatNodeLine = (node: ActivatedNode): string => {
+    const pathStr = node.path.join(' > ');
+    const sessionInfo = node.sessionCount >= 2 ? `${node.sessionCount} sessions, ` : '';
+    const typeLabel = formatEdgeTypeLabel(node.edgeType);
+    const typePart = typeLabel ? ` [${typeLabel}]` : '';
+    return `- ${node.nodeLabel} (${node.nodeType})${typePart} -- via ${pathStr} [${sessionInfo}weight: ${node.edgeWeight.toFixed(2)}]`;
+  };
+
   if (direct.length > 0) {
     lines.push('', 'Direct connections (high confidence):');
     for (const node of direct) {
-      const pathStr = node.path.join(' > ');
-      const sessionInfo = node.sessionCount >= 2 ? `${node.sessionCount} sessions, ` : '';
-      lines.push(`- ${node.nodeLabel} (${node.nodeType}) -- via ${pathStr} [${sessionInfo}weight: ${node.edgeWeight.toFixed(2)}]`);
+      lines.push(formatNodeLine(node));
     }
   }
 
   if (related.length > 0) {
     lines.push('', 'Related context (medium confidence):');
     for (const node of related) {
-      const pathStr = node.path.join(' > ');
-      const sessionInfo = node.sessionCount >= 2 ? `${node.sessionCount} sessions, ` : '';
-      lines.push(`- ${node.nodeLabel} (${node.nodeType}) -- via ${pathStr} [${sessionInfo}weight: ${node.edgeWeight.toFixed(2)}]`);
+      lines.push(formatNodeLine(node));
     }
   }
 
@@ -1488,9 +1555,7 @@ function formatActivationContext(seeds: SeedEntity[], activated: ActivatedNode[]
   if (weak.length > 0 && (direct.length + related.length) < 5) {
     lines.push('', 'Weak signals (speculative - do not assert as fact):');
     for (const node of weak) {
-      const pathStr = node.path.join(' > ');
-      const sessionInfo = node.sessionCount >= 2 ? `${node.sessionCount} sessions, ` : '';
-      lines.push(`- ${node.nodeLabel} (${node.nodeType}) -- via ${pathStr} [${sessionInfo}weight: ${node.edgeWeight.toFixed(2)}]`);
+      lines.push(formatNodeLine(node));
     }
   }
 

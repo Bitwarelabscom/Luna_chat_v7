@@ -16,7 +16,8 @@ export type BackgroundLlmFeature =
   | 'music_trend_analysis'
   | 'query_refinement'
   | 'domain_evaluation'
-  | 'ceo_org_execution';
+  | 'ceo_org_execution'
+  | 'edge_classification';
 
 export interface FeatureModelSelection {
   provider: ProviderId;
@@ -126,6 +127,11 @@ export const BACKGROUND_LLM_FEATURES: BackgroundLlmFeatureMeta[] = [
     label: 'CEO Org Execution',
     description: 'Runs department tasks, weekly planning, and daily checks for CEO organization system.',
   },
+  {
+    id: 'edge_classification',
+    label: 'Edge Classification',
+    description: 'Classifies graph memory edges into semantic types (interested_in, working_on, etc.).',
+  },
 ];
 
 export const DEFAULT_BACKGROUND_LLM_SETTINGS: BackgroundLlmSettings = {
@@ -189,6 +195,10 @@ export const DEFAULT_BACKGROUND_LLM_SETTINGS: BackgroundLlmSettings = {
     primary: { provider: 'ollama_tertiary', model: 'HoseaDev/qwen2.5-7b-instruct-q4-gguf:latest' },
     fallback: { provider: 'ollama_secondary', model: 'llama3.2:3b' },
   },
+  edge_classification: {
+    primary: { provider: 'ollama_tertiary', model: 'HoseaDev/qwen2.5-7b-instruct-q4-gguf:latest' },
+    fallback: { provider: 'ollama', model: 'llama3.2:3b' },
+  },
 };
 
 interface DbSettingsRow {
@@ -234,6 +244,7 @@ function mergeWithDefaults(raw: unknown): BackgroundLlmSettings {
     query_refinement: sanitizeFeatureConfig(obj.query_refinement, DEFAULT_BACKGROUND_LLM_SETTINGS.query_refinement),
     domain_evaluation: sanitizeFeatureConfig(obj.domain_evaluation, DEFAULT_BACKGROUND_LLM_SETTINGS.domain_evaluation),
     ceo_org_execution: sanitizeFeatureConfig(obj.ceo_org_execution, DEFAULT_BACKGROUND_LLM_SETTINGS.ceo_org_execution),
+    edge_classification: sanitizeFeatureConfig(obj.edge_classification, DEFAULT_BACKGROUND_LLM_SETTINGS.edge_classification),
   };
 }
 
@@ -274,6 +285,7 @@ export async function updateBackgroundLlmSettings(
     query_refinement: updates.query_refinement ? sanitizeFeatureConfig(updates.query_refinement, current.query_refinement) : current.query_refinement,
     domain_evaluation: updates.domain_evaluation ? sanitizeFeatureConfig(updates.domain_evaluation, current.domain_evaluation) : current.domain_evaluation,
     ceo_org_execution: updates.ceo_org_execution ? sanitizeFeatureConfig(updates.ceo_org_execution, current.ceo_org_execution) : current.ceo_org_execution,
+    edge_classification: updates.edge_classification ? sanitizeFeatureConfig(updates.edge_classification, current.edge_classification) : current.edge_classification,
   };
 
   await query(

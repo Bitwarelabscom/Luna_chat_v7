@@ -10,6 +10,7 @@ import type { Session } from '../types/index.js';
 import { UNTRUSTED_EMAIL_FRAME } from '../email/email-gatekeeper.service.js';
 import { formatRelativeTime } from './time-utils.js';
 import { scoreMessageComplexity, curateMemory } from './memory-curation.service.js';
+import { classifyEdges } from './edge-classification.service.js';
 
 /**
  * Memory context split into stable (cacheable) and volatile (per-query) parts
@@ -545,14 +546,20 @@ export async function processMessageMemory(
     logger.error('Failed to store message embedding', { error: err.message });
   });
 
-  // Extract graph entities asynchronously (builds connection-based memory)
+  // Extract graph entities asynchronously, then classify edge types
   memorycoreClient.extractGraphEntities(
     userId,
     sessionId,
     content,
     role === 'user' ? 'user' : 'model'
-  ).catch(err => {
-    logger.error('Failed to extract graph entities', { error: err.message });
+  ).then(result => {
+    if (result?.entities && result.entities.length >= 2) {
+      classifyEdges(userId, sessionId, content, role, result.entities).catch(err => {
+        logger.error('Failed to classify edges', { error: err.message });
+      });
+    }
+  }).catch(err => {
+    logger.error('Failed to extract graph entities or classify edges', { error: err.message });
   });
 }
 
