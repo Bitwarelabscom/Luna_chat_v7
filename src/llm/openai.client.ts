@@ -72,8 +72,8 @@ function getClient(provider: ProviderId = 'openai'): OpenAI {
         // This error only triggers if someone tries to use the OpenAI client directly
         throw new Error('Anthropic should be routed through createChatCompletion, not getClient directly.');
       case 'google':
-        // Google Gemini uses different API format, not OpenAI-compatible
-        throw new Error('Google Gemini is not supported for chat with tool calling. Use OpenAI, Groq, xAI, or OpenRouter.');
+        // Google Gemini uses different API format, routed through createChatCompletion
+        throw new Error('Google Gemini should be routed through createChatCompletion, not getClient directly.');
       default:
         throw new Error(`Unknown provider: ${provider}`);
     }
@@ -313,25 +313,47 @@ export async function createChatCompletion(
     }
   }
 
-  // Route Google AI to native provider (Gemini doesn't support tools via OpenAI SDK here yet)
+  // Route Google AI to native provider (supports tool calling via Gemini function calling)
   if (provider === 'google') {
     try {
       const googleProvider = await import('./providers/google.provider.js');
-      const result = await googleProvider.createCompletion(
-        modelToUse,
-        messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
-        { temperature, maxTokens: resolvedMaxTokens }
-      );
-      const completionResult: ChatCompletionResult = {
-        content: result.content,
-        tokensUsed: result.tokensUsed,
-        promptTokens: 0,
-        completionTokens: 0,
-        toolCalls: undefined,
-        finishReason: 'stop',
-      };
-      logActivity(completionResult);
-      return completionResult;
+      if (tools && tools.length > 0) {
+        logger.debug('Routing to native Google provider for tool calling', { model: modelToUse });
+        const result = await googleProvider.createCompletionWithTools(
+          modelToUse,
+          messages as anthropicProvider.ToolMessage[],
+          tools as anthropicProvider.OpenAITool[],
+          { temperature, maxTokens: resolvedMaxTokens }
+        );
+        const completionResult: ChatCompletionResult = {
+          content: result.content,
+          tokensUsed: result.tokensUsed,
+          promptTokens: result.promptTokens,
+          completionTokens: result.completionTokens,
+          toolCalls: result.toolCalls as OpenAI.Chat.Completions.ChatCompletionMessageToolCall[],
+          finishReason: result.finishReason,
+        };
+        logActivity(completionResult);
+        return completionResult;
+      } else {
+        // No tools - use regular Google completion
+        logger.debug('Routing to native Google provider (no tools)', { model: modelToUse });
+        const result = await googleProvider.createCompletion(
+          modelToUse,
+          messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
+          { temperature, maxTokens: resolvedMaxTokens }
+        );
+        const completionResult: ChatCompletionResult = {
+          content: result.content,
+          tokensUsed: result.tokensUsed,
+          promptTokens: result.inputTokens || 0,
+          completionTokens: result.outputTokens || 0,
+          toolCalls: undefined,
+          finishReason: 'stop',
+        };
+        logActivity(completionResult);
+        return completionResult;
+      }
     } catch (error) {
       logErrorActivity((error as Error).message || 'Google completion failed');
       throw error;
