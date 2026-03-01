@@ -6,7 +6,7 @@ export interface EnrichedArticle {
   id: number;
   title: string;
   url: string | null;
-  source_name: string;
+  author: string;
   category: string;
   priority: string;
   priority_reason: string | null;
@@ -47,7 +47,7 @@ export async function checkAndSendAlerts(userId: string, article: EnrichedArticl
 
     // Format alert message
     const priorityEmoji = article.priority === 'P1' ? '[BREAKING]' : article.priority === 'P2' ? '[IMPORTANT]' : '[NEWS]';
-    const message = `${priorityEmoji} [${article.priority} ${article.category.toUpperCase()}] ${article.title}\n${article.source_name}${article.url ? `\n${article.url}` : ''}`;
+    const message = `${priorityEmoji} [${article.priority} ${article.category.toUpperCase()}] ${article.title}\n${article.author || 'Unknown'}${article.url ? `\n${article.url}` : ''}`;
 
     // Send via configured delivery method
     if (deliveryMethod === 'telegram') {

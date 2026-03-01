@@ -547,9 +547,9 @@ router.get('/news/articles', async (req: Request, res: Response) => {
     const { q, limit, category, priority } = req.query;
 
     // Query from local enriched articles
-    let sql = `SELECT id, title, url, source_name, published_at, category, priority,
+    let sql = `SELECT id, title, url, author, published_at, category, priority,
                priority_reason, source_type, enriched_at, notification_sent,
-               newsfetcher_id, created_at
+               newsfetcher_id, fetched_at
                FROM rss_articles WHERE 1=1`;
     const params: any[] = [];
     let paramIdx = 1;
@@ -567,7 +567,7 @@ router.get('/news/articles', async (req: Request, res: Response) => {
       params.push(`%${q}%`);
     }
 
-    sql += ` ORDER BY created_at DESC LIMIT $${paramIdx++}`;
+    sql += ` ORDER BY COALESCE(published_at, fetched_at) DESC LIMIT $${paramIdx++}`;
     params.push(parseInt(limit as string) || 50);
 
     const rows = await query(sql, params);
@@ -577,7 +577,7 @@ router.get('/news/articles', async (req: Request, res: Response) => {
       title: r.title,
       url: r.url,
       publishedAt: r.published_at,
-      sourceName: r.source_name,
+      sourceName: r.author || 'Unknown',
       category: r.category,
       priority: r.priority,
       priorityReason: r.priority_reason,

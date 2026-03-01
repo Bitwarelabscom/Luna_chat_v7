@@ -73,8 +73,7 @@ export default function NewsWindow() {
         priority: priorityFilter !== 'all' ? priorityFilter : undefined,
         limit: 100,
       });
-      // API returns array directly now
-      const list = Array.isArray(res) ? res : (res as any).articles || [];
+      const list = (res as any).articles || [];
       setArticles(list);
     } catch (error) {
       console.error('Failed to fetch articles:', error);

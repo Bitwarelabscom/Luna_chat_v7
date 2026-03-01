@@ -16,7 +16,7 @@ export async function syncAndEnrichNews(userId: string): Promise<SyncResult> {
 
   try {
     // 1. Pull articles from newsfetcher
-    const articles = await newsfetcherService.getArticles({ limit: 100 });
+    const articles = await newsfetcherService.getArticles({ limit: 200 });
 
     // 2. Sync to local rss_articles
     for (const article of articles) {
@@ -28,10 +28,11 @@ export async function syncAndEnrichNews(userId: string): Promise<SyncResult> {
         if (existing.length > 0) continue;
 
         await query(
-          `INSERT INTO rss_articles (title, url, source_name, published_at, source_type, newsfetcher_id, created_at)
-           VALUES ($1, $2, $3, $4, 'newsfetcher', $5, NOW())
+          `INSERT INTO rss_articles (user_id, title, url, author, published_at, source_type, newsfetcher_id, fetched_at)
+           VALUES ($1, $2, $3, $4, $5, 'newsfetcher', $6, NOW())
            ON CONFLICT DO NOTHING`,
           [
+            userId,
             article.title,
             article.url,
             article.sourceName,
@@ -47,9 +48,9 @@ export async function syncAndEnrichNews(userId: string): Promise<SyncResult> {
 
     // 3. Enrich un-enriched articles
     const unenriched = await query(
-      `SELECT id, title, url, source_name, newsfetcher_id FROM rss_articles
+      `SELECT id, title, url, author, newsfetcher_id FROM rss_articles
        WHERE enriched_at IS NULL AND source_type = 'newsfetcher'
-       ORDER BY created_at DESC LIMIT 50`
+       ORDER BY fetched_at DESC LIMIT 50`
     );
 
     if (unenriched.length > 0) {
@@ -92,7 +93,7 @@ export async function syncAndEnrichNews(userId: string): Promise<SyncResult> {
 
     // 4. Check alerts for newly enriched articles
     const unnotified = await query(
-      `SELECT id, title, url, source_name, category, priority, priority_reason
+      `SELECT id, title, url, author, category, priority, priority_reason
        FROM rss_articles
        WHERE notification_sent = false AND enriched_at IS NOT NULL AND category IS NOT NULL
        ORDER BY enriched_at DESC LIMIT 50`

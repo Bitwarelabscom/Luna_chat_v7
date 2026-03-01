@@ -339,7 +339,7 @@ export const autonomousApi = {
     if (options?.category) params.set('category', options.category);
     if (options?.priority) params.set('priority', options.priority);
     const query = params.toString();
-    return api<NewsArticle[]>(`/api/autonomous/news/articles${query ? `?${query}` : ''}`);
+    return api<{ articles: NewsArticle[] }>(`/api/autonomous/news/articles${query ? `?${query}` : ''}`);
   },
 
   getNewsCategories: () =>
