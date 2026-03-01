@@ -156,6 +156,7 @@ export async function getArticles(options: {
   status?: string;
   minScore?: number;
   limit?: number;
+  since?: string;
 } = {}): Promise<NewsArticle[]> {
   if (!isEnabled()) return [];
 
@@ -163,7 +164,8 @@ export async function getArticles(options: {
   if (options.q) params.set('q', options.q);
   if (options.status) params.set('status', options.status);
   if (options.minScore) params.set('min_score', options.minScore.toString());
-  params.set('limit', (options.limit || 50).toString());
+  if (options.since) params.set('since', options.since);
+  params.set('limit', (options.limit || 2000).toString());
 
   const query = params.toString();
   const raw = await fetchJson<RawArticle[]>(`/articles?${query}`);

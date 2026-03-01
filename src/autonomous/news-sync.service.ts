@@ -9,18 +9,35 @@ export interface SyncResult {
   synced: number;
   enriched: number;
   alerts: number;
+  pruned: number;
+}
+
+/**
+ * Compute a 3-day-ago ISO date string for the since filter.
+ */
+function threeDaysAgo(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - 3);
+  return d.toISOString();
 }
 
 export async function syncAndEnrichNews(userId: string): Promise<SyncResult> {
-  const result: SyncResult = { synced: 0, enriched: 0, alerts: 0 };
+  const result: SyncResult = { synced: 0, enriched: 0, alerts: 0, pruned: 0 };
 
   try {
-    // 1. Pull articles from newsfetcher
-    const articles = await newsfetcherService.getArticles({ limit: 200 });
+    const since = threeDaysAgo();
 
-    // 2. Sync to local rss_articles
+    // 1. Pull articles from newsfetcher with 3-day filter
+    const articles = await newsfetcherService.getArticles({ limit: 2000, since });
+
+    // 2. Sync to local rss_articles (only articles within 3-day window)
     for (const article of articles) {
       try {
+        // Skip articles outside our window (belt + suspenders)
+        if (article.publishedAt && new Date(article.publishedAt) < new Date(since)) {
+          continue;
+        }
+
         const existing = await query(
           'SELECT id FROM rss_articles WHERE newsfetcher_id = $1',
           [article.id]
@@ -46,15 +63,14 @@ export async function syncAndEnrichNews(userId: string): Promise<SyncResult> {
       }
     }
 
-    // 3. Enrich un-enriched articles
+    // 3. Enrich only newly synced unenriched articles (small batch for background job)
     const unenriched = await query(
       `SELECT id, title, url, author, newsfetcher_id FROM rss_articles
-       WHERE enriched_at IS NULL AND source_type = 'newsfetcher'
-       ORDER BY fetched_at DESC LIMIT 50`
+       WHERE enriched_at IS NULL AND published_at >= NOW() - INTERVAL '3 days'
+       ORDER BY fetched_at DESC LIMIT 20`
     );
 
     if (unenriched.length > 0) {
-      // Get user interests for personalized filtering
       const facts = await factsService.getUserFacts(userId, { limit: 10 });
       const interests = facts
         .filter((f: any) => f.category === 'hobby' || f.category === 'preference')
@@ -62,7 +78,6 @@ export async function syncAndEnrichNews(userId: string): Promise<SyncResult> {
 
       for (const row of unenriched) {
         try {
-          // Find matching newsfetcher article for default_category hint
           const nfArticle = articles.find(a => a.id === (row as any).newsfetcher_id);
           const defaultCategory = nfArticle?.defaultCategory || undefined;
 
@@ -84,7 +99,7 @@ export async function syncAndEnrichNews(userId: string): Promise<SyncResult> {
           result.enriched++;
 
           // Rate limit
-          await new Promise(r => setTimeout(r, 400));
+          await new Promise(r => setTimeout(r, 300));
         } catch (err) {
           logger.warn('Failed to enrich article', { id: (row as any).id, error: (err as Error).message });
         }
@@ -103,7 +118,6 @@ export async function syncAndEnrichNews(userId: string): Promise<SyncResult> {
       try {
         const sent = await checkAndSendAlerts(userId, article as any);
         if (sent) result.alerts++;
-        // Mark as processed regardless
         await query(
           'UPDATE rss_articles SET notification_sent = true WHERE id = $1',
           [(article as any).id]
@@ -113,7 +127,15 @@ export async function syncAndEnrichNews(userId: string): Promise<SyncResult> {
       }
     }
 
-    logger.info('News sync complete', { ...result, userId });
+    // 5. Prune articles older than 3 days
+    const pruneResult = await query(
+      `DELETE FROM rss_articles WHERE published_at < NOW() - INTERVAL '3 days' RETURNING id`
+    );
+    result.pruned = pruneResult.length;
+
+    if (result.synced > 0 || result.enriched > 0 || result.pruned > 0) {
+      logger.info('News sync complete', { ...result, userId });
+    }
   } catch (error) {
     logger.error('News sync failed', { error, userId });
   }

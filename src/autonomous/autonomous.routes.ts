@@ -15,6 +15,7 @@ import { query } from '../db/postgres.js';
 import { NEWS_CATEGORIES } from './news-filter.service.js';
 import { syncAndEnrichNews } from './news-sync.service.js';
 import * as newsAlertService from './news-alert.service.js';
+import * as newsEnrichmentService from './news-enrichment.service.js';
 import logger from '../utils/logger.js';
 
 const router = Router();
@@ -546,11 +547,12 @@ router.get('/news/articles', async (req: Request, res: Response) => {
   try {
     const { q, limit, category, priority } = req.query;
 
-    // Query from local enriched articles
+    // Query from local enriched articles (3-day window, enriched only)
     let sql = `SELECT id, title, url, author, published_at, category, priority,
                priority_reason, source_type, enriched_at, notification_sent,
                newsfetcher_id, fetched_at
-               FROM rss_articles WHERE 1=1`;
+               FROM rss_articles WHERE enriched_at IS NOT NULL
+               AND published_at >= NOW() - INTERVAL '3 days'`;
     const params: any[] = [];
     let paramIdx = 1;
 
@@ -701,7 +703,8 @@ router.get('/news/categories', async (_req: Request, res: Response) => {
   try {
     const counts = await query(
       `SELECT category, COUNT(*) as count FROM rss_articles
-       WHERE category IS NOT NULL GROUP BY category ORDER BY count DESC`
+       WHERE category IS NOT NULL AND published_at >= NOW() - INTERVAL '3 days'
+       GROUP BY category ORDER BY count DESC`
     );
     const countMap = new Map((counts as any[]).map((r: any) => [r.category, parseInt(r.count)]));
     const categories = NEWS_CATEGORIES.map(c => ({
@@ -757,6 +760,119 @@ router.post('/news/sync', async (req: Request, res: Response) => {
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: 'Failed to sync news' });
+  }
+});
+
+// ============================================
+// News Dashboard & Enrichment Control
+// ============================================
+
+/**
+ * GET /api/autonomous/news/dashboard
+ * Stats: total, enriched, unprocessed, priority/category breakdown, enrichment state
+ */
+router.get('/news/dashboard', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const stats = await newsEnrichmentService.getDashboardStats(userId);
+    res.json(stats);
+  } catch (error) {
+    logger.error('Error getting news dashboard', { error });
+    res.status(500).json({ error: 'Failed to get dashboard stats' });
+  }
+});
+
+/**
+ * GET /api/autonomous/news/queue
+ * Unclassified articles (enriched_at IS NULL, 3-day window)
+ */
+router.get('/news/queue', async (req: Request, res: Response) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
+    const rows = await query(
+      `SELECT id, title, url, author, published_at, source_type, fetched_at
+       FROM rss_articles
+       WHERE enriched_at IS NULL AND published_at >= NOW() - INTERVAL '3 days'
+       ORDER BY published_at DESC LIMIT $1`,
+      [limit]
+    );
+
+    const articles = (rows as any[]).map((r: any) => ({
+      id: r.id,
+      title: r.title,
+      url: r.url,
+      author: r.author,
+      publishedAt: r.published_at,
+      sourceType: r.source_type,
+      fetchedAt: r.fetched_at,
+    }));
+
+    res.json({ articles, total: articles.length });
+  } catch (error) {
+    logger.error('Error getting news queue', { error });
+    res.status(500).json({ error: 'Failed to get news queue' });
+  }
+});
+
+/**
+ * GET /api/autonomous/news/enrich/stream
+ * SSE - starts enrichment and streams progress events
+ */
+router.get('/news/enrich/stream', async (req: Request, res: Response): Promise<void> => {
+  const userId = req.user!.userId;
+
+  // Check if already running
+  const currentState = await newsEnrichmentService.getEnrichmentState(userId);
+  if (currentState.running) {
+    res.status(409).json({ error: 'Enrichment already running' });
+    return;
+  }
+
+  // Set up SSE
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.flushHeaders();
+
+  let closed = false;
+  req.on('close', () => {
+    closed = true;
+    // Request stop on disconnect
+    newsEnrichmentService.requestStop(userId).catch(() => {});
+  });
+
+  try {
+    for await (const event of newsEnrichmentService.batchEnrichWithProgress(userId)) {
+      if (closed) break;
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    }
+  } catch (error) {
+    if (!closed) {
+      res.write(`data: ${JSON.stringify({ type: 'error', error: (error as Error).message })}\n\n`);
+    }
+    logger.error('Enrichment stream error', { error, userId });
+  }
+
+  if (!closed) {
+    res.end();
+  }
+});
+
+/**
+ * POST /api/autonomous/news/enrich/stop
+ * Request enrichment to stop
+ */
+router.post('/news/enrich/stop', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    await newsEnrichmentService.requestStop(userId);
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Error stopping enrichment', { error });
+    res.status(500).json({ error: 'Failed to stop enrichment' });
   }
 });
 

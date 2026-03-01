@@ -1,14 +1,19 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Newspaper, Search, RefreshCw, ExternalLink,
-  Clock, Shield, Settings, X, ChevronDown
+  Clock, Shield, Settings, X, ChevronDown,
+  BarChart3, ListTodo, Play, Square, Zap
 } from 'lucide-react';
-import { autonomousApi, type NewsArticle, type NewsClaim, type NewsCategoryInfo, type AlertThreshold } from '@/lib/api';
+import {
+  autonomousApi,
+  type NewsArticle, type NewsClaim, type NewsCategoryInfo, type AlertThreshold,
+  type DashboardStats, type EnrichmentProgressEvent, type QueueArticle, type RecentClassification
+} from '@/lib/api';
 import { cn } from '@/lib/utils';
 
-type ViewMode = 'articles' | 'claims';
+type TabId = 'articles' | 'queue' | 'dashboard' | 'claims';
 
 const CATEGORY_COLORS: Record<string, string> = {
   conflicts: '#ef4444',
@@ -52,7 +57,7 @@ const VERIFICATION_COLORS: Record<string, { bg: string; text: string; border: st
 };
 
 export default function NewsWindow() {
-  const [viewMode, setViewMode] = useState<ViewMode>('articles');
+  const [activeTab, setActiveTab] = useState<TabId>('articles');
   const [articles, setArticles] = useState<NewsArticle[]>([]);
   const [claims, setClaims] = useState<NewsClaim[]>([]);
   const [categories, setCategories] = useState<NewsCategoryInfo[]>([]);
@@ -64,6 +69,7 @@ export default function NewsWindow() {
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [thresholds, setThresholds] = useState<AlertThreshold[]>([]);
+  const [queueCount, setQueueCount] = useState(0);
 
   const fetchArticles = useCallback(async () => {
     try {
@@ -109,14 +115,23 @@ export default function NewsWindow() {
     }
   }, []);
 
+  const fetchQueueCount = useCallback(async () => {
+    try {
+      const res = await autonomousApi.getNewsQueue({ limit: 1 });
+      setQueueCount(res.total);
+    } catch {
+      // ignore
+    }
+  }, []);
+
   const fetchData = useCallback(async () => {
     setIsLoading(true);
     try {
-      await Promise.all([fetchArticles(), fetchCategories(), fetchClaims()]);
+      await Promise.all([fetchArticles(), fetchCategories(), fetchClaims(), fetchQueueCount()]);
     } finally {
       setIsLoading(false);
     }
-  }, [fetchArticles, fetchCategories, fetchClaims]);
+  }, [fetchArticles, fetchCategories, fetchClaims, fetchQueueCount]);
 
   useEffect(() => {
     fetchData();
@@ -136,7 +151,7 @@ export default function NewsWindow() {
     try {
       const res = await autonomousApi.syncNews();
       setSyncStatus(`Synced ${res.synced}, enriched ${res.enriched}, ${res.alerts} alerts`);
-      await Promise.all([fetchArticles(), fetchCategories()]);
+      await Promise.all([fetchArticles(), fetchCategories(), fetchQueueCount()]);
       setTimeout(() => setSyncStatus(null), 4000);
     } catch {
       setSyncStatus('Sync failed');
@@ -159,36 +174,40 @@ export default function NewsWindow() {
 
   return (
     <div className="h-full flex flex-col" style={{ background: 'var(--theme-bg-primary)' }}>
-      {/* Category tab bar */}
+      {/* Tab bar */}
       <div
         className="flex items-center gap-1 px-3 py-2 border-b overflow-x-auto custom-scrollbar"
         style={{ borderColor: 'var(--theme-border)' }}
       >
-        {/* View mode toggle */}
+        {/* Main tabs */}
         <div className="flex items-center gap-1 mr-2 pr-2 border-r" style={{ borderColor: 'var(--theme-border)' }}>
-          <button
-            onClick={() => setViewMode('articles')}
-            className={cn(
-              "px-2 py-1 rounded text-[11px] font-medium transition",
-              viewMode === 'articles' ? "bg-white/10 text-white" : "text-white/40 hover:text-white/70"
-            )}
-          >
-            Articles
-          </button>
-          <button
-            onClick={() => setViewMode('claims')}
-            className={cn(
-              "px-2 py-1 rounded text-[11px] font-medium transition",
-              viewMode === 'claims' ? "bg-white/10 text-white" : "text-white/40 hover:text-white/70"
-            )}
-          >
-            Claims
-          </button>
+          {([
+            { id: 'articles' as TabId, label: 'Articles', icon: Newspaper },
+            { id: 'queue' as TabId, label: 'Queue', icon: ListTodo, badge: queueCount },
+            { id: 'dashboard' as TabId, label: 'Dashboard', icon: BarChart3 },
+            { id: 'claims' as TabId, label: 'Claims', icon: Shield },
+          ]).map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={cn(
+                "flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-medium transition",
+                activeTab === tab.id ? "bg-white/10 text-white" : "text-white/40 hover:text-white/70"
+              )}
+            >
+              <tab.icon className="w-3.5 h-3.5" />
+              {tab.label}
+              {tab.badge != null && tab.badge > 0 && (
+                <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-amber-500/20 text-amber-400 min-w-[18px] text-center">
+                  {tab.badge > 999 ? `${Math.round(tab.badge / 1000)}k` : tab.badge}
+                </span>
+              )}
+            </button>
+          ))}
         </div>
 
-        {viewMode === 'articles' && (
+        {activeTab === 'articles' && (
           <>
-            {/* All tab */}
             <button
               onClick={() => setCategoryFilter('all')}
               className={cn(
@@ -202,7 +221,6 @@ export default function NewsWindow() {
               <span className="text-[10px] opacity-60 font-mono">{totalArticles}</span>
             </button>
 
-            {/* Category tabs */}
             {categories.filter(c => c.count > 0).map(cat => (
               <button
                 key={cat.id}
@@ -226,104 +244,84 @@ export default function NewsWindow() {
         )}
       </div>
 
-      {/* Sub-toolbar */}
-      <div className="h-10 border-b flex items-center px-3 gap-2" style={{ borderColor: 'var(--theme-border)' }}>
-        {viewMode === 'articles' && (
-          <>
-            <div className="flex-1 relative max-w-sm">
-              <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 opacity-30" />
-              <input
-                type="text"
-                placeholder="Search articles..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-7 pr-3 py-1 rounded text-[12px] bg-white/5 border border-white/10 focus:outline-none focus:border-white/20"
-                style={{ color: 'var(--theme-text-primary)' }}
-              />
-            </div>
+      {/* Sub-toolbar (articles only) */}
+      {activeTab === 'articles' && (
+        <div className="h-10 border-b flex items-center px-3 gap-2" style={{ borderColor: 'var(--theme-border)' }}>
+          <div className="flex-1 relative max-w-sm">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 opacity-30" />
+            <input
+              type="text"
+              placeholder="Search articles..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-7 pr-3 py-1 rounded text-[12px] bg-white/5 border border-white/10 focus:outline-none focus:border-white/20"
+              style={{ color: 'var(--theme-text-primary)' }}
+            />
+          </div>
 
-            {/* Priority filter */}
-            <div className="relative">
-              <select
-                value={priorityFilter}
-                onChange={(e) => setPriorityFilter(e.target.value)}
-                className="appearance-none pl-2 pr-6 py-1 rounded text-[11px] bg-white/5 border border-white/10 focus:outline-none cursor-pointer"
-                style={{ color: 'var(--theme-text-secondary)' }}
-              >
-                <option value="all">All Priorities</option>
-                <option value="P1">P1 - Breaking</option>
-                <option value="P2">P2 - Important</option>
-                <option value="P3">P3 - Noteworthy</option>
-                <option value="P4">P4 - Background</option>
-              </select>
-              <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 opacity-30 pointer-events-none" />
-            </div>
-          </>
-        )}
-        {viewMode === 'claims' && <div className="flex-1" />}
+          <div className="relative">
+            <select
+              value={priorityFilter}
+              onChange={(e) => setPriorityFilter(e.target.value)}
+              className="appearance-none pl-2 pr-6 py-1 rounded text-[11px] bg-white/5 border border-white/10 focus:outline-none cursor-pointer"
+              style={{ color: 'var(--theme-text-secondary)' }}
+            >
+              <option value="all">All Priorities</option>
+              <option value="P1">P1 - Breaking</option>
+              <option value="P2">P2 - Important</option>
+              <option value="P3">P3 - Noteworthy</option>
+              <option value="P4">P4 - Background</option>
+            </select>
+            <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 opacity-30 pointer-events-none" />
+          </div>
 
-        <div className="ml-auto flex items-center gap-2">
-          {syncStatus && (
-            <span className="text-[10px] text-emerald-400 font-medium">{syncStatus}</span>
-          )}
-
-          <button
-            onClick={handleSync}
-            disabled={isSyncing}
-            className={cn(
-              "flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition",
-              isSyncing
-                ? "bg-blue-500/20 text-blue-400"
-                : "hover:bg-white/5 text-white/40 hover:text-white/70"
+          <div className="ml-auto flex items-center gap-2">
+            {syncStatus && (
+              <span className="text-[10px] text-emerald-400 font-medium">{syncStatus}</span>
             )}
-            title="Sync, enrich, and check alerts"
-          >
-            <RefreshCw className={cn("w-3 h-3", isSyncing && "animate-spin")} />
-            Sync
-          </button>
 
-          <button
-            onClick={() => { setShowSettings(true); fetchThresholds(); }}
-            className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium hover:bg-white/5 text-white/40 hover:text-white/70 transition"
-            title="Alert settings"
-          >
-            <Settings className="w-3 h-3" />
-          </button>
+            <button
+              onClick={handleSync}
+              disabled={isSyncing}
+              className={cn(
+                "flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium transition",
+                isSyncing
+                  ? "bg-blue-500/20 text-blue-400"
+                  : "hover:bg-white/5 text-white/40 hover:text-white/70"
+              )}
+              title="Sync, enrich, and check alerts"
+            >
+              <RefreshCw className={cn("w-3 h-3", isSyncing && "animate-spin")} />
+              Sync
+            </button>
+
+            <button
+              onClick={() => { setShowSettings(true); fetchThresholds(); }}
+              className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium hover:bg-white/5 text-white/40 hover:text-white/70 transition"
+              title="Alert settings"
+            >
+              <Settings className="w-3 h-3" />
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
-        {isLoading ? (
-          <div className="h-full flex flex-col items-center justify-center opacity-30">
-            <RefreshCw className="w-8 h-8 animate-spin mb-2" />
-            <p className="text-sm">Loading news...</p>
-          </div>
-        ) : viewMode === 'claims' ? (
-          claims.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center opacity-30">
-              <Shield className="w-12 h-12 mb-4" />
-              <p className="text-sm">No claims found.</p>
-            </div>
-          ) : (
-            <div className="space-y-3 max-w-4xl mx-auto">
-              {claims.map(claim => (
-                <ClaimCard key={claim.id} claim={claim} />
-              ))}
-            </div>
-          )
-        ) : articles.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center opacity-30">
-            <Newspaper className="w-12 h-12 mb-4" />
-            <p className="text-sm">No articles found.</p>
-            <p className="text-xs mt-1">Click Sync to fetch and classify articles.</p>
-          </div>
-        ) : (
-          <div className="space-y-2 max-w-4xl mx-auto">
-            {articles.map(article => (
-              <ArticleCard key={article.id} article={article} />
-            ))}
-          </div>
+      <div className="flex-1 overflow-y-auto custom-scrollbar">
+        {activeTab === 'articles' && (
+          <ArticlesTab
+            articles={articles}
+            isLoading={isLoading}
+          />
+        )}
+        {activeTab === 'queue' && (
+          <QueueTab />
+        )}
+        {activeTab === 'dashboard' && (
+          <DashboardTab onQueueCountChange={setQueueCount} />
+        )}
+        {activeTab === 'claims' && (
+          <ClaimsTab claims={claims} isLoading={isLoading} />
         )}
       </div>
 
@@ -339,6 +337,477 @@ export default function NewsWindow() {
   );
 }
 
+// ============================================
+// Articles Tab
+// ============================================
+
+function ArticlesTab({ articles, isLoading }: { articles: NewsArticle[]; isLoading: boolean }) {
+  if (isLoading) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center opacity-30 p-4">
+        <RefreshCw className="w-8 h-8 animate-spin mb-2" />
+        <p className="text-sm">Loading articles...</p>
+      </div>
+    );
+  }
+
+  if (articles.length === 0) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center opacity-30 p-4">
+        <Newspaper className="w-12 h-12 mb-4" />
+        <p className="text-sm">No articles found.</p>
+        <p className="text-xs mt-1">Click Sync to fetch and classify articles.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2 max-w-4xl mx-auto p-4">
+      {articles.map(article => (
+        <ArticleCard key={article.id} article={article} />
+      ))}
+    </div>
+  );
+}
+
+// ============================================
+// Queue Tab
+// ============================================
+
+function QueueTab() {
+  const [queue, setQueue] = useState<QueueArticle[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      try {
+        const res = await autonomousApi.getNewsQueue({ limit: 200 });
+        setQueue(res.articles);
+      } catch (error) {
+        console.error('Failed to fetch queue:', error);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center opacity-30 p-4">
+        <RefreshCw className="w-8 h-8 animate-spin mb-2" />
+        <p className="text-sm">Loading queue...</p>
+      </div>
+    );
+  }
+
+  if (queue.length === 0) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center opacity-30 p-4">
+        <ListTodo className="w-12 h-12 mb-4" />
+        <p className="text-sm">Queue is empty.</p>
+        <p className="text-xs mt-1">All articles have been classified.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1.5 max-w-4xl mx-auto p-4">
+      <p className="text-[11px] text-white/40 mb-3">{queue.length} articles pending classification</p>
+      {queue.map(article => (
+        <div
+          key={article.id}
+          className="flex items-center gap-3 p-2.5 rounded-lg border bg-white/[0.02] border-white/[0.06]"
+        >
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-0.5">
+              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold tracking-tight bg-white/10 text-white/40">
+                Pending
+              </span>
+              {article.author && (
+                <span className="text-[10px] opacity-35 font-medium">{article.author}</span>
+              )}
+              <span className="text-[10px] opacity-25 flex items-center gap-0.5 ml-auto">
+                <Clock className="w-3 h-3" />
+                {article.publishedAt
+                  ? new Date(article.publishedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                  : 'Unknown'
+                }
+              </span>
+            </div>
+            <p className="text-[12px] leading-tight truncate" style={{ color: 'var(--theme-text-primary)' }}>
+              {article.title}
+            </p>
+          </div>
+          {article.url && (
+            <a
+              href={article.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-1 rounded bg-white/5 hover:bg-white/10 text-white/30 hover:text-white/70 transition flex-shrink-0"
+            >
+              <ExternalLink className="w-3 h-3" />
+            </a>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ============================================
+// Dashboard Tab
+// ============================================
+
+function DashboardTab({ onQueueCountChange }: { onQueueCountChange: (n: number) => void }) {
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [enriching, setEnriching] = useState(false);
+  const [progress, setProgress] = useState<{ total: number; processed: number; rate: number; eta: number } | null>(null);
+  const [recentClassifications, setRecentClassifications] = useState<RecentClassification[]>([]);
+  const eventSourceRef = useRef<EventSource | null>(null);
+
+  const fetchStats = useCallback(async () => {
+    try {
+      const data = await autonomousApi.getDashboardStats();
+      setStats(data);
+      onQueueCountChange(data.unprocessed);
+      if (data.enrichmentState.running) {
+        setEnriching(true);
+        setProgress({
+          total: data.enrichmentState.total,
+          processed: data.enrichmentState.processed,
+          rate: 0,
+          eta: 0,
+        });
+      }
+      if (data.recentClassifications.length > 0) {
+        setRecentClassifications(data.recentClassifications);
+      }
+    } catch (error) {
+      console.error('Failed to fetch dashboard stats:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, [onQueueCountChange]);
+
+  useEffect(() => {
+    fetchStats();
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+      }
+    };
+  }, [fetchStats]);
+
+  const startEnrichment = useCallback(() => {
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+    }
+
+    setEnriching(true);
+    const es = new EventSource('/api/autonomous/news/enrich/stream', { withCredentials: true });
+    eventSourceRef.current = es;
+
+    es.onmessage = (event) => {
+      try {
+        const data: EnrichmentProgressEvent = JSON.parse(event.data);
+
+        if (data.type === 'start') {
+          setProgress({ total: data.total || 0, processed: 0, rate: 0, eta: 0 });
+        } else if (data.type === 'progress') {
+          setProgress({
+            total: data.total || 0,
+            processed: data.processed || 0,
+            rate: data.rate || 0,
+            eta: data.eta || 0,
+          });
+          if (data.article) {
+            setRecentClassifications(prev => {
+              const next = [data.article!, ...prev];
+              return next.slice(0, 20);
+            });
+          }
+        } else if (data.type === 'complete' || data.type === 'stopped') {
+          setEnriching(false);
+          setProgress(null);
+          es.close();
+          eventSourceRef.current = null;
+          fetchStats();
+        } else if (data.type === 'error') {
+          setEnriching(false);
+          setProgress(null);
+          es.close();
+          eventSourceRef.current = null;
+        }
+      } catch (err) {
+        console.error('SSE parse error:', err);
+      }
+    };
+
+    es.onerror = () => {
+      setEnriching(false);
+      setProgress(null);
+      es.close();
+      eventSourceRef.current = null;
+    };
+  }, [fetchStats]);
+
+  const stopEnrichment = useCallback(async () => {
+    try {
+      await autonomousApi.stopEnrichment();
+    } catch {
+      // ignore
+    }
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+    setEnriching(false);
+    setProgress(null);
+    fetchStats();
+  }, [fetchStats]);
+
+  if (loading) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center opacity-30 p-4">
+        <RefreshCw className="w-8 h-8 animate-spin mb-2" />
+        <p className="text-sm">Loading dashboard...</p>
+      </div>
+    );
+  }
+
+  if (!stats) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center opacity-30 p-4">
+        <BarChart3 className="w-12 h-12 mb-4" />
+        <p className="text-sm">Failed to load dashboard.</p>
+      </div>
+    );
+  }
+
+  const maxPriority = Math.max(...stats.priorityBreakdown.map(p => p.count), 1);
+  const maxCategory = Math.max(...stats.categoryBreakdown.map(c => c.count), 1);
+  const progressPct = progress && progress.total > 0 ? Math.round((progress.processed / progress.total) * 100) : 0;
+
+  const formatEta = (seconds: number) => {
+    if (seconds < 60) return `${seconds}s`;
+    return `${Math.ceil(seconds / 60)}m`;
+  };
+
+  return (
+    <div className="max-w-4xl mx-auto p-4 space-y-4">
+      {/* Enrichment Control */}
+      <div className="rounded-lg border p-4 bg-white/[0.02] border-white/[0.06]">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-[13px] font-bold" style={{ color: 'var(--theme-text-primary)' }}>
+            Enrichment Control
+          </h3>
+          <div className="flex items-center gap-2">
+            {enriching ? (
+              <button
+                onClick={stopEnrichment}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-medium bg-red-500/20 text-red-400 hover:bg-red-500/30 transition"
+              >
+                <Square className="w-3 h-3" />
+                Stop
+              </button>
+            ) : (
+              <button
+                onClick={startEnrichment}
+                disabled={stats.unprocessed === 0}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-medium transition",
+                  stats.unprocessed === 0
+                    ? "bg-white/5 text-white/20 cursor-not-allowed"
+                    : "bg-blue-500/20 text-blue-400 hover:bg-blue-500/30"
+                )}
+              >
+                <Play className="w-3 h-3" />
+                Classify All
+              </button>
+            )}
+            <span className={cn(
+              "text-[10px] font-medium px-2 py-0.5 rounded",
+              enriching ? "bg-emerald-500/20 text-emerald-400" : "bg-white/5 text-white/30"
+            )}>
+              {enriching ? 'Running' : 'Idle'}
+            </span>
+          </div>
+        </div>
+
+        {/* Progress bar */}
+        {progress && (
+          <div>
+            <div className="h-2 rounded-full bg-white/10 overflow-hidden mb-2">
+              <div
+                className="h-full rounded-full bg-blue-500 transition-all duration-300"
+                style={{ width: `${progressPct}%` }}
+              />
+            </div>
+            <div className="flex items-center justify-between text-[10px] text-white/40">
+              <span>{progress.processed}/{progress.total}</span>
+              <span>
+                {progress.rate > 0 && `${progress.rate}/min`}
+                {progress.eta > 0 && ` - ETA: ${formatEta(progress.eta)}`}
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Stats summary */}
+      <div className="grid grid-cols-3 gap-3">
+        {([
+          { label: 'Total', value: stats.total, color: 'text-white' },
+          { label: 'Enriched', value: stats.enriched, color: 'text-emerald-400' },
+          { label: 'Queue', value: stats.unprocessed, color: 'text-amber-400' },
+        ]).map(stat => (
+          <div key={stat.label} className="rounded-lg border p-3 bg-white/[0.02] border-white/[0.06] text-center">
+            <div className={cn("text-2xl font-bold tabular-nums", stat.color)}>{stat.value.toLocaleString()}</div>
+            <div className="text-[10px] text-white/40 mt-0.5">{stat.label} (3-day window)</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Breakdowns */}
+      <div className="grid grid-cols-2 gap-4">
+        {/* Priority breakdown */}
+        <div className="rounded-lg border p-4 bg-white/[0.02] border-white/[0.06]">
+          <h4 className="text-[11px] font-bold text-white/60 mb-3 uppercase tracking-wider">Priority</h4>
+          <div className="space-y-2">
+            {(['P1', 'P2', 'P3', 'P4']).map(p => {
+              const item = stats.priorityBreakdown.find(b => b.priority === p);
+              const count = item?.count || 0;
+              const pct = stats.enriched > 0 ? Math.round((count / stats.enriched) * 100) : 0;
+              const style = PRIORITY_STYLES[p];
+              return (
+                <div key={p} className="flex items-center gap-2">
+                  <span className={cn("text-[10px] font-bold w-5", style?.text)}>{p}</span>
+                  <div className="flex-1 h-2 rounded-full bg-white/5 overflow-hidden">
+                    <div
+                      className={cn("h-full rounded-full transition-all", style?.bg?.replace('/20', '/60') || 'bg-white/20')}
+                      style={{ width: `${(count / maxPriority) * 100}%`, backgroundColor: p === 'P1' ? '#ef4444' : p === 'P2' ? '#f97316' : p === 'P3' ? '#3b82f6' : '#6b7280' }}
+                    />
+                  </div>
+                  <span className="text-[10px] text-white/40 tabular-nums w-16 text-right">
+                    {count} ({pct}%)
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Category breakdown */}
+        <div className="rounded-lg border p-4 bg-white/[0.02] border-white/[0.06]">
+          <h4 className="text-[11px] font-bold text-white/60 mb-3 uppercase tracking-wider">Category</h4>
+          <div className="space-y-2">
+            {stats.categoryBreakdown.slice(0, 8).map(cat => {
+              const color = CATEGORY_COLORS[cat.category] || '#6b7280';
+              const label = CATEGORY_LABELS[cat.category] || cat.category;
+              return (
+                <div key={cat.category} className="flex items-center gap-2">
+                  <span className="text-[10px] font-medium w-16 truncate" style={{ color }}>{label}</span>
+                  <div className="flex-1 h-2 rounded-full bg-white/5 overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all"
+                      style={{ width: `${(cat.count / maxCategory) * 100}%`, backgroundColor: color }}
+                    />
+                  </div>
+                  <span className="text-[10px] text-white/40 tabular-nums w-10 text-right">{cat.count}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Recent classifications */}
+      {recentClassifications.length > 0 && (
+        <div className="rounded-lg border p-4 bg-white/[0.02] border-white/[0.06]">
+          <h4 className="text-[11px] font-bold text-white/60 mb-3 uppercase tracking-wider flex items-center gap-1.5">
+            <Zap className="w-3 h-3" />
+            Recent Classifications
+            {enriching && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
+          </h4>
+          <div className="space-y-1.5 max-h-60 overflow-y-auto custom-scrollbar">
+            {recentClassifications.map((item, i) => {
+              const pStyle = PRIORITY_STYLES[item.priority];
+              const catColor = CATEGORY_COLORS[item.category] || '#6b7280';
+              const catLabel = CATEGORY_LABELS[item.category] || item.category;
+              const ago = timeAgo(item.classifiedAt);
+              return (
+                <div key={`${item.id}-${i}`} className="flex items-center gap-2 text-[11px]">
+                  <span className={cn("px-1 py-0.5 rounded text-[9px] font-bold", pStyle?.bg, pStyle?.text)}>
+                    {item.priority}
+                  </span>
+                  <span
+                    className="px-1 py-0.5 rounded text-[9px] font-bold uppercase"
+                    style={{ backgroundColor: `${catColor}20`, color: catColor }}
+                  >
+                    {catLabel}
+                  </span>
+                  <span className="flex-1 truncate" style={{ color: 'var(--theme-text-primary)' }}>
+                    {item.title}
+                  </span>
+                  <span className="text-[9px] text-white/25 flex-shrink-0">{ago}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function timeAgo(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const seconds = Math.floor(diff / 1000);
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ago`;
+}
+
+// ============================================
+// Claims Tab
+// ============================================
+
+function ClaimsTab({ claims, isLoading }: { claims: NewsClaim[]; isLoading: boolean }) {
+  if (isLoading) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center opacity-30 p-4">
+        <RefreshCw className="w-8 h-8 animate-spin mb-2" />
+        <p className="text-sm">Loading claims...</p>
+      </div>
+    );
+  }
+
+  if (claims.length === 0) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center opacity-30 p-4">
+        <Shield className="w-12 h-12 mb-4" />
+        <p className="text-sm">No claims found.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3 max-w-4xl mx-auto p-4">
+      {claims.map(claim => (
+        <ClaimCard key={claim.id} claim={claim} />
+      ))}
+    </div>
+  );
+}
+
+// ============================================
+// Shared Components
+// ============================================
+
 function ArticleCard({ article }: { article: NewsArticle }) {
   const categoryColor = article.category ? CATEGORY_COLORS[article.category] : '#6b7280';
   const categoryLabel = article.category ? CATEGORY_LABELS[article.category] : null;
@@ -352,13 +821,11 @@ function ArticleCard({ article }: { article: NewsArticle }) {
         <div className="flex-1 min-w-0">
           {/* Badges row */}
           <div className="flex items-center gap-1.5 mb-1 flex-wrap">
-            {/* Priority badge */}
             {priorityStyle && article.priority && (
               <span className={cn("px-1.5 py-0.5 rounded text-[10px] font-bold tracking-tight", priorityStyle.bg, priorityStyle.text)}>
                 {article.priority}
               </span>
             )}
-            {/* Category badge */}
             {categoryLabel && (
               <span
                 className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-tight"
@@ -370,9 +837,7 @@ function ArticleCard({ article }: { article: NewsArticle }) {
                 {categoryLabel}
               </span>
             )}
-            {/* Source */}
             <span className="text-[10px] opacity-35 font-medium">{article.sourceName}</span>
-            {/* Date */}
             <span className="text-[10px] opacity-25 flex items-center gap-0.5 ml-auto">
               <Clock className="w-3 h-3" />
               {article.publishedAt
@@ -382,12 +847,10 @@ function ArticleCard({ article }: { article: NewsArticle }) {
             </span>
           </div>
 
-          {/* Title */}
           <h3 className="text-[13px] font-semibold leading-tight group-hover:text-blue-400 transition-colors" style={{ color: 'var(--theme-text-primary)' }}>
             {article.title}
           </h3>
 
-          {/* Reason */}
           {article.priorityReason && (
             <p className="text-[11px] opacity-45 mt-1 leading-relaxed">{article.priorityReason}</p>
           )}
@@ -477,6 +940,10 @@ function ClaimCard({ claim }: { claim: NewsClaim }) {
   );
 }
 
+// ============================================
+// Alert Settings
+// ============================================
+
 const ALL_CATEGORIES = [
   { id: 'conflicts', label: 'Conflicts/War' },
   { id: 'tech', label: 'Tech' },
@@ -543,7 +1010,6 @@ function AlertSettingsPanel({
         </button>
       </div>
 
-      {/* Presets */}
       <div className="p-3 border-b flex gap-2" style={{ borderColor: 'var(--theme-border)' }}>
         <button onClick={() => applyPreset('P1')} className="flex-1 px-2 py-1 rounded text-[10px] font-medium bg-red-500/10 text-red-400 hover:bg-red-500/20 transition">
           Critical Only
@@ -556,7 +1022,6 @@ function AlertSettingsPanel({
         </button>
       </div>
 
-      {/* Per-category settings */}
       <div className="flex-1 overflow-y-auto p-3 space-y-3 custom-scrollbar">
         {ALL_CATEGORIES.map(cat => {
           const val = local[cat.id];
@@ -599,7 +1064,6 @@ function AlertSettingsPanel({
         })}
       </div>
 
-      {/* Save */}
       <div className="p-3 border-t" style={{ borderColor: 'var(--theme-border)' }}>
         <button
           onClick={handleSave}

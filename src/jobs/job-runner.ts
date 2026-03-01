@@ -629,7 +629,7 @@ async function runNewsSyncAndEnrich(): Promise<void> {
     }
 
     const result = await syncAndEnrichNews(defaultUserId);
-    if (result.synced > 0 || result.enriched > 0 || result.alerts > 0) {
+    if (result.synced > 0 || result.enriched > 0 || result.alerts > 0 || result.pruned > 0) {
       logger.info('News sync and enrich completed', result);
     } else {
       logger.debug('News sync and enrich completed - no changes');

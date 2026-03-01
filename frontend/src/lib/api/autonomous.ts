@@ -140,6 +140,54 @@ export interface NewsArticle {
   signalConfidence: number | null;
 }
 
+export interface DashboardStats {
+  total: number;
+  enriched: number;
+  unprocessed: number;
+  priorityBreakdown: Array<{ priority: string; count: number }>;
+  categoryBreakdown: Array<{ category: string; count: number }>;
+  enrichmentState: EnrichmentState;
+  recentClassifications: RecentClassification[];
+}
+
+export interface EnrichmentState {
+  running: boolean;
+  total: number;
+  processed: number;
+  startedAt: string | null;
+  stopRequested: boolean;
+  recentClassifications: RecentClassification[];
+}
+
+export interface RecentClassification {
+  id: string;
+  title: string;
+  category: string;
+  priority: string;
+  reason: string;
+  classifiedAt: string;
+}
+
+export interface EnrichmentProgressEvent {
+  type: 'start' | 'progress' | 'complete' | 'stopped' | 'error';
+  total?: number;
+  processed?: number;
+  article?: RecentClassification;
+  rate?: number;
+  eta?: number;
+  error?: string;
+}
+
+export interface QueueArticle {
+  id: string;
+  title: string;
+  url: string | null;
+  author: string | null;
+  publishedAt: string | null;
+  sourceType: string | null;
+  fetchedAt: string;
+}
+
 export interface NewsClaim {
   id: number;
   claimText: string;
@@ -352,7 +400,20 @@ export const autonomousApi = {
     api<{ success: boolean }>('/api/autonomous/news/alerts/thresholds', { method: 'PUT', body: { thresholds } }),
 
   syncNews: () =>
-    api<{ synced: number; enriched: number; alerts: number }>('/api/autonomous/news/sync', { method: 'POST' }),
+    api<{ synced: number; enriched: number; alerts: number; pruned: number }>('/api/autonomous/news/sync', { method: 'POST' }),
+
+  getDashboardStats: () =>
+    api<DashboardStats>('/api/autonomous/news/dashboard'),
+
+  getNewsQueue: (options?: { limit?: number }) => {
+    const params = new URLSearchParams();
+    if (options?.limit) params.set('limit', options.limit.toString());
+    const q = params.toString();
+    return api<{ articles: QueueArticle[]; total: number }>(`/api/autonomous/news/queue${q ? `?${q}` : ''}`);
+  },
+
+  stopEnrichment: () =>
+    api<{ success: boolean }>('/api/autonomous/news/enrich/stop', { method: 'POST' }),
 
   getNewsClaims: (options?: { status?: string; minScore?: number; limit?: number }) => {
     const params = new URLSearchParams();
