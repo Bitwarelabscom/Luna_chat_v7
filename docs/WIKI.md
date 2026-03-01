@@ -1,7 +1,7 @@
 # Luna Chat Wiki
 
 **Version**: 7.x
-**Last Updated**: February 2026
+**Last Updated**: March 2026
 
 ---
 
@@ -15,14 +15,15 @@
 6. [CEO Luna](#ceo-luna)
 7. [DJ Luna](#dj-luna)
 8. [Music Pipeline](#music-pipeline)
-9. [Trading System](#trading-system)
-10. [Friends System](#friends-system)
-11. [VR Luna](#vr-luna)
-12. [Integrations](#integrations)
-13. [Developer Guide](#developer-guide)
-14. [API Reference](#api-reference)
-15. [Configuration](#configuration)
-16. [Troubleshooting](#troubleshooting)
+9. [News Intelligence](#news-intelligence)
+10. [Trading System](#trading-system)
+11. [Friends System](#friends-system)
+12. [VR Luna](#vr-luna)
+13. [Integrations](#integrations)
+14. [Developer Guide](#developer-guide)
+15. [API Reference](#api-reference)
+16. [Configuration](#configuration)
+17. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -296,14 +297,33 @@ Every message is enriched before processing:
 
 **Structure**:
 - **Nodes**: Entities, topics, preferences, events, emotions
-- **Edges**: Co-occurrence, semantic, causal, temporal, same_as
+- **Edges**: Co-occurrence, semantic, causal, temporal, same_as (typed with per-type decay rates)
 - **Origin Tracking**: User vs. model-originated (prevents echo chambers)
 - **Soft Merging**: Reversible identity resolution via SAME_AS edges
 
+**Semantic Edge Typing** (March 2026):
+Edges are now classified into semantic types with different EMA decay rates during NeuralSleep consolidation:
+
+| Edge Type | Tau (days) | Rationale |
+|-----------|-----------|-----------|
+| `co_occurrence` | 14 | Casual mentions fade in ~2 weeks |
+| `semantic` | 90 | Explicit relationships are long-lived |
+| `temporal` | 30 | Time-based associations |
+| `causal` | 60 | Cause/effect relationships |
+
+**Spreading Activation** (March 2026):
+Graph retrieval uses BFS spreading activation instead of static narrative blobs:
+- Seed entities matched from message text with fuzzy matching
+- Signal decays per hop (configurable decay factor, default 0.65)
+- Hop-1 threshold: 0.10, Hop-2 threshold: 0.20
+- Hub fan limit: 15 neighbors per seed node
+- Session bonus: 1.5x boost for edges with 3+ distinct sessions
+- Max 25 results returned
+
 **Consolidation**:
 - **Immediate**: Session end - extract nodes, create co-occurrence edges
-- **Daily**: 2 AM - apply decay, create semantic edges, update centrality
-- **Weekly**: 3 AM Sunday - soft merge analysis, prune isolated nodes, clustering
+- **Daily**: 2 AM - EMA weight evolution (per-type tau), weak edge pruning, centrality recalc, provisional node promotion
+- **Weekly**: 3 AM Sunday - stale node pruning, noise purge (type-exempt), graduated anti-centrality, merge candidate analysis
 
 **Key Principles**:
 1. Connection density = memory strength (not just storage)
@@ -311,6 +331,7 @@ Every message is enriched before processing:
 3. Soft merging only (all merges reversible)
 4. Anti-centrality pressure prevents gravity wells
 5. Causal edges require multi-session reinforcement
+6. Spreading activation replaces static retrieval for dynamic context
 
 ### Fact Extraction & Learning
 
@@ -429,30 +450,48 @@ Luna has AI "friend" personas she discusses topics with, providing diverse persp
 
 *👉 [Full Friends Documentation](AUTONOMOUS.md#friends--gossip-system)*
 
-### Newsfetcher Integration
+### News Intelligence System
 
-Replaced RSS with verified news:
+A full news intelligence platform with multi-source aggregation, LLM-powered classification, and priority-based alerting.
 
-**Features**:
-- Multi-source aggregation
-- Fact-checking and verification
+**Architecture**:
+- RSS feeds from NYTimes, Guardian, Financial Times, and custom sources
+- 3-day rolling window for article retention
+- LLM classification via Qwen 2.5 7B on local Ollama (10.0.0.30)
+- POST+polling enrichment pattern (replaced SSE for reliability)
+- Heartbeat-based staleness detection for enrichment recovery
+
+**4-Tab Layout**: Articles | Queue | Dashboard | Claims
+
+**Classification**:
+- **Categories**: Finance, Tech, Conflicts/War, Politics, Science, Health, Good News, Other
+- **Priority Grades**: P1 (critical, 6%) | P2 (important, 18%) | P3 (standard, 54%) | P4 (low, 22%)
+- Category counts displayed as filter pill badges
+
+**Dashboard**:
+- Enrichment control panel with one-click "Classify All"
+- 3-day stats: Total / Enriched / Queue counts
+- Priority distribution chart
+- Category breakdown with bar visualization
+- Recent classifications feed with timestamps
+
+**Search**:
+- Full-text search across all articles
+- Category filter pills
+- Priority dropdown filter
+- Source attribution and timestamps
+
+**Verification & Claims**:
 - Confidence scores (independence, primary evidence, recency, consistency, trust)
-- Signal detection (low/medium/high priority)
-- Topic clustering
 - Claim tracking across articles
-
-**Verification Statuses**:
-- `Verified`: High confidence (90%+)
-- `Likely`: Good confidence (70-89%)
-- `Unconfirmed`: Moderate confidence (50-69%)
-- `Conflicted`: Conflicting sources
-- `False/Retraction`: Debunked or retracted
+- Verification statuses: Verified, Likely, Unconfirmed, Conflicted, False/Retraction
 
 **Integration**:
-- Autonomous mode can research news
-- Proactive alerts on high-signal topics
+- Autonomous mode can research and summarize breaking news
+- P1 articles trigger proactive alerts
 - User interest tracking
 - Source trust scoring
+- Competitor radar consumes news signals
 
 ---
 
@@ -624,6 +663,52 @@ The `runMusicTrendScraper` job scrapes music sources every 2 hours:
 | `src/ceo/album-pipeline.service.ts` | Autonomous album production |
 | `src/ceo/music-trend-scraper.service.ts` | Trend scraping + LLM analysis |
 | `frontend/src/lib/genre-presets.ts` | Frontend genre definitions |
+
+---
+
+## News Intelligence
+
+Luna includes a full news intelligence platform for multi-source aggregation, LLM-powered classification, and priority-based alerting. Accessible from the desktop as the **News** window.
+
+### Architecture
+
+- **Sources**: RSS feeds from NYTimes, Guardian, Financial Times, and custom sources
+- **Window**: 3-day rolling window for article retention and enrichment
+- **LLM**: Classification via Qwen 2.5 7B on local Ollama (10.0.0.30)
+- **Enrichment**: POST+polling pattern with heartbeat-based staleness detection
+
+### Tabs
+
+| Tab | Purpose |
+|-----|---------|
+| **Articles** | Browse classified articles with P1-P4 priority badges, category tags, search, and filter pills |
+| **Queue** | View pending articles awaiting LLM classification |
+| **Dashboard** | Enrichment control, 3-day stats, priority distribution, category breakdown, recent classifications |
+| **Claims** | Track claims across articles with verification statuses |
+
+### Priority Grades
+
+| Grade | Meaning | Typical % |
+|-------|---------|-----------|
+| **P1** | Critical - geopolitical, breaking | ~6% |
+| **P2** | Important - significant developments | ~18% |
+| **P3** | Standard - general news | ~54% |
+| **P4** | Low - lifestyle, opinion | ~22% |
+
+### Categories
+
+Finance, Tech, Conflicts/War, Politics, Science, Health, Good News, Environment, Other. Each article is assigned exactly one category with a color-coded badge.
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `src/news/news-sync.service.ts` | RSS feed aggregation and article sync |
+| `src/news/news-enrichment.service.ts` | LLM classification pipeline |
+| `src/news/news.routes.ts` | REST endpoints for articles, enrichment, dashboard |
+| `frontend/src/components/os/apps/NewsWindow.tsx` | Main news window |
+| `frontend/src/components/news/ArticlesTab.tsx` | Article list with search and filters |
+| `frontend/src/components/news/DashboardTab.tsx` | Enrichment dashboard |
 
 ---
 
@@ -986,6 +1071,31 @@ Build/Scripts/build.sh package
 
 **Implementation**: `src/llm/providers/sanhedrin.provider.ts`
 
+### KDE Desktop Integration (March 2026)
+
+**Desktop notifications and control via WebSocket**:
+
+**Features**:
+- Real-time notifications pushed to KDE desktop
+- WebSocket-based bidirectional communication
+- Native Linux desktop integration
+- Notification actions and click handling
+
+**Implementation**: WebSocket service for KDE Plasma desktop bridge
+
+### Files Window (March 2026)
+
+**Full file manager with tree view**:
+
+**Features**:
+- Tree view file browser for workspace files
+- Rename, mkdir, chmod operations
+- File creation and deletion
+- Directory navigation with breadcrumbs
+- Integration with editor for direct file editing
+
+**Implementation**: `frontend/src/components/os/apps/FilesWindow.tsx`, `src/abilities/workspace.service.ts`
+
 ---
 
 ## Developer Guide
@@ -1286,6 +1396,18 @@ See [README.md](../README.md#api-reference) for full endpoint listing.
 - `SANHEDRIN_ENABLED`: Enable Sanhedrin integration
 - `SANHEDRIN_BASE_URL`: Sanhedrin server URL
 - `SANHEDRIN_TIMEOUT`: Request timeout in ms (default: 120000)
+
+### Supported LLM Providers
+
+| Provider | Tool/Function Calling | Notes |
+|----------|----------------------|-------|
+| **OpenAI** | Yes | GPT-4o, GPT-5.1, o-series reasoning models |
+| **Anthropic** | Yes | Claude Sonnet 4, Claude Opus 4 |
+| **Google Gemini** | Yes (March 2026) | Full tool/function calling support via `generateContent` API |
+| **Groq** | Yes | Llama 3.3, fast inference |
+| **xAI** | Yes | Grok models |
+| **OpenRouter** | Yes | Multi-model gateway |
+| **Ollama** | Limited | Local models (BGE-M3, Qwen 2.5, Llama) |
 
 ### Model Configuration
 

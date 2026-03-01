@@ -672,12 +672,82 @@ async function buildMemoryContext(userId, sessionId, message) {
 
 ---
 
+## Spreading Activation (March 2026)
+
+Graph retrieval now uses BFS spreading activation instead of static narrative blobs. This dynamically activates relevant memory nodes from seed entities found in the user's message.
+
+### How It Works
+
+1. **Seed Matching**: Entities are extracted from the user's message and matched against graph nodes (with fuzzy matching for partial matches)
+2. **BFS Traversal**: From each seed node, activation spreads to connected nodes with signal decay per hop
+3. **Aggregation**: All activated nodes are scored, deduplicated, and the top results returned as memory context
+
+### Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `DECAY_FACTOR` | 0.65 | Signal loss per hop |
+| `HOP1_THRESHOLD` | 0.10 | Minimum weight*recency for hop-1 neighbors |
+| `HOP2_THRESHOLD` | 0.20 | Minimum weight*recency for hop-2 neighbors |
+| `HUB_FAN_LIMIT` | 15 | Max neighbors per seed node |
+| `MAX_RESULTS` | 25 | Final activation cap |
+| `SESSION_BONUS` | 1.5x | Boost for edges with 3+ distinct sessions |
+
+### Confidence Framing
+
+Retrieved memories include confidence framing in the system prompt to prevent Luna from stating uncertain memories as facts. Edges with low activation scores are presented with qualifiers like "I think" or "you may have mentioned."
+
+---
+
+## Semantic Edge Typing (March 2026)
+
+Graph edges are now classified into typed categories with different EMA decay rates during NeuralSleep consolidation:
+
+| Edge Type | Tau (days) | Rationale |
+|-----------|-----------|-----------|
+| `co_occurrence` | 14 | Casual mentions fade in ~2 weeks |
+| `semantic` | 90 | Explicit relationships are long-lived |
+| `temporal` | 30 | Time-based associations |
+| `causal` | 60 | Cause/effect relationships |
+| `same_as` | N/A | Identity links, never decayed or pruned |
+
+The EMA formula: `alpha = 1 - exp(-deltaT / tau)`, `targetWeight = min(1.0, 0.5 + 0.05 * ln(activation_count + 1))`, `newWeight = weight * (1 - alpha) + targetWeight * alpha`
+
+---
+
+## Memory Lab (March 2026)
+
+The Memory Lab window (AppId: `memory-lab`, 1400x860) provides a visual interface for inspecting and managing Luna's graph memory.
+
+### Tabs
+
+| Tab | Description |
+|-----|-------------|
+| **Graph** | Interactive graph visualization with 2D explorer and 3D brain view (react-force-graph). Min-edges threshold slider, full-screen mode with force spread controls. |
+| **Facts** | CRUD interface for managing user facts with category, confidence, and source tracking |
+| **Consciousness** | Real-time consciousness metrics (Phi, temporal integration, self-reference depth, causal density) |
+| **LNN Live** | Live diagnostics dashboard polling every 5 seconds. Shows ThematicLNN stability, RelationalLNN coherence, CausalGate cross-stream flow, Spreading Activation parameters, emotional trajectory chart, and centroid drift chart. |
+
+### 3D Brain View
+
+The 3D brain visualization renders 4,000+ memory nodes as color-coded spheres:
+- **Blue**: Topics and general entities
+- **Green**: Named entities (people, places, brands)
+- **Orange**: Emotional associations
+- Sphere size correlates with centrality score
+- Edges rendered as translucent lines between connected nodes
+
+---
+
 ## Future Improvements
 
 - [ ] Emotion-aware memory retrieval
 - [x] Cross-session topic tracking (via distinct_session_count on graph edges)
 - [x] Memory consolidation (MemoryCore integration - see below)
 - [x] Forgetting curve (EMA weight decay in NeuralSleep daily consolidation)
+- [x] Spreading activation for graph retrieval (replaces static narrative blob)
+- [x] Semantic edge typing with per-type decay rates
+- [x] 3D brain visualization in Memory Lab
 - [ ] User-controllable memory settings
 
 ---

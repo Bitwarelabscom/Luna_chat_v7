@@ -48,15 +48,19 @@ Luna has a "job" even when you aren't chatting. She can research news, track you
 *   📊 **Trading (Trader Luna):** A specialized, isolated persona for secure crypto trading on Binance and Crypto.com.
 *   🎙️ **Voice Intelligence:** Ultra-low latency voice chat that feels like a real conversation.
 *   📧 **Secure Integration:** Manages your Email, Calendar (CalDAV), and IRC with advanced security "Gatekeepers."
-*   🌐 **Visual Browsing:** Luna can actually *see* and navigate websites to perform research for you.
+*   🌐 **Visual Browsing:** Luna can open URLs directly via the `open_url` LLM tool for research and link sharing.
 *   💻 **Code Sandbox:** Safely executes Python, JavaScript, and Shell scripts to solve problems.
 *   📺 **Local Media:** Streams your local movies and music directly to your browser or phone, with YouTube download support via yt-dlp.
 *   🕹️ **Retro Gaming:** Includes a built-in emulator for classic games (GBA, NES, SNES, etc.).
-*   💼 **CEO Luna:** A full business operations hub -- track builds, log finances, monitor competitors, auto-produce albums, scrape music trends, and schedule social posts with an AI co-founder persona.
+*   💼 **CEO Luna:** A full business operations hub -- track builds, log finances, manage organizations, monitor competitors, auto-produce albums, scrape music trends, and schedule social posts with an AI co-founder persona.
 *   🎵 **DJ Luna:** An AI music production studio with 55 genre presets across 12 categories, a live lyrics canvas with syllable analysis, direct Suno AI integration, and an automated album production pipeline.
+*   📰 **News Intelligence:** Multi-source RSS aggregation with LLM-powered P1-P4 priority classification, category tagging, enrichment dashboard, and full-text search across 3-day rolling windows.
 *   🖼️ **Inline Canvas:** Code artifacts open in a split-view panel directly inside the chat window, with a detach button to pop them out as standalone windows.
+*   📁 **Files Window:** Full file manager with tree view, rename, mkdir, chmod, and workspace file browsing.
 *   🧑‍🤝‍🧑 **Friends System:** Luna has AI "friend" personas she discusses topics with -- a gossip queue with importance ranking, auto-discussion timers, and theater mode for watching deliberations live.
 *   🥽 **VR Luna:** An Unreal Engine 5.5 companion app for Steam Index VR with MetaHuman avatar, spatial voice chat, and three themed rooms (Music, CEO Office, Relax).
+*   🖥️ **KDE Integration:** Desktop integration via WebSocket for seamless Linux desktop notifications and control.
+*   🤖 **Multi-Provider LLM:** Supports OpenAI, Anthropic, Google Gemini (with tool/function calling), Groq, xAI, OpenRouter, and local Ollama models.
 
 ---
 
@@ -72,10 +76,12 @@ Key capabilities:
 - **Build Tracker**: Time-track development sessions with `/build start|pause|done` slash commands. Automated check-ins every 30 minutes save progress notes to the build log.
 - **Finance Logging**: Log costs and income with `/cost` and `/income` slash commands. Keyword-to-category auto-mapping for common vendors. Owner salary tracking.
 - **Financial Dashboard**: Monthly P&L chart, expense categories, transaction history.
+- **Organization Management**: Define departments, roles, hiring pipelines, and team structure. CEO Luna tracks organizational growth alongside finances.
 - **Competitor Radar**: CEO Luna monitors your competitor list and surfaces news and music trend signals. Filter tabs: All / Market / Music Trends.
 - **Music Trend Scraper**: Scrapes Billboard, Pitchfork, and custom sources every 2 hours. LLM analysis via Ollama detects emerging genres and auto-queues album productions.
 - **Album Creator**: Full autonomous album production pipeline -- select a genre from 55 presets, generate lyrics via LLM, review, submit to Suno, and track progress across multiple albums.
 - **Autopost**: Schedule automated social posts to X, LinkedIn, Telegram, Reddit, and Blog.
+- **Video Downloads**: Download videos directly from the CEO workspace for content creation and research.
 - **Scheduled Reports**: Daily morning brief, evening review, weekly P&L report, and biweekly audit -- delivered via Telegram.
 
 *👉 [CEO Luna Documentation](docs/CEO_LUNA.md)*
@@ -98,6 +104,22 @@ Key capabilities:
 - **Project Management**: Songs are saved as Markdown files with YAML frontmatter in your workspace, organized by project folder.
 
 *👉 [DJ Luna Documentation](docs/DJ_LUNA.md)*
+
+---
+
+## 📰 News Intelligence - Multi-Source Classification & Alerts
+
+Luna includes a full news intelligence system that aggregates, classifies, and prioritizes articles from multiple RSS sources with LLM-powered enrichment.
+
+**4-tab layout**: Articles | Queue | Dashboard | Claims
+
+Key capabilities:
+- **Multi-Source Aggregation**: RSS feeds from NYTimes, Guardian, Financial Times, and custom sources with 3-day rolling window.
+- **LLM Classification**: Each article is classified by category (Finance, Tech, Conflicts, Politics, Science, Health, Good News) and assigned a P1-P4 priority grade using Qwen 2.5 7B on local Ollama.
+- **Enrichment Dashboard**: Real-time stats showing total/enriched/queued articles, priority distribution, and category breakdown. One-click "Classify All" to process the entire queue.
+- **Search & Filter**: Full-text search across articles with category filter pills and priority dropdown. Category counts displayed as badges.
+- **Heartbeat Staleness Detection**: Enrichment process uses heartbeat-based monitoring to detect and recover from stalled classification jobs.
+- **Alert System**: P1 articles trigger proactive alerts. Autonomous mode can research and summarize breaking news.
 
 ---
 
@@ -133,6 +155,12 @@ Semantic Memory (PostgreSQL, persistent)
 
 Sessions automatically consolidate through tiers over time. NeuralSleep's Dual-LNN architecture (Thematic + Relational streams) processes memories with consciousness metrics including Phi (integrated information), temporal integration, and self-reference depth.
 
+**Recent additions (March 2026):**
+- **Spreading Activation**: Graph retrieval now uses BFS spreading activation from seed entities instead of static narrative blobs. Signal decays per hop with configurable thresholds, hub fan limits, and session bonuses.
+- **Semantic Edge Typing**: Graph edges are now classified into typed categories (co_occurrence, semantic, temporal, causal) with per-type decay rates during NeuralSleep consolidation.
+- **3D Brain View**: Memory Lab includes a 3D force-directed graph visualization (react-force-graph) with 4,000+ nodes rendered as spheres, color-coded by entity type.
+- **Full-Screen Explorer**: Graph explorer supports full-screen mode with force spread controls and a min-edges threshold slider for filtering low-connectivity nodes.
+
 *👉 [Memory System Details](docs/MEMORY.md)*
 
 ---
@@ -140,9 +168,48 @@ Sessions automatically consolidate through tiers over time. NeuralSleep's Dual-L
 ## 📸 Gallery
 
 <div align="center">
-<img src="images/desktop_latest.png" width="45%" alt="Luna Desktop" /> <img src="images/screenshot-apps.png" width="45%" alt="Luna Apps" />
+
+### Memory Lab - 3D Brain View
+<img src="screenshots/graph-brain.png" width="90%" alt="Memory Lab 3D Brain View - Interactive 3D visualization of Luna's knowledge graph with thousands of interconnected memory nodes rendered as spheres, color-coded by entity type" />
 <br />
-<i>OS-style workspace with multi-window support, task management, and autonomous activity tracking.</i>
+<i>3D force-directed graph of Luna's knowledge brain -- 4,300+ nodes and 19,000+ edges visualized with react-force-graph. Blue spheres are topics, green are entities, orange are emotions. (March 2026)</i>
+<br /><br />
+
+### Memory Lab - Graph Explorer
+<img src="screenshots/graph-explorer.png" width="45%" alt="Memory Lab Graph Explorer - 2D network visualization showing entity relationships and connection density" /> <img src="screenshots/graph-explorer2.png" width="45%" alt="Memory Lab Graph Explorer with Labels - Detailed view showing entity names and relationship types across the knowledge graph" />
+<br />
+<i>Left: 2D force-directed graph explorer with min-edges threshold slider. Right: Label view showing entity names and relationship clusters. Both support full-screen mode with force spread controls. (March 2026)</i>
+<br /><br />
+
+### Memory Lab - LNN Live Diagnostics
+<img src="screenshots/memory-lab-LNN.png" width="90%" alt="Memory Lab LNN Live tab showing Dual-LNN diagnostics with ThematicLNN stability, RelationalLNN coherence, CausalGate cross-stream flow, Spreading Activation parameters, emotional trajectory chart, and centroid drift chart" />
+<br />
+<i>LNN Live diagnostics dashboard -- real-time monitoring of ThematicLNN (fast-path), RelationalLNN (slow-path), CausalGate arbitration, and Spreading Activation parameters. Emotional trajectory and centroid drift charts at the bottom. (March 2026)</i>
+<br /><br />
+
+### CEO Luna - Business Operations Hub
+<img src="screenshots/ceo-luna.png" width="90%" alt="CEO Luna window showing KPI strip, organization management, task log, and competitor radar with color-coded department cards" />
+<br />
+<i>CEO Luna workspace with KPI strip, organization management (departments, roles, hiring pipeline), task log with automated campaign tracking, and strategy proposals. (March 2026)</i>
+<br /><br />
+
+### DJ Luna - AI Music Production Studio
+<img src="screenshots/dj-luna.png" width="90%" alt="DJ Luna startup modal showing genre preset grid with Dark Techno, Lo-fi Hip Hop, Melodic House, Trap, Ambient, Pop, R&B, and Phonk presets" />
+<br />
+<i>DJ Luna studio startup -- pick a genre from 55 presets across 12 categories, name your song, and open the 3-column production workspace with AI chat, lyrics canvas, and Suno integration. (March 2026)</i>
+<br /><br />
+
+### News Intelligence - Article Feed
+<img src="screenshots/news-articles.png" width="45%" alt="News window Articles tab showing classified articles with P1-P4 priority badges, category tags (Conflicts, Politics, Tech), and multi-source aggregation from NYTimes, Guardian, Financial Times" /> <img src="screenshots/news-search.png" width="45%" alt="News window with search functionality, category filter pills, and priority-graded article results with source attribution" />
+<br />
+<i>Left: Articles tab with P1-P4 priority grading, color-coded category badges, and multi-source classification (NYTimes, Guardian, Financial Times). Right: Full-text search with category pills and priority filtering. (March 2026)</i>
+<br /><br />
+
+### News Intelligence - Dashboard
+<img src="screenshots/news-dashboard.png" width="90%" alt="News Dashboard tab showing enrichment control panel, 3-day rolling window stats (1,875 total articles), priority distribution chart, category breakdown with Finance, Tech, Conflicts, Politics, and recent LLM classifications" />
+<br />
+<i>News dashboard with enrichment control, 3-day rolling window stats, P1-P4 priority distribution, category breakdown (Finance, Tech, Conflicts, Politics, Science, Health), and recent LLM classifications. (March 2026)</i>
+
 </div>
 
 ---

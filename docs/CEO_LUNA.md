@@ -1,7 +1,7 @@
 # CEO Luna - Business Intelligence & Operations Hub
 
 **Version**: 7.x
-**Last Updated**: February 2026
+**Last Updated**: March 2026
 
 ---
 
@@ -160,6 +160,21 @@ Album productions are stored in the `album_productions` table with per-song entr
 ### Log (Quick Log)
 
 Manual finance entry form for quick cost and income logging without slash commands. Useful for bulk data entry.
+
+---
+
+## Organization Management (March 2026)
+
+CEO Luna now includes organization management capabilities for tracking team structure and growth alongside business operations.
+
+**Features**:
+- Define departments with color-coded cards (Engineering, Marketing, Design, etc.)
+- Manage roles and headcount within each department
+- Hiring pipeline tracking (open positions, candidates, status)
+- Strategy proposals and task management with automated campaign tracking
+- Video downloads for content creation and competitive research
+
+**Integration**: Organization data feeds into the KPI strip and CEO Luna's system context, so she can reference team structure in conversations and reports.
 
 ---
 
