@@ -154,8 +154,8 @@ export const DEFAULT_BACKGROUND_LLM_SETTINGS: BackgroundLlmSettings = {
     fallback: { provider: 'openai', model: 'gpt-5-mini' },
   },
   news_filter: {
-    primary: { provider: 'ollama', model: 'llama3.2:3b' },
-    fallback: { provider: 'openai', model: 'gpt-5-mini' },
+    primary: { provider: 'ollama_tertiary', model: 'HoseaDev/qwen2.5-7b-instruct-q4-gguf:latest' },
+    fallback: { provider: 'ollama', model: 'llama3.2:3b' },
   },
   research_synthesis: {
     primary: { provider: 'ollama', model: 'llama3.2:3b' },
