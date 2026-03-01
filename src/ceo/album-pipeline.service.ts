@@ -1415,38 +1415,12 @@ export async function retryFailedSongs(userId: string, productionId: string): Pr
 // ============================================================
 
 /**
- * When a trend-generated production completes, auto-approve the next
- * one in 'planned' status from the same trend batch.
- * This serializes album execution to prevent Suno overload.
+ * Disabled - trend productions now require manual user approval.
+ * No auto-approve of trend-generated productions.
  */
 async function autoApproveNextTrendProduction(): Promise<void> {
-  // Find the oldest planned production that has trend-related notes
-  // but only if there are no currently in_progress productions
-  const inProgressCount = await pool.query<{ cnt: string }>(
-    `SELECT COUNT(*) AS cnt FROM album_productions WHERE status = 'in_progress'`,
-  );
-
-  if (parseInt(inProgressCount.rows[0].cnt, 10) > 0) {
-    return; // Still have active pipelines, don't approve more
-  }
-
-  const nextPlanned = await pool.query<{ id: string; user_id: string }>(
-    `SELECT id, user_id FROM album_productions
-     WHERE status = 'planned'
-       AND production_notes LIKE '%Auto-generated from music trend%'
-     ORDER BY created_at ASC
-     LIMIT 1`,
-  );
-
-  if (nextPlanned.rows.length === 0) return;
-
-  const { id: productionId, user_id: userId } = nextPlanned.rows[0];
-  logger.info('Auto-approving next trend production', { productionId });
-
-  const approved = await approveProduction(userId, productionId);
-  if (approved) {
-    logger.info('Next trend production auto-approved and pipeline started', { productionId });
-  }
+  // Trend productions require manual approval - no auto-approve
+  return;
 }
 
 // ============================================================

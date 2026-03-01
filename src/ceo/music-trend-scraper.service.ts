@@ -4,15 +4,10 @@ import { getBackgroundFeatureModelConfig } from '../settings/background-llm-sett
 import { GENRE_PRESETS } from '../abilities/genre-presets.js';
 import { invalidateCache } from '../abilities/genre-registry.service.js';
 import { enqueueCeoMessage } from './ceo.service.js';
-import * as albumPipeline from './album-pipeline.service.js';
 import * as triggerService from '../triggers/trigger.service.js';
 import type { ChatMessage } from '../llm/types.js';
 import { logActivity } from '../activity/activity.service.js';
 import logger from '../utils/logger.js';
-
-// Default artist names used when auto-generating albums from trends
-const DEFAULT_TREND_ARTISTS = ['Bitwaretunes', 'Pillow Frequency', 'Coffee'];
-const ALBUMS_PER_TREND = 3;
 
 // ============================================================
 // Types
@@ -364,113 +359,20 @@ async function generatePresetFromTrend(
   };
 
   try {
-    // Auto-approve the genre (insert with status='approved')
+    // Propose the genre as pending - requires manual approval before any production
     const result = await pool.query<{ id: string }>(
-      `INSERT INTO proposed_genre_presets (user_id, genre_id, name, category, preset_data, confidence, status, reviewed_at)
-       VALUES ($1, $2, $3, $4, $5, $6, 'approved', NOW())
+      `INSERT INTO proposed_genre_presets (user_id, genre_id, name, category, preset_data, confidence, status)
+       VALUES ($1, $2, $3, $4, $5, $6, 'pending')
        RETURNING id`,
       [userId, genreId, trend.name, trend.suggestedCategory, JSON.stringify(presetData), trend.confidence],
     );
 
-    // Invalidate genre registry cache so new genre is available
-    invalidateCache(userId);
+    logger.info('Proposed new genre from trend (pending approval)', { userId, genreId, name: trend.name, confidence: trend.confidence });
 
-    logger.info('Auto-approved new genre from trend', { userId, genreId, name: trend.name, confidence: trend.confidence });
-
-    // Notify about auto-approved genre
+    // Notify about proposed genre (no auto-production - user must approve)
     await notifyNewGenreProposal(userId, trend, result.rows[0].id);
-
-    // Queue 3 album productions for this new genre
-    await queueTrendAlbums(userId, genreId, trend);
   } catch (err) {
     logger.warn('Failed to process genre from trend', { genreId, error: (err as Error).message });
-  }
-}
-
-// ============================================================
-// Auto-Queue Albums for Trend Genre
-// ============================================================
-
-async function queueTrendAlbums(
-  userId: string,
-  genreId: string,
-  trend: TrendAnalysis['emergingGenres'][0],
-): Promise<void> {
-  // Get existing artist names, fall back to defaults
-  let artists: string[];
-  try {
-    const existingArtists = await albumPipeline.listArtists(userId);
-    artists = existingArtists.length > 0 ? existingArtists : DEFAULT_TREND_ARTISTS;
-  } catch {
-    artists = DEFAULT_TREND_ARTISTS;
-  }
-
-  const queuedIds: string[] = [];
-
-  for (let i = 0; i < ALBUMS_PER_TREND; i++) {
-    const artistName = artists[i % artists.length];
-    try {
-      // Create production
-      const productionId = await albumPipeline.createProduction(userId, {
-        artistName,
-        genre: genreId,
-        productionNotes: `Auto-generated from music trend: "${trend.name}" (${Math.round(trend.confidence * 100)}% confidence). ${trend.evidence}`,
-        albumCount: 1,
-      });
-
-      logger.info('Auto-queued album production from trend', { userId, productionId, genreId, artistName, index: i + 1 });
-
-      // Plan albums immediately
-      await albumPipeline.planAlbums(productionId);
-
-      // Only approve the FIRST production immediately.
-      // Subsequent ones stay in 'planned' and get auto-approved by
-      // autoApproveNextTrendProduction() when the previous one completes.
-      // This prevents multiple concurrent pipelines from overloading Suno.
-      if (i === 0) {
-        const approved = await albumPipeline.approveProduction(userId, productionId);
-        if (approved) {
-          logger.info('Auto-approved first album production', { productionId, genreId });
-        }
-      } else {
-        logger.info('Album production planned, will auto-approve when previous completes', { productionId, genreId, queuePosition: i + 1 });
-      }
-
-      queuedIds.push(productionId);
-
-      // Small delay between productions to avoid hammering LLM
-      if (i < ALBUMS_PER_TREND - 1) {
-        await new Promise(r => setTimeout(r, 2000));
-      }
-    } catch (err) {
-      logger.error('Failed to auto-queue album from trend', {
-        userId, genreId, artistName, index: i + 1,
-        error: (err as Error).message,
-      });
-    }
-  }
-
-  // Notify about queued productions
-  if (queuedIds.length > 0) {
-    const msg = `[Auto-Production] Queued ${queuedIds.length} album(s) for new trend genre "${trend.name}".\n` +
-      `Artists: ${artists.slice(0, queuedIds.length).join(', ')}\n` +
-      `Productions are now running the full pipeline (planning -> lyrics -> Suno).`;
-
-    await enqueueCeoMessage(userId, 'music_trend_auto_production', msg, 7);
-
-    try {
-      await triggerService.enqueueTrigger({
-        userId,
-        triggerSource: 'event',
-        triggerType: 'music_trend_auto_production',
-        payload: { genreId, genreName: trend.name, productionIds: queuedIds },
-        message: msg,
-        deliveryMethod: 'sse',
-        priority: 7,
-      });
-    } catch (err) {
-      logger.warn('Failed to send SSE for auto-production', { error: (err as Error).message });
-    }
   }
 }
 
@@ -484,11 +386,11 @@ async function notifyNewGenreProposal(
   proposalId: string,
 ): Promise<void> {
   const confidencePct = Math.round(trend.confidence * 100);
-  const message = `[Music Trend] New genre auto-approved: "${trend.name}" (${confidencePct}% confidence)\n` +
+  const message = `[Music Trend] New genre suggested: "${trend.name}" (${confidencePct}% confidence)\n` +
     `Category: ${trend.suggestedCategory}\n` +
     `Style: ${trend.suggestedStyleTags}\n` +
     `Evidence: ${trend.evidence}\n` +
-    `${ALBUMS_PER_TREND} albums are being auto-generated. Proposal ID: ${proposalId}`;
+    `Awaiting your approval before any production begins. Proposal ID: ${proposalId}`;
 
   // Always: CEO Luna chat message
   if (trend.confidence >= 0.5) {
@@ -520,7 +422,7 @@ async function notifyNewGenreProposal(
         triggerSource: 'event',
         triggerType: 'music_trend_genre_proposal_telegram',
         payload: { proposalId, genreName: trend.name, confidence: trend.confidence },
-        message: `New genre trend: "${trend.name}" (${confidencePct}%)\nStyle: ${trend.suggestedStyleTags}`,
+        message: `New genre trend suggested: "${trend.name}" (${confidencePct}%)\nStyle: ${trend.suggestedStyleTags}\nApprove in CEO Luna Radar to start production.`,
         deliveryMethod: 'telegram',
         priority: 7,
       });
