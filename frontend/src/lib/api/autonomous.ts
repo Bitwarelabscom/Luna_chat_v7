@@ -155,6 +155,7 @@ export interface EnrichmentState {
   total: number;
   processed: number;
   startedAt: string | null;
+  lastUpdatedAt: string | null;
   stopRequested: boolean;
   rate: number;
   eta: number;

@@ -14,6 +14,7 @@ export interface EnrichmentState {
   total: number;
   processed: number;
   startedAt: string | null;
+  lastUpdatedAt: string | null;
   stopRequested: boolean;
   rate: number;
   eta: number;
@@ -52,6 +53,7 @@ const DEFAULT_STATE: EnrichmentState = {
   total: 0,
   processed: 0,
   startedAt: null,
+  lastUpdatedAt: null,
   stopRequested: false,
   rate: 0,
   eta: 0,
@@ -132,7 +134,22 @@ export async function getDashboardStats(userId: string): Promise<DashboardStats>
 export async function startBatchEnrich(userId: string): Promise<{ started: boolean; total: number }> {
   const current = await getEnrichmentState(userId);
   if (current.running) {
-    return { started: false, total: current.total };
+    // Check for stale state (process died during container restart)
+    // The loop updates lastUpdatedAt every iteration (~1s). If it hasn't
+    // been updated in 2 minutes, the process is dead.
+    const lastUpdate = current.lastUpdatedAt ? Date.now() - new Date(current.lastUpdatedAt).getTime() : Infinity;
+    const isStale = lastUpdate > 120_000; // no heartbeat in 2 min
+    if (isStale) {
+      logger.warn('Resetting stale enrichment state (no heartbeat)', {
+        userId,
+        processed: current.processed,
+        total: current.total,
+        lastUpdatedAt: current.lastUpdatedAt,
+      });
+      await setEnrichmentState(userId, { ...DEFAULT_STATE });
+    } else {
+      return { started: false, total: current.total };
+    }
   }
 
   // Get unenriched articles in 3-day window
@@ -148,11 +165,13 @@ export async function startBatchEnrich(userId: string): Promise<{ started: boole
   }
 
   // Set initial state
+  const now = new Date().toISOString();
   const state: EnrichmentState = {
     running: true,
     total,
     processed: 0,
-    startedAt: new Date().toISOString(),
+    startedAt: now,
+    lastUpdatedAt: now,
     stopRequested: false,
     rate: 0,
     eta: 0,
@@ -190,6 +209,7 @@ async function runEnrichmentLoop(userId: string, rows: Array<{ id: string; title
         total,
         processed,
         startedAt: currentState.startedAt,
+        lastUpdatedAt: new Date().toISOString(),
         stopRequested: false,
         rate: 0,
         eta: 0,
@@ -236,12 +256,13 @@ async function runEnrichmentLoop(userId: string, rows: Array<{ id: string; title
       const remaining = total - processed;
       const eta = rate > 0 ? Math.ceil(remaining / (rate / 60)) : 0;
 
-      // Update Redis state for polling
+      // Update Redis state for polling (heartbeat)
       await setEnrichmentState(userId, {
         running: true,
         total,
         processed,
         startedAt: new Date(startTime).toISOString(),
+        lastUpdatedAt: new Date().toISOString(),
         stopRequested: false,
         rate,
         eta,
@@ -282,6 +303,7 @@ async function runEnrichmentLoop(userId: string, rows: Array<{ id: string; title
     total,
     processed,
     startedAt: new Date(startTime).toISOString(),
+    lastUpdatedAt: new Date().toISOString(),
     stopRequested: false,
     rate: 0,
     eta: 0,
