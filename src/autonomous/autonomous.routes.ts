@@ -622,6 +622,36 @@ router.get('/news/claims', async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/autonomous/news/enrich/start
+ * Start batch enrichment in background. Poll /news/dashboard for progress.
+ */
+router.post('/news/enrich/start', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const result = await newsEnrichmentService.startBatchEnrich(userId);
+    res.json(result);
+  } catch (error) {
+    logger.error('Error starting enrichment', { error });
+    res.status(500).json({ error: 'Failed to start enrichment' });
+  }
+});
+
+/**
+ * POST /api/autonomous/news/enrich/stop
+ * Request enrichment to stop
+ */
+router.post('/news/enrich/stop', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    await newsEnrichmentService.requestStop(userId);
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Error stopping enrichment', { error });
+    res.status(500).json({ error: 'Failed to stop enrichment' });
+  }
+});
+
+/**
  * POST /api/autonomous/news/enrich/:id
  * Trigger AI enrichment for a single article
  */
@@ -814,67 +844,7 @@ router.get('/news/queue', async (req: Request, res: Response) => {
   }
 });
 
-/**
- * GET /api/autonomous/news/enrich/stream
- * SSE - starts enrichment and streams progress events
- */
-router.get('/news/enrich/stream', async (req: Request, res: Response): Promise<void> => {
-  const userId = req.user!.userId;
-
-  // Check if already running
-  const currentState = await newsEnrichmentService.getEnrichmentState(userId);
-  if (currentState.running) {
-    res.status(409).json({ error: 'Enrichment already running' });
-    return;
-  }
-
-  // Set up SSE
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-    'X-Accel-Buffering': 'no',
-  });
-  res.flushHeaders();
-
-  let closed = false;
-  req.on('close', () => {
-    closed = true;
-    // Request stop on disconnect
-    newsEnrichmentService.requestStop(userId).catch(() => {});
-  });
-
-  try {
-    for await (const event of newsEnrichmentService.batchEnrichWithProgress(userId)) {
-      if (closed) break;
-      res.write(`data: ${JSON.stringify(event)}\n\n`);
-    }
-  } catch (error) {
-    if (!closed) {
-      res.write(`data: ${JSON.stringify({ type: 'error', error: (error as Error).message })}\n\n`);
-    }
-    logger.error('Enrichment stream error', { error, userId });
-  }
-
-  if (!closed) {
-    res.end();
-  }
-});
-
-/**
- * POST /api/autonomous/news/enrich/stop
- * Request enrichment to stop
- */
-router.post('/news/enrich/stop', async (req: Request, res: Response) => {
-  try {
-    const userId = req.user!.userId;
-    await newsEnrichmentService.requestStop(userId);
-    res.json({ success: true });
-  } catch (error) {
-    logger.error('Error stopping enrichment', { error });
-    res.status(500).json({ error: 'Failed to stop enrichment' });
-  }
-});
+// (enrich/start and enrich/stop moved before /enrich/:id to avoid param capture)
 
 // ============================================
 // Insights

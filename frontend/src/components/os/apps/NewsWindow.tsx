@@ -9,7 +9,7 @@ import {
 import {
   autonomousApi,
   type NewsArticle, type NewsClaim, type NewsCategoryInfo, type AlertThreshold,
-  type DashboardStats, type EnrichmentProgressEvent, type QueueArticle, type RecentClassification
+  type DashboardStats, type QueueArticle, type RecentClassification
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
@@ -465,21 +465,26 @@ function DashboardTab({ onQueueCountChange }: { onQueueCountChange: (n: number) 
   const [enriching, setEnriching] = useState(false);
   const [progress, setProgress] = useState<{ total: number; processed: number; rate: number; eta: number } | null>(null);
   const [recentClassifications, setRecentClassifications] = useState<RecentClassification[]>([]);
-  const eventSourceRef = useRef<EventSource | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchStats = useCallback(async () => {
     try {
       const data = await autonomousApi.getDashboardStats();
       setStats(data);
       onQueueCountChange(data.unprocessed);
-      if (data.enrichmentState.running) {
+
+      const es = data.enrichmentState;
+      if (es.running) {
         setEnriching(true);
-        setProgress({
-          total: data.enrichmentState.total,
-          processed: data.enrichmentState.processed,
-          rate: 0,
-          eta: 0,
-        });
+        setProgress({ total: es.total, processed: es.processed, rate: es.rate || 0, eta: es.eta || 0 });
+      } else {
+        setEnriching(false);
+        setProgress(null);
+        // Stop polling when no longer running
+        if (pollRef.current) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
       }
       if (data.recentClassifications.length > 0) {
         setRecentClassifications(data.recentClassifications);
@@ -494,63 +499,29 @@ function DashboardTab({ onQueueCountChange }: { onQueueCountChange: (n: number) 
   useEffect(() => {
     fetchStats();
     return () => {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
       }
     };
   }, [fetchStats]);
 
-  const startEnrichment = useCallback(() => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-    }
-
-    setEnriching(true);
-    const es = new EventSource('/api/autonomous/news/enrich/stream', { withCredentials: true });
-    eventSourceRef.current = es;
-
-    es.onmessage = (event) => {
-      try {
-        const data: EnrichmentProgressEvent = JSON.parse(event.data);
-
-        if (data.type === 'start') {
-          setProgress({ total: data.total || 0, processed: 0, rate: 0, eta: 0 });
-        } else if (data.type === 'progress') {
-          setProgress({
-            total: data.total || 0,
-            processed: data.processed || 0,
-            rate: data.rate || 0,
-            eta: data.eta || 0,
-          });
-          if (data.article) {
-            setRecentClassifications(prev => {
-              const next = [data.article!, ...prev];
-              return next.slice(0, 20);
-            });
-          }
-        } else if (data.type === 'complete' || data.type === 'stopped') {
-          setEnriching(false);
-          setProgress(null);
-          es.close();
-          eventSourceRef.current = null;
-          fetchStats();
-        } else if (data.type === 'error') {
-          setEnriching(false);
-          setProgress(null);
-          es.close();
-          eventSourceRef.current = null;
-        }
-      } catch (err) {
-        console.error('SSE parse error:', err);
+  const startEnrichment = useCallback(async () => {
+    try {
+      setEnriching(true);
+      const result = await autonomousApi.startEnrichment();
+      if (!result.started) {
+        setEnriching(false);
+        await fetchStats();
+        return;
       }
-    };
-
-    es.onerror = () => {
+      setProgress({ total: result.total, processed: 0, rate: 0, eta: 0 });
+      // Start polling every 2s
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = setInterval(fetchStats, 2000);
+    } catch (error) {
+      console.error('Failed to start enrichment:', error);
       setEnriching(false);
-      setProgress(null);
-      es.close();
-      eventSourceRef.current = null;
-    };
+    }
   }, [fetchStats]);
 
   const stopEnrichment = useCallback(async () => {
@@ -559,9 +530,9 @@ function DashboardTab({ onQueueCountChange }: { onQueueCountChange: (n: number) 
     } catch {
       // ignore
     }
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-      eventSourceRef.current = null;
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
     }
     setEnriching(false);
     setProgress(null);

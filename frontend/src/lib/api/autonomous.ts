@@ -156,6 +156,8 @@ export interface EnrichmentState {
   processed: number;
   startedAt: string | null;
   stopRequested: boolean;
+  rate: number;
+  eta: number;
   recentClassifications: RecentClassification[];
 }
 
@@ -411,6 +413,9 @@ export const autonomousApi = {
     const q = params.toString();
     return api<{ articles: QueueArticle[]; total: number }>(`/api/autonomous/news/queue${q ? `?${q}` : ''}`);
   },
+
+  startEnrichment: () =>
+    api<{ started: boolean; total: number }>('/api/autonomous/news/enrich/start', { method: 'POST' }),
 
   stopEnrichment: () =>
     api<{ success: boolean }>('/api/autonomous/news/enrich/stop', { method: 'POST' }),

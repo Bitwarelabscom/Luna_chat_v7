@@ -15,6 +15,8 @@ export interface EnrichmentState {
   processed: number;
   startedAt: string | null;
   stopRequested: boolean;
+  rate: number;
+  eta: number;
   recentClassifications: RecentClassification[];
 }
 
@@ -25,16 +27,6 @@ export interface RecentClassification {
   priority: string;
   reason: string;
   classifiedAt: string;
-}
-
-export interface EnrichmentProgressEvent {
-  type: 'start' | 'progress' | 'complete' | 'stopped' | 'error';
-  total?: number;
-  processed?: number;
-  article?: RecentClassification;
-  rate?: number;
-  eta?: number;
-  error?: string;
 }
 
 export interface DashboardStats {
@@ -61,6 +53,8 @@ const DEFAULT_STATE: EnrichmentState = {
   processed: 0,
   startedAt: null,
   stopRequested: false,
+  rate: 0,
+  eta: 0,
   recentClassifications: [],
 };
 
@@ -132,12 +126,15 @@ export async function getDashboardStats(userId: string): Promise<DashboardStats>
 }
 
 // ============================================
-// Batch enrichment with progress (async generator)
+// Background batch enrichment (fire-and-forget)
 // ============================================
 
-export async function* batchEnrichWithProgress(
-  userId: string
-): AsyncGenerator<EnrichmentProgressEvent> {
+export async function startBatchEnrich(userId: string): Promise<{ started: boolean; total: number }> {
+  const current = await getEnrichmentState(userId);
+  if (current.running) {
+    return { started: false, total: current.total };
+  }
+
   // Get unenriched articles in 3-day window
   const unenriched = await query(
     `SELECT id, title, url, author, newsfetcher_id FROM rss_articles
@@ -147,15 +144,8 @@ export async function* batchEnrichWithProgress(
 
   const total = unenriched.length;
   if (total === 0) {
-    yield { type: 'complete', total: 0, processed: 0 };
-    return;
+    return { started: false, total: 0 };
   }
-
-  // Get user interests
-  const facts = await factsService.getUserFacts(userId, { limit: 10 });
-  const interests = facts
-    .filter((f: any) => f.category === 'hobby' || f.category === 'preference')
-    .map((f: any) => f.factValue);
 
   // Set initial state
   const state: EnrichmentState = {
@@ -164,28 +154,50 @@ export async function* batchEnrichWithProgress(
     processed: 0,
     startedAt: new Date().toISOString(),
     stopRequested: false,
+    rate: 0,
+    eta: 0,
     recentClassifications: [],
   };
   await setEnrichmentState(userId, state);
 
-  yield { type: 'start', total };
+  // Fire and forget - run in background
+  runEnrichmentLoop(userId, unenriched as any[]).catch(err => {
+    logger.error('Background enrichment failed', { error: (err as Error).message, userId });
+  });
 
+  logger.info('Batch enrichment started', { total, userId });
+  return { started: true, total };
+}
+
+async function runEnrichmentLoop(userId: string, rows: Array<{ id: string; title: string; newsfetcher_id: string }>): Promise<void> {
+  // Get user interests
+  const facts = await factsService.getUserFacts(userId, { limit: 10 });
+  const interests = facts
+    .filter((f: any) => f.category === 'hobby' || f.category === 'preference')
+    .map((f: any) => f.factValue);
+
+  const total = rows.length;
   const startTime = Date.now();
   let processed = 0;
+  const recentClassifications: RecentClassification[] = [];
 
-  for (const row of unenriched) {
+  for (const article of rows) {
     // Check stop request
     const currentState = await getEnrichmentState(userId);
     if (currentState.stopRequested) {
-      state.running = false;
-      state.stopRequested = false;
-      state.processed = processed;
-      await setEnrichmentState(userId, state);
-      yield { type: 'stopped', total, processed };
+      await setEnrichmentState(userId, {
+        running: false,
+        total,
+        processed,
+        startedAt: currentState.startedAt,
+        stopRequested: false,
+        rate: 0,
+        eta: 0,
+        recentClassifications,
+      });
+      logger.info('Batch enrichment stopped by user', { processed, total, userId });
       return;
     }
-
-    const article = row as any;
 
     try {
       const classification = await filterArticle(
@@ -213,13 +225,28 @@ export async function* batchEnrichWithProgress(
         classifiedAt: new Date().toISOString(),
       };
 
-      // Keep last 20 recent classifications
-      state.recentClassifications.unshift(recentItem);
-      if (state.recentClassifications.length > 20) {
-        state.recentClassifications = state.recentClassifications.slice(0, 20);
+      recentClassifications.unshift(recentItem);
+      if (recentClassifications.length > 20) {
+        recentClassifications.length = 20;
       }
-      state.processed = processed;
-      await setEnrichmentState(userId, state);
+
+      // Calculate rate and ETA
+      const elapsed = (Date.now() - startTime) / 1000;
+      const rate = elapsed > 0 ? Math.round((processed / (elapsed / 60)) * 10) / 10 : 0;
+      const remaining = total - processed;
+      const eta = rate > 0 ? Math.ceil(remaining / (rate / 60)) : 0;
+
+      // Update Redis state for polling
+      await setEnrichmentState(userId, {
+        running: true,
+        total,
+        processed,
+        startedAt: new Date(startTime).toISOString(),
+        stopRequested: false,
+        rate,
+        eta,
+        recentClassifications,
+      });
 
       // Check alerts
       try {
@@ -241,21 +268,6 @@ export async function* batchEnrichWithProgress(
         logger.warn('Alert check failed during enrichment', { id: article.id, error: (alertErr as Error).message });
       }
 
-      // Calculate rate and ETA
-      const elapsed = (Date.now() - startTime) / 1000;
-      const rate = processed / (elapsed / 60); // articles per minute
-      const remaining = total - processed;
-      const eta = rate > 0 ? Math.ceil(remaining / (rate / 60)) : 0; // seconds
-
-      yield {
-        type: 'progress',
-        total,
-        processed,
-        article: recentItem,
-        rate: Math.round(rate * 10) / 10,
-        eta,
-      };
-
       // Throttle between articles
       await new Promise(r => setTimeout(r, 300));
     } catch (err) {
@@ -265,9 +277,16 @@ export async function* batchEnrichWithProgress(
   }
 
   // Done
-  state.running = false;
-  state.processed = processed;
-  await setEnrichmentState(userId, state);
+  await setEnrichmentState(userId, {
+    running: false,
+    total,
+    processed,
+    startedAt: new Date(startTime).toISOString(),
+    stopRequested: false,
+    rate: 0,
+    eta: 0,
+    recentClassifications,
+  });
 
-  yield { type: 'complete', total, processed };
+  logger.info('Batch enrichment completed', { processed, total, userId });
 }
