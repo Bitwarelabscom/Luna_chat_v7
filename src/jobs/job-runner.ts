@@ -683,10 +683,10 @@ async function consolidateSessionLearnings(): Promise<void> {
     // Get users with recent autonomous sessions and insights enabled
     const result = await pool.query(`
       SELECT DISTINCT ac.user_id
-      FROM autonomous_sessions as
-      JOIN autonomous_config ac ON as.user_id = ac.user_id
-      WHERE as.created_at > NOW() - INTERVAL '7 days'
-        AND as.status = 'completed'
+      FROM autonomous_sessions asess
+      JOIN autonomous_config ac ON asess.user_id = ac.user_id
+      WHERE asess.created_at > NOW() - INTERVAL '7 days'
+        AND asess.status = 'completed'
         AND ac.insights_enabled = true
     `);
 
