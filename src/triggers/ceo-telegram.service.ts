@@ -13,6 +13,8 @@ import logger from '../utils/logger.js';
 import crypto from 'crypto';
 import * as staffChatService from '../ceo/staff-chat.service.js';
 import * as ceoProposalsService from '../ceo/ceo-proposals.service.js';
+import * as chatService from '../chat/chat.service.js';
+import * as sessionService from '../chat/session.service.js';
 import { DEPARTMENT_MAP } from '../persona/luna.persona.js';
 
 // ============================================
@@ -341,6 +343,75 @@ async function updateLastMessageTime(userId: string): Promise<void> {
     `UPDATE ceo_telegram_connections SET last_message_at = NOW() WHERE user_id = $1`,
     [userId]
   );
+}
+
+// ============================================
+// CEO Luna Chat (free-form messages)
+// ============================================
+
+async function getOrCreateCeoTelegramSession(userId: string): Promise<string> {
+  const title = 'CEO Telegram';
+
+  const result = await pool.query(
+    `SELECT id FROM sessions
+     WHERE user_id = $1 AND title = $2
+     ORDER BY created_at DESC LIMIT 1`,
+    [userId, title]
+  );
+
+  if (result.rows.length > 0) {
+    return result.rows[0].id;
+  }
+
+  const session = await sessionService.createSession({ userId, title, mode: 'ceo_luna' });
+  logger.info('Created CEO Telegram session', { userId, sessionId: session.id });
+  return session.id;
+}
+
+async function handleCeoChat(
+  connection: CeoTelegramConnection,
+  text: string
+): Promise<void> {
+  try {
+    await telegramRequest('sendChatAction', {
+      chat_id: connection.chatId,
+      action: 'typing',
+    });
+
+    const sessionId = await getOrCreateCeoTelegramSession(connection.userId);
+
+    const response = await chatService.processMessage({
+      sessionId,
+      userId: connection.userId,
+      message: text,
+      mode: 'ceo_luna',
+      source: 'telegram',
+    });
+
+    await updateLastMessageTime(connection.userId);
+
+    const maxLength = 4000;
+    let content = response.content;
+
+    while (content.length > 0) {
+      const chunk = content.slice(0, maxLength);
+      content = content.slice(maxLength);
+      await sendMessage(connection.chatId, chunk, { parseMode: 'Markdown' });
+    }
+
+    logger.info('CEO Telegram chat message processed', {
+      userId: connection.userId,
+      sessionId,
+      inputLength: text.length,
+      outputLength: response.content.length,
+    });
+  } catch (error) {
+    logger.error('Failed to process CEO Telegram chat message', {
+      userId: connection.userId,
+      error: (error as Error).message,
+    });
+    await sendMessage(connection.chatId, 'Sorry, I encountered an error. Please try again.');
+  }
 }
 
 // ============================================
@@ -757,8 +828,8 @@ export async function processUpdate(update: TelegramUpdate): Promise<void> {
     return;
   }
 
-  // Unrecognized message
-  await sendMessage(chatId, 'Unknown command. Use /help to see available commands.');
+  // Free-form message - route to CEO Luna chat
+  await handleCeoChat(connection, text);
 }
 
 // ============================================
