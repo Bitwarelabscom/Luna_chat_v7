@@ -1,0 +1,861 @@
+/**
+ * CEO Telegram Service
+ *
+ * Separate Telegram bot for CEO Luna - handles:
+ * - Department agent chat via /economy, /marketing, /development, /research
+ * - Meeting orchestration via /meeting
+ * - Proposal management via /proposals, /approve, /reject
+ * - Proposal notifications with inline Approve/Reject buttons
+ */
+
+import { pool } from '../db/index.js';
+import logger from '../utils/logger.js';
+import crypto from 'crypto';
+import * as staffChatService from '../ceo/staff-chat.service.js';
+import * as ceoProposalsService from '../ceo/ceo-proposals.service.js';
+import { DEPARTMENT_MAP } from '../persona/luna.persona.js';
+
+// ============================================
+// Types
+// ============================================
+
+export interface CeoTelegramConnection {
+  id: string;
+  userId: string;
+  chatId: number;
+  username: string | null;
+  firstName: string | null;
+  isActive: boolean;
+  linkedAt: Date;
+  lastMessageAt: Date | null;
+}
+
+interface TelegramUpdate {
+  update_id: number;
+  message?: {
+    message_id: number;
+    from: {
+      id: number;
+      is_bot: boolean;
+      first_name: string;
+      username?: string;
+    };
+    chat: {
+      id: number;
+      type: string;
+    };
+    text?: string;
+  };
+  callback_query?: {
+    id: string;
+    from: {
+      id: number;
+      first_name: string;
+      username?: string;
+    };
+    message?: {
+      message_id: number;
+      chat: {
+        id: number;
+      };
+    };
+    data?: string;
+  };
+}
+
+interface TelegramApiResponse {
+  ok: boolean;
+  result?: unknown;
+  description?: string;
+}
+
+// ============================================
+// Configuration
+// ============================================
+
+function getBotToken(): string | null {
+  return process.env.CEO_TELEGRAM_BOT_TOKEN || null;
+}
+
+export function isConfigured(): boolean {
+  return !!getBotToken();
+}
+
+// ============================================
+// Telegram API
+// ============================================
+
+async function telegramRequest(method: string, body?: Record<string, unknown>): Promise<unknown> {
+  const token = getBotToken();
+  if (!token) {
+    throw new Error('CEO Telegram bot token not configured');
+  }
+
+  const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+
+  const result = await response.json() as TelegramApiResponse;
+
+  if (!result.ok) {
+    logger.error('CEO Telegram API error', { method, error: result.description });
+    throw new Error(result.description || 'Telegram API error');
+  }
+
+  return result.result;
+}
+
+export async function sendMessage(
+  chatId: number,
+  text: string,
+  options?: {
+    parseMode?: 'HTML' | 'Markdown' | 'MarkdownV2';
+    disableNotification?: boolean;
+  }
+): Promise<boolean> {
+  try {
+    await telegramRequest('sendMessage', {
+      chat_id: chatId,
+      text,
+      parse_mode: options?.parseMode,
+      disable_notification: options?.disableNotification,
+    });
+    return true;
+  } catch (error) {
+    const errorMessage = (error as Error).message;
+
+    // If parsing failed and we were using parseMode, retry without it
+    if (options?.parseMode && errorMessage.includes("can't parse entities")) {
+      logger.warn('CEO Telegram markdown parsing failed, retrying as plain text', { chatId });
+      try {
+        await telegramRequest('sendMessage', {
+          chat_id: chatId,
+          text,
+          disable_notification: options?.disableNotification,
+        });
+        return true;
+      } catch (retryError) {
+        logger.error('Failed to send CEO Telegram message (retry)', {
+          chatId,
+          error: (retryError as Error).message,
+        });
+        return false;
+      }
+    }
+
+    logger.error('Failed to send CEO Telegram message', { chatId, error: errorMessage });
+    return false;
+  }
+}
+
+export async function sendMessageWithButtons(
+  chatId: number,
+  text: string,
+  buttons: Array<{ text: string; callback: string }>,
+  columns: number = 2
+): Promise<{ success: boolean; messageId?: number }> {
+  try {
+    const rows: Array<Array<{ text: string; callback_data: string }>> = [];
+    for (let i = 0; i < buttons.length; i += columns) {
+      const row = buttons.slice(i, i + columns).map(b => ({
+        text: b.text,
+        callback_data: b.callback,
+      }));
+      rows.push(row);
+    }
+
+    const result = await telegramRequest('sendMessage', {
+      chat_id: chatId,
+      text,
+      reply_markup: {
+        inline_keyboard: rows,
+      },
+    }) as { message_id: number };
+
+    return { success: true, messageId: result.message_id };
+  } catch (error) {
+    logger.error('Failed to send CEO Telegram message with buttons', {
+      chatId,
+      error: (error as Error).message,
+    });
+    return { success: false };
+  }
+}
+
+async function editMessageText(
+  chatId: number,
+  messageId: number,
+  text: string
+): Promise<boolean> {
+  try {
+    await telegramRequest('editMessageText', {
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+      reply_markup: { inline_keyboard: [] },
+    });
+    return true;
+  } catch (error) {
+    logger.error('Failed to edit CEO Telegram message', {
+      chatId,
+      messageId,
+      error: (error as Error).message,
+    });
+    return false;
+  }
+}
+
+async function answerCallbackQuery(
+  callbackQueryId: string,
+  text?: string
+): Promise<boolean> {
+  try {
+    await telegramRequest('answerCallbackQuery', {
+      callback_query_id: callbackQueryId,
+      text,
+    });
+    return true;
+  } catch (error) {
+    logger.error('Failed to answer CEO callback query', { error: (error as Error).message });
+    return false;
+  }
+}
+
+export async function getBotInfo(): Promise<{ username: string; firstName: string } | null> {
+  if (!isConfigured()) return null;
+
+  try {
+    const result = await telegramRequest('getMe') as { username: string; first_name: string };
+    return {
+      username: result.username,
+      firstName: result.first_name,
+    };
+  } catch (error) {
+    logger.error('Failed to get CEO bot info', { error: (error as Error).message });
+    return null;
+  }
+}
+
+// ============================================
+// Link Code Management
+// ============================================
+
+export async function generateLinkCode(userId: string): Promise<string> {
+  await pool.query(
+    `DELETE FROM ceo_telegram_link_codes WHERE user_id = $1`,
+    [userId]
+  );
+
+  const code = crypto.randomBytes(4).toString('hex').toUpperCase();
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+  await pool.query(
+    `INSERT INTO ceo_telegram_link_codes (user_id, code, expires_at)
+     VALUES ($1, $2, $3)`,
+    [userId, code, expiresAt]
+  );
+
+  logger.info('Generated CEO Telegram link code', { userId, code });
+  return code;
+}
+
+async function validateLinkCode(code: string): Promise<string | null> {
+  const result = await pool.query(
+    `SELECT user_id FROM ceo_telegram_link_codes
+     WHERE code = $1
+       AND expires_at > NOW()
+       AND used_at IS NULL`,
+    [code.toUpperCase()]
+  );
+
+  if (result.rows.length === 0) return null;
+
+  await pool.query(
+    `UPDATE ceo_telegram_link_codes SET used_at = NOW() WHERE code = $1`,
+    [code.toUpperCase()]
+  );
+
+  return result.rows[0].user_id;
+}
+
+// ============================================
+// Connection Management
+// ============================================
+
+export async function linkTelegram(
+  userId: string,
+  chatId: number,
+  username?: string,
+  firstName?: string
+): Promise<CeoTelegramConnection> {
+  const result = await pool.query(
+    `INSERT INTO ceo_telegram_connections (user_id, chat_id, username, first_name)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (user_id) DO UPDATE SET
+       chat_id = EXCLUDED.chat_id,
+       username = EXCLUDED.username,
+       first_name = EXCLUDED.first_name,
+       is_active = true,
+       linked_at = NOW()
+     RETURNING *`,
+    [userId, chatId, username || null, firstName || null]
+  );
+
+  logger.info('CEO Telegram linked', { userId, chatId, username });
+  return mapConnectionRow(result.rows[0]);
+}
+
+export async function unlinkTelegram(userId: string): Promise<boolean> {
+  const result = await pool.query(
+    `DELETE FROM ceo_telegram_connections WHERE user_id = $1 RETURNING id`,
+    [userId]
+  );
+
+  if ((result.rowCount ?? 0) > 0) {
+    logger.info('CEO Telegram unlinked', { userId });
+    return true;
+  }
+  return false;
+}
+
+export async function getConnection(userId: string): Promise<CeoTelegramConnection | null> {
+  const result = await pool.query(
+    `SELECT * FROM ceo_telegram_connections WHERE user_id = $1`,
+    [userId]
+  );
+  return result.rows.length > 0 ? mapConnectionRow(result.rows[0]) : null;
+}
+
+export async function getConnectionByChatId(chatId: number): Promise<CeoTelegramConnection | null> {
+  const result = await pool.query(
+    `SELECT * FROM ceo_telegram_connections WHERE chat_id = $1`,
+    [chatId]
+  );
+  return result.rows.length > 0 ? mapConnectionRow(result.rows[0]) : null;
+}
+
+async function updateLastMessageTime(userId: string): Promise<void> {
+  await pool.query(
+    `UPDATE ceo_telegram_connections SET last_message_at = NOW() WHERE user_id = $1`,
+    [userId]
+  );
+}
+
+// ============================================
+// Department Chat Handlers
+// ============================================
+
+const VALID_DEPARTMENTS = ['economy', 'marketing', 'development', 'research'] as const;
+
+async function handleDepartmentMessage(
+  connection: CeoTelegramConnection,
+  department: string,
+  message: string
+): Promise<void> {
+  try {
+    await telegramRequest('sendChatAction', {
+      chat_id: connection.chatId,
+      action: 'typing',
+    });
+
+    const session = await staffChatService.getOrCreateStaffSession(connection.userId, department);
+    const response = await staffChatService.sendStaffMessage(connection.userId, session.id, message);
+
+    await updateLastMessageTime(connection.userId);
+
+    const dept = DEPARTMENT_MAP.get(department as typeof VALID_DEPARTMENTS[number]);
+    const deptName = dept?.name || department;
+
+    // Split long messages
+    const maxLength = 4000;
+    let content = `[${deptName}]\n${response.content}`;
+
+    while (content.length > 0) {
+      const chunk = content.slice(0, maxLength);
+      content = content.slice(maxLength);
+      await sendMessage(connection.chatId, chunk, { parseMode: 'Markdown' });
+    }
+
+    logger.info('CEO Telegram dept message processed', {
+      userId: connection.userId,
+      department,
+      inputLength: message.length,
+      outputLength: response.content.length,
+    });
+  } catch (error) {
+    logger.error('Failed to process CEO Telegram dept message', {
+      userId: connection.userId,
+      department,
+      error: (error as Error).message,
+    });
+    await sendMessage(
+      connection.chatId,
+      `Failed to reach ${department} department. Please try again.`
+    );
+  }
+}
+
+async function handleMeetingMessage(
+  connection: CeoTelegramConnection,
+  message: string
+): Promise<void> {
+  try {
+    await telegramRequest('sendChatAction', {
+      chat_id: connection.chatId,
+      action: 'typing',
+    });
+
+    const session = await staffChatService.getOrCreateStaffSession(connection.userId, 'meeting');
+    const responses = await staffChatService.sendMeetingMessage(connection.userId, session.id, message);
+
+    await updateLastMessageTime(connection.userId);
+
+    for (const msg of responses) {
+      const deptLabel = msg.departmentSlug === 'meeting'
+        ? 'CEO Luna'
+        : DEPARTMENT_MAP.get(msg.departmentSlug as typeof VALID_DEPARTMENTS[number])?.name || msg.departmentSlug;
+
+      const maxLength = 4000;
+      let content = `[${deptLabel}]\n${msg.content}`;
+
+      while (content.length > 0) {
+        const chunk = content.slice(0, maxLength);
+        content = content.slice(maxLength);
+        await sendMessage(connection.chatId, chunk, { parseMode: 'Markdown' });
+      }
+    }
+
+    logger.info('CEO Telegram meeting message processed', {
+      userId: connection.userId,
+      responseCount: responses.length,
+    });
+  } catch (error) {
+    logger.error('Failed to process CEO Telegram meeting message', {
+      userId: connection.userId,
+      error: (error as Error).message,
+    });
+    await sendMessage(connection.chatId, 'Meeting session failed. Please try again.');
+  }
+}
+
+// ============================================
+// Proposal Handlers
+// ============================================
+
+async function handleProposalsCommand(connection: CeoTelegramConnection): Promise<void> {
+  try {
+    const proposals = await ceoProposalsService.listProposals(connection.userId, { status: 'pending' });
+
+    if (proposals.length === 0) {
+      await sendMessage(connection.chatId, 'No pending proposals.');
+      return;
+    }
+
+    let text = `*Pending Proposals (${proposals.length})*\n\n`;
+
+    for (const p of proposals.slice(0, 15)) {
+      const urgencyTag = p.urgency === 'p1' ? '[P1]' : p.urgency === 'p2' ? '[P2]' : '';
+      const idShort = p.id.slice(0, 8);
+      text += `${urgencyTag} \`${idShort}\` ${p.title}\n`;
+    }
+
+    if (proposals.length > 15) {
+      text += `\n...and ${proposals.length - 15} more`;
+    }
+
+    text += '\n\nUse /approve <id> or /reject <id>';
+
+    await sendMessage(connection.chatId, text, { parseMode: 'Markdown' });
+  } catch (error) {
+    logger.error('Failed to list proposals via CEO Telegram', {
+      userId: connection.userId,
+      error: (error as Error).message,
+    });
+    await sendMessage(connection.chatId, 'Failed to fetch proposals. Please try again.');
+  }
+}
+
+async function handleApproveCommand(
+  connection: CeoTelegramConnection,
+  idPrefix: string
+): Promise<void> {
+  try {
+    const proposalId = await resolveProposalId(connection.userId, idPrefix);
+    if (!proposalId) {
+      await sendMessage(connection.chatId, `No pending proposal found matching "${idPrefix}".`);
+      return;
+    }
+
+    const result = await ceoProposalsService.approveProposal(connection.userId, proposalId);
+    if (result) {
+      await sendMessage(connection.chatId, `Approved: ${result.title}`);
+    } else {
+      await sendMessage(connection.chatId, 'Proposal not found or already decided.');
+    }
+  } catch (error) {
+    logger.error('Failed to approve proposal via CEO Telegram', {
+      error: (error as Error).message,
+    });
+    await sendMessage(connection.chatId, 'Failed to approve proposal.');
+  }
+}
+
+async function handleRejectCommand(
+  connection: CeoTelegramConnection,
+  idPrefix: string
+): Promise<void> {
+  try {
+    const proposalId = await resolveProposalId(connection.userId, idPrefix);
+    if (!proposalId) {
+      await sendMessage(connection.chatId, `No pending proposal found matching "${idPrefix}".`);
+      return;
+    }
+
+    const ok = await ceoProposalsService.rejectProposal(connection.userId, proposalId);
+    if (ok) {
+      await sendMessage(connection.chatId, 'Proposal rejected.');
+    } else {
+      await sendMessage(connection.chatId, 'Proposal not found or already decided.');
+    }
+  } catch (error) {
+    logger.error('Failed to reject proposal via CEO Telegram', {
+      error: (error as Error).message,
+    });
+    await sendMessage(connection.chatId, 'Failed to reject proposal.');
+  }
+}
+
+/**
+ * Resolve a short ID prefix to a full proposal UUID
+ */
+async function resolveProposalId(userId: string, prefix: string): Promise<string | null> {
+  const result = await pool.query(
+    `SELECT id FROM ceo_proposals
+     WHERE user_id = $1 AND status = 'pending' AND id::text LIKE $2
+     ORDER BY created_at DESC LIMIT 1`,
+    [userId, `${prefix}%`]
+  );
+  return result.rows.length > 0 ? (result.rows[0] as Record<string, unknown>).id as string : null;
+}
+
+// ============================================
+// Proposal Notification (called externally)
+// ============================================
+
+export async function sendProposalToCeoTelegram(
+  userId: string,
+  proposal: { id: string; title: string; description: string | null; urgency: string }
+): Promise<number | null> {
+  const connection = await getConnection(userId);
+  if (!connection?.isActive || !connection.chatId) return null;
+
+  const urgencyLabel = proposal.urgency === 'p1' ? 'P1 - URGENT' : proposal.urgency === 'p2' ? 'P2 - Important' : 'Normal';
+  const text = `[CEO Luna - ${urgencyLabel}]\n\n${proposal.title}\n\n${proposal.description || ''}`.trim();
+
+  const buttons = [
+    { text: 'Approve', callback: `ceo:approve:${proposal.id}` },
+    { text: 'Reject', callback: `ceo:reject:${proposal.id}` },
+  ];
+
+  const result = await sendMessageWithButtons(connection.chatId, text, buttons, 2);
+  return result.messageId || null;
+}
+
+// ============================================
+// Callback Query Handler
+// ============================================
+
+async function handleCallbackQuery(callback: NonNullable<TelegramUpdate['callback_query']>): Promise<void> {
+  const chatId = callback.message?.chat.id;
+  const messageId = callback.message?.message_id;
+  const data = callback.data;
+
+  if (!chatId || !data) {
+    await answerCallbackQuery(callback.id);
+    return;
+  }
+
+  const connection = await getConnectionByChatId(chatId);
+  if (!connection) {
+    await answerCallbackQuery(callback.id, 'Not connected');
+    return;
+  }
+
+  // Handle CEO proposal buttons: ceo:approve:<id> or ceo:reject:<id>
+  if (data.startsWith('ceo:')) {
+    const parts = data.split(':');
+    const action = parts[1];
+    const proposalId = parts[2];
+
+    if (!proposalId) {
+      await answerCallbackQuery(callback.id, 'Invalid proposal');
+      return;
+    }
+
+    try {
+      if (action === 'approve') {
+        const result = await ceoProposalsService.approveProposal(connection.userId, proposalId);
+        if (result) {
+          await answerCallbackQuery(callback.id, 'Approved!');
+          if (messageId) {
+            await editMessageText(chatId, messageId, `[APPROVED] ${result.title}`);
+          }
+        } else {
+          await answerCallbackQuery(callback.id, 'Already decided');
+        }
+      } else if (action === 'reject') {
+        const ok = await ceoProposalsService.rejectProposal(connection.userId, proposalId);
+        if (ok) {
+          await answerCallbackQuery(callback.id, 'Rejected');
+          if (messageId) {
+            await editMessageText(chatId, messageId, `[REJECTED] ${data.split(':').slice(3).join(':') || 'Proposal rejected'}`);
+          }
+        } else {
+          await answerCallbackQuery(callback.id, 'Already decided');
+        }
+      }
+    } catch (error) {
+      logger.error('CEO Telegram proposal callback error', { action, proposalId, error: (error as Error).message });
+      await answerCallbackQuery(callback.id, 'Failed. Try via app.');
+    }
+    return;
+  }
+
+  await answerCallbackQuery(callback.id);
+}
+
+// ============================================
+// Webhook Handler
+// ============================================
+
+export async function processUpdate(update: TelegramUpdate): Promise<void> {
+  // Handle callback queries (button presses)
+  if (update.callback_query) {
+    await handleCallbackQuery(update.callback_query);
+    return;
+  }
+
+  if (!update.message?.text) return;
+
+  const message = update.message;
+  const chatId = message.chat.id;
+  const text = message.text!.trim();
+
+  // /start <code> - link account
+  if (text.startsWith('/start ')) {
+    const code = text.slice(7).trim();
+    await handleLinkCommand(chatId, code, message.from);
+    return;
+  }
+
+  if (text === '/start') {
+    await sendMessage(
+      chatId,
+      'Hi! I\'m CEO Luna\'s command bot. To link your account, go to Luna Chat > CEO > Settings and click "Link CEO Telegram".\n\nOnce linked, you can chat with departments, manage proposals, and run meetings here!'
+    );
+    return;
+  }
+
+  if (text === '/help') {
+    await sendMessage(
+      chatId,
+      'CEO Luna Telegram Commands:\n\n'
+      + 'Department Chat:\n'
+      + '/economy <message> - Talk to Finance Luna\n'
+      + '/marketing <message> - Talk to Market Luna\n'
+      + '/development <message> - Talk to Dev Luna\n'
+      + '/research <message> - Talk to Research Luna\n'
+      + '/meeting <message> - Start a team meeting\n\n'
+      + 'Proposals:\n'
+      + '/proposals - List pending proposals\n'
+      + '/approve <id> - Approve a proposal\n'
+      + '/reject <id> - Reject a proposal\n\n'
+      + 'Other:\n'
+      + '/status - Check connection status\n'
+      + '/unlink - Disconnect from CEO Luna\n'
+      + '/help - Show this help'
+    );
+    return;
+  }
+
+  if (text === '/status') {
+    await handleStatusCommand(chatId);
+    return;
+  }
+
+  if (text === '/unlink') {
+    await handleUnlinkCommand(chatId);
+    return;
+  }
+
+  // Check connection for all other commands
+  const connection = await getConnectionByChatId(chatId);
+  if (!connection) {
+    await sendMessage(chatId, 'Your Telegram is not linked to a CEO Luna account. Go to CEO Settings to link it.');
+    return;
+  }
+
+  // Department commands
+  for (const dept of VALID_DEPARTMENTS) {
+    if (text.startsWith(`/${dept} `)) {
+      const msg = text.slice(dept.length + 2).trim();
+      if (!msg) {
+        await sendMessage(chatId, `Usage: /${dept} <your message>`);
+        return;
+      }
+      await handleDepartmentMessage(connection, dept, msg);
+      return;
+    }
+    if (text === `/${dept}`) {
+      await sendMessage(chatId, `Usage: /${dept} <your message>`);
+      return;
+    }
+  }
+
+  // Meeting command
+  if (text.startsWith('/meeting ')) {
+    const msg = text.slice(9).trim();
+    if (!msg) {
+      await sendMessage(chatId, 'Usage: /meeting <topic or question>');
+      return;
+    }
+    await handleMeetingMessage(connection, msg);
+    return;
+  }
+  if (text === '/meeting') {
+    await sendMessage(chatId, 'Usage: /meeting <topic or question>');
+    return;
+  }
+
+  // Proposals command
+  if (text === '/proposals') {
+    await handleProposalsCommand(connection);
+    return;
+  }
+
+  // Approve command
+  if (text.startsWith('/approve ')) {
+    const idPrefix = text.slice(9).trim();
+    if (!idPrefix) {
+      await sendMessage(chatId, 'Usage: /approve <proposal-id-prefix>');
+      return;
+    }
+    await handleApproveCommand(connection, idPrefix);
+    return;
+  }
+
+  // Reject command
+  if (text.startsWith('/reject ')) {
+    const idPrefix = text.slice(8).trim();
+    if (!idPrefix) {
+      await sendMessage(chatId, 'Usage: /reject <proposal-id-prefix>');
+      return;
+    }
+    await handleRejectCommand(connection, idPrefix);
+    return;
+  }
+
+  // Unrecognized message
+  await sendMessage(chatId, 'Unknown command. Use /help to see available commands.');
+}
+
+// ============================================
+// Link / Status / Unlink handlers
+// ============================================
+
+async function handleLinkCommand(
+  chatId: number,
+  code: string,
+  from: { id: number; first_name: string; username?: string }
+): Promise<void> {
+  const userId = await validateLinkCode(code);
+
+  if (!userId) {
+    await sendMessage(chatId, 'Invalid or expired link code. Please generate a new one from CEO Luna Settings.');
+    return;
+  }
+
+  await linkTelegram(userId, chatId, from.username, from.first_name);
+
+  await sendMessage(
+    chatId,
+    `Connected! Hi ${from.first_name}, you can now:\n\n`
+    + '- Chat with department agents (/economy, /marketing, /development, /research)\n'
+    + '- Run team meetings (/meeting)\n'
+    + '- Manage proposals (/proposals, /approve, /reject)\n'
+    + '- Receive proposal notifications with inline buttons\n\n'
+    + 'Type /help for the full command list.'
+  );
+}
+
+async function handleStatusCommand(chatId: number): Promise<void> {
+  const connection = await getConnectionByChatId(chatId);
+
+  if (connection) {
+    await sendMessage(
+      chatId,
+      `Connected to CEO Luna\nLinked: ${connection.linkedAt.toLocaleDateString()}\nLast message: ${connection.lastMessageAt?.toLocaleDateString() || 'Never'}`
+    );
+  } else {
+    await sendMessage(chatId, 'Not connected to any CEO Luna account.');
+  }
+}
+
+async function handleUnlinkCommand(chatId: number): Promise<void> {
+  const connection = await getConnectionByChatId(chatId);
+
+  if (connection) {
+    await unlinkTelegram(connection.userId);
+    await sendMessage(chatId, 'Disconnected from CEO Luna. You will no longer receive proposal notifications here.');
+  } else {
+    await sendMessage(chatId, 'This chat is not connected to any CEO Luna account.');
+  }
+}
+
+// ============================================
+// Helpers
+// ============================================
+
+function mapConnectionRow(row: Record<string, unknown>): CeoTelegramConnection {
+  return {
+    id: row.id as string,
+    userId: row.user_id as string,
+    chatId: Number(row.chat_id),
+    username: row.username as string | null,
+    firstName: row.first_name as string | null,
+    isActive: row.is_active as boolean,
+    linkedAt: row.linked_at as Date,
+    lastMessageAt: row.last_message_at as Date | null,
+  };
+}
+
+export function getSetupInstructions(): string {
+  return `To set up CEO Telegram:
+
+1. The bot token should be configured in CEO_TELEGRAM_BOT_TOKEN
+
+2. Set up webhook:
+   POST to /api/triggers/ceo-telegram/webhook
+
+3. Link your account:
+   - Go to CEO Luna > Settings
+   - Click "Link CEO Telegram"
+   - Send the code to the CEO bot`;
+}
+
+export default {
+  sendMessage,
+  sendMessageWithButtons,
+  getBotInfo,
+  generateLinkCode,
+  linkTelegram,
+  unlinkTelegram,
+  getConnection,
+  getConnectionByChatId,
+  sendProposalToCeoTelegram,
+  processUpdate,
+  isConfigured,
+  getSetupInstructions,
+};

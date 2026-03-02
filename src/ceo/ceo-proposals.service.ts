@@ -92,11 +92,25 @@ export async function createProposal(
 
   const proposal = mapProposalRow(result.rows[0] as Record<string, unknown>);
 
-  // Send to Telegram if urgent
+  // Send to Telegram if urgent - try CEO bot first, fall back to main bot
   if (proposal.urgency === 'p1' || proposal.urgency === 'p2') {
     try {
-      const { sendProposalToTelegram } = await import('../triggers/telegram.service.js');
-      const msgId = await sendProposalToTelegram(userId, proposal);
+      let msgId: number | null = null;
+
+      // Try dedicated CEO Telegram bot first
+      try {
+        const { sendProposalToCeoTelegram } = await import('../triggers/ceo-telegram.service.js');
+        msgId = await sendProposalToCeoTelegram(userId, proposal);
+      } catch {
+        // CEO bot not available, fall through
+      }
+
+      // Fall back to main Telegram bot
+      if (!msgId) {
+        const { sendProposalToTelegram } = await import('../triggers/telegram.service.js');
+        msgId = await sendProposalToTelegram(userId, proposal);
+      }
+
       if (msgId) {
         await pool.query(
           `UPDATE ceo_proposals SET telegram_message_id = $1 WHERE id = $2`,

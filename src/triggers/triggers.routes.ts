@@ -6,6 +6,7 @@ import * as deliveryService from './delivery.service.js';
 import * as checkinsService from '../abilities/checkins.service.js';
 import * as telegramService from './telegram.service.js';
 import * as tradingTelegramService from './trading-telegram.service.js';
+import * as ceoTelegramService from './ceo-telegram.service.js';
 import logger from '../utils/logger.js';
 
 const router = Router();
@@ -627,6 +628,116 @@ router.post('/trading-telegram/test', async (req: Request, res: Response) => {
 });
 
 // ============================================
+// CEO Telegram Integration (Separate Bot)
+// ============================================
+
+/**
+ * GET /api/triggers/ceo-telegram/status
+ * Get CEO Telegram connection status and bot info
+ */
+router.get('/ceo-telegram/status', async (req: Request, res: Response) => {
+  try {
+    const isConfigured = ceoTelegramService.isConfigured();
+    const connection = await ceoTelegramService.getConnection(req.user!.userId);
+    const botInfo = isConfigured ? await ceoTelegramService.getBotInfo() : null;
+
+    res.json({
+      isConfigured,
+      connection: connection ? {
+        chatId: connection.chatId,
+        username: connection.username,
+        firstName: connection.firstName,
+        isActive: connection.isActive,
+        linkedAt: connection.linkedAt,
+        lastMessageAt: connection.lastMessageAt,
+      } : null,
+      botInfo,
+      setupInstructions: !isConfigured ? ceoTelegramService.getSetupInstructions() : null,
+    });
+  } catch (error) {
+    logger.error('Failed to get CEO Telegram status', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get CEO Telegram status' });
+  }
+});
+
+/**
+ * POST /api/triggers/ceo-telegram/link
+ * Generate a link code for connecting CEO Telegram
+ */
+router.post('/ceo-telegram/link', async (req: Request, res: Response) => {
+  try {
+    if (!ceoTelegramService.isConfigured()) {
+      res.status(400).json({
+        error: 'CEO Telegram not configured',
+        setupInstructions: ceoTelegramService.getSetupInstructions(),
+      });
+      return;
+    }
+
+    const code = await ceoTelegramService.generateLinkCode(req.user!.userId);
+    const botInfo = await ceoTelegramService.getBotInfo();
+
+    res.json({
+      code,
+      expiresInMinutes: 10,
+      botUsername: botInfo?.username,
+      linkUrl: botInfo ? `https://t.me/${botInfo.username}?start=${code}` : null,
+    });
+  } catch (error) {
+    logger.error('Failed to generate CEO Telegram link code', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to generate link code' });
+  }
+});
+
+/**
+ * DELETE /api/triggers/ceo-telegram/unlink
+ * Unlink CEO Telegram from user account
+ */
+router.delete('/ceo-telegram/unlink', async (req: Request, res: Response) => {
+  try {
+    const unlinked = await ceoTelegramService.unlinkTelegram(req.user!.userId);
+
+    if (unlinked) {
+      res.json({ success: true, message: 'CEO Telegram unlinked successfully' });
+    } else {
+      res.status(404).json({ error: 'No CEO Telegram connection found' });
+    }
+  } catch (error) {
+    logger.error('Failed to unlink CEO Telegram', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to unlink CEO Telegram' });
+  }
+});
+
+/**
+ * POST /api/triggers/ceo-telegram/test
+ * Send a test message via CEO Telegram
+ */
+router.post('/ceo-telegram/test', async (req: Request, res: Response) => {
+  try {
+    const connection = await ceoTelegramService.getConnection(req.user!.userId);
+
+    if (!connection) {
+      res.status(404).json({ error: 'No CEO Telegram connection found' });
+      return;
+    }
+
+    const success = await ceoTelegramService.sendMessage(
+      connection.chatId,
+      'This is a test message from CEO Luna! Your CEO Telegram connection is working correctly.'
+    );
+
+    if (success) {
+      res.json({ success: true, message: 'Test message sent' });
+    } else {
+      res.status(500).json({ error: 'Failed to send test message' });
+    }
+  } catch (error) {
+    logger.error('Failed to send CEO Telegram test message', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to send test message' });
+  }
+});
+
+// ============================================
 // Telegram Webhook (no auth - comes from Telegram)
 // ============================================
 
@@ -663,6 +774,23 @@ telegramWebhookRouter.post('/trading-telegram/webhook', async (req: Request, res
     await tradingTelegramService.processUpdate(req.body);
   } catch (error) {
     logger.error('Failed to process Trading Telegram webhook', { error: (error as Error).message });
+    // Still return 200 to prevent Telegram from retrying
+  }
+});
+
+/**
+ * POST /api/triggers/ceo-telegram/webhook
+ * Receive updates from CEO Telegram bot (no authentication)
+ */
+telegramWebhookRouter.post('/ceo-telegram/webhook', async (req: Request, res: Response) => {
+  try {
+    // Always respond 200 OK quickly to Telegram
+    res.status(200).json({ ok: true });
+
+    // Process update asynchronously
+    await ceoTelegramService.processUpdate(req.body);
+  } catch (error) {
+    logger.error('Failed to process CEO Telegram webhook', { error: (error as Error).message });
     // Still return 200 to prevent Telegram from retrying
   }
 });
