@@ -471,6 +471,24 @@ export interface OrgTask {
   startedAt: string | null;
   completedAt: string | null;
   createdAt: string;
+  executionStatus: 'running' | 'completed' | 'failed' | null;
+  executionStartedAt: string | null;
+  executionCompletedAt: string | null;
+  suggestedBy: 'manual' | 'ceo_chat' | 'department' | 'weekly_plan' | null;
+}
+
+export type MemoDeptSlug = 'economy' | 'marketing' | 'development' | 'research' | 'ceo';
+
+export interface CeoMemo {
+  id: string;
+  userId: string;
+  departmentSlug: MemoDeptSlug;
+  memoType: 'decision' | 'insight' | 'status_update' | 'task_result';
+  title: string;
+  content: string;
+  relatedTaskId: string | null;
+  sessionId: string | null;
+  createdAt: string;
 }
 
 export interface WeeklyGoal {
@@ -570,6 +588,36 @@ export const triggerWeeklyPlan = () =>
 
 export const triggerDailyCheck = () =>
   api<{ success: boolean; executed: number; skipped: number }>('/api/ceo/org/run/daily-check', { method: 'POST' });
+
+// ============================================================
+// Memos
+// ============================================================
+
+export const fetchMemos = (params?: { department?: string; type?: string; since?: string; limit?: number }) => {
+  const qs = new URLSearchParams();
+  if (params?.department) qs.set('department', params.department);
+  if (params?.type) qs.set('type', params.type);
+  if (params?.since) qs.set('since', params.since);
+  if (params?.limit) qs.set('limit', String(params.limit));
+  const q = qs.toString();
+  return api<{ memos: CeoMemo[] }>(`/api/ceo/memos${q ? `?${q}` : ''}`);
+};
+
+export const searchMemoApi = (query: string, limit = 10) =>
+  api<{ memos: CeoMemo[] }>(`/api/ceo/memos/search?q=${encodeURIComponent(query)}&limit=${limit}`);
+
+export const createMemoApi = (data: { departmentSlug: MemoDeptSlug; memoType?: string; title: string; content: string }) =>
+  api<{ memo: CeoMemo }>('/api/ceo/memos', { method: 'POST', body: data });
+
+// ============================================================
+// Task Execution
+// ============================================================
+
+export const startTaskExecution = (taskId: string) =>
+  api<{ task: OrgTask }>(`/api/ceo/org/tasks/${taskId}/start`, { method: 'POST' });
+
+export const fetchRunningTasks = () =>
+  api<{ running: OrgTask[]; recentlyCompleted: OrgTask[] }>('/api/ceo/org/tasks/running');
 
 // ============================================================
 // CEO Proposals

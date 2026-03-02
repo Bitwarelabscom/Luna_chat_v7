@@ -303,3 +303,98 @@ export const n8nWebhookTool: OpenAI.Chat.Completions.ChatCompletionTool = {
     },
   },
 };
+
+// ============================================================
+// CEO Luna Office Tools
+// ============================================================
+
+export const commitWeeklyPlanTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'commit_weekly_plan',
+    description: 'Commit the weekly plan after the user approves it in conversation. Creates goals and tasks directly. Only call this when the user explicitly agrees to the plan.',
+    parameters: {
+      type: 'object',
+      properties: {
+        goals: {
+          type: 'array',
+          description: 'Weekly goals per department',
+          items: {
+            type: 'object',
+            properties: {
+              department: { type: 'string', enum: ['economy', 'marketing', 'development', 'research'] },
+              text: { type: 'string', description: 'Goal text' },
+            },
+            required: ['department', 'text'],
+          },
+        },
+        tasks: {
+          type: 'array',
+          description: 'Tasks to create',
+          items: {
+            type: 'object',
+            properties: {
+              department: { type: 'string', enum: ['economy', 'marketing', 'development', 'research'] },
+              title: { type: 'string' },
+              description: { type: 'string' },
+              priority: { type: 'number', description: '1-10, higher is more important' },
+            },
+            required: ['department', 'title'],
+          },
+        },
+        summary: { type: 'string', description: 'Brief summary of the weekly plan' },
+      },
+      required: ['goals', 'tasks'],
+    },
+  },
+};
+
+export const queryDepartmentHistoryTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'query_department_history',
+    description: 'Search department chat history and memos for relevant context. Use when the user asks about past decisions, department activities, or cross-department knowledge.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search query' },
+        department: {
+          type: 'string',
+          enum: ['economy', 'marketing', 'development', 'research'],
+          description: 'Optional - filter to a specific department',
+        },
+      },
+      required: ['query'],
+    },
+  },
+};
+
+export const startTaskTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'start_task',
+    description: 'Start background execution of a task. The task runs asynchronously and the user will see results when complete. Use when the user wants to execute a specific task.',
+    parameters: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'UUID of the task to start' },
+      },
+      required: ['task_id'],
+    },
+  },
+};
+
+export const getTaskStatusTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'get_task_status',
+    description: 'Get status of running and recently completed tasks. Call without task_id to see all, or with task_id for a specific task.',
+    parameters: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Optional - specific task UUID to check' },
+      },
+      required: [],
+    },
+  },
+};

@@ -36,6 +36,10 @@ import {
   listCalendarEventsTool,
   sessionNoteTool,
   ceoNoteBuildTool,
+  commitWeeklyPlanTool,
+  queryDepartmentHistoryTool,
+  startTaskTool,
+  getTaskStatusTool,
   createReminderTool,
   listRemindersTool,
   cancelReminderTool,
@@ -906,7 +910,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     modeTools = [searchTool, fetchUrlTool, youtubeSearchTool, mediaDownloadTool, sunoGenerateTool];
   }
   if (mode === 'ceo_luna') {
-    modeTools = [...modeTools, ceoNoteBuildTool];
+    modeTools = [...modeTools, ceoNoteBuildTool, commitWeeklyPlanTool, queryDepartmentHistoryTool, startTaskTool, getTaskStatusTool];
   }
   const availableTools = isSmallTalkMessageLegacy ? [] : modeTools;
   let searchResults: SearchResult[] | undefined;
@@ -1617,6 +1621,55 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
             tool_call_id: toolCall.id,
             content: `Failed to save note: ${(error as Error).message}`,
           } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'commit_weekly_plan') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('CEO Luna committing weekly plan', { userId, goals: args.goals?.length, tasks: args.tasks?.length });
+        try {
+          const { commitWeeklyPlan } = await import('../ceo/ceo-org.service.js');
+          const result = await commitWeeklyPlan(userId, args);
+          messages.push({ role: 'tool', tool_call_id: toolCall.id, content: `Weekly plan committed: ${result.goalsCreated} goals, ${result.tasksCreated} tasks created.` } as ChatMessage);
+        } catch (error) {
+          messages.push({ role: 'tool', tool_call_id: toolCall.id, content: `Failed to commit weekly plan: ${(error as Error).message}` } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'query_department_history') {
+        const args = JSON.parse(toolCall.function.arguments);
+        try {
+          const { searchStaffHistory } = await import('../ceo/staff-chat.service.js');
+          const results = await searchStaffHistory(userId, args.query, args.department, 8);
+          const parts: string[] = [];
+          if (results.memoResults.length > 0) { parts.push('## Memos'); for (const m of results.memoResults) parts.push(`- [${m.department}/${m.type}] ${m.title}: ${m.content}`); }
+          if (results.chatResults.length > 0) { parts.push('## Chat History'); for (const c of results.chatResults) parts.push(`- [${c.department}] ${c.content}`); }
+          messages.push({ role: 'tool', tool_call_id: toolCall.id, content: parts.length > 0 ? parts.join('\n') : 'No results found.' } as ChatMessage);
+        } catch (error) {
+          messages.push({ role: 'tool', tool_call_id: toolCall.id, content: `Search failed: ${(error as Error).message}` } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'start_task') {
+        const args = JSON.parse(toolCall.function.arguments);
+        try {
+          const { startTaskExecution } = await import('../ceo/ceo-org.service.js');
+          const task = await startTaskExecution(userId, args.task_id);
+          messages.push({ role: 'tool', tool_call_id: toolCall.id, content: task ? `Task "${task.title}" started in background.` : 'Task not found or not startable.' } as ChatMessage);
+        } catch (error) {
+          messages.push({ role: 'tool', tool_call_id: toolCall.id, content: `Failed: ${(error as Error).message}` } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'get_task_status') {
+        const args = JSON.parse(toolCall.function.arguments);
+        try {
+          const { getRunningTasks, getRecentlyCompleted, listTasks } = await import('../ceo/ceo-org.service.js');
+          if (args.task_id) {
+            const tasks = await listTasks(userId, {});
+            const task = tasks.find(t => t.id === args.task_id);
+            messages.push({ role: 'tool', tool_call_id: toolCall.id, content: task ? `"${task.title}" [${task.departmentSlug}]: status=${task.status}, execution=${task.executionStatus || 'not started'}${task.resultSummary ? ', result: ' + task.resultSummary : ''}` : 'Task not found.' } as ChatMessage);
+          } else {
+            const [running, recent] = await Promise.all([getRunningTasks(userId), getRecentlyCompleted(userId, 10)]);
+            const parts: string[] = [];
+            if (running.length > 0) { parts.push(`Running (${running.length}):`); for (const t of running) parts.push(`- "${t.title}" [${t.departmentSlug}]`); }
+            if (recent.length > 0) { parts.push(`Recently completed (${recent.length}):`); for (const t of recent) parts.push(`- "${t.title}" [${t.departmentSlug}] ${t.executionStatus}: ${t.resultSummary || 'no summary'}`); }
+            messages.push({ role: 'tool', tool_call_id: toolCall.id, content: parts.length > 0 ? parts.join('\n') : 'No running or recently completed tasks.' } as ChatMessage);
+          }
+        } catch (error) {
+          messages.push({ role: 'tool', tool_call_id: toolCall.id, content: `Failed: ${(error as Error).message}` } as ChatMessage);
         }
       } else if (toolCall.function.name === 'create_reminder') {
         // Quick reminder tool
@@ -3602,7 +3655,7 @@ export async function* streamMessage(
     modeTools = [searchTool, fetchUrlTool, youtubeSearchTool, mediaDownloadTool, sunoGenerateTool];
   }
   if (mode === 'ceo_luna') {
-    modeTools = [...modeTools, ceoNoteBuildTool];
+    modeTools = [...modeTools, ceoNoteBuildTool, commitWeeklyPlanTool, queryDepartmentHistoryTool, startTaskTool, getTaskStatusTool];
   }
   const availableTools = isSmallTalkMessage ? [] : modeTools;
   let searchResults: SearchResult[] | undefined;
@@ -4293,6 +4346,55 @@ export async function* streamMessage(
             tool_call_id: toolCall.id,
             content: `Failed to save note: ${(error as Error).message}`,
           } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'commit_weekly_plan') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('CEO Luna committing weekly plan', { userId, goals: args.goals?.length, tasks: args.tasks?.length });
+        try {
+          const { commitWeeklyPlan } = await import('../ceo/ceo-org.service.js');
+          const result = await commitWeeklyPlan(userId, args);
+          messages.push({ role: 'tool', tool_call_id: toolCall.id, content: `Weekly plan committed: ${result.goalsCreated} goals, ${result.tasksCreated} tasks created.` } as ChatMessage);
+        } catch (error) {
+          messages.push({ role: 'tool', tool_call_id: toolCall.id, content: `Failed to commit weekly plan: ${(error as Error).message}` } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'query_department_history') {
+        const args = JSON.parse(toolCall.function.arguments);
+        try {
+          const { searchStaffHistory } = await import('../ceo/staff-chat.service.js');
+          const results = await searchStaffHistory(userId, args.query, args.department, 8);
+          const parts: string[] = [];
+          if (results.memoResults.length > 0) { parts.push('## Memos'); for (const m of results.memoResults) parts.push(`- [${m.department}/${m.type}] ${m.title}: ${m.content}`); }
+          if (results.chatResults.length > 0) { parts.push('## Chat History'); for (const c of results.chatResults) parts.push(`- [${c.department}] ${c.content}`); }
+          messages.push({ role: 'tool', tool_call_id: toolCall.id, content: parts.length > 0 ? parts.join('\n') : 'No results found.' } as ChatMessage);
+        } catch (error) {
+          messages.push({ role: 'tool', tool_call_id: toolCall.id, content: `Search failed: ${(error as Error).message}` } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'start_task') {
+        const args = JSON.parse(toolCall.function.arguments);
+        try {
+          const { startTaskExecution } = await import('../ceo/ceo-org.service.js');
+          const task = await startTaskExecution(userId, args.task_id);
+          messages.push({ role: 'tool', tool_call_id: toolCall.id, content: task ? `Task "${task.title}" started in background.` : 'Task not found or not startable.' } as ChatMessage);
+        } catch (error) {
+          messages.push({ role: 'tool', tool_call_id: toolCall.id, content: `Failed: ${(error as Error).message}` } as ChatMessage);
+        }
+      } else if (toolCall.function.name === 'get_task_status') {
+        const args = JSON.parse(toolCall.function.arguments);
+        try {
+          const { getRunningTasks, getRecentlyCompleted, listTasks } = await import('../ceo/ceo-org.service.js');
+          if (args.task_id) {
+            const tasks = await listTasks(userId, {});
+            const task = tasks.find(t => t.id === args.task_id);
+            messages.push({ role: 'tool', tool_call_id: toolCall.id, content: task ? `"${task.title}" [${task.departmentSlug}]: status=${task.status}, execution=${task.executionStatus || 'not started'}${task.resultSummary ? ', result: ' + task.resultSummary : ''}` : 'Task not found.' } as ChatMessage);
+          } else {
+            const [running, recent] = await Promise.all([getRunningTasks(userId), getRecentlyCompleted(userId, 10)]);
+            const parts: string[] = [];
+            if (running.length > 0) { parts.push(`Running (${running.length}):`); for (const t of running) parts.push(`- "${t.title}" [${t.departmentSlug}]`); }
+            if (recent.length > 0) { parts.push(`Recently completed (${recent.length}):`); for (const t of recent) parts.push(`- "${t.title}" [${t.departmentSlug}] ${t.executionStatus}: ${t.resultSummary || 'no summary'}`); }
+            messages.push({ role: 'tool', tool_call_id: toolCall.id, content: parts.length > 0 ? parts.join('\n') : 'No running or recently completed tasks.' } as ChatMessage);
+          }
+        } catch (error) {
+          messages.push({ role: 'tool', tool_call_id: toolCall.id, content: `Failed: ${(error as Error).message}` } as ChatMessage);
         }
       } else if (toolCall.function.name === 'create_reminder') {
         // Quick reminder tool

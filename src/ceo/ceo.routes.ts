@@ -5,6 +5,7 @@ import * as ceoService from './ceo.service.js';
 import * as ceoOrg from './ceo-org.service.js';
 import * as ceoProposals from './ceo-proposals.service.js';
 import * as staffChat from './staff-chat.service.js';
+import * as ceoMemos from './ceo-memos.service.js';
 import * as buildTracker from './build-tracker.service.js';
 import * as albumPipeline from './album-pipeline.service.js';
 import * as musicTrendScraper from './music-trend-scraper.service.js';
@@ -974,6 +975,91 @@ router.post('/radar/scrape-now', async (req: Request, res: Response) => {
 // ============================================================
 // Organization System
 // ============================================================
+
+// ============================================================
+// Memos
+// ============================================================
+
+const memoSchema = z.object({
+  departmentSlug: z.enum(['economy', 'marketing', 'development', 'research', 'ceo']),
+  memoType: z.enum(['decision', 'insight', 'status_update', 'task_result']).optional(),
+  title: z.string().min(1).max(200),
+  content: z.string().min(1).max(5000),
+  relatedTaskId: z.string().uuid().optional(),
+  sessionId: z.string().uuid().optional(),
+});
+
+// GET /memos - List memos
+router.get('/memos', async (req: Request, res: Response) => {
+  try {
+    const memos = await ceoMemos.listMemos(req.user!.userId, {
+      department: req.query.department as string | undefined,
+      type: req.query.type as string | undefined,
+      since: req.query.since as string | undefined,
+      limit: req.query.limit ? Number(req.query.limit) : undefined,
+    });
+    res.json({ memos });
+  } catch (error) {
+    logger.error('Failed to list memos', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to list memos' });
+  }
+});
+
+// GET /memos/search - Search memos
+router.get('/memos/search', async (req: Request, res: Response) => {
+  try {
+    const q = req.query.q as string;
+    if (!q) { res.status(400).json({ error: 'Query required' }); return; }
+    const memos = await ceoMemos.searchMemos(req.user!.userId, q, req.query.limit ? Number(req.query.limit) : 10);
+    res.json({ memos });
+  } catch (error) {
+    logger.error('Failed to search memos', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to search memos' });
+  }
+});
+
+// POST /memos - Create memo
+router.post('/memos', async (req: Request, res: Response) => {
+  try {
+    const parsed = memoSchema.parse(req.body);
+    const memo = await ceoMemos.createMemo(req.user!.userId, parsed);
+    res.json({ memo });
+  } catch (error) {
+    if (error instanceof z.ZodError) { res.status(400).json({ error: error.errors }); return; }
+    logger.error('Failed to create memo', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to create memo' });
+  }
+});
+
+// ============================================================
+// Task Execution (must be before /org/tasks/:id)
+// ============================================================
+
+// GET /org/tasks/running - Poll running + recently completed tasks
+router.get('/org/tasks/running', async (req: Request, res: Response) => {
+  try {
+    const [running, recentlyCompleted] = await Promise.all([
+      ceoOrg.getRunningTasks(req.user!.userId),
+      ceoOrg.getRecentlyCompleted(req.user!.userId, 5),
+    ]);
+    res.json({ running, recentlyCompleted });
+  } catch (error) {
+    logger.error('Failed to get running tasks', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get running tasks' });
+  }
+});
+
+// POST /org/tasks/:id/start - Start background execution
+router.post('/org/tasks/:id/start', async (req: Request, res: Response) => {
+  try {
+    const task = await ceoOrg.startTaskExecution(req.user!.userId, req.params.id);
+    if (!task) { res.status(404).json({ error: 'Task not found or not startable' }); return; }
+    res.json({ task });
+  } catch (error) {
+    logger.error('Failed to start task execution', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to start task execution' });
+  }
+});
 
 // GET /org/departments - Department overview with task counts
 router.get('/org/departments', async (req: Request, res: Response) => {

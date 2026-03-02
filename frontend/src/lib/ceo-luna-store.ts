@@ -6,7 +6,7 @@ import type {
   CeoDashboard, RadarSignal, AutopostItem, ProductionSummary, GenreOption, ProposedGenre,
   OrgTask, WeeklyGoal, AbilityProposal, RecommendedAction, DepartmentSummary,
   FinanceEntry, FinanceCreatePayload, FinanceUpdatePayload,
-  CeoProposal, StaffSession, StaffMessage,
+  CeoProposal, StaffSession, StaffMessage, CeoMemo, DepartmentSlug,
 } from './api/ceo';
 
 export interface CeoFileEntry {
@@ -104,6 +104,21 @@ interface CEOLunaState {
   approveOrgProposal: (id: string) => Promise<void>;
   rejectOrgProposal: (id: string) => Promise<void>;
 
+  // Memos
+  orgMemos: CeoMemo[];
+  isLoadingMemos: boolean;
+  loadMemos: (department?: string) => Promise<void>;
+
+  // Background task execution
+  runningTasks: OrgTask[];
+  recentlyCompletedTasks: OrgTask[];
+  taskPollingInterval: ReturnType<typeof setInterval> | null;
+  startTask: (taskId: string) => Promise<void>;
+  pollRunningTasks: () => Promise<void>;
+  startTaskPolling: () => void;
+  stopTaskPolling: () => void;
+  createOrgTask: (data: { departmentSlug: DepartmentSlug; title: string; description?: string; priority?: number }) => Promise<void>;
+
   // Proposals
   ceoProposals: CeoProposal[];
   pendingProposalCount: number;
@@ -178,6 +193,15 @@ export const useCEOLunaStore = create<CEOLunaState>((set, get) => ({
   ceoProposals: [],
   pendingProposalCount: 0,
   isLoadingProposals: false,
+
+  // Memos
+  orgMemos: [],
+  isLoadingMemos: false,
+
+  // Background task execution
+  runningTasks: [],
+  recentlyCompletedTasks: [],
+  taskPollingInterval: null,
 
   // Staff Chat
   staffSessions: {},
@@ -479,6 +503,90 @@ export const useCEOLunaStore = create<CEOLunaState>((set, get) => ({
       set({ orgProposals: get().orgProposals.filter((p) => p.id !== id) });
     } catch (err) {
       console.error('Failed to reject proposal:', err);
+    }
+  },
+
+  // ============================================================
+  // Memos
+  // ============================================================
+
+  loadMemos: async (department) => {
+    set({ isLoadingMemos: true });
+    try {
+      const { fetchMemos } = await import('./api/ceo');
+      const params = department && department !== 'all' ? { department, limit: 10 } : { limit: 10 };
+      const { memos } = await fetchMemos(params);
+      set({ orgMemos: memos });
+    } catch (err) {
+      console.error('Failed to load memos:', err);
+    } finally {
+      set({ isLoadingMemos: false });
+    }
+  },
+
+  // ============================================================
+  // Background Task Execution
+  // ============================================================
+
+  startTask: async (taskId) => {
+    try {
+      const { startTaskExecution } = await import('./api/ceo');
+      await startTaskExecution(taskId);
+      // Start polling for results
+      get().startTaskPolling();
+      // Refresh task list
+      await get().loadOrgOverview();
+    } catch (err) {
+      console.error('Failed to start task:', err);
+    }
+  },
+
+  pollRunningTasks: async () => {
+    try {
+      const { fetchRunningTasks } = await import('./api/ceo');
+      const { running, recentlyCompleted } = await fetchRunningTasks();
+      const prevRunning = get().runningTasks;
+      set({ runningTasks: running, recentlyCompletedTasks: recentlyCompleted });
+
+      // If tasks just completed (were running before, now fewer running), refresh org overview
+      if (prevRunning.length > running.length) {
+        await get().loadOrgOverview();
+        await get().loadMemos(get().orgDeptFilter);
+      }
+
+      // Auto-stop polling when nothing is running
+      if (running.length === 0) {
+        get().stopTaskPolling();
+      }
+    } catch (err) {
+      console.error('Failed to poll running tasks:', err);
+    }
+  },
+
+  startTaskPolling: () => {
+    const existing = get().taskPollingInterval;
+    if (existing) return; // Already polling
+    const interval = setInterval(() => { get().pollRunningTasks(); }, 10000);
+    set({ taskPollingInterval: interval });
+    // Also poll immediately
+    get().pollRunningTasks();
+  },
+
+  stopTaskPolling: () => {
+    const interval = get().taskPollingInterval;
+    if (interval) {
+      clearInterval(interval);
+      set({ taskPollingInterval: null });
+    }
+  },
+
+  createOrgTask: async (data) => {
+    try {
+      const { createOrgTask: apiCreate } = await import('./api/ceo');
+      await apiCreate(data);
+      await get().loadOrgOverview();
+    } catch (err) {
+      console.error('Failed to create task:', err);
     }
   },
 

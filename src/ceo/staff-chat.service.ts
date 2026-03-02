@@ -3,6 +3,7 @@ import { createCompletion } from '../llm/router.js';
 import { getBackgroundFeatureModelConfig } from '../settings/background-llm-settings.service.js';
 import { getDashboard } from './ceo.service.js';
 import { listTasks } from './ceo-org.service.js';
+import { getCrossDeptMemos, createMemo, looksLikeDecision, extractDecisionTitle, searchMemos, type MemoDeptSlug } from './ceo-memos.service.js';
 import { DEPARTMENT_MAP, type DepartmentSlug } from '../persona/luna.persona.js';
 import type { ChatMessage } from '../llm/types.js';
 import logger from '../utils/logger.js';
@@ -103,6 +104,19 @@ async function buildDeptContext(userId: string, deptSlug: string): Promise<strin
     // Tasks optional
   }
 
+  // Cross-department memos for awareness
+  try {
+    const crossMemos = await getCrossDeptMemos(userId, deptSlug, 5);
+    if (crossMemos.length > 0) {
+      parts.push(`\n## Recent Cross-Department Updates`);
+      for (const m of crossMemos) {
+        parts.push(`- [${m.departmentSlug}/${m.memoType}] ${m.title}: ${m.content.slice(0, 150)}`);
+      }
+    }
+  } catch {
+    // Memos optional
+  }
+
   return parts.join('\n');
 }
 
@@ -196,6 +210,22 @@ export async function sendStaffMessage(
 
   // Update session timestamp
   await pool.query(`UPDATE ceo_staff_sessions SET updated_at = NOW() WHERE id = $1`, [sessionId]);
+
+  // Auto-detect decisions and create memos
+  if (looksLikeDecision(response)) {
+    try {
+      await createMemo(userId, {
+        departmentSlug: session.departmentSlug as MemoDeptSlug,
+        memoType: 'decision',
+        title: extractDecisionTitle(response),
+        content: response.slice(0, 1000),
+        sessionId,
+      });
+      logger.debug('Auto-created decision memo from staff chat', { sessionId, dept: session.departmentSlug });
+    } catch (err) {
+      logger.warn('Failed to auto-create decision memo', { error: (err as Error).message });
+    }
+  }
 
   return mapMessageRow(assistantResult.rows[0] as Record<string, unknown>);
 }
@@ -342,4 +372,48 @@ Pick 1-3 departments most relevant to the request. Craft specific questions for 
   await pool.query(`UPDATE ceo_staff_sessions SET updated_at = NOW() WHERE id = $1`, [sessionId]);
 
   return resultMessages;
+}
+
+// ============================================================
+// Search Staff History + Memos
+// ============================================================
+
+export async function searchStaffHistory(
+  userId: string,
+  query: string,
+  department?: string,
+  limit = 10
+): Promise<{ chatResults: Array<{ department: string; content: string; createdAt: string }>; memoResults: Array<{ department: string; title: string; content: string; type: string; createdAt: string }> }> {
+  const pattern = `%${query}%`;
+
+  // Search chat messages
+  let chatSql = `SELECT sm.content, sm.created_at, ss.department_slug
+     FROM ceo_staff_messages sm
+     JOIN ceo_staff_sessions ss ON sm.session_id = ss.id
+     WHERE ss.user_id = $1 AND sm.content ILIKE $2`;
+  const chatParams: unknown[] = [userId, pattern];
+  if (department) {
+    chatSql += ` AND ss.department_slug = $3`;
+    chatParams.push(department);
+  }
+  chatSql += ` ORDER BY sm.created_at DESC LIMIT $${chatParams.length + 1}`;
+  chatParams.push(limit);
+
+  const chatResult = await pool.query(chatSql, chatParams);
+  const chatResults = (chatResult.rows as Array<Record<string, unknown>>).map(row => ({
+    department: row.department_slug as string,
+    content: (row.content as string).slice(0, 300),
+    createdAt: String(row.created_at),
+  }));
+
+  // Search memos
+  const memoResults = (await searchMemos(userId, query, limit)).map(m => ({
+    department: m.departmentSlug,
+    title: m.title,
+    content: m.content.slice(0, 300),
+    type: m.memoType,
+    createdAt: m.createdAt,
+  }));
+
+  return { chatResults, memoResults };
 }

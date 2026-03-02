@@ -5,6 +5,7 @@ import { getBackgroundFeatureModelConfig } from '../settings/background-llm-sett
 import * as workspaceService from '../abilities/workspace.service.js';
 import { DEPARTMENTS, DEPARTMENT_MAP, type DepartmentSlug } from '../persona/luna.persona.js';
 import { createProposal } from './ceo-proposals.service.js';
+import { createMemo } from './ceo-memos.service.js';
 import type { ChatMessage } from '../llm/types.js';
 import logger from '../utils/logger.js';
 
@@ -30,6 +31,10 @@ export interface OrgTask {
   startedAt: string | null;
   completedAt: string | null;
   createdAt: string;
+  executionStatus: 'running' | 'completed' | 'failed' | null;
+  executionStartedAt: string | null;
+  executionCompletedAt: string | null;
+  suggestedBy: 'manual' | 'ceo_chat' | 'department' | 'weekly_plan' | null;
 }
 
 export interface WeeklyGoal {
@@ -108,6 +113,10 @@ function mapTaskRow(row: Record<string, unknown>): OrgTask {
     startedAt: row.started_at ? String(row.started_at) : null,
     completedAt: row.completed_at ? String(row.completed_at) : null,
     createdAt: String(row.created_at),
+    executionStatus: (row.execution_status as OrgTask['executionStatus']) || null,
+    executionStartedAt: row.execution_started_at ? String(row.execution_started_at) : null,
+    executionCompletedAt: row.execution_completed_at ? String(row.execution_completed_at) : null,
+    suggestedBy: (row.suggested_by as OrgTask['suggestedBy']) || null,
   };
 }
 
@@ -258,11 +267,12 @@ export async function createTask(
     assignedBy?: string;
     weekLabel?: string;
     dueDate?: string;
+    suggestedBy?: 'manual' | 'ceo_chat' | 'department' | 'weekly_plan';
   }
 ): Promise<OrgTask> {
   const result = await pool.query(
-    `INSERT INTO ceo_org_tasks (user_id, department_slug, title, description, risk_level, priority, source, assigned_by, week_label, due_date)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    `INSERT INTO ceo_org_tasks (user_id, department_slug, title, description, risk_level, priority, source, assigned_by, week_label, due_date, suggested_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      RETURNING *`,
     [
       userId,
@@ -275,6 +285,7 @@ export async function createTask(
       data.assignedBy || null,
       data.weekLabel || null,
       data.dueDate || null,
+      data.suggestedBy || 'manual',
     ]
   );
   return mapTaskRow(result.rows[0] as Record<string, unknown>);
@@ -736,6 +747,215 @@ export async function rejectOrgTask(userId: string, taskId: string): Promise<boo
     [userId, taskId]
   );
   return (result.rowCount || 0) > 0;
+}
+
+// ============================================================
+// Background Task Execution
+// ============================================================
+
+export async function startTaskExecution(userId: string, taskId: string): Promise<OrgTask | null> {
+  // Verify task exists and is in a startable state
+  const result = await pool.query(
+    `SELECT * FROM ceo_org_tasks WHERE user_id = $1 AND id = $2 AND status IN ('pending', 'approved')`,
+    [userId, taskId]
+  );
+  if (result.rowCount === 0) return null;
+
+  const task = mapTaskRow(result.rows[0] as Record<string, unknown>);
+
+  // Mark as running
+  await pool.query(
+    `UPDATE ceo_org_tasks SET execution_status = 'running', execution_started_at = NOW(), status = 'in_progress', started_at = COALESCE(started_at, NOW())
+     WHERE id = $1`,
+    [taskId]
+  );
+
+  // Fire and forget - execute in background
+  executeTaskBackground(userId, task).catch(err => {
+    logger.error('Background task execution failed', { taskId, error: (err as Error).message });
+  });
+
+  // Re-fetch to return updated state
+  const updated = await pool.query(`SELECT * FROM ceo_org_tasks WHERE id = $1`, [taskId]);
+  return updated.rowCount ? mapTaskRow(updated.rows[0] as Record<string, unknown>) : null;
+}
+
+async function executeTaskBackground(userId: string, task: OrgTask): Promise<void> {
+  const dept = DEPARTMENT_MAP.get(task.departmentSlug);
+  if (!dept) {
+    await pool.query(
+      `UPDATE ceo_org_tasks SET execution_status = 'failed', execution_completed_at = NOW(), result_summary = 'Unknown department'
+       WHERE id = $1`,
+      [task.id]
+    );
+    return;
+  }
+
+  try {
+    const systemPrompt = `${dept.prompt}
+
+You are working on a task assigned by CEO Luna. Complete the task thoroughly and provide your findings/results.
+
+OUTPUT: Respond with a JSON object (no markdown fencing):
+{
+  "result": "Your detailed findings or deliverable text",
+  "summary": "A 1-2 sentence summary of what you did"
+}`;
+
+    const userMessage = `Task: ${task.title}\n\nDescription: ${task.description || 'No additional details.'}`;
+    const llmOutput = await callOrgLlm(userId, systemPrompt, userMessage);
+
+    let parsed: { result: string; summary: string };
+    try {
+      const jsonMatch = llmOutput.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch ? jsonMatch[0] : llmOutput);
+    } catch {
+      parsed = { result: llmOutput, summary: llmOutput.slice(0, 200) };
+    }
+
+    // Write result to workspace file
+    const slug = task.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50);
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const deptFolder = dept.name.replace(/\s+/g, '');
+    const filePath = `ceo-luna/${deptFolder}/${slug}-${dateStr}.md`;
+
+    try {
+      const content = [
+        `# ${task.title}`,
+        ``,
+        `**Department**: ${dept.name}`,
+        `**Date**: ${dateStr}`,
+        `**Priority**: ${task.priority}`,
+        ``,
+        `## Result`,
+        ``,
+        parsed.result,
+      ].join('\n');
+      await workspaceService.writeFile(userId, filePath, content);
+    } catch (err) {
+      logger.warn('Failed to write task result file', { error: (err as Error).message });
+    }
+
+    // Mark completed
+    await pool.query(
+      `UPDATE ceo_org_tasks SET execution_status = 'completed', execution_completed_at = NOW(),
+              status = 'done', completed_at = NOW(), result_summary = $2, result_file_path = $3
+       WHERE id = $1`,
+      [task.id, parsed.summary.slice(0, 500), filePath]
+    );
+
+    // Auto-create task_result memo
+    try {
+      await createMemo(userId, {
+        departmentSlug: task.departmentSlug,
+        memoType: 'task_result',
+        title: `Completed: ${task.title}`,
+        content: parsed.summary,
+        relatedTaskId: task.id,
+      });
+    } catch (err) {
+      logger.warn('Failed to create task result memo', { error: (err as Error).message });
+    }
+
+    logger.info('Background task execution completed', { taskId: task.id, department: task.departmentSlug });
+  } catch (err) {
+    logger.error('Background task execution error', { taskId: task.id, error: (err as Error).message });
+    await pool.query(
+      `UPDATE ceo_org_tasks SET execution_status = 'failed', execution_completed_at = NOW(),
+              result_summary = $2
+       WHERE id = $1`,
+      [task.id, `Error: ${(err as Error).message}`.slice(0, 500)]
+    );
+  }
+}
+
+export async function getRunningTasks(userId: string): Promise<OrgTask[]> {
+  const result = await pool.query(
+    `SELECT * FROM ceo_org_tasks WHERE user_id = $1 AND execution_status = 'running' ORDER BY execution_started_at DESC`,
+    [userId]
+  );
+  return (result.rows as Array<Record<string, unknown>>).map(mapTaskRow);
+}
+
+export async function getRecentlyCompleted(userId: string, sinceMinutes = 5): Promise<OrgTask[]> {
+  const result = await pool.query(
+    `SELECT * FROM ceo_org_tasks
+     WHERE user_id = $1 AND execution_status IN ('completed', 'failed')
+       AND execution_completed_at >= NOW() - INTERVAL '1 minute' * $2
+     ORDER BY execution_completed_at DESC`,
+    [userId, sinceMinutes]
+  );
+  return (result.rows as Array<Record<string, unknown>>).map(mapTaskRow);
+}
+
+export async function commitWeeklyPlan(
+  userId: string,
+  plan: {
+    goals: Array<{ department: string; text: string }>;
+    tasks: Array<{ department: string; title: string; description?: string; priority?: number }>;
+    summary?: string;
+  }
+): Promise<{ goalsCreated: number; tasksCreated: number }> {
+  const weekLabel = getWeekLabel();
+  let goalsCreated = 0;
+  let tasksCreated = 0;
+
+  // Insert goals
+  for (const g of plan.goals) {
+    if (!DEPARTMENT_MAP.has(g.department as DepartmentSlug)) continue;
+    try {
+      await pool.query(
+        `INSERT INTO ceo_weekly_goals (user_id, week_label, department_slug, goal_text)
+         VALUES ($1, $2, $3, $4)`,
+        [userId, weekLabel, g.department, g.text]
+      );
+      goalsCreated++;
+    } catch (err) {
+      logger.warn('Failed to insert weekly goal', { error: (err as Error).message });
+    }
+  }
+
+  // Insert tasks
+  for (const t of plan.tasks) {
+    if (!DEPARTMENT_MAP.has(t.department as DepartmentSlug)) continue;
+    try {
+      await createTask(userId, {
+        departmentSlug: t.department as DepartmentSlug,
+        title: t.title,
+        description: t.description,
+        priority: t.priority || 5,
+        source: 'weekly_plan',
+        weekLabel,
+        suggestedBy: 'weekly_plan',
+      });
+      tasksCreated++;
+    } catch (err) {
+      logger.warn('Failed to insert weekly task', { error: (err as Error).message });
+    }
+  }
+
+  // Write summary file
+  if (plan.summary) {
+    try {
+      const content = [
+        `# Weekly Plan - ${weekLabel}`,
+        ``,
+        plan.summary,
+        ``,
+        `## Goals (${goalsCreated})`,
+        ...plan.goals.map(g => `- **${g.department}**: ${g.text}`),
+        ``,
+        `## Tasks (${tasksCreated})`,
+        ...plan.tasks.map(t => `- [${t.department}] ${t.title} (P${t.priority || 5})`),
+      ].join('\n');
+      await workspaceService.writeFile(userId, `ceo-luna/Week/${weekLabel}-plan.md`, content);
+    } catch (err) {
+      logger.warn('Failed to write weekly plan file', { error: (err as Error).message });
+    }
+  }
+
+  logger.info('Weekly plan committed', { userId, weekLabel, goalsCreated, tasksCreated });
+  return { goalsCreated, tasksCreated };
 }
 
 // ============================================================
