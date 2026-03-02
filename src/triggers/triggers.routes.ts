@@ -784,6 +784,20 @@ telegramWebhookRouter.post('/trading-telegram/webhook', async (req: Request, res
  */
 telegramWebhookRouter.post('/ceo-telegram/webhook', async (req: Request, res: Response) => {
   try {
+    // Verify webhook secret token if configured
+    const secret = ceoTelegramService.getWebhookSecret();
+    if (secret) {
+      const headerSecret = req.headers['x-telegram-bot-api-secret-token'];
+      if (headerSecret !== secret) {
+        logger.warn('CEO Telegram webhook secret mismatch', {
+          ip: req.ip,
+          hasHeader: !!headerSecret,
+        });
+        res.status(403).json({ error: 'Forbidden' });
+        return;
+      }
+    }
+
     // Always respond 200 OK quickly to Telegram
     res.status(200).json({ ok: true });
 

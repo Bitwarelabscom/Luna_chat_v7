@@ -83,6 +83,26 @@ export function isConfigured(): boolean {
   return !!getBotToken();
 }
 
+// Webhook secret token - Telegram sends this in X-Telegram-Bot-Api-Secret-Token header
+const WEBHOOK_SECRET = process.env.CEO_TELEGRAM_WEBHOOK_SECRET || '';
+
+export function getWebhookSecret(): string {
+  return WEBHOOK_SECRET;
+}
+
+// Allowlist of authorized Telegram user IDs (empty = allow all linked users)
+const ALLOWED_TELEGRAM_IDS: Set<number> = new Set(
+  (process.env.CEO_TELEGRAM_ALLOWED_IDS || '')
+    .split(',')
+    .map(id => parseInt(id.trim(), 10))
+    .filter(id => !isNaN(id))
+);
+
+function isUserAllowed(telegramUserId: number): boolean {
+  if (ALLOWED_TELEGRAM_IDS.size === 0) return true;
+  return ALLOWED_TELEGRAM_IDS.has(telegramUserId);
+}
+
 // ============================================
 // Telegram API
 // ============================================
@@ -702,6 +722,17 @@ async function handleCallbackQuery(callback: NonNullable<TelegramUpdate['callbac
 // ============================================
 
 export async function processUpdate(update: TelegramUpdate): Promise<void> {
+  // Security: check Telegram user ID allowlist on all interactions
+  const telegramUserId = update.message?.from?.id || update.callback_query?.from?.id;
+  if (telegramUserId && !isUserAllowed(telegramUserId)) {
+    logger.warn('Unauthorized CEO Telegram access attempt', { telegramUserId });
+    const chatId = update.message?.chat.id || update.callback_query?.message?.chat.id;
+    if (chatId) {
+      await sendMessage(chatId, 'You are not authorized to use this bot.');
+    }
+    return;
+  }
+
   // Handle callback queries (button presses)
   if (update.callback_query) {
     await handleCallbackQuery(update.callback_query);
