@@ -15,6 +15,7 @@ import * as staffChatService from '../ceo/staff-chat.service.js';
 import * as ceoProposalsService from '../ceo/ceo-proposals.service.js';
 import * as chatService from '../chat/chat.service.js';
 import * as sessionService from '../chat/session.service.js';
+import { addMessage } from '../chat/session.service.js';
 import { DEPARTMENT_MAP } from '../persona/luna.persona.js';
 
 // ============================================
@@ -469,6 +470,25 @@ async function handleDepartmentMessage(
       await sendMessage(connection.chatId, chunk, { parseMode: 'Markdown' });
     }
 
+    // Inject into CEO Luna chat session so free-form chat has context
+    try {
+      const ceoSessionId = await getOrCreateCeoTelegramSession(connection.userId);
+      await addMessage({
+        sessionId: ceoSessionId,
+        role: 'user',
+        content: `[Staff Chat - ${deptName}] ${message}`,
+        source: 'telegram',
+      });
+      await addMessage({
+        sessionId: ceoSessionId,
+        role: 'assistant',
+        content: `[${deptName} responded via staff chat]\n${response.content}`,
+        source: 'telegram',
+      });
+    } catch {
+      // Non-critical - don't fail the response
+    }
+
     logger.info('CEO Telegram dept message processed', {
       userId: connection.userId,
       department,
@@ -516,6 +536,31 @@ async function handleMeetingMessage(
         content = content.slice(maxLength);
         await sendMessage(connection.chatId, chunk, { parseMode: 'Markdown' });
       }
+    }
+
+    // Inject meeting transcript into CEO Luna chat session
+    try {
+      const ceoSessionId = await getOrCreateCeoTelegramSession(connection.userId);
+      await addMessage({
+        sessionId: ceoSessionId,
+        role: 'user',
+        content: `[Team Meeting] ${message}`,
+        source: 'telegram',
+      });
+      const transcript = responses.map(msg => {
+        const label = msg.departmentSlug === 'meeting'
+          ? 'CEO Luna'
+          : DEPARTMENT_MAP.get(msg.departmentSlug as typeof VALID_DEPARTMENTS[number])?.name || msg.departmentSlug;
+        return `[${label}] ${msg.content}`;
+      }).join('\n\n');
+      await addMessage({
+        sessionId: ceoSessionId,
+        role: 'assistant',
+        content: `[Meeting transcript]\n${transcript}`,
+        source: 'telegram',
+      });
+    } catch {
+      // Non-critical
     }
 
     logger.info('CEO Telegram meeting message processed', {
