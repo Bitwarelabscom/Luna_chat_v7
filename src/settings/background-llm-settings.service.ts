@@ -137,27 +137,27 @@ export const BACKGROUND_LLM_FEATURES: BackgroundLlmFeatureMeta[] = [
 export const DEFAULT_BACKGROUND_LLM_SETTINGS: BackgroundLlmSettings = {
   mood_analysis: {
     primary: { provider: 'ollama', model: 'llama3.2:3b' },
-    fallback: { provider: 'openai', model: 'gpt-5-nano' },
+    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
   },
   context_summary: {
     primary: { provider: 'ollama', model: 'llama3.2:3b' },
-    fallback: { provider: 'openai', model: 'gpt-5-nano' },
+    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
   },
   memory_curation: {
     primary: { provider: 'ollama', model: 'llama3.2:3b' },
-    fallback: { provider: 'openai', model: 'gpt-5-nano' },
+    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
   },
   friend_summary: {
     primary: { provider: 'ollama', model: 'llama3.2:3b' },
-    fallback: { provider: 'openai', model: 'gpt-5-mini' },
+    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
   },
   friend_fact_extraction: {
     primary: { provider: 'ollama', model: 'llama3.2:3b' },
-    fallback: { provider: 'openai', model: 'gpt-5-mini' },
+    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
   },
   intent_detection: {
     primary: { provider: 'ollama', model: 'llama3.2:3b' },
-    fallback: { provider: 'openai', model: 'gpt-5-mini' },
+    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
   },
   news_filter: {
     primary: { provider: 'ollama_tertiary', model: 'HoseaDev/qwen2.5-7b-instruct-q4-gguf:latest' },
@@ -165,31 +165,31 @@ export const DEFAULT_BACKGROUND_LLM_SETTINGS: BackgroundLlmSettings = {
   },
   research_synthesis: {
     primary: { provider: 'ollama', model: 'llama3.2:3b' },
-    fallback: { provider: 'openai', model: 'gpt-5-mini' },
+    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
   },
   session_gap_analysis: {
     primary: { provider: 'ollama', model: 'llama3.2:3b' },
-    fallback: { provider: 'openai', model: 'gpt-5-mini' },
+    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
   },
   knowledge_verification: {
     primary: { provider: 'ollama', model: 'llama3.2:3b' },
-    fallback: { provider: 'openai', model: 'gpt-5-mini' },
+    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
   },
   supervisor_critique: {
     primary: { provider: 'ollama_tertiary', model: 'HoseaDev/qwen2.5-7b-instruct-q4-gguf:latest' },
-    fallback: { provider: 'openai', model: 'gpt-5-mini' },
+    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
   },
   music_trend_analysis: {
     primary: { provider: 'ollama_tertiary', model: 'HoseaDev/qwen2.5-7b-instruct-q4-gguf:latest' },
-    fallback: { provider: 'openai', model: 'gpt-5-mini' },
+    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
   },
   query_refinement: {
     primary: { provider: 'ollama', model: 'llama3.2:3b' },
-    fallback: { provider: 'openai', model: 'gpt-5-mini' },
+    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
   },
   domain_evaluation: {
     primary: { provider: 'ollama', model: 'llama3.2:3b' },
-    fallback: { provider: 'openai', model: 'gpt-5-mini' },
+    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
   },
   ceo_org_execution: {
     primary: { provider: 'ollama_tertiary', model: 'HoseaDev/qwen2.5-7b-instruct-q4-gguf:latest' },

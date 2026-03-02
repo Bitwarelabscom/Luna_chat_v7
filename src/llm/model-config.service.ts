@@ -79,7 +79,7 @@ export async function getUserModelConfig(
         };
       } else {
         // Ultimate fallback
-        config = { provider: 'openai', model: 'gpt-5.1-chat-latest' };
+        config = { provider: 'xai', model: 'grok-4-1-fast' };
       }
     }
 

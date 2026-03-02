@@ -1000,8 +1000,8 @@ export const CONFIGURABLE_TASKS: TaskModelConfig[] = [
     taskType: 'main_chat',
     displayName: 'Main Chat',
     description: 'The primary conversation model for Luna',
-    defaultProvider: 'openai',
-    defaultModel: 'gpt-5.1-chat-latest',
+    defaultProvider: 'xai',
+    defaultModel: 'grok-4-1-fast',
   },
   {
     taskType: 'council',
@@ -1028,8 +1028,8 @@ export const CONFIGURABLE_TASKS: TaskModelConfig[] = [
     taskType: 'agent:writer',
     displayName: 'Writer Agent',
     description: 'Creative writing and content creation',
-    defaultProvider: 'openai',
-    defaultModel: 'gpt-5.1-chat-latest',
+    defaultProvider: 'xai',
+    defaultModel: 'grok-4-1-fast',
   },
   {
     taskType: 'agent:analyst',
@@ -1042,8 +1042,8 @@ export const CONFIGURABLE_TASKS: TaskModelConfig[] = [
     taskType: 'agent:planner',
     displayName: 'Planner Agent',
     description: 'Task planning and orchestration',
-    defaultProvider: 'openai',
-    defaultModel: 'gpt-5.1-chat-latest',
+    defaultProvider: 'xai',
+    defaultModel: 'grok-4-1-fast',
   },
   {
     taskType: 'friend',
@@ -1084,8 +1084,8 @@ export const CONFIGURABLE_TASKS: TaskModelConfig[] = [
     taskType: 'image_generation',
     displayName: 'Image Generation',
     description: 'Model used for generating images from text descriptions',
-    defaultProvider: 'openai',
-    defaultModel: 'gpt-image-1-mini',
+    defaultProvider: 'xai',
+    defaultModel: 'grok-imagine-image',
   },
   {
     taskType: 'rpg_architect',
@@ -1119,15 +1119,15 @@ export const CONFIGURABLE_TASKS: TaskModelConfig[] = [
     taskType: 'ceo_luna',
     displayName: 'CEO Luna',
     description: 'CEO Luna business operations and strategy',
-    defaultProvider: 'openai',
-    defaultModel: 'gpt-5-mini',
+    defaultProvider: 'xai',
+    defaultModel: 'grok-4-1-fast',
   },
   {
     taskType: 'dj_luna',
     displayName: 'DJ Luna',
     description: 'DJ Luna music production and lyrics',
-    defaultProvider: 'openai',
-    defaultModel: 'gpt-5-mini',
+    defaultProvider: 'xai',
+    defaultModel: 'grok-4-1-fast',
   },
 ];
 

@@ -1,6 +1,6 @@
 import { pool } from '../db/index.js';
 import { createCompletion } from '../llm/router.js';
-import { getBackgroundFeatureModelConfig } from '../settings/background-llm-settings.service.js';
+import { getUserModelConfig } from '../llm/model-config.service.js';
 import { getDashboard } from './ceo.service.js';
 import { listTasks } from './ceo-org.service.js';
 import { getCrossDeptMemos, createMemo, looksLikeDecision, extractDecisionTitle, searchMemos, type MemoDeptSlug } from './ceo-memos.service.js';
@@ -61,21 +61,12 @@ async function callStaffLlm(
   messages: ChatMessage[],
   maxTokens = 1024
 ): Promise<string> {
-  const config = await getBackgroundFeatureModelConfig(userId, 'ceo_org_execution');
-  try {
-    const result = await createCompletion(config.primary.provider, config.primary.model, messages, {
-      temperature: 0.5,
-      maxTokens,
-    });
-    return result.content;
-  } catch (primaryErr) {
-    logger.warn('Staff chat primary LLM failed, trying fallback', { error: (primaryErr as Error).message });
-    const fallback = await createCompletion(config.fallback.provider, config.fallback.model, messages, {
-      temperature: 0.5,
-      maxTokens,
-    });
-    return fallback.content;
-  }
+  const { provider, model } = await getUserModelConfig(userId, 'ceo_luna');
+  const result = await createCompletion(provider, model, messages, {
+    temperature: 0.5,
+    maxTokens,
+  });
+  return result.content;
 }
 
 async function buildDeptContext(userId: string, deptSlug: string): Promise<string> {
