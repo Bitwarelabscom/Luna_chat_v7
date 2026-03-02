@@ -52,7 +52,8 @@ const configSchema = z.object({
 const expenseSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   vendor: z.string().min(1).max(120),
-  amountUsd: z.number().min(0),
+  amount: z.number().min(0),
+  currency: z.string().length(3).optional(),
   category: z.string().min(1).max(40).optional(),
   cadence: z.string().min(1).max(20).optional(),
   notes: z.string().max(1000).optional(),
@@ -570,7 +571,7 @@ router.post('/slash/cost', async (req: Request, res: Response) => {
     const category = resolveCategory(categoryOrKeyword);
     const id = await ceoService.logExpense(req.user!.userId, {
       vendor: categoryOrKeyword,
-      amountUsd: amount,
+      amount,
       category,
       notes: note || undefined,
     });
@@ -592,7 +593,7 @@ router.post('/slash/income', async (req: Request, res: Response) => {
     const { amount, source, note } = slashIncomeSchema.parse(req.body);
     const id = await ceoService.logIncome(req.user!.userId, {
       vendor: source,
-      amountUsd: amount,
+      amount,
       notes: note || undefined,
     });
     const systemLog = `[SYSTEM LOG: Income +${amount.toFixed(2)} logged - ${source}${note ? ': ' + note : ''}]`;
@@ -619,7 +620,7 @@ router.post('/slash/pay', async (req: Request, res: Response) => {
     const { amount, keyword, note } = slashPaySchema.parse(req.body);
     const id = await ceoService.logOwnerPay(req.user!.userId, {
       vendor: keyword,
-      amountUsd: amount,
+      amount,
       notes: note || undefined,
     });
     const systemLog = `[SYSTEM LOG: Owner payment ${amount.toFixed(2)} logged - ${keyword}${note ? ': ' + note : ''}]`;
@@ -1213,6 +1214,106 @@ router.post('/org/run/daily-check', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to run daily check', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to run daily check' });
+  }
+});
+
+// ============================================================
+// Finance Entries CRUD
+// ============================================================
+
+// GET /finances - List finance entries
+router.get('/finances', async (req: Request, res: Response) => {
+  try {
+    const entryType = (req.query.type as string) || 'all';
+    const periodDays = parseInt(req.query.days as string, 10) || 90;
+    const limit = Math.min(parseInt(req.query.limit as string, 10) || 100, 500);
+    const offset = parseInt(req.query.offset as string, 10) || 0;
+    const result = await ceoService.listFinanceEntries(req.user!.userId, { entryType, periodDays, limit, offset });
+    res.json(result);
+  } catch (error) {
+    logger.error('Failed to list finance entries', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to list finance entries' });
+  }
+});
+
+const financeCreateSchema = z.object({
+  entryType: z.enum(['expense', 'income', 'owner_pay']),
+  vendor: z.string().min(1).max(120),
+  amount: z.number().min(0),
+  currency: z.string().length(3).optional(),
+  category: z.string().min(1).max(40).optional(),
+  cadence: z.string().min(1).max(20).optional(),
+  notes: z.string().max(1000).optional(),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+
+// POST /finances - Create finance entry
+router.post('/finances', async (req: Request, res: Response) => {
+  try {
+    const { entryType, ...rest } = financeCreateSchema.parse(req.body);
+    const input: ceoService.FinanceLogInput = { ...rest };
+    let id: string;
+    if (entryType === 'expense') {
+      id = await ceoService.logExpense(req.user!.userId, input);
+    } else if (entryType === 'income') {
+      id = await ceoService.logIncome(req.user!.userId, input);
+    } else {
+      id = await ceoService.logOwnerPay(req.user!.userId, input);
+    }
+    res.status(201).json({ id });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: 'Validation error', details: error.errors });
+      return;
+    }
+    logger.error('Failed to create finance entry', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to create finance entry' });
+  }
+});
+
+const financeUpdateSchema = z.object({
+  vendor: z.string().min(1).max(120).optional(),
+  amount: z.number().min(0).optional(),
+  currency: z.string().length(3).optional(),
+  category: z.string().min(1).max(40).optional(),
+  cadence: z.string().min(1).max(20).optional(),
+  notes: z.string().max(1000).optional(),
+  occurredOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  entryType: z.enum(['expense', 'income', 'owner_pay']).optional(),
+});
+
+// PUT /finances/:id - Update finance entry
+router.put('/finances/:id', async (req: Request, res: Response) => {
+  try {
+    const updates = financeUpdateSchema.parse(req.body);
+    const ok = await ceoService.updateFinanceEntry(req.user!.userId, req.params.id, updates);
+    if (!ok) {
+      res.status(404).json({ error: 'Entry not found' });
+      return;
+    }
+    res.json({ success: true });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: 'Validation error', details: error.errors });
+      return;
+    }
+    logger.error('Failed to update finance entry', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to update finance entry' });
+  }
+});
+
+// DELETE /finances/:id - Delete finance entry
+router.delete('/finances/:id', async (req: Request, res: Response) => {
+  try {
+    const ok = await ceoService.deleteFinanceEntry(req.user!.userId, req.params.id);
+    if (!ok) {
+      res.status(404).json({ error: 'Entry not found' });
+      return;
+    }
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Failed to delete finance entry', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to delete finance entry' });
   }
 });
 

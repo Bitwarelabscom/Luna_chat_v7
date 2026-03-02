@@ -80,8 +80,8 @@ export function QuickLogPanel() {
   const [error, setError] = useState('');
 
   // Form state - one per tab
-  const [expenseForm, setExpenseForm] = useState({ vendor: '', amountUsd: '', category: '', notes: '' });
-  const [incomeForm, setIncomeForm] = useState({ vendor: '', amountUsd: '', category: '', notes: '' });
+  const [expenseForm, setExpenseForm] = useState({ vendor: '', amount: '', category: '', notes: '' });
+  const [incomeForm, setIncomeForm] = useState({ vendor: '', amount: '', category: '', notes: '' });
   const [buildForm, setBuildForm] = useState({ projectKey: '', hours: '', item: '', stage: '' });
   const [experimentForm, setExperimentForm] = useState({ channel: '', name: '', costUsd: '', leads: '', outcome: '', notes: '' });
   const [leadForm, setLeadForm] = useState({ source: '', valueEstimateUsd: '', status: '', notes: '' });
@@ -99,13 +99,13 @@ export function QuickLogPanel() {
     setError('');
     try {
       if (activeTab === 'expense') {
-        if (!expenseForm.vendor || !expenseForm.amountUsd) throw new Error('Vendor and amount are required');
-        await logExpense({ vendor: expenseForm.vendor, amountUsd: parseFloat(expenseForm.amountUsd), category: expenseForm.category || undefined, notes: expenseForm.notes || undefined });
-        setExpenseForm({ vendor: '', amountUsd: '', category: '', notes: '' });
+        if (!expenseForm.vendor || !expenseForm.amount) throw new Error('Vendor and amount are required');
+        await logExpense({ vendor: expenseForm.vendor, amount: parseFloat(expenseForm.amount), category: expenseForm.category || undefined, notes: expenseForm.notes || undefined });
+        setExpenseForm({ vendor: '', amount: '', category: '', notes: '' });
       } else if (activeTab === 'income') {
-        if (!incomeForm.vendor || !incomeForm.amountUsd) throw new Error('Source and amount are required');
-        await logIncome({ vendor: incomeForm.vendor, amountUsd: parseFloat(incomeForm.amountUsd), category: incomeForm.category || undefined, notes: incomeForm.notes || undefined });
-        setIncomeForm({ vendor: '', amountUsd: '', category: '', notes: '' });
+        if (!incomeForm.vendor || !incomeForm.amount) throw new Error('Source and amount are required');
+        await logIncome({ vendor: incomeForm.vendor, amount: parseFloat(incomeForm.amount), category: incomeForm.category || undefined, notes: incomeForm.notes || undefined });
+        setIncomeForm({ vendor: '', amount: '', category: '', notes: '' });
       } else if (activeTab === 'build') {
         if (!buildForm.projectKey || !buildForm.hours) throw new Error('Project and hours are required');
         await logBuild({ projectKey: buildForm.projectKey, hours: parseFloat(buildForm.hours), item: buildForm.item || undefined, stage: buildForm.stage || undefined });
@@ -179,7 +179,7 @@ export function QuickLogPanel() {
           {activeTab === 'expense' && (
             <>
               <Field label="Vendor / Service" value={expenseForm.vendor} onChange={(v) => setExpenseForm((p) => ({ ...p, vendor: v }))} placeholder="e.g. AWS" required />
-              <Field label="Amount (USD)" value={expenseForm.amountUsd} onChange={(v) => setExpenseForm((p) => ({ ...p, amountUsd: v }))} type="number" placeholder="0.00" required />
+              <Field label="Amount" value={expenseForm.amount} onChange={(v) => setExpenseForm((p) => ({ ...p, amount: v }))} type="number" placeholder="0.00" required />
               <Field label="Category" value={expenseForm.category} onChange={(v) => setExpenseForm((p) => ({ ...p, category: v }))} placeholder="e.g. infrastructure" />
               <TextArea label="Notes" value={expenseForm.notes} onChange={(v) => setExpenseForm((p) => ({ ...p, notes: v }))} placeholder="Optional notes" />
             </>
@@ -188,7 +188,7 @@ export function QuickLogPanel() {
           {activeTab === 'income' && (
             <>
               <Field label="Source" value={incomeForm.vendor} onChange={(v) => setIncomeForm((p) => ({ ...p, vendor: v }))} placeholder="e.g. Client payment" required />
-              <Field label="Amount (USD)" value={incomeForm.amountUsd} onChange={(v) => setIncomeForm((p) => ({ ...p, amountUsd: v }))} type="number" placeholder="0.00" required />
+              <Field label="Amount" value={incomeForm.amount} onChange={(v) => setIncomeForm((p) => ({ ...p, amount: v }))} type="number" placeholder="0.00" required />
               <Field label="Category" value={incomeForm.category} onChange={(v) => setIncomeForm((p) => ({ ...p, category: v }))} placeholder="e.g. consulting" />
               <TextArea label="Notes" value={incomeForm.notes} onChange={(v) => setIncomeForm((p) => ({ ...p, notes: v }))} />
             </>

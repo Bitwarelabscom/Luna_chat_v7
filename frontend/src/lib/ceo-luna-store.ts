@@ -5,6 +5,7 @@ import { workspaceApi } from './api/workspace';
 import type {
   CeoDashboard, RadarSignal, AutopostItem, ProductionSummary, GenreOption, ProposedGenre,
   OrgTask, WeeklyGoal, AbilityProposal, RecommendedAction, DepartmentSummary,
+  FinanceEntry, FinanceCreatePayload, FinanceUpdatePayload,
 } from './api/ceo';
 
 export interface CeoFileEntry {
@@ -13,7 +14,7 @@ export interface CeoFileEntry {
   folder: 'Documents' | 'Plans' | 'Week' | 'Other';
 }
 
-type ActiveTab = 'viewer' | 'chat' | 'dashboard' | 'org' | 'radar' | 'autopost' | 'builds' | 'log' | 'albums';
+type ActiveTab = 'viewer' | 'chat' | 'dashboard' | 'finances' | 'org' | 'radar' | 'autopost' | 'builds' | 'log' | 'albums';
 
 interface CEOLunaState {
   // Session
@@ -54,6 +55,13 @@ interface CEOLunaState {
   isLoadingOrg: boolean;
   orgDeptFilter: string;
 
+  // Finances
+  financeEntries: FinanceEntry[];
+  financesTotal: number;
+  isLoadingFinances: boolean;
+  financeFilter: 'all' | 'expense' | 'income' | 'owner_pay';
+  financePeriod: number;
+
   // Albums
   productions: ProductionSummary[];
   genres: GenreOption[];
@@ -75,6 +83,13 @@ interface CEOLunaState {
   loadAutopostQueue: (limit?: number) => Promise<void>;
   setDashboardPeriod: (days: number) => void;
   createFile: (folder: string, name: string) => Promise<void>;
+  loadFinances: () => Promise<void>;
+  setFinanceFilter: (filter: 'all' | 'expense' | 'income' | 'owner_pay') => void;
+  setFinancePeriod: (days: number) => void;
+  createFinance: (payload: FinanceCreatePayload) => Promise<void>;
+  updateFinance: (id: string, payload: FinanceUpdatePayload) => Promise<void>;
+  deleteFinance: (id: string) => Promise<void>;
+
   loadProductions: () => Promise<void>;
   loadGenres: () => Promise<void>;
   loadArtists: () => Promise<void>;
@@ -124,6 +139,12 @@ export const useCEOLunaStore = create<CEOLunaState>((set, get) => ({
   orgActions: [],
   isLoadingOrg: false,
   orgDeptFilter: 'all',
+
+  financeEntries: [],
+  financesTotal: 0,
+  isLoadingFinances: false,
+  financeFilter: 'all',
+  financePeriod: 90,
 
   productions: [],
   genres: [],
@@ -246,6 +267,65 @@ export const useCEOLunaStore = create<CEOLunaState>((set, get) => ({
       console.error('Failed to load autopost queue:', err);
     } finally {
       set({ isLoadingAutopost: false });
+    }
+  },
+
+  loadFinances: async () => {
+    set({ isLoadingFinances: true });
+    try {
+      const { fetchFinances } = await import('./api/ceo');
+      const filter = get().financeFilter;
+      const days = get().financePeriod;
+      const type = filter === 'all' ? undefined : filter;
+      const { entries, total } = await fetchFinances({ type, days, limit: 200 });
+      set({ financeEntries: entries, financesTotal: total });
+    } catch (err) {
+      console.error('Failed to load finances:', err);
+    } finally {
+      set({ isLoadingFinances: false });
+    }
+  },
+
+  setFinanceFilter: (filter) => {
+    set({ financeFilter: filter });
+    get().loadFinances();
+  },
+
+  setFinancePeriod: (days) => {
+    set({ financePeriod: days });
+    get().loadFinances();
+  },
+
+  createFinance: async (payload) => {
+    try {
+      const { createFinanceEntry } = await import('./api/ceo');
+      await createFinanceEntry(payload);
+      await get().loadFinances();
+    } catch (err) {
+      console.error('Failed to create finance entry:', err);
+      throw err;
+    }
+  },
+
+  updateFinance: async (id, payload) => {
+    try {
+      const { updateFinanceEntry } = await import('./api/ceo');
+      await updateFinanceEntry(id, payload);
+      await get().loadFinances();
+    } catch (err) {
+      console.error('Failed to update finance entry:', err);
+      throw err;
+    }
+  },
+
+  deleteFinance: async (id) => {
+    try {
+      const { deleteFinanceEntry } = await import('./api/ceo');
+      await deleteFinanceEntry(id);
+      set({ financeEntries: get().financeEntries.filter((e) => e.id !== id) });
+    } catch (err) {
+      console.error('Failed to delete finance entry:', err);
+      throw err;
     }
   },
 

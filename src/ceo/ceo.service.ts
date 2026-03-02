@@ -54,11 +54,27 @@ export interface UpdateCeoConfigInput {
 export interface FinanceLogInput {
   date?: string;
   vendor: string;
-  amountUsd: number;
+  amount: number;
+  currency?: string;
   category?: string;
   cadence?: string;
   notes?: string;
   source?: string;
+}
+
+export interface FinanceEntry {
+  id: string;
+  userId: string;
+  occurredOn: string;
+  entryType: 'expense' | 'income' | 'owner_pay';
+  vendor: string;
+  amount: number;
+  currency: string;
+  category: string;
+  cadence: string;
+  notes: string | null;
+  source: string;
+  createdAt: string;
 }
 
 export interface BuildLogInput {
@@ -396,8 +412,29 @@ function parseDateInput(value: string | undefined, fallbackIsoDate: string): str
   return fallbackIsoDate;
 }
 
-function formatMoney(value: number): string {
-  return `$${value.toFixed(2)}`;
+const CURRENCY_SYMBOLS: Record<string, string> = {
+  USD: '$', EUR: '\u20AC', GBP: '\u00A3', SEK: 'kr', NOK: 'kr',
+  DKK: 'kr', JPY: '\u00A5', CHF: 'CHF', AUD: 'A$', CAD: 'C$',
+};
+
+function formatMoney(value: number, currency = 'USD'): string {
+  const symbol = CURRENCY_SYMBOLS[currency] || currency;
+  if (['kr', 'CHF'].includes(symbol)) {
+    return `${value.toFixed(2)} ${symbol}`;
+  }
+  return `${symbol}${value.toFixed(2)}`;
+}
+
+async function getUserCurrency(userId: string): Promise<string> {
+  try {
+    const result = await pool.query(
+      `SELECT settings->>'currency' AS currency FROM users WHERE id = $1`,
+      [userId]
+    );
+    return (result.rows[0]?.currency as string) || 'USD';
+  } catch {
+    return 'USD';
+  }
 }
 
 function median(values: number[]): number {
@@ -724,16 +761,16 @@ async function computeFinancialWindow(
   endDateIso: string,
   windowDays: number
 ): Promise<{
-  expenseTotalUsd: number;
-  incomeTotalUsd: number;
-  ownerPayTotalUsd: number;
+  expenseTotal: number;
+  incomeTotal: number;
+  ownerPayTotal: number;
   perDayExpense: Map<string, number>;
   perDayIncome: Map<string, number>;
 }> {
   const startDateIso = addDays(endDateIso, -(windowDays - 1));
 
   const result = await pool.query(
-    `SELECT occurred_on::text AS occurred_on, entry_type, SUM(amount_usd)::numeric AS total
+    `SELECT occurred_on::text AS occurred_on, entry_type, SUM(amount)::numeric AS total
      FROM ceo_finance_entries
      WHERE user_id = $1
        AND occurred_on BETWEEN $2::date AND $3::date
@@ -743,27 +780,27 @@ async function computeFinancialWindow(
 
   const perDayExpense = new Map<string, number>();
   const perDayIncome = new Map<string, number>();
-  let expenseTotalUsd = 0;
-  let incomeTotalUsd = 0;
-  let ownerPayTotalUsd = 0;
+  let expenseTotal = 0;
+  let incomeTotal = 0;
+  let ownerPayTotal = 0;
 
   for (const row of result.rows as Array<{ occurred_on: string; entry_type: string; total: string }>) {
     const total = asNumber(row.total, 0);
     if (row.entry_type === 'expense') {
-      expenseTotalUsd += total;
+      expenseTotal += total;
       perDayExpense.set(row.occurred_on, total);
     } else if (row.entry_type === 'owner_pay') {
-      ownerPayTotalUsd += total;
+      ownerPayTotal += total;
     } else {
-      incomeTotalUsd += total;
+      incomeTotal += total;
       perDayIncome.set(row.occurred_on, total);
     }
   }
 
   return {
-    expenseTotalUsd,
-    incomeTotalUsd,
-    ownerPayTotalUsd,
+    expenseTotal,
+    incomeTotal,
+    ownerPayTotal,
     perDayExpense,
     perDayIncome,
   };
@@ -833,6 +870,7 @@ async function detectDailyAlerts(
 ): Promise<PendingAlert[]> {
   const alerts: PendingAlert[] = [];
 
+  const currency = await getUserCurrency(userId);
   const finance = await computeFinancialWindow(userId, localDateIso, 15);
   const todayExpense = finance.perDayExpense.get(localDateIso) || 0;
 
@@ -853,13 +891,13 @@ async function detectDailyAlerts(
       severity: 'P1',
       alertType: 'burn_spike',
       title: 'Burn spike detected',
-      message: `Today spend is ${formatMoney(todayExpense)}, up ${formatMoney(burnDelta)} vs 14-day median (${formatMoney(referenceMedian)}).`,
+      message: `Today spend is ${formatMoney(todayExpense, currency)}, up ${formatMoney(burnDelta, currency)} vs 14-day median (${formatMoney(referenceMedian, currency)}).`,
       payload: { todayExpense, referenceMedian, burnDelta },
     });
   }
 
   const vendorToday = await pool.query(
-    `SELECT vendor, SUM(amount_usd)::numeric AS amount
+    `SELECT vendor, SUM(amount)::numeric AS amount
      FROM ceo_finance_entries
      WHERE user_id = $1
        AND entry_type = 'expense'
@@ -872,7 +910,7 @@ async function detectDailyAlerts(
     const history = await pool.query(
       `SELECT vendor,
               COUNT(*)::int AS entries,
-              AVG(amount_usd)::numeric AS avg_amount
+              AVG(amount)::numeric AS avg_amount
        FROM ceo_finance_entries
        WHERE user_id = $1
          AND entry_type = 'expense'
@@ -900,7 +938,7 @@ async function detectDailyAlerts(
             severity: 'P1',
             alertType: 'unexpected_vendor_new',
             title: 'Unexpected new vendor cost',
-            message: `${row.vendor} charged ${formatMoney(todayAmount)} today and has no prior baseline.`,
+            message: `${row.vendor} charged ${formatMoney(todayAmount, currency)} today and has no prior baseline.`,
             payload: { vendor: row.vendor, amount: todayAmount },
           });
         }
@@ -915,7 +953,7 @@ async function detectDailyAlerts(
           severity: 'P1',
           alertType: 'unexpected_vendor_spike',
           title: 'Unexpected vendor spike',
-          message: `${row.vendor} charged ${formatMoney(todayAmount)} today vs average ${formatMoney(baseline.avgAmount)}.`,
+          message: `${row.vendor} charged ${formatMoney(todayAmount, currency)} today vs average ${formatMoney(baseline.avgAmount, currency)}.`,
           payload: {
             vendor: row.vendor,
             amount: todayAmount,
@@ -982,7 +1020,7 @@ async function detectDailyAlerts(
     });
   }
 
-  const hasIncome = finance.incomeTotalUsd > 0;
+  const hasIncome = finance.incomeTotal > 0;
   if (config.mode === 'normal' || hasIncome) {
     const incomeWindow = await computeFinancialWindow(userId, localDateIso, 14);
     let current7 = 0;
@@ -1002,7 +1040,7 @@ async function detectDailyAlerts(
         severity: 'P1',
         alertType: 'revenue_drop',
         title: 'Revenue drop detected',
-        message: `Last 7 days revenue is ${formatMoney(current7)} vs ${formatMoney(previous7)} in previous 7 days (drop ${formatMoney(delta)}).`,
+        message: `Last 7 days revenue is ${formatMoney(current7, currency)} vs ${formatMoney(previous7, currency)} in previous 7 days (drop ${formatMoney(delta, currency)}).`,
         payload: { current7, previous7, delta },
       });
     }
@@ -1187,6 +1225,7 @@ async function generateWeeklyActions(
   buildHours7d: number,
   experiments7d: number,
   burn7d: number,
+  currency: string,
   income7d: number
 ): Promise<string[]> {
   const actions: string[] = [];
@@ -1210,7 +1249,7 @@ async function generateWeeklyActions(
   }
 
   if (config.mode === 'pre_revenue' && burn7d > 0 && income7d === 0) {
-    actions.push(`Hold weekly spend below ${formatMoney(Math.max(75, burn7d * 0.9))} until first revenue is logged.`);
+    actions.push(`Hold weekly spend below ${formatMoney(Math.max(75, burn7d * 0.9), currency)} until first revenue is logged.`);
   }
 
   return actions.slice(0, 3);
@@ -1496,17 +1535,19 @@ export async function logExpense(userId: string, input: FinanceLogInput): Promis
   const config = await getOrCreateConfig(userId);
   const localDate = getLocalTimeParts(config.timezone).isoDate;
   const occurredOn = parseDateInput(input.date, localDate);
+  const currency = input.currency || await getUserCurrency(userId);
 
   const result = await pool.query(
     `INSERT INTO ceo_finance_entries
-     (user_id, occurred_on, entry_type, vendor, amount_usd, category, cadence, notes, source)
-     VALUES ($1, $2::date, 'expense', $3, $4, $5, $6, $7, $8)
+     (user_id, occurred_on, entry_type, vendor, amount, currency, category, cadence, notes, source)
+     VALUES ($1, $2::date, 'expense', $3, $4, $5, $6, $7, $8, $9)
      RETURNING id`,
     [
       userId,
       occurredOn,
       input.vendor.trim(),
-      Math.max(0, input.amountUsd),
+      Math.max(0, input.amount),
+      currency,
       (input.category || 'other').trim().toLowerCase(),
       normalizeCadence(input.cadence),
       input.notes || null,
@@ -1521,17 +1562,19 @@ export async function logIncome(userId: string, input: FinanceLogInput): Promise
   const config = await getOrCreateConfig(userId);
   const localDate = getLocalTimeParts(config.timezone).isoDate;
   const occurredOn = parseDateInput(input.date, localDate);
+  const currency = input.currency || await getUserCurrency(userId);
 
   const result = await pool.query(
     `INSERT INTO ceo_finance_entries
-     (user_id, occurred_on, entry_type, vendor, amount_usd, category, cadence, notes, source)
-     VALUES ($1, $2::date, 'income', $3, $4, $5, $6, $7, $8)
+     (user_id, occurred_on, entry_type, vendor, amount, currency, category, cadence, notes, source)
+     VALUES ($1, $2::date, 'income', $3, $4, $5, $6, $7, $8, $9)
      RETURNING id`,
     [
       userId,
       occurredOn,
       input.vendor.trim(),
-      Math.max(0, input.amountUsd),
+      Math.max(0, input.amount),
+      currency,
       (input.category || 'revenue').trim().toLowerCase(),
       normalizeCadence(input.cadence),
       input.notes || null,
@@ -1546,17 +1589,19 @@ export async function logOwnerPay(userId: string, input: FinanceLogInput): Promi
   const config = await getOrCreateConfig(userId);
   const localDate = getLocalTimeParts(config.timezone).isoDate;
   const occurredOn = parseDateInput(input.date, localDate);
+  const currency = input.currency || await getUserCurrency(userId);
 
   const result = await pool.query(
     `INSERT INTO ceo_finance_entries
-     (user_id, occurred_on, entry_type, vendor, amount_usd, category, cadence, notes, source)
-     VALUES ($1, $2::date, 'owner_pay', $3, $4, $5, $6, $7, $8)
+     (user_id, occurred_on, entry_type, vendor, amount, currency, category, cadence, notes, source)
+     VALUES ($1, $2::date, 'owner_pay', $3, $4, $5, $6, $7, $8, $9)
      RETURNING id`,
     [
       userId,
       occurredOn,
       input.vendor.trim(),
-      Math.max(0, input.amountUsd),
+      Math.max(0, input.amount),
+      currency,
       (input.category || 'owner_payment').trim().toLowerCase(),
       'one-time',
       input.notes || null,
@@ -1922,8 +1967,9 @@ export async function runDailyCheckForUser(userId: string, slot: 'morning' | 'ev
   const flushed = await flushSuppressedAlerts(userId, localTime);
   alertsQueued += flushed;
 
+  const currency = await getUserCurrency(userId);
   const finance7d = await computeFinancialWindow(userId, localTime.isoDate, 7);
-  const burn7d = finance7d.expenseTotalUsd - finance7d.incomeTotalUsd;
+  const burn7d = finance7d.expenseTotal - finance7d.incomeTotal;
 
   const buildHoursResult = await pool.query(
     `SELECT COALESCE(SUM(hours), 0)::numeric AS total
@@ -1945,7 +1991,7 @@ export async function runDailyCheckForUser(userId: string, slot: 'morning' | 'ev
   const headline = `Daily CEO pulse (${slot}) - ${alerts.length} raw signals, ${alertsQueued} queued`;
   const body = [
     `Mode: ${config.mode}`,
-    `7d burn net: ${formatMoney(burn7d)} (expenses ${formatMoney(finance7d.expenseTotalUsd)}, income ${formatMoney(finance7d.incomeTotalUsd)})`,
+    `7d burn net: ${formatMoney(burn7d, currency)} (expenses ${formatMoney(finance7d.expenseTotal, currency)}, income ${formatMoney(finance7d.incomeTotal, currency)})`,
     `7d build hours: ${asNumber(buildHoursResult.rows[0]?.total).toFixed(1)}`,
     `7d experiments: ${experimentsResult.rows[0]?.count || 0}, leads: ${experimentsResult.rows[0]?.leads || 0}`,
   ].join('\n');
@@ -1963,8 +2009,8 @@ export async function runDailyCheckForUser(userId: string, slot: 'morning' | 'ev
       alertsDetected: alerts.length,
       alertsQueued,
       burn7d,
-      expenses7d: finance7d.expenseTotalUsd,
-      income7d: finance7d.incomeTotalUsd,
+      expenses7d: finance7d.expenseTotal,
+      income7d: finance7d.incomeTotal,
       buildHours7d: asNumber(buildHoursResult.rows[0]?.total),
       experiments7d: experimentsResult.rows[0]?.count || 0,
       leads7d: experimentsResult.rows[0]?.leads || 0,
@@ -1982,11 +2028,12 @@ export async function runWeeklyBriefForUser(userId: string): Promise<{ reportId:
   const periodStart = addDays(localTime.isoDate, -6);
 
   const radarSignalsInserted = await refreshMarketRadar(userId, config);
+  const currency = await getUserCurrency(userId);
 
   const finance7d = await computeFinancialWindow(userId, localTime.isoDate, 7);
   const finance30d = await computeFinancialWindow(userId, localTime.isoDate, 30);
-  const burn7d = finance7d.expenseTotalUsd - finance7d.incomeTotalUsd;
-  const burn30d = finance30d.expenseTotalUsd - finance30d.incomeTotalUsd;
+  const burn7d = finance7d.expenseTotal - finance7d.incomeTotal;
+  const burn30d = finance30d.expenseTotal - finance30d.incomeTotal;
   const projected30dBurnUsd = burn30d;
 
   const buildResult = await pool.query(
@@ -2037,7 +2084,8 @@ export async function runWeeklyBriefForUser(userId: string): Promise<{ reportId:
     buildHours7d,
     experiments7d,
     burn7d,
-    finance7d.incomeTotalUsd
+    currency,
+    finance7d.incomeTotal
   );
 
   const topProject = projectRankings[0]?.projectKey || null;
@@ -2047,10 +2095,10 @@ export async function runWeeklyBriefForUser(userId: string): Promise<{ reportId:
     `CEO Brief (${periodStart} to ${localTime.isoDate})`,
     '',
     `Mode: ${config.mode}`,
-    `Burn: ${formatMoney(burn7d)} this week | ${formatMoney(projected30dBurnUsd)} 30d trend`,
-    `Income: ${formatMoney(finance7d.incomeTotalUsd)} this week`,
+    `Burn: ${formatMoney(burn7d, currency)} this week | ${formatMoney(projected30dBurnUsd, currency)} 30d trend`,
+    `Income: ${formatMoney(finance7d.incomeTotal, currency)} this week`,
     `Build: ${buildHours7d.toFixed(1)} hours`,
-    `Growth: ${experiments7d} experiments, ${leads7d} leads, ${formatMoney(growthSpend7d)} spend`,
+    `Growth: ${experiments7d} experiments, ${leads7d} leads, ${formatMoney(growthSpend7d, currency)} spend`,
     `Top channel: ${topChannel}`,
     `Top project: ${topProject || 'none logged'}`,
     '',
@@ -2080,7 +2128,7 @@ export async function runWeeklyBriefForUser(userId: string): Promise<{ reportId:
       burn7d,
       burn30d,
       projected30dBurnUsd,
-      income7d: finance7d.incomeTotalUsd,
+      income7d: finance7d.incomeTotal,
       buildHours7d,
       experiments7d,
       leads7d,
@@ -2120,8 +2168,9 @@ export async function runBiweeklyAuditForUser(userId: string): Promise<{ reportI
   const localTime = getLocalTimeParts(config.timezone);
   const periodStart = addDays(localTime.isoDate, -13);
 
+  const currency = await getUserCurrency(userId);
   const finance14d = await computeFinancialWindow(userId, localTime.isoDate, 14);
-  const burn14d = finance14d.expenseTotalUsd - finance14d.incomeTotalUsd;
+  const burn14d = finance14d.expenseTotal - finance14d.incomeTotal;
 
   const buildHoursResult = await pool.query(
     `SELECT COALESCE(SUM(hours), 0)::numeric AS total
@@ -2141,7 +2190,7 @@ export async function runBiweeklyAuditForUser(userId: string): Promise<{ reportI
   );
 
   const toolSpendResult = await pool.query(
-    `SELECT COALESCE(SUM(amount_usd), 0)::numeric AS total
+    `SELECT COALESCE(SUM(amount), 0)::numeric AS total
      FROM ceo_finance_entries
      WHERE user_id = $1
        AND entry_type = 'expense'
@@ -2166,7 +2215,7 @@ export async function runBiweeklyAuditForUser(userId: string): Promise<{ reportI
   }
 
   if (toolSpend14d > 0 && buildHours14d < 4) {
-    findings.push(`Tool spend is ${formatMoney(toolSpend14d)} with low build activity (${buildHours14d.toFixed(1)}h).`);
+    findings.push(`Tool spend is ${formatMoney(toolSpend14d, currency)} with low build activity (${buildHours14d.toFixed(1)}h).`);
   }
 
   if (burn14d > 0 && config.mode === 'pre_revenue' && leads14d === 0) {
@@ -2183,8 +2232,8 @@ export async function runBiweeklyAuditForUser(userId: string): Promise<{ reportI
     `Build hours: ${buildHours14d.toFixed(1)}`,
     `Experiments: ${experiments14d}`,
     `Leads: ${leads14d}`,
-    `Tool spend: ${formatMoney(toolSpend14d)}`,
-    `Burn net: ${formatMoney(burn14d)}`,
+    `Tool spend: ${formatMoney(toolSpend14d, currency)}`,
+    `Burn net: ${formatMoney(burn14d, currency)}`,
     '',
     'Findings:',
     ...findings.map((finding, index) => `${index + 1}. ${finding}`),
@@ -2263,17 +2312,17 @@ export async function getDashboard(userId: string, periodDays = 30): Promise<Ceo
     [userId]
   );
 
-  const saldo = financial.ownerPayTotalUsd + financial.incomeTotalUsd - financial.expenseTotalUsd;
-  const burnNet = financial.expenseTotalUsd - financial.incomeTotalUsd;
+  const saldo = financial.ownerPayTotal + financial.incomeTotal - financial.expenseTotal;
+  const burnNet = financial.expenseTotal - financial.incomeTotal;
   const projected30dBurnUsd = periodDays > 0 ? burnNet * (30 / periodDays) : burnNet;
 
   return {
     config,
     financial: {
       periodDays,
-      expenseTotal: financial.expenseTotalUsd,
-      incomeTotal: financial.incomeTotalUsd,
-      ownerPayTotal: financial.ownerPayTotalUsd,
+      expenseTotal: financial.expenseTotal,
+      incomeTotal: financial.incomeTotal,
+      ownerPayTotal: financial.ownerPayTotal,
       saldo,
       projected30dBurnUsd,
     },
@@ -2390,6 +2439,95 @@ export async function runMonitoringCycle(): Promise<CeoMonitoringRunResult> {
   };
 }
 
+export async function listFinanceEntries(
+  userId: string,
+  options?: { entryType?: string; periodDays?: number; limit?: number; offset?: number }
+): Promise<{ entries: FinanceEntry[]; total: number }> {
+  const entryType = options?.entryType;
+  const periodDays = options?.periodDays || 90;
+  const limit = options?.limit || 100;
+  const offset = options?.offset || 0;
+
+  const conditions = ['user_id = $1', 'occurred_on >= CURRENT_DATE - ($2::text || \' days\')::interval'];
+  const params: unknown[] = [userId, periodDays];
+
+  if (entryType && entryType !== 'all') {
+    params.push(entryType);
+    conditions.push(`entry_type = $${params.length}`);
+  }
+
+  const where = conditions.join(' AND ');
+
+  const [dataResult, countResult] = await Promise.all([
+    pool.query(
+      `SELECT id, user_id, occurred_on::text AS occurred_on, entry_type, vendor, amount, currency, category, cadence, notes, source, created_at
+       FROM ceo_finance_entries
+       WHERE ${where}
+       ORDER BY occurred_on DESC, created_at DESC
+       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, limit, offset]
+    ),
+    pool.query(
+      `SELECT COUNT(*)::int AS total FROM ceo_finance_entries WHERE ${where}`,
+      params
+    ),
+  ]);
+
+  const entries = (dataResult.rows as Array<Record<string, unknown>>).map((row) => ({
+    id: row.id as string,
+    userId: row.user_id as string,
+    occurredOn: row.occurred_on as string,
+    entryType: row.entry_type as FinanceEntry['entryType'],
+    vendor: row.vendor as string,
+    amount: asNumber(row.amount),
+    currency: (row.currency as string) || 'USD',
+    category: row.category as string,
+    cadence: row.cadence as string,
+    notes: (row.notes as string) || null,
+    source: row.source as string,
+    createdAt: String(row.created_at),
+  }));
+
+  return { entries, total: countResult.rows[0]?.total || 0 };
+}
+
+export async function updateFinanceEntry(
+  userId: string,
+  entryId: string,
+  updates: { vendor?: string; amount?: number; currency?: string; category?: string; cadence?: string; notes?: string; occurredOn?: string; entryType?: string }
+): Promise<boolean> {
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  let idx = 1;
+
+  if (updates.vendor !== undefined) { sets.push(`vendor = $${idx++}`); params.push(updates.vendor.trim()); }
+  if (updates.amount !== undefined) { sets.push(`amount = $${idx++}`); params.push(Math.max(0, updates.amount)); }
+  if (updates.currency !== undefined) { sets.push(`currency = $${idx++}`); params.push(updates.currency); }
+  if (updates.category !== undefined) { sets.push(`category = $${idx++}`); params.push(updates.category.trim().toLowerCase()); }
+  if (updates.cadence !== undefined) { sets.push(`cadence = $${idx++}`); params.push(normalizeCadence(updates.cadence)); }
+  if (updates.notes !== undefined) { sets.push(`notes = $${idx++}`); params.push(updates.notes || null); }
+  if (updates.occurredOn !== undefined) { sets.push(`occurred_on = $${idx++}::date`); params.push(updates.occurredOn); }
+  if (updates.entryType !== undefined) { sets.push(`entry_type = $${idx++}`); params.push(updates.entryType); }
+
+  if (sets.length === 0) return false;
+
+  params.push(entryId, userId);
+  const result = await pool.query(
+    `UPDATE ceo_finance_entries SET ${sets.join(', ')} WHERE id = $${idx++} AND user_id = $${idx}`,
+    params
+  );
+
+  return (result.rowCount || 0) > 0;
+}
+
+export async function deleteFinanceEntry(userId: string, entryId: string): Promise<boolean> {
+  const result = await pool.query(
+    `DELETE FROM ceo_finance_entries WHERE id = $1 AND user_id = $2`,
+    [entryId, userId]
+  );
+  return (result.rowCount || 0) > 0;
+}
+
 export async function runMaintenanceCleanup(): Promise<{ deletedRows: number }> {
   const deletions = await Promise.all([
     pool.query(
@@ -2428,11 +2566,11 @@ export async function runMaintenanceCleanup(): Promise<{ deletedRows: number }> 
   return { deletedRows };
 }
 
-function formatDashboardSummary(dashboard: CeoDashboard): string {
+function formatDashboardSummary(dashboard: CeoDashboard, currency: string): string {
   const lines: string[] = [];
   lines.push(`CEO status (${dashboard.config.mode}, ${dashboard.config.timezone})`);
-  lines.push(`Saldo: ${formatMoney(dashboard.financial.saldo)} | Expenses ${dashboard.financial.periodDays}d: ${formatMoney(dashboard.financial.expenseTotal)} | Income: ${formatMoney(dashboard.financial.incomeTotal)}`);
-  lines.push(`Projected 30d cash need: ${formatMoney(dashboard.financial.projected30dBurnUsd)}`);
+  lines.push(`Saldo: ${formatMoney(dashboard.financial.saldo, currency)} | Expenses ${dashboard.financial.periodDays}d: ${formatMoney(dashboard.financial.expenseTotal, currency)} | Income: ${formatMoney(dashboard.financial.incomeTotal, currency)}`);
+  lines.push(`Projected 30d cash need: ${formatMoney(dashboard.financial.projected30dBurnUsd, currency)}`);
   lines.push(`Build hours: ${dashboard.activity.buildHours.toFixed(1)} | Experiments: ${dashboard.activity.experiments} | Leads: ${dashboard.activity.leads}`);
 
   if (dashboard.projectRankings.length > 0) {
@@ -2495,10 +2633,11 @@ async function handleExpenseCommand(userId: string, text: string): Promise<Comma
   if (tokens[index]) index++;
   const notes = tokens.slice(index).join(' ') || undefined;
 
+  const currency = await getUserCurrency(userId);
   await logExpense(userId, {
     date,
     vendor,
-    amountUsd: amount,
+    amount,
     category,
     cadence,
     notes,
@@ -2507,7 +2646,7 @@ async function handleExpenseCommand(userId: string, text: string): Promise<Comma
 
   return {
     handled: true,
-    response: `Logged expense: ${formatMoney(amount)} to ${vendor} on ${date} (${category}/${normalizeCadence(cadence)}).`,
+    response: `Logged expense: ${formatMoney(amount, currency)} to ${vendor} on ${date} (${category}/${normalizeCadence(cadence)}).`,
   };
 }
 
@@ -2546,10 +2685,11 @@ async function handleIncomeCommand(userId: string, text: string): Promise<Comman
   if (tokens[index]) index++;
   const notes = tokens.slice(index).join(' ') || undefined;
 
+  const currency = await getUserCurrency(userId);
   await logIncome(userId, {
     date,
     vendor: source,
-    amountUsd: amount,
+    amount,
     category,
     cadence,
     notes,
@@ -2558,7 +2698,7 @@ async function handleIncomeCommand(userId: string, text: string): Promise<Comman
 
   return {
     handled: true,
-    response: `Logged income: ${formatMoney(amount)} from ${source} on ${date}.`,
+    response: `Logged income: ${formatMoney(amount, currency)} from ${source} on ${date}.`,
   };
 }
 
@@ -2633,7 +2773,7 @@ async function handleExperimentCommand(userId: string, text: string): Promise<Co
 
   return {
     handled: true,
-    response: `Logged experiment: ${name} on ${channel} (cost ${formatMoney(costUsd)}, leads ${leads}, outcome ${normalizeOutcome(outcome)}).`,
+    response: `Logged experiment: ${name} on ${channel} (cost ${formatMoney(costUsd, await getUserCurrency(userId))}, leads ${leads}, outcome ${normalizeOutcome(outcome)}).`,
   };
 }
 
@@ -2668,7 +2808,7 @@ async function handleLeadCommand(userId: string, text: string): Promise<CommandR
 
   return {
     handled: true,
-    response: `Logged lead: source=${source}, status=${normalizeLeadStatus(status)}${valueEstimateUsd !== undefined ? `, value=${formatMoney(valueEstimateUsd)}` : ''}.`,
+    response: `Logged lead: source=${source}, status=${normalizeLeadStatus(status)}${valueEstimateUsd !== undefined ? `, value=${formatMoney(valueEstimateUsd, await getUserCurrency(userId))}` : ''}.`,
   };
 }
 
@@ -2839,9 +2979,10 @@ async function handleCeoCommand(userId: string, text: string): Promise<CommandRe
 
   if (action === 'status') {
     const dashboard = await getDashboard(userId, 30);
+    const currency = await getUserCurrency(userId);
     return {
       handled: true,
-      response: formatDashboardSummary(dashboard),
+      response: formatDashboardSummary(dashboard, currency),
     };
   }
 

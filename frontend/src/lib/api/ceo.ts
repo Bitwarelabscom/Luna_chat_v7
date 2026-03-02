@@ -185,7 +185,8 @@ export const cancelPost = (id: string) =>
 // Log endpoints
 export interface ExpensePayload {
   vendor: string;
-  amountUsd: number;
+  amount: number;
+  currency?: string;
   date?: string;
   category?: string;
   cadence?: string;
@@ -194,10 +195,48 @@ export interface ExpensePayload {
 
 export interface IncomePayload {
   vendor: string;
-  amountUsd: number;
+  amount: number;
+  currency?: string;
   date?: string;
   category?: string;
   notes?: string;
+}
+
+export interface FinanceEntry {
+  id: string;
+  userId: string;
+  occurredOn: string;
+  entryType: 'expense' | 'income' | 'owner_pay';
+  vendor: string;
+  amount: number;
+  currency: string;
+  category: string;
+  cadence: string;
+  notes: string | null;
+  source: string;
+  createdAt: string;
+}
+
+export interface FinanceCreatePayload {
+  entryType: 'expense' | 'income' | 'owner_pay';
+  vendor: string;
+  amount: number;
+  currency?: string;
+  category?: string;
+  cadence?: string;
+  notes?: string;
+  date?: string;
+}
+
+export interface FinanceUpdatePayload {
+  vendor?: string;
+  amount?: number;
+  currency?: string;
+  category?: string;
+  cadence?: string;
+  notes?: string;
+  occurredOn?: string;
+  entryType?: 'expense' | 'income' | 'owner_pay';
 }
 
 export interface BuildPayload {
@@ -257,6 +296,26 @@ export const logLead = (payload: LeadPayload) =>
 
 export const logProject = (payload: ProjectPayload) =>
   api<{ id: string }>('/api/ceo/log/project', { method: 'POST', body: payload });
+
+// Finance CRUD
+export const fetchFinances = (options?: { type?: string; days?: number; limit?: number; offset?: number }) => {
+  const qs = new URLSearchParams();
+  if (options?.type) qs.set('type', options.type);
+  if (options?.days) qs.set('days', String(options.days));
+  if (options?.limit) qs.set('limit', String(options.limit));
+  if (options?.offset) qs.set('offset', String(options.offset));
+  const q = qs.toString();
+  return api<{ entries: FinanceEntry[]; total: number }>(`/api/ceo/finances${q ? `?${q}` : ''}`);
+};
+
+export const createFinanceEntry = (payload: FinanceCreatePayload) =>
+  api<{ id: string }>('/api/ceo/finances', { method: 'POST', body: payload });
+
+export const updateFinanceEntry = (id: string, payload: FinanceUpdatePayload) =>
+  api<{ success: boolean }>(`/api/ceo/finances/${id}`, { method: 'PUT', body: payload });
+
+export const deleteFinanceEntry = (id: string) =>
+  api<{ success: boolean }>(`/api/ceo/finances/${id}`, { method: 'DELETE' });
 
 // ============================================================
 // Album Production Pipeline
