@@ -301,6 +301,7 @@ export const useCEOLunaStore = create<CEOLunaState>((set, get) => ({
       const { createFinanceEntry } = await import('./api/ceo');
       await createFinanceEntry(payload);
       await get().loadFinances();
+      get().loadDashboard();
     } catch (err) {
       console.error('Failed to create finance entry:', err);
       throw err;
@@ -312,6 +313,7 @@ export const useCEOLunaStore = create<CEOLunaState>((set, get) => ({
       const { updateFinanceEntry } = await import('./api/ceo');
       await updateFinanceEntry(id, payload);
       await get().loadFinances();
+      get().loadDashboard();
     } catch (err) {
       console.error('Failed to update finance entry:', err);
       throw err;
@@ -323,6 +325,7 @@ export const useCEOLunaStore = create<CEOLunaState>((set, get) => ({
       const { deleteFinanceEntry } = await import('./api/ceo');
       await deleteFinanceEntry(id);
       set({ financeEntries: get().financeEntries.filter((e) => e.id !== id) });
+      get().loadDashboard();
     } catch (err) {
       console.error('Failed to delete finance entry:', err);
       throw err;
