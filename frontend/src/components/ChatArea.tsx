@@ -184,7 +184,6 @@ function StandardChatArea() {
 
   const [localSystemBubbles, setLocalSystemBubbles] = useState<{ id: string; text: string }[]>([]);
   const [input, setInput] = useState('');
-  const [projectMode, setProjectMode] = useState(false);
   const [thinkingMode, setThinkingMode] = useState(false);
   const [novaMode, setNovaMode] = useState(false);
   const [verificationQuestion, setVerificationQuestion] = useState<AutonomousQuestion | null>(null);
@@ -389,8 +388,8 @@ function StandardChatArea() {
       let accumulatedContent = '';
       const skillContext = slash.activeSkill?.content;
       const streamFunction = files.length > 0
-        ? streamMessageWithFiles(sessionId, message, files, projectMode, thinkingMode, novaMode)
-        : streamMessage(sessionId, message, projectMode, thinkingMode, novaMode, undefined, undefined, undefined, skillContext);
+        ? streamMessageWithFiles(sessionId, message, files, false, thinkingMode, novaMode)
+        : streamMessage(sessionId, message, false, thinkingMode, novaMode, undefined, undefined, undefined, skillContext);
 
       for await (const chunk of streamFunction) {
         if (chunk.type === 'status' && chunk.status) {
@@ -900,7 +899,6 @@ function StandardChatArea() {
               </div>
             </div>
             <div className="flex items-center gap-2 mt-2 px-1">
-              <TogglePill label="Project" active={projectMode} onToggle={() => setProjectMode(!projectMode)} />
               <TogglePill
                 label="Thinking"
                 active={thinkingMode}

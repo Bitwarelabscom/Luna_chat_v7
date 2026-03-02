@@ -118,6 +118,11 @@ export function ModelSelector() {
     return () => document.removeEventListener('mousedown', handler);
   }, [isOpen]);
 
+  // Fetch models on mount so the display name is available immediately
+  useEffect(() => {
+    fetchModels();
+  }, []);
+
   return (
     <div className="relative" ref={dropdownRef}>
       <button
