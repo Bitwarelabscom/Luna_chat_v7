@@ -6,6 +6,7 @@ import type {
   CeoDashboard, RadarSignal, AutopostItem, ProductionSummary, GenreOption, ProposedGenre,
   OrgTask, WeeklyGoal, AbilityProposal, RecommendedAction, DepartmentSummary,
   FinanceEntry, FinanceCreatePayload, FinanceUpdatePayload,
+  CeoProposal, StaffSession, StaffMessage,
 } from './api/ceo';
 
 export interface CeoFileEntry {
@@ -14,7 +15,7 @@ export interface CeoFileEntry {
   folder: 'Documents' | 'Plans' | 'Week' | 'Other';
 }
 
-type ActiveTab = 'viewer' | 'chat' | 'dashboard' | 'finances' | 'org' | 'radar' | 'autopost' | 'builds' | 'log' | 'albums';
+type ActiveTab = 'viewer' | 'chat' | 'dashboard' | 'finances' | 'org' | 'staff' | 'radar' | 'autopost' | 'builds' | 'log' | 'albums';
 
 interface CEOLunaState {
   // Session
@@ -102,6 +103,27 @@ interface CEOLunaState {
   updateOrgAction: (id: string, status: 'dismissed' | 'done') => Promise<void>;
   approveOrgProposal: (id: string) => Promise<void>;
   rejectOrgProposal: (id: string) => Promise<void>;
+
+  // Proposals
+  ceoProposals: CeoProposal[];
+  pendingProposalCount: number;
+  isLoadingProposals: boolean;
+  loadCeoProposals: () => Promise<void>;
+  loadProposalCount: () => Promise<void>;
+  approveCeoProposal: (id: string) => Promise<void>;
+  rejectCeoProposal: (id: string) => Promise<void>;
+  batchDecideProposals: (action: 'approve' | 'reject') => Promise<void>;
+
+  // Staff Chat
+  staffSessions: Record<string, StaffSession | null>;
+  staffMessages: Record<string, StaffMessage[]>;
+  staffActiveTab: 'economy' | 'marketing' | 'development' | 'research' | 'meeting';
+  isStaffSending: boolean;
+  setStaffActiveTab: (tab: 'economy' | 'marketing' | 'development' | 'research' | 'meeting') => void;
+  loadStaffSession: (dept: string) => Promise<void>;
+  sendStaffMessage: (sessionId: string, message: string) => Promise<void>;
+  sendMeetingMessage: (sessionId: string, message: string) => Promise<void>;
+  clearStaffSession: (sessionId: string) => Promise<void>;
 }
 
 function classifyFolder(path: string): CeoFileEntry['folder'] {
@@ -151,6 +173,17 @@ export const useCEOLunaStore = create<CEOLunaState>((set, get) => ({
   artists: [],
   isLoadingProductions: false,
   isLoadingGenres: false,
+
+  // Proposals
+  ceoProposals: [],
+  pendingProposalCount: 0,
+  isLoadingProposals: false,
+
+  // Staff Chat
+  staffSessions: {},
+  staffMessages: {},
+  staffActiveTab: 'economy',
+  isStaffSending: false,
 
   setSessionId: (id) => set({ sessionId: id }),
 
@@ -446,6 +479,184 @@ export const useCEOLunaStore = create<CEOLunaState>((set, get) => ({
       set({ orgProposals: get().orgProposals.filter((p) => p.id !== id) });
     } catch (err) {
       console.error('Failed to reject proposal:', err);
+    }
+  },
+
+  // ============================================================
+  // CEO Proposals
+  // ============================================================
+
+  loadCeoProposals: async () => {
+    set({ isLoadingProposals: true });
+    try {
+      const { fetchCeoProposals } = await import('./api/ceo');
+      const { proposals } = await fetchCeoProposals('pending');
+      set({ ceoProposals: proposals });
+    } catch (err) {
+      console.error('Failed to load proposals:', err);
+    } finally {
+      set({ isLoadingProposals: false });
+    }
+  },
+
+  loadProposalCount: async () => {
+    try {
+      const { fetchProposalCount } = await import('./api/ceo');
+      const { count } = await fetchProposalCount();
+      set({ pendingProposalCount: count });
+    } catch (err) {
+      console.error('Failed to load proposal count:', err);
+    }
+  },
+
+  approveCeoProposal: async (id) => {
+    try {
+      const { approveCeoProposal: apiApprove } = await import('./api/ceo');
+      await apiApprove(id);
+      set({
+        ceoProposals: get().ceoProposals.filter((p) => p.id !== id),
+        pendingProposalCount: Math.max(0, get().pendingProposalCount - 1),
+      });
+    } catch (err) {
+      console.error('Failed to approve proposal:', err);
+    }
+  },
+
+  rejectCeoProposal: async (id) => {
+    try {
+      const { rejectCeoProposal: apiReject } = await import('./api/ceo');
+      await apiReject(id);
+      set({
+        ceoProposals: get().ceoProposals.filter((p) => p.id !== id),
+        pendingProposalCount: Math.max(0, get().pendingProposalCount - 1),
+      });
+    } catch (err) {
+      console.error('Failed to reject proposal:', err);
+    }
+  },
+
+  batchDecideProposals: async (action) => {
+    try {
+      const { batchDecideProposals: apiBatch } = await import('./api/ceo');
+      const decisions = get().ceoProposals.map((p) => ({ id: p.id, action }));
+      await apiBatch(decisions);
+      set({ ceoProposals: [], pendingProposalCount: 0 });
+    } catch (err) {
+      console.error('Failed to batch decide proposals:', err);
+    }
+  },
+
+  // ============================================================
+  // Staff Chat
+  // ============================================================
+
+  setStaffActiveTab: (tab) => set({ staffActiveTab: tab }),
+
+  loadStaffSession: async (dept) => {
+    try {
+      const { fetchStaffSession, fetchStaffMessages } = await import('./api/ceo');
+      const { session } = await fetchStaffSession(dept);
+      set((state) => ({
+        staffSessions: { ...state.staffSessions, [dept]: session },
+      }));
+      // Load messages
+      const { messages } = await fetchStaffMessages(session.id);
+      set((state) => ({
+        staffMessages: { ...state.staffMessages, [session.id]: messages },
+      }));
+    } catch (err) {
+      console.error('Failed to load staff session:', err);
+    }
+  },
+
+  sendStaffMessage: async (sessionId, message) => {
+    set({ isStaffSending: true });
+    try {
+      // Optimistic: add user message
+      const userMsg: StaffMessage = {
+        id: `temp-${Date.now()}`,
+        sessionId,
+        role: 'user',
+        departmentSlug: null,
+        content: message,
+        createdAt: new Date().toISOString(),
+      };
+      set((state) => ({
+        staffMessages: {
+          ...state.staffMessages,
+          [sessionId]: [...(state.staffMessages[sessionId] || []), userMsg],
+        },
+      }));
+
+      const { sendStaffMessage: apiSend } = await import('./api/ceo');
+      const { message: assistantMsg } = await apiSend(sessionId, message);
+
+      // Replace temp user msg and add assistant response
+      set((state) => {
+        const msgs = (state.staffMessages[sessionId] || []).filter((m) => m.id !== userMsg.id);
+        // Reload from server to get the real user message + response
+        return {
+          staffMessages: {
+            ...state.staffMessages,
+            [sessionId]: [...msgs, { ...userMsg, id: `u-${Date.now()}` }, assistantMsg],
+          },
+        };
+      });
+    } catch (err) {
+      console.error('Failed to send staff message:', err);
+    } finally {
+      set({ isStaffSending: false });
+    }
+  },
+
+  sendMeetingMessage: async (sessionId, message) => {
+    set({ isStaffSending: true });
+    try {
+      // Optimistic: add user message
+      const userMsg: StaffMessage = {
+        id: `temp-${Date.now()}`,
+        sessionId,
+        role: 'user',
+        departmentSlug: null,
+        content: message,
+        createdAt: new Date().toISOString(),
+      };
+      set((state) => ({
+        staffMessages: {
+          ...state.staffMessages,
+          [sessionId]: [...(state.staffMessages[sessionId] || []), userMsg],
+        },
+      }));
+
+      const { sendMeetingMessage: apiSend } = await import('./api/ceo');
+      const { messages: newMsgs } = await apiSend(sessionId, message);
+
+      // Add all returned messages
+      set((state) => {
+        const msgs = (state.staffMessages[sessionId] || []).filter((m) => m.id !== userMsg.id);
+        return {
+          staffMessages: {
+            ...state.staffMessages,
+            [sessionId]: [...msgs, { ...userMsg, id: `u-${Date.now()}` }, ...newMsgs],
+          },
+        };
+      });
+    } catch (err) {
+      console.error('Failed to send meeting message:', err);
+    } finally {
+      set({ isStaffSending: false });
+    }
+  },
+
+  clearStaffSession: async (sessionId) => {
+    try {
+      const { clearStaffChat } = await import('./api/ceo');
+      await clearStaffChat(sessionId);
+      set((state) => ({
+        staffMessages: { ...state.staffMessages, [sessionId]: [] },
+      }));
+    } catch (err) {
+      console.error('Failed to clear staff session:', err);
     }
   },
 

@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Loader2, Play, CheckCircle, XCircle, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
+import { Loader2, Play, CheckCircle, XCircle, AlertTriangle, ChevronDown, ChevronUp, CheckCheck, X } from 'lucide-react';
 import { useCEOLunaStore } from '@/lib/ceo-luna-store';
-import type { OrgTask, DepartmentSlug } from '@/lib/api/ceo';
+import type { OrgTask, DepartmentSlug, CeoProposal } from '@/lib/api/ceo';
 
 const DEPT_FILTERS: Array<{ id: string; label: string }> = [
   { id: 'all', label: 'All' },
@@ -28,17 +28,34 @@ const STATUS_BADGES: Record<string, { bg: string; text: string }> = {
   rejected: { bg: 'bg-red-900/40', text: 'text-red-400' },
 };
 
+const URGENCY_STYLES: Record<string, { bg: string; text: string; label: string }> = {
+  p1: { bg: 'bg-red-900/50', text: 'text-red-400', label: 'P1' },
+  p2: { bg: 'bg-orange-900/50', text: 'text-orange-400', label: 'P2' },
+  normal: { bg: 'bg-gray-800', text: 'text-gray-400', label: 'Normal' },
+};
+
+const TYPE_LABELS: Record<string, string> = {
+  weekly_plan: 'Weekly Plan',
+  task: 'Task',
+  goal: 'Goal',
+  action: 'Action',
+  department_task: 'Dept Task',
+};
+
 export function OrgPanel() {
   const {
     orgDepartments, orgTasks, orgGoals, orgProposals, orgActions,
     isLoadingOrg, orgDeptFilter, loadOrgOverview, setOrgDeptFilter,
     approveOrgTask, rejectOrgTask: rejectTask,
     updateOrgAction, approveOrgProposal, rejectOrgProposal,
+    ceoProposals, isLoadingProposals, loadCeoProposals,
+    approveCeoProposal, rejectCeoProposal, batchDecideProposals,
   } = useCEOLunaStore();
 
   const [isRunningWeekly, setIsRunningWeekly] = useState(false);
   const [isRunningDaily, setIsRunningDaily] = useState(false);
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
+    pendingProposals: true,
     goals: true,
     departments: true,
     approval: true,
@@ -49,6 +66,7 @@ export function OrgPanel() {
 
   useEffect(() => {
     loadOrgOverview();
+    loadCeoProposals();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orgDeptFilter]);
 
@@ -126,7 +144,7 @@ export function OrgPanel() {
           className="flex items-center gap-1 px-2.5 py-1 text-xs rounded bg-indigo-900/50 text-indigo-300 hover:bg-indigo-800/60 disabled:opacity-50"
         >
           {isRunningWeekly ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
-          Run Weekly
+          Propose Weekly
         </button>
         <button
           onClick={handleRunDaily}
@@ -146,6 +164,49 @@ export function OrgPanel() {
           </div>
         ) : (
           <>
+            {/* Pending Proposals */}
+            {(ceoProposals.length > 0 || isLoadingProposals) && (
+              <div>
+                <SectionHeader label="Pending Proposals" sectionKey="pendingProposals" count={ceoProposals.length} />
+                {expandedSections.pendingProposals && (
+                  <div className="mt-2 space-y-2">
+                    {isLoadingProposals ? (
+                      <div className="flex items-center text-gray-500 text-xs py-2">
+                        <Loader2 size={12} className="animate-spin mr-2" /> Loading proposals...
+                      </div>
+                    ) : (
+                      <>
+                        {ceoProposals.length > 1 && (
+                          <div className="flex gap-2 mb-2">
+                            <button
+                              onClick={() => batchDecideProposals('approve')}
+                              className="flex items-center gap-1 px-2.5 py-1 text-xs rounded bg-emerald-900/50 text-emerald-300 hover:bg-emerald-800/60"
+                            >
+                              <CheckCheck size={12} /> Approve All ({ceoProposals.length})
+                            </button>
+                            <button
+                              onClick={() => batchDecideProposals('reject')}
+                              className="flex items-center gap-1 px-2.5 py-1 text-xs rounded bg-red-900/50 text-red-300 hover:bg-red-800/60"
+                            >
+                              <X size={12} /> Reject All
+                            </button>
+                          </div>
+                        )}
+                        {ceoProposals.map((proposal) => (
+                          <ProposalCard
+                            key={proposal.id}
+                            proposal={proposal}
+                            onApprove={() => approveCeoProposal(proposal.id)}
+                            onReject={() => rejectCeoProposal(proposal.id)}
+                          />
+                        ))}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Weekly Goals */}
             <div>
               <SectionHeader label="Weekly Goals" sectionKey="goals" count={orgGoals.length} />
@@ -394,6 +455,63 @@ function TaskRow({ task }: { task: OrgTask }) {
       <span className="text-gray-300 truncate flex-1">{task.title}</span>
       <span className="text-gray-500 shrink-0">P{task.priority}</span>
       {task.source !== 'manual' && <span className="text-gray-600 shrink-0">{task.source}</span>}
+    </div>
+  );
+}
+
+function ProposalCard({
+  proposal,
+  onApprove,
+  onReject,
+}: {
+  proposal: CeoProposal;
+  onApprove: () => void;
+  onReject: () => void;
+}) {
+  const deptColors = proposal.departmentSlug
+    ? DEPT_COLORS[proposal.departmentSlug as DepartmentSlug]
+    : null;
+  const urgencyStyle = URGENCY_STYLES[proposal.urgency] || URGENCY_STYLES.normal;
+  const typeLabel = TYPE_LABELS[proposal.proposalType] || proposal.proposalType;
+
+  return (
+    <div className={`p-3 rounded border ${
+      proposal.urgency === 'p1' ? 'border-red-700 bg-red-950/20' :
+      proposal.urgency === 'p2' ? 'border-orange-700 bg-orange-950/20' :
+      'border-gray-700 bg-gray-900'
+    }`}>
+      <div className="flex items-center gap-2 mb-1 flex-wrap">
+        <span className={`text-xs px-1.5 py-0.5 rounded ${urgencyStyle.bg} ${urgencyStyle.text} font-medium`}>
+          {urgencyStyle.label}
+        </span>
+        <span className="text-xs px-1.5 py-0.5 rounded bg-indigo-900/40 text-indigo-400">
+          {typeLabel}
+        </span>
+        {deptColors && (
+          <span className={`text-xs px-1.5 py-0.5 rounded ${deptColors.bg} ${deptColors.text}`}>
+            {proposal.departmentSlug}
+          </span>
+        )}
+        <span className="text-xs text-gray-500 ml-auto">P{proposal.priority}</span>
+      </div>
+      <p className="text-sm text-gray-200 font-medium">{proposal.title}</p>
+      {proposal.description && (
+        <p className="text-xs text-gray-400 mt-1 line-clamp-3">{proposal.description}</p>
+      )}
+      <div className="flex gap-2 mt-2">
+        <button
+          onClick={onApprove}
+          className="flex items-center gap-1 px-2.5 py-1 text-xs rounded bg-emerald-900/50 text-emerald-300 hover:bg-emerald-800/60"
+        >
+          <CheckCircle size={12} /> Approve
+        </button>
+        <button
+          onClick={onReject}
+          className="flex items-center gap-1 px-2.5 py-1 text-xs rounded bg-red-900/50 text-red-300 hover:bg-red-800/60"
+        >
+          <XCircle size={12} /> Reject
+        </button>
+      </div>
     </div>
   );
 }

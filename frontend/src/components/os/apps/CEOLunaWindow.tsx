@@ -14,6 +14,7 @@ import { BuildsPanel } from '@/components/ceo-luna/BuildsPanel';
 import { AlbumCreatorTab } from '@/components/ceo-luna/AlbumCreatorTab';
 import { OrgPanel } from '@/components/ceo-luna/OrgPanel';
 import { FinancesPanel } from '@/components/ceo-luna/FinancesPanel';
+import { StaffPanel } from '@/components/ceo-luna/StaffPanel';
 
 const TABS = [
   { id: 'viewer' as const, label: 'Viewer' },
@@ -21,6 +22,7 @@ const TABS = [
   { id: 'dashboard' as const, label: 'Dashboard' },
   { id: 'finances' as const, label: 'Finances' },
   { id: 'org' as const, label: 'Org' },
+  { id: 'staff' as const, label: 'Staff' },
   { id: 'albums' as const, label: 'Albums' },
   { id: 'radar' as const, label: 'Radar' },
   { id: 'autopost' as const, label: 'Autopost' },
@@ -31,15 +33,16 @@ const TABS = [
 type Tab = typeof TABS[number]['id'];
 
 export default function CEOLunaWindow() {
-  const { activeTab, setActiveTab, loadFileTree } = useCEOLunaStore();
+  const { activeTab, setActiveTab, loadFileTree, pendingProposalCount, loadProposalCount } = useCEOLunaStore();
   const initialized = useRef(false);
 
   useEffect(() => {
     if (!initialized.current) {
       initialized.current = true;
       loadFileTree();
+      loadProposalCount();
     }
-  }, [loadFileTree]);
+  }, [loadFileTree, loadProposalCount]);
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-gray-950">
@@ -61,13 +64,18 @@ export default function CEOLunaWindow() {
               <button
                 key={id}
                 onClick={() => setActiveTab(id as Tab)}
-                className={`shrink-0 px-3 py-1 text-sm rounded transition-colors ${
+                className={`shrink-0 px-3 py-1 text-sm rounded transition-colors relative ${
                   activeTab === id
                     ? 'bg-slate-700 text-white'
                     : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
                 }`}
               >
                 {label}
+                {id === 'org' && pendingProposalCount > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-[16px] h-4 flex items-center justify-center px-1 text-[10px] font-bold rounded-full bg-red-500 text-white">
+                    {pendingProposalCount > 99 ? '99+' : pendingProposalCount}
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -79,6 +87,7 @@ export default function CEOLunaWindow() {
             {activeTab === 'dashboard' && <DashboardPanel />}
             {activeTab === 'finances' && <FinancesPanel />}
             {activeTab === 'org' && <OrgPanel />}
+            {activeTab === 'staff' && <StaffPanel />}
             {activeTab === 'albums' && <AlbumCreatorTab />}
             {activeTab === 'radar' && <RadarPanel />}
             {activeTab === 'autopost' && <AutopostPanel />}

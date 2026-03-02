@@ -227,6 +227,12 @@ SPECIALISTS:
 - Use analyst for numbers, forecasts, and KPI interpretation.
 - Use planner for concrete execution sequencing.
 
+PROPOSAL PROTOCOL (mandatory):
+- Never create tasks, goals, or action items without proposing them first.
+- Present plans clearly with: what, which department(s), risk, expected outcome.
+- Always end proposals by asking for approval before proceeding.
+- If the user approves, confirm and execute. If rejected, ask for direction.
+
 TOOLS:
 - Use ceo_note_build when responding to a [Build Check-in] message. Summarize the user's reply as a concise progress note (max 200 chars) and save it via the tool. The build_id is provided in the check-in context.`;
 

@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { authenticate } from '../auth/auth.middleware.js';
 import * as ceoService from './ceo.service.js';
 import * as ceoOrg from './ceo-org.service.js';
+import * as ceoProposals from './ceo-proposals.service.js';
+import * as staffChat from './staff-chat.service.js';
 import * as buildTracker from './build-tracker.service.js';
 import * as albumPipeline from './album-pipeline.service.js';
 import * as musicTrendScraper from './music-trend-scraper.service.js';
@@ -1314,6 +1316,153 @@ router.delete('/finances/:id', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to delete finance entry', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to delete finance entry' });
+  }
+});
+
+// ============================================================
+// Proposals
+// ============================================================
+
+router.get('/proposals', async (req: Request, res: Response) => {
+  try {
+    const userId = (req as Request & { user?: { userId: string } }).user?.userId;
+    if (!userId) { res.status(401).json({ error: 'Unauthorized' }); return; }
+
+    const status = req.query.status as string | undefined;
+    const urgency = req.query.urgency as string | undefined;
+    const type = req.query.type as string | undefined;
+    const proposals = await ceoProposals.listProposals(userId, { status, urgency, type });
+    res.json({ proposals });
+  } catch (error) {
+    logger.error('Failed to list proposals', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to list proposals' });
+  }
+});
+
+router.get('/proposals/count', async (req: Request, res: Response) => {
+  try {
+    const userId = (req as Request & { user?: { userId: string } }).user?.userId;
+    if (!userId) { res.status(401).json({ error: 'Unauthorized' }); return; }
+
+    const count = await ceoProposals.getProposalCount(userId);
+    res.json({ count });
+  } catch (error) {
+    logger.error('Failed to get proposal count', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get proposal count' });
+  }
+});
+
+router.post('/proposals/:id/approve', async (req: Request, res: Response) => {
+  try {
+    const userId = (req as Request & { user?: { userId: string } }).user?.userId;
+    if (!userId) { res.status(401).json({ error: 'Unauthorized' }); return; }
+
+    const proposal = await ceoProposals.approveProposal(userId, req.params.id);
+    if (!proposal) { res.status(404).json({ error: 'Proposal not found or already decided' }); return; }
+    res.json({ proposal });
+  } catch (error) {
+    logger.error('Failed to approve proposal', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to approve proposal' });
+  }
+});
+
+router.post('/proposals/:id/reject', async (req: Request, res: Response) => {
+  try {
+    const userId = (req as Request & { user?: { userId: string } }).user?.userId;
+    if (!userId) { res.status(401).json({ error: 'Unauthorized' }); return; }
+
+    const ok = await ceoProposals.rejectProposal(userId, req.params.id);
+    if (!ok) { res.status(404).json({ error: 'Proposal not found or already decided' }); return; }
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Failed to reject proposal', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to reject proposal' });
+  }
+});
+
+router.post('/proposals/batch', async (req: Request, res: Response) => {
+  try {
+    const userId = (req as Request & { user?: { userId: string } }).user?.userId;
+    if (!userId) { res.status(401).json({ error: 'Unauthorized' }); return; }
+
+    const { decisions } = req.body as { decisions: Array<{ id: string; action: 'approve' | 'reject' }> };
+    if (!Array.isArray(decisions)) { res.status(400).json({ error: 'decisions array required' }); return; }
+
+    const result = await ceoProposals.batchDecide(userId, decisions);
+    res.json(result);
+  } catch (error) {
+    logger.error('Failed to batch decide proposals', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to batch decide proposals' });
+  }
+});
+
+// ============================================================
+// Staff Chat
+// ============================================================
+
+router.get('/staff/sessions/:dept', async (req: Request, res: Response) => {
+  try {
+    const userId = (req as Request & { user?: { userId: string } }).user?.userId;
+    if (!userId) { res.status(401).json({ error: 'Unauthorized' }); return; }
+
+    const session = await staffChat.getOrCreateStaffSession(userId, req.params.dept);
+    res.json({ session });
+  } catch (error) {
+    logger.error('Failed to get staff session', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get staff session' });
+  }
+});
+
+router.get('/staff/messages/:sessionId', async (req: Request, res: Response) => {
+  try {
+    const limit = parseInt(req.query.limit as string) || 50;
+    const messages = await staffChat.getStaffMessages(req.params.sessionId, limit);
+    res.json({ messages });
+  } catch (error) {
+    logger.error('Failed to get staff messages', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get staff messages' });
+  }
+});
+
+router.post('/staff/messages/:sessionId', async (req: Request, res: Response) => {
+  try {
+    const userId = (req as Request & { user?: { userId: string } }).user?.userId;
+    if (!userId) { res.status(401).json({ error: 'Unauthorized' }); return; }
+
+    const { message } = req.body as { message: string };
+    if (!message?.trim()) { res.status(400).json({ error: 'message required' }); return; }
+
+    const response = await staffChat.sendStaffMessage(userId, req.params.sessionId, message.trim());
+    res.json({ message: response });
+  } catch (error) {
+    logger.error('Failed to send staff message', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to send staff message' });
+  }
+});
+
+router.post('/staff/meeting/:sessionId', async (req: Request, res: Response) => {
+  try {
+    const userId = (req as Request & { user?: { userId: string } }).user?.userId;
+    if (!userId) { res.status(401).json({ error: 'Unauthorized' }); return; }
+
+    const { message } = req.body as { message: string };
+    if (!message?.trim()) { res.status(400).json({ error: 'message required' }); return; }
+
+    const messages = await staffChat.sendMeetingMessage(userId, req.params.sessionId, message.trim());
+    res.json({ messages });
+  } catch (error) {
+    logger.error('Failed to send meeting message', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to send meeting message' });
+  }
+});
+
+router.delete('/staff/sessions/:sessionId', async (req: Request, res: Response) => {
+  try {
+    await staffChat.clearStaffSession(req.params.sessionId);
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Failed to clear staff session', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to clear staff session' });
   }
 });
 

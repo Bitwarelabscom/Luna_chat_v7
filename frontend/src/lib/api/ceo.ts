@@ -570,3 +570,78 @@ export const triggerWeeklyPlan = () =>
 
 export const triggerDailyCheck = () =>
   api<{ success: boolean; executed: number; skipped: number }>('/api/ceo/org/run/daily-check', { method: 'POST' });
+
+// ============================================================
+// CEO Proposals
+// ============================================================
+
+export interface CeoProposal {
+  id: string;
+  userId: string;
+  proposalType: 'weekly_plan' | 'task' | 'goal' | 'action' | 'department_task';
+  title: string;
+  description: string | null;
+  departmentSlug: string | null;
+  priority: number;
+  urgency: 'p1' | 'p2' | 'normal';
+  status: 'pending' | 'approved' | 'rejected' | 'expired';
+  payload: Record<string, unknown>;
+  source: string;
+  sessionId: string | null;
+  telegramMessageId: number | null;
+  expiresAt: string | null;
+  decidedAt: string | null;
+  createdAt: string;
+}
+
+export const fetchCeoProposals = (status = 'pending') =>
+  api<{ proposals: CeoProposal[] }>(`/api/ceo/proposals?status=${status}`);
+
+export const fetchProposalCount = () =>
+  api<{ count: number }>('/api/ceo/proposals/count');
+
+export const approveCeoProposal = (id: string) =>
+  api<{ proposal: CeoProposal }>(`/api/ceo/proposals/${id}/approve`, { method: 'POST' });
+
+export const rejectCeoProposal = (id: string) =>
+  api<{ success: boolean }>(`/api/ceo/proposals/${id}/reject`, { method: 'POST' });
+
+export const batchDecideProposals = (decisions: Array<{ id: string; action: 'approve' | 'reject' }>) =>
+  api<{ approved: number; rejected: number }>('/api/ceo/proposals/batch', { method: 'POST', body: { decisions } });
+
+// ============================================================
+// Staff Chat
+// ============================================================
+
+export interface StaffSession {
+  id: string;
+  userId: string;
+  departmentSlug: string;
+  title: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StaffMessage {
+  id: string;
+  sessionId: string;
+  role: 'user' | 'assistant' | 'system';
+  departmentSlug: string | null;
+  content: string;
+  createdAt: string;
+}
+
+export const fetchStaffSession = (dept: string) =>
+  api<{ session: StaffSession }>(`/api/ceo/staff/sessions/${dept}`);
+
+export const fetchStaffMessages = (sessionId: string, limit = 50) =>
+  api<{ messages: StaffMessage[] }>(`/api/ceo/staff/messages/${sessionId}?limit=${limit}`);
+
+export const sendStaffMessage = (sessionId: string, message: string) =>
+  api<{ message: StaffMessage }>(`/api/ceo/staff/messages/${sessionId}`, { method: 'POST', body: { message } });
+
+export const sendMeetingMessage = (sessionId: string, message: string) =>
+  api<{ messages: StaffMessage[] }>(`/api/ceo/staff/meeting/${sessionId}`, { method: 'POST', body: { message } });
+
+export const clearStaffChat = (sessionId: string) =>
+  api<{ success: boolean }>(`/api/ceo/staff/sessions/${sessionId}`, { method: 'DELETE' });

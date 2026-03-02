@@ -33,6 +33,7 @@ import logger from '../utils/logger.js';
 import * as sunoService from '../abilities/suno-generator.service.js';
 import * as memorycoreGraphService from '../memory/memorycore-graph.service.js';
 import * as ceoOrgService from '../ceo/ceo-org.service.js';
+import * as ceoProposals from '../ceo/ceo-proposals.service.js';
 
 // ============================================
 // Job Definitions
@@ -392,6 +393,13 @@ const jobs: Job[] = [
     enabled: true,
     running: false,
     handler: runCeoOrgDailyCheck,
+  },
+  {
+    name: 'ceoProposalExpiry',
+    intervalMs: 24 * 60 * 60 * 1000, // Daily
+    enabled: true,
+    running: false,
+    handler: runCeoProposalExpiry,
   },
 ];
 
@@ -1802,6 +1810,17 @@ async function runCeoOrgDailyCheck(): Promise<void> {
     await ceoOrgService.runDailyCheckForAllUsers();
   } catch (error) {
     logger.error('CEO org daily check failed', { error: (error as Error).message });
+  }
+}
+
+/**
+ * CEO Proposals: expire stale proposals older than 7 days
+ */
+async function runCeoProposalExpiry(): Promise<void> {
+  try {
+    await ceoProposals.expireStaleProposals();
+  } catch (error) {
+    logger.error('CEO proposal expiry failed', { error: (error as Error).message });
   }
 }
 

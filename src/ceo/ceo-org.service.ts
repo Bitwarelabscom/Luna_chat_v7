@@ -4,6 +4,7 @@ import { createCompletion } from '../llm/router.js';
 import { getBackgroundFeatureModelConfig } from '../settings/background-llm-settings.service.js';
 import * as workspaceService from '../abilities/workspace.service.js';
 import { DEPARTMENTS, DEPARTMENT_MAP, type DepartmentSlug } from '../persona/luna.persona.js';
+import { createProposal } from './ceo-proposals.service.js';
 import type { ChatMessage } from '../llm/types.js';
 import logger from '../utils/logger.js';
 
@@ -475,75 +476,43 @@ Create 1 goal per department (4 total), 2-4 tasks per department, and 1-3 recomm
     return { goalsCreated: 0, tasksCreated: 0, actionsCreated: 0 };
   }
 
-  let goalsCreated = 0;
-  let tasksCreated = 0;
-  let actionsCreated = 0;
+  const goalsCount = (parsed.goals || []).filter(g => DEPARTMENT_MAP.has(g.department as DepartmentSlug)).length;
+  const tasksCount = (parsed.tasks || []).filter(t => DEPARTMENT_MAP.has(t.department as DepartmentSlug)).length;
+  const actionsCount = (parsed.actions || []).filter(a => DEPARTMENT_MAP.has(a.department as DepartmentSlug)).length;
 
-  // Insert goals
-  for (const g of parsed.goals || []) {
-    const dept = g.department as DepartmentSlug;
-    if (!DEPARTMENT_MAP.has(dept)) continue;
-    try {
-      await pool.query(
-        `INSERT INTO ceo_weekly_goals (user_id, week_label, department_slug, goal_text)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (user_id, week_label, department_slug) DO UPDATE SET goal_text = EXCLUDED.goal_text`,
-        [userId, weekLabel, dept, g.goal]
-      );
-      goalsCreated++;
-    } catch (err) {
-      logger.warn('Failed to insert weekly goal', { error: (err as Error).message });
-    }
-  }
-
-  // Insert tasks
-  for (const t of parsed.tasks || []) {
-    const dept = t.department as DepartmentSlug;
-    if (!DEPARTMENT_MAP.has(dept)) continue;
-    try {
-      await createTask(userId, {
-        departmentSlug: dept,
-        title: t.title,
-        description: t.description,
-        riskLevel: t.risk === 'high' ? 'high' : 'low',
-        priority: Math.min(10, Math.max(1, t.priority || 5)),
-        source: 'weekly_plan',
-        assignedBy: 'CEO Luna',
+  // Create a single proposal for the entire weekly plan
+  try {
+    await createProposal(userId, {
+      proposalType: 'weekly_plan',
+      title: `Weekly Plan ${weekLabel}`,
+      description: parsed.summary || `${goalsCount} goals, ${tasksCount} tasks, ${actionsCount} actions`,
+      urgency: 'p2',
+      priority: 8,
+      payload: {
         weekLabel,
-      });
-      tasksCreated++;
-    } catch (err) {
-      logger.warn('Failed to insert org task', { error: (err as Error).message });
-    }
+        goals: parsed.goals || [],
+        tasks: parsed.tasks || [],
+        actions: parsed.actions || [],
+        summary: parsed.summary || '',
+      },
+      source: 'weekly_plan',
+    });
+  } catch (err) {
+    logger.error('Failed to create weekly plan proposal', { error: (err as Error).message });
+    return { goalsCreated: 0, tasksCreated: 0, actionsCreated: 0 };
   }
 
-  // Insert recommended actions
-  for (const a of parsed.actions || []) {
-    const dept = a.department as DepartmentSlug;
-    if (!DEPARTMENT_MAP.has(dept)) continue;
-    try {
-      await pool.query(
-        `INSERT INTO ceo_recommended_actions (user_id, department_slug, title, description, priority, category)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [userId, dept, a.title, a.description, Math.min(10, Math.max(1, a.priority || 5)), a.category || null]
-      );
-      actionsCreated++;
-    } catch (err) {
-      logger.warn('Failed to insert recommended action', { error: (err as Error).message });
-    }
-  }
-
-  // Write summary to workspace
+  // Write summary to workspace for reference
   try {
     const summaryContent = [
-      `# Weekly Plan - ${weekLabel}`,
+      `# Weekly Plan (Proposed) - ${weekLabel}`,
       ``,
       parsed.summary || '',
       ``,
       `## Goals`,
       ...(parsed.goals || []).map((g) => `- **${g.department}**: ${g.goal}`),
       ``,
-      `## Tasks (${tasksCreated})`,
+      `## Tasks (${tasksCount})`,
       ...(parsed.tasks || []).map((t) => `- [${t.department}] ${t.title} (${t.risk} risk, P${t.priority})`),
       ``,
       `## Recommended Actions`,
@@ -555,20 +524,20 @@ Create 1 goal per department (4 total), 2-4 tasks per department, and 1-3 recomm
     logger.warn('Failed to write weekly plan file', { error: (err as Error).message });
   }
 
-  // Notify user
+  // Notify user that plan is proposed (not created)
   try {
     await enqueueCeoMessage(
       userId,
       'org_weekly_plan',
-      `Weekly plan created for ${weekLabel}: ${goalsCreated} goals, ${tasksCreated} tasks, ${actionsCreated} actions. Check the Org tab for details.`,
+      `Weekly plan proposed for ${weekLabel}: ${goalsCount} goals, ${tasksCount} tasks, ${actionsCount} actions. Review and approve in the Org tab.`,
       3
     );
   } catch (err) {
     logger.warn('Failed to enqueue weekly plan notification', { error: (err as Error).message });
   }
 
-  logger.info('Weekly planning completed', { userId, weekLabel, goalsCreated, tasksCreated, actionsCreated });
-  return { goalsCreated, tasksCreated, actionsCreated };
+  logger.info('Weekly planning proposed', { userId, weekLabel, goalsCount, tasksCount, actionsCount });
+  return { goalsCreated: goalsCount, tasksCreated: tasksCount, actionsCreated: actionsCount };
 }
 
 // ============================================================
@@ -606,7 +575,7 @@ export async function runDailyDepartmentCheck(userId: string): Promise<{ execute
       continue;
     }
 
-    // Get pending low-risk tasks for this department
+    // Get pending low-risk tasks for this department - create proposals instead of auto-executing
     const pendingResult = await pool.query(
       `SELECT * FROM ceo_org_tasks
        WHERE user_id = $1 AND department_slug = $2 AND status = 'pending' AND risk_level = 'low'
@@ -618,10 +587,27 @@ export async function runDailyDepartmentCheck(userId: string): Promise<{ execute
     for (const row of pendingResult.rows as Array<Record<string, unknown>>) {
       const task = mapTaskRow(row);
       try {
-        await executeDepartmentTask(userId, task);
+        const urgency = task.priority >= 9 ? 'p1' as const : task.priority >= 7 ? 'p2' as const : 'normal' as const;
+        await createProposal(userId, {
+          proposalType: 'department_task',
+          title: task.title,
+          description: task.description || undefined,
+          departmentSlug: task.departmentSlug,
+          priority: task.priority,
+          urgency,
+          payload: {
+            taskId: task.id,
+            departmentSlug: task.departmentSlug,
+            title: task.title,
+            description: task.description,
+            riskLevel: task.riskLevel,
+            priority: task.priority,
+          },
+          source: 'daily_check',
+        });
         executed++;
       } catch (err) {
-        logger.error('Failed to execute department task', {
+        logger.error('Failed to create proposal for department task', {
           taskId: task.id,
           department: dept.slug,
           error: (err as Error).message,

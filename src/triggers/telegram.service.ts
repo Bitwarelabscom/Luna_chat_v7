@@ -439,7 +439,7 @@ async function sendMessageWithButtons(
   text: string,
   buttons: Array<{ text: string; callback: string }>,
   columns: number = 2
-): Promise<boolean> {
+): Promise<{ success: boolean; messageId?: number }> {
   try {
     // Build inline keyboard rows
     const rows: Array<Array<{ text: string; callback_data: string }>> = [];
@@ -451,20 +451,20 @@ async function sendMessageWithButtons(
       rows.push(row);
     }
 
-    await telegramRequest('sendMessage', {
+    const result = await telegramRequest('sendMessage', {
       chat_id: chatId,
       text,
       reply_markup: {
         inline_keyboard: rows,
       },
-    });
-    return true;
+    }) as { message_id?: number } | undefined;
+    return { success: true, messageId: result?.message_id };
   } catch (error) {
     logger.error('Failed to send Telegram message with buttons', {
       chatId,
       error: (error as Error).message,
     });
-    return false;
+    return { success: false };
   }
 }
 
@@ -1294,6 +1294,12 @@ async function handleCallbackQuery(callback: NonNullable<TelegramUpdate['callbac
     return;
   }
 
+  // Handle CEO proposal approvals/rejections
+  if (data.startsWith('ceo:')) {
+    await handleCeoProposalCallback(callback.id, chatId, messageId, connection.userId, data);
+    return;
+  }
+
   // Handle actions - route through chat
   if (data.startsWith('act:')) {
     const actionMessages: Record<string, string> = {
@@ -1682,6 +1688,83 @@ function mapConnectionRow(row: Record<string, unknown>): TelegramConnection {
 }
 
 // ============================================
+// CEO Proposal Notification Support
+// ============================================
+
+/**
+ * Send a CEO proposal to Telegram with Approve/Reject buttons
+ */
+export async function sendProposalToTelegram(
+  userId: string,
+  proposal: { id: string; title: string; description: string | null; urgency: string }
+): Promise<number | null> {
+  const connection = await getTelegramConnection(userId);
+  if (!connection?.isActive || !connection.chatId) return null;
+
+  const urgencyLabel = proposal.urgency === 'p1' ? 'P1 - URGENT' : proposal.urgency === 'p2' ? 'P2 - Important' : 'Normal';
+  const text = `[CEO Luna - ${urgencyLabel}]\n\n${proposal.title}\n\n${proposal.description || ''}`.trim();
+
+  const buttons = [
+    { text: 'Approve', callback: `ceo:approve:${proposal.id}` },
+    { text: 'Reject', callback: `ceo:reject:${proposal.id}` },
+  ];
+
+  const result = await sendMessageWithButtons(connection.chatId, text, buttons, 2);
+  return result.messageId || null;
+}
+
+/**
+ * Handle CEO proposal callback actions from Telegram buttons
+ */
+async function handleCeoProposalCallback(
+  callbackId: string,
+  chatId: number,
+  messageId: number | undefined,
+  userId: string,
+  data: string
+): Promise<void> {
+  const parts = data.split(':');
+  const action = parts[1]; // 'approve' or 'reject'
+  const proposalId = parts[2];
+
+  if (!proposalId) {
+    await answerCallbackQuery(callbackId, 'Invalid proposal');
+    return;
+  }
+
+  try {
+    const { approveProposal, rejectProposal } = await import('../ceo/ceo-proposals.service.js');
+
+    if (action === 'approve') {
+      const proposal = await approveProposal(userId, proposalId);
+      if (!proposal) {
+        await answerCallbackQuery(callbackId, 'Proposal already decided');
+        return;
+      }
+      await answerCallbackQuery(callbackId, 'Approved!');
+      if (messageId) {
+        await editMessageButtons(chatId, messageId, `[CEO Luna - APPROVED]\n\n${proposal.title}\n\nApproved and executing.`, []);
+      }
+    } else if (action === 'reject') {
+      const ok = await rejectProposal(userId, proposalId);
+      if (!ok) {
+        await answerCallbackQuery(callbackId, 'Proposal already decided');
+        return;
+      }
+      await answerCallbackQuery(callbackId, 'Rejected');
+      if (messageId) {
+        await editMessageButtons(chatId, messageId, `[CEO Luna - REJECTED]\n\nProposal rejected.`, []);
+      }
+    } else {
+      await answerCallbackQuery(callbackId);
+    }
+  } catch (error) {
+    logger.error('CEO proposal callback failed', { proposalId, action, error: (error as Error).message });
+    await answerCallbackQuery(callbackId, 'Error processing request');
+  }
+}
+
+// ============================================
 // Trade Notification Support
 // ============================================
 
@@ -1693,7 +1776,8 @@ export async function sendTradeMessageWithButtons(
   text: string,
   buttons: Array<{ text: string; callback: string }>
 ): Promise<boolean> {
-  return sendMessageWithButtons(chatId, text, buttons, 2);
+  const result = await sendMessageWithButtons(chatId, text, buttons, 2);
+  return result.success;
 }
 
 /**
