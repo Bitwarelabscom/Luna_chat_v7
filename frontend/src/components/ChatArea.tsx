@@ -23,6 +23,7 @@ import { useWindowStore } from '@/lib/window-store';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { SlashCommandDropdown } from './shared/SlashCommandDropdown';
 import { ChatInputBadge } from './shared/ChatInputBadge';
+import { SaveToKnowledgeModal } from './SaveToKnowledgeModal';
 
 const VoiceChatArea = dynamic(() => import('./VoiceChatArea'), {
   ssr: false,
@@ -130,6 +131,9 @@ function StandardChatArea() {
   } = useChatStore();
 
   const thinkingPhrase = useThinkingMessage(isSending && !streamingContent, currentSession?.mode);
+
+  // Save to Knowledge modal state
+  const [saveToKnowledgeContent, setSaveToKnowledgeContent] = useState<string | null>(null);
 
   // Track background reflection status
   const activities = useActivityStore((state) => state.activities);
@@ -706,6 +710,7 @@ function StandardChatArea() {
                       onEdit={msg.role === 'user' ? (newContent) => handleEditMessage(msg.id, newContent) : undefined}
                       onRegenerate={msg.role === 'assistant' ? () => handleRegenerate(msg.id) : undefined}
                       onPlayAudio={msg.role === 'assistant' ? () => handlePlayAudio(msg.id, msg.content) : undefined}
+                      onSaveToKnowledge={msg.role === 'assistant' ? () => setSaveToKnowledgeContent(msg.content) : undefined}
                       isPlaying={audioPlayer.currentMessageId === msg.id && audioPlayer.isPlaying}
                       isLoadingAudio={audioPlayer.currentMessageId === msg.id && audioPlayer.isLoading}
                       disabled={isSending}
@@ -1004,6 +1009,13 @@ function StandardChatArea() {
             </div>
           </div>
         </div>
+      )}
+      {/* Save to Knowledge modal */}
+      {saveToKnowledgeContent !== null && (
+        <SaveToKnowledgeModal
+          content={saveToKnowledgeContent}
+          onClose={() => setSaveToKnowledgeContent(null)}
+        />
       )}
     </main>
   );

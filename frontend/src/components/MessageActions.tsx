@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Copy, Pencil, RefreshCw, Volume2, Check, X, Loader2 } from 'lucide-react';
+import { Copy, Pencil, RefreshCw, Volume2, Check, X, Loader2, BookmarkPlus } from 'lucide-react';
 import clsx from 'clsx';
 
 interface MessageActionsProps {
@@ -10,6 +10,7 @@ interface MessageActionsProps {
   onEdit?: (newContent: string) => void;
   onRegenerate?: () => void;
   onPlayAudio?: () => void;
+  onSaveToKnowledge?: () => void;
   isPlaying?: boolean;
   isLoadingAudio?: boolean;
   disabled?: boolean;
@@ -21,6 +22,7 @@ export default function MessageActions({
   onEdit,
   onRegenerate,
   onPlayAudio,
+  onSaveToKnowledge,
   isPlaying = false,
   isLoadingAudio = false,
   disabled = false,
@@ -156,6 +158,22 @@ export default function MessageActions({
           ) : (
             <Volume2 className="w-4 h-4" />
           )}
+        </button>
+      )}
+
+      {/* Save to Knowledge - only for assistant messages */}
+      {role === 'assistant' && onSaveToKnowledge && (
+        <button
+          onClick={onSaveToKnowledge}
+          disabled={disabled}
+          className={clsx(
+            'p-1.5 rounded-md transition',
+            'text-theme-text-muted hover:text-theme-text-secondary hover:bg-theme-bg-tertiary',
+            'disabled:opacity-50 disabled:cursor-not-allowed'
+          )}
+          title="Save to Knowledge"
+        >
+          <BookmarkPlus className="w-4 h-4" />
         </button>
       )}
     </div>

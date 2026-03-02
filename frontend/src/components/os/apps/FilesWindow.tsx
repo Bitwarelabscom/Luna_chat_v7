@@ -1,10 +1,10 @@
 'use client';
 
-import { useEffect, useCallback, useRef } from 'react';
+import { useEffect, useCallback, useRef, useState } from 'react';
 import {
-  Upload, RefreshCw, Plus, FolderPlus, X, Edit3, FileBox
+  Upload, RefreshCw, Plus, FolderPlus, X, Edit3, FileBox, Search, Calendar, FilePlus2
 } from 'lucide-react';
-import { workspaceApi, documentsApi, uploadWorkspaceFile, editorBridgeApi, type Document } from '@/lib/api';
+import { workspaceApi, documentsApi, uploadWorkspaceFile, editorBridgeApi, type Document, type SearchResult } from '@/lib/api';
 import { useFilesStore, type FileTab, type TreeNode } from '@/lib/files-store';
 import { useWindowStore } from '@/lib/window-store';
 import FileTreeView from '@/components/files/FileTreeView';
@@ -46,10 +46,58 @@ export default function FilesWindow() {
   const dragCountRef = useRef(0);
   const uploadingRef = useRef(false);
 
+  // Search state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     store.loadFiles();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Debounced search
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setSearchResults([]);
+      setIsSearching(false);
+      return;
+    }
+    setIsSearching(true);
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    searchTimeoutRef.current = setTimeout(async () => {
+      try {
+        const results = await workspaceApi.search(searchQuery.trim());
+        setSearchResults(results);
+      } catch (err) {
+        console.error('Search failed:', err);
+        setSearchResults([]);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 300);
+    return () => {
+      if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    };
+  }, [searchQuery]);
+
+  const handleOpenDailyNote = useCallback(async () => {
+    try {
+      const result = await workspaceApi.getDailyNote();
+      const mapping = await editorBridgeApi.getWorkspaceMapping(result.filename);
+      setPendingEditorContext({
+        sourceType: 'workspace',
+        sourceId: result.filename,
+        documentId: mapping.documentId,
+        documentName: mapping.documentName,
+        initialContent: mapping.initialContent,
+      });
+      openApp('editor');
+    } catch (err) {
+      console.error('Failed to open daily note:', err);
+    }
+  }, [openApp, setPendingEditorContext]);
 
   // -- Handlers --
 
@@ -373,6 +421,18 @@ export default function FilesWindow() {
           <Upload className="w-3.5 h-3.5" />
           Upload
         </button>
+        {store.activeTab !== 'documents' && (
+          <button
+            onClick={handleOpenDailyNote}
+            className="flex items-center gap-1 px-2 py-1 text-xs rounded hover:bg-[var(--theme-bg-tertiary)] transition"
+            style={{ color: 'var(--theme-text-muted)' }}
+            title="Open today's daily note"
+          >
+            <Calendar className="w-3.5 h-3.5" />
+            Daily
+          </button>
+        )}
+
         <button
           onClick={() => store.loadFiles()}
           disabled={store.loading}
@@ -399,11 +459,82 @@ export default function FilesWindow() {
         />
       </div>
 
+      {/* Search bar */}
+      {store.activeTab !== 'documents' && (
+        <div
+          className="flex items-center gap-1.5 px-3 py-1.5 border-b"
+          style={{ borderColor: 'var(--theme-border-default)', background: 'var(--theme-bg-secondary)' }}
+        >
+          <Search className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--theme-text-muted)' }} />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search files..."
+            className="flex-1 bg-transparent text-xs outline-none"
+            style={{ color: 'var(--theme-text-primary)' }}
+          />
+          {searchQuery && (
+            <button onClick={() => setSearchQuery('')} className="p-0.5 rounded hover:bg-white/10">
+              <X className="w-3 h-3" style={{ color: 'var(--theme-text-muted)' }} />
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Content area */}
       <div className="flex-1 overflow-hidden relative">
         {store.loading ? (
           <div className="flex items-center justify-center h-full">
             <RefreshCw className="w-6 h-6 animate-spin" style={{ color: 'var(--theme-accent-primary)' }} />
+          </div>
+        ) : searchQuery.trim() ? (
+          // Search results
+          <div className="h-full overflow-auto p-2">
+            {isSearching ? (
+              <div className="flex items-center justify-center h-20">
+                <RefreshCw className="w-4 h-4 animate-spin" style={{ color: 'var(--theme-text-muted)' }} />
+              </div>
+            ) : searchResults.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-20" style={{ color: 'var(--theme-text-muted)' }}>
+                <p className="text-xs">No results found</p>
+              </div>
+            ) : (
+              <div className="space-y-1">
+                {searchResults.map((result, i) => (
+                  <button
+                    key={i}
+                    onClick={() => handleViewFile(result.filename)}
+                    onDoubleClick={() => handleOpenInEditor(result.filename)}
+                    className="w-full text-left p-2 rounded hover:bg-[var(--theme-bg-tertiary)] transition"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-medium truncate" style={{ color: 'var(--theme-accent-primary)' }}>
+                        {result.filename}
+                      </span>
+                      {result.matchType && (
+                        <span
+                          className="text-[9px] px-1 py-0.5 rounded shrink-0"
+                          style={{ background: 'var(--theme-bg-tertiary)', color: 'var(--theme-text-muted)' }}
+                        >
+                          {result.matchType}
+                        </span>
+                      )}
+                      <span className="text-[10px] shrink-0 ml-auto" style={{ color: 'var(--theme-text-muted)' }}>
+                        {(result.score * 100).toFixed(0)}%
+                      </span>
+                    </div>
+                    {result.snippet && (
+                      <p
+                        className="text-[10px] mt-0.5 line-clamp-2"
+                        style={{ color: 'var(--theme-text-muted)' }}
+                        dangerouslySetInnerHTML={{ __html: result.snippet }}
+                      />
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         ) : store.activeTab === 'documents' ? (
           // Documents tab - flat list

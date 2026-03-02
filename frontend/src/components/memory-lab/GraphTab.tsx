@@ -23,6 +23,15 @@ const ExplorerView = dynamic(() => import('./ExplorerView').then(m => ({ default
   ),
 });
 
+const NotesGraphView = dynamic(() => import('./NotesGraphView').then(m => ({ default: m.NotesGraphView })), {
+  ssr: false,
+  loading: () => (
+    <div className="h-full flex items-center justify-center" style={{ background: '#0f172a' }}>
+      <Loader2 className="w-6 h-6 animate-spin" style={{ color: 'var(--theme-accent-primary)' }} />
+    </div>
+  ),
+});
+
 export function GraphTab() {
   const {
     graphViewMode, setGraphViewMode,
@@ -71,6 +80,17 @@ export function GraphTab() {
           >
             Brain
           </button>
+          <button
+            onClick={() => setGraphViewMode('notes')}
+            className={`px-3 py-1 rounded-md text-xs font-medium transition ${
+              graphViewMode === 'notes' ? 'bg-white/10 shadow-sm' : 'hover:bg-white/5'
+            }`}
+            style={{
+              color: graphViewMode === 'notes' ? 'var(--theme-accent-primary)' : 'var(--theme-text-secondary)',
+            }}
+          >
+            Notes
+          </button>
         </div>
 
         <div className="flex items-center gap-3 text-[10px]" style={{ color: 'var(--theme-text-muted)' }}>
@@ -85,7 +105,7 @@ export function GraphTab() {
 
       {/* Graph view */}
       <div className="flex-1 overflow-hidden">
-        {graphViewMode === 'brain' ? <BrainView /> : <ExplorerView />}
+        {graphViewMode === 'notes' ? <NotesGraphView /> : graphViewMode === 'brain' ? <BrainView /> : <ExplorerView />}
       </div>
     </div>
   );

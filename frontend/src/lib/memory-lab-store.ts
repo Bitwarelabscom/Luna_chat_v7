@@ -3,14 +3,14 @@ import type { GraphNode, GraphEdge, SlimGraphEdge, GraphOverview, EmotionalPoint
 import type { UserFact, FactCorrection } from './api/friends';
 import type { ConsciousnessMetrics, ConsciousnessHistory, ConsolidationEvent } from './api/consciousness';
 
-type TabId = 'graph' | 'facts' | 'consciousness' | 'lnn';
+type TabId = 'graph' | 'facts' | 'consciousness' | 'lnn' | 'knowledge';
 
 interface MemoryLabState {
   activeTab: TabId;
   setActiveTab: (tab: TabId) => void;
 
   // Graph
-  graphViewMode: 'explorer' | 'brain';
+  graphViewMode: 'explorer' | 'brain' | 'notes';
   graphNodes: GraphNode[];
   graphEdges: GraphEdge[];
   graphOverview: GraphOverview | null;
@@ -50,7 +50,7 @@ interface MemoryLabState {
   activationTrace: ActivationTrace | null;
 
   // Actions
-  setGraphViewMode: (mode: 'explorer' | 'brain') => void;
+  setGraphViewMode: (mode: 'explorer' | 'brain' | 'notes') => void;
   loadFullGraph: () => Promise<void>;
   loadGraphOverview: () => Promise<void>;
   expandNode: (nodeId: string) => Promise<void>;

@@ -10,18 +10,21 @@ import {
   BookOpen,
   Activity,
   Radio,
+  Library,
 } from 'lucide-react';
 import { useMemoryLabStore } from '@/lib/memory-lab-store';
 import { GraphTab } from '@/components/memory-lab/GraphTab';
 import { FactsTab } from '@/components/memory-lab/FactsTab';
 import { ConsciousnessTab } from '@/components/memory-lab/ConsciousnessTab';
 import { LnnTab } from '@/components/memory-lab/LnnTab';
+import { KnowledgeTab } from '@/components/memory-lab/KnowledgeTab';
 
-type TabId = 'graph' | 'facts' | 'consciousness' | 'lnn';
+type TabId = 'graph' | 'facts' | 'consciousness' | 'lnn' | 'knowledge';
 
 const TABS: { id: TabId; label: string; icon: typeof Brain }[] = [
   { id: 'graph', label: 'Graph', icon: Network },
   { id: 'facts', label: 'Facts', icon: BookOpen },
+  { id: 'knowledge', label: 'Knowledge', icon: Library },
   { id: 'consciousness', label: 'Consciousness', icon: Activity },
   { id: 'lnn', label: 'LNN Live', icon: Radio },
 ];
@@ -62,6 +65,7 @@ export default function MemoryLabWindow() {
       case 'facts': return loadFacts();
       case 'consciousness': return loadConsciousness();
       case 'lnn': return loadLnnData();
+      case 'knowledge': return; // KnowledgeTab manages its own data
     }
   }, [activeTab, graphViewMode, loadGraphOverview, loadFullGraph, loadFacts, loadConsciousness, loadLnnData]);
 
@@ -166,6 +170,7 @@ export default function MemoryLabWindow() {
       <div className="flex-1 overflow-hidden">
         {activeTab === 'graph' && <GraphTab />}
         {activeTab === 'facts' && <FactsTab />}
+        {activeTab === 'knowledge' && <KnowledgeTab />}
         {activeTab === 'consciousness' && <ConsciousnessTab />}
         {activeTab === 'lnn' && <LnnTab />}
       </div>

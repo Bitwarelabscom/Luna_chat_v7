@@ -30,6 +30,60 @@ export interface FileInfo {
   accessedAt: string;
 }
 
+// PKM types
+export interface BacklinkResult {
+  sourceFile: string;
+  linkText: string;
+  snippet: string;
+}
+
+export interface ForwardLinkResult {
+  targetFile: string;
+  linkText: string;
+}
+
+export interface LinkSuggestion {
+  filename: string;
+}
+
+export interface SearchResult {
+  filename: string;
+  snippet: string;
+  score: number;
+  matchType?: 'keyword' | 'semantic' | 'both';
+}
+
+export interface DailyNoteResult {
+  filename: string;
+  content: string;
+  isNew: boolean;
+}
+
+export interface DailyNoteListItem {
+  filename: string;
+  date: string;
+  size: number;
+}
+
+export interface TemplateItem {
+  filename: string;
+  name: string;
+}
+
+export interface NoteGraphData {
+  nodes: Array<{
+    filename: string;
+    title: string;
+    linkCount: number;
+    lastModified: string;
+  }>;
+  edges: Array<{
+    source: string;
+    target: string;
+    linkText: string;
+  }>;
+}
+
 export const workspaceApi = {
   listFiles: () =>
     api<WorkspaceFile[]>('/api/abilities/workspace'),
@@ -69,6 +123,43 @@ export const workspaceApi = {
 
   listDirectories: () =>
     api<string[]>('/api/abilities/workspace/directories'),
+
+  // PKM: Backlinks & Links
+  getBacklinks: (filename: string) =>
+    api<BacklinkResult[]>(`/api/abilities/workspace/backlinks/${encodeURIComponent(filename)}`),
+
+  getForwardLinks: (filename: string) =>
+    api<ForwardLinkResult[]>(`/api/abilities/workspace/links/${encodeURIComponent(filename)}`),
+
+  linkSuggest: (query: string) =>
+    api<LinkSuggestion[]>(`/api/abilities/workspace/link-suggest?q=${encodeURIComponent(query)}`),
+
+  // PKM: Search
+  search: (query: string, mode: 'hybrid' | 'keyword' | 'semantic' = 'hybrid', limit = 20) =>
+    api<SearchResult[]>(`/api/abilities/workspace/search?q=${encodeURIComponent(query)}&mode=${mode}&limit=${limit}`),
+
+  // PKM: Daily Notes
+  getDailyNote: (date?: string) => {
+    const params = date ? `?date=${encodeURIComponent(date)}` : '';
+    return api<DailyNoteResult>(`/api/abilities/workspace/daily${params}`);
+  },
+
+  listDailyNotes: (limit = 30) =>
+    api<DailyNoteListItem[]>(`/api/abilities/workspace/daily/list?limit=${limit}`),
+
+  // PKM: Templates
+  getTemplates: () =>
+    api<TemplateItem[]>('/api/abilities/workspace/templates'),
+
+  createFromTemplate: (templateFilename: string, targetFilename: string) =>
+    api<{ filename: string; content: string }>('/api/abilities/workspace/templates/create', {
+      method: 'POST',
+      body: { templateFilename, targetFilename },
+    }),
+
+  // PKM: Note Graph
+  getNoteGraph: () =>
+    api<NoteGraphData>('/api/abilities/workspace/note-graph'),
 };
 
 // Upload workspace file using FormData

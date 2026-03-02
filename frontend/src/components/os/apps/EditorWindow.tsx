@@ -23,9 +23,15 @@ import {
   Save,
   Loader2,
   ArrowUpFromLine,
+  Link2,
+  ListTree,
 } from 'lucide-react';
 import { useWindowStore, type EditorFileContext } from '@/lib/window-store';
 import { editorBridgeApi } from '@/lib/api';
+import { workspaceApi, type BacklinkResult, type ForwardLinkResult } from '@/lib/api/workspace';
+import { WikilinkExtension } from '@/lib/tiptap/wikilink-extension';
+import { NoteEmbedExtension } from '@/lib/tiptap/note-embed-extension';
+import { OutlineExtension, type HeadingItem } from '@/lib/tiptap/outline-extension';
 
 interface EditorWindowProps {
   documentId?: string;
@@ -53,6 +59,16 @@ export function EditorWindow({
   const [title, setTitle] = useState(documentName);
   const [syncing, setSyncing] = useState(false);
   const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Panel state
+  const [showBacklinks, setShowBacklinks] = useState(false);
+  const [showOutline, setShowOutline] = useState(false);
+  const [backlinks, setBacklinks] = useState<BacklinkResult[]>([]);
+  const [forwardLinks, setForwardLinks] = useState<ForwardLinkResult[]>([]);
+  const [headings, setHeadings] = useState<HeadingItem[]>([]);
+
+  // Stable ref for the outline onUpdate callback to avoid useMemo dependency churn
+  const headingsCallbackRef = useRef<(h: HeadingItem[]) => void>((h) => setHeadings(h));
 
   // Create Y.js document
   const ydoc = useMemo(() => new Y.Doc(), []);
@@ -134,6 +150,22 @@ export function EditorWindow({
     };
   }, [provider]);
 
+  // Load backlinks and forward links when a file-backed document syncs
+  useEffect(() => {
+    if (!fileContext.current?.sourceId) return;
+    const filename = fileContext.current.sourceId.includes(':')
+      ? fileContext.current.sourceId.split(':').pop()!
+      : fileContext.current.sourceId;
+
+    Promise.all([
+      workspaceApi.getBacklinks(filename).catch(() => []),
+      workspaceApi.getForwardLinks(filename).catch(() => []),
+    ]).then(([bl, fl]) => {
+      setBacklinks(bl);
+      setForwardLinks(fl);
+    });
+  }, [isSynced]);
+
   // Build extensions - CollaborationCursor needs provider
   const extensions = useMemo(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -143,6 +175,27 @@ export function EditorWindow({
       }),
       Placeholder.configure({
         placeholder: 'Start writing...',
+      }),
+      WikilinkExtension.configure({
+        onLinkClick: (filename: string) => {
+          const { setPendingEditorContext, openApp } = useWindowStore.getState();
+          import('@/lib/api/workspace').then(({ editorBridgeApi: bridgeApi }) => {
+            bridgeApi.getWorkspaceMapping(filename).then(mapping => {
+              setPendingEditorContext({
+                documentId: mapping.documentId,
+                documentName: mapping.documentName,
+                sourceType: 'workspace',
+                sourceId: `workspace:${filename}`,
+                initialContent: mapping.initialContent,
+              });
+              openApp('editor');
+            }).catch(console.error);
+          });
+        },
+      }),
+      NoteEmbedExtension.configure({}),
+      OutlineExtension.configure({
+        onUpdate: (h: HeadingItem[]) => headingsCallbackRef.current(h),
       }),
       Collaboration.configure({
         document: ydoc,
@@ -387,6 +440,28 @@ export function EditorWindow({
           <Redo className="w-4 h-4" />
         </ToolbarButton>
 
+        <div className="w-px h-5 bg-white/10 mx-1" />
+
+        {/* Outline toggle */}
+        <ToolbarButton
+          onClick={() => setShowOutline(!showOutline)}
+          active={showOutline}
+          title="Table of Contents"
+        >
+          <ListTree className="w-4 h-4" />
+        </ToolbarButton>
+
+        {/* Backlinks toggle - only for file-backed documents */}
+        {fileContext.current && (
+          <ToolbarButton
+            onClick={() => setShowBacklinks(!showBacklinks)}
+            active={showBacklinks}
+            title="Backlinks"
+          >
+            <Link2 className="w-4 h-4" />
+          </ToolbarButton>
+        )}
+
         {/* Spacer */}
         <div className="flex-1" />
 
@@ -466,15 +541,136 @@ export function EditorWindow({
         </div>
       </div>
 
-      {/* Editor Content */}
-      <div
-        className="flex-1 overflow-auto"
-        style={{ background: 'var(--theme-bg-primary)' }}
-      >
-        <EditorContent
-          editor={editor}
-          className="h-full"
-        />
+      {/* Main content area */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Outline sidebar */}
+        {showOutline && (
+          <div
+            className="w-48 border-r overflow-auto shrink-0"
+            style={{ borderColor: 'var(--theme-border)', background: 'var(--theme-bg-secondary)' }}
+          >
+            <div className="p-2">
+              <p className="text-[10px] font-semibold uppercase tracking-wide mb-2" style={{ color: 'var(--theme-text-muted)' }}>
+                Outline
+              </p>
+              {headings.length === 0 ? (
+                <p className="text-xs" style={{ color: 'var(--theme-text-muted)' }}>No headings</p>
+              ) : (
+                <div className="space-y-0.5">
+                  {headings.map(h => (
+                    <button
+                      key={h.id}
+                      onClick={() => {
+                        if (editor) {
+                          editor.chain().focus().setTextSelection(h.pos).run();
+                          // Scroll to position
+                          const element = editor.view.domAtPos(h.pos);
+                          if (element.node instanceof HTMLElement) {
+                            element.node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                          }
+                        }
+                      }}
+                      className="block w-full text-left text-xs py-0.5 px-1 rounded truncate hover:bg-white/5 transition"
+                      style={{
+                        color: 'var(--theme-text-secondary)',
+                        paddingLeft: `${(h.level - 1) * 12 + 4}px`,
+                      }}
+                    >
+                      {h.text}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Editor */}
+        <div className="flex-1 overflow-auto" style={{ background: 'var(--theme-bg-primary)' }}>
+          <EditorContent editor={editor} className="h-full" />
+        </div>
+
+        {/* Backlinks sidebar */}
+        {showBacklinks && fileContext.current && (
+          <div
+            className="w-64 border-l overflow-auto shrink-0"
+            style={{ borderColor: 'var(--theme-border)', background: 'var(--theme-bg-secondary)' }}
+          >
+            <div className="p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wide mb-2" style={{ color: 'var(--theme-text-muted)' }}>
+                Backlinks ({backlinks.length})
+              </p>
+              {backlinks.length === 0 ? (
+                <p className="text-xs" style={{ color: 'var(--theme-text-muted)' }}>No backlinks</p>
+              ) : (
+                <div className="space-y-2">
+                  {backlinks.map((bl, i) => (
+                    <button
+                      key={i}
+                      onClick={() => {
+                        const { setPendingEditorContext, openApp } = useWindowStore.getState();
+                        import('@/lib/api/workspace').then(({ editorBridgeApi: bridgeApi }) => {
+                          bridgeApi.getWorkspaceMapping(bl.sourceFile).then(mapping => {
+                            setPendingEditorContext({
+                              documentId: mapping.documentId,
+                              documentName: mapping.documentName,
+                              sourceType: 'workspace',
+                              sourceId: `workspace:${bl.sourceFile}`,
+                              initialContent: mapping.initialContent,
+                            });
+                            openApp('editor');
+                          }).catch(console.error);
+                        });
+                      }}
+                      className="block w-full text-left p-2 rounded hover:bg-white/5 transition"
+                    >
+                      <span className="text-xs font-medium block truncate" style={{ color: 'var(--theme-accent-primary)' }}>
+                        {bl.sourceFile}
+                      </span>
+                      <span className="text-[10px] block mt-0.5 line-clamp-2" style={{ color: 'var(--theme-text-muted)' }}>
+                        {bl.snippet}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <p className="text-[10px] font-semibold uppercase tracking-wide mt-4 mb-2" style={{ color: 'var(--theme-text-muted)' }}>
+                Forward Links ({forwardLinks.length})
+              </p>
+              {forwardLinks.length === 0 ? (
+                <p className="text-xs" style={{ color: 'var(--theme-text-muted)' }}>No forward links</p>
+              ) : (
+                <div className="space-y-1">
+                  {forwardLinks.map((fl, i) => (
+                    <button
+                      key={i}
+                      onClick={() => {
+                        const { setPendingEditorContext, openApp } = useWindowStore.getState();
+                        import('@/lib/api/workspace').then(({ editorBridgeApi: bridgeApi }) => {
+                          bridgeApi.getWorkspaceMapping(fl.targetFile).then(mapping => {
+                            setPendingEditorContext({
+                              documentId: mapping.documentId,
+                              documentName: mapping.documentName,
+                              sourceType: 'workspace',
+                              sourceId: `workspace:${fl.targetFile}`,
+                              initialContent: mapping.initialContent,
+                            });
+                            openApp('editor');
+                          }).catch(console.error);
+                        });
+                      }}
+                      className="block w-full text-left px-2 py-1 rounded text-xs truncate hover:bg-white/5 transition"
+                      style={{ color: 'var(--theme-text-secondary)' }}
+                    >
+                      {fl.targetFile}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Editor Styles */}
@@ -571,6 +767,40 @@ export function EditorWindow({
           padding: 0.1rem 0.3rem;
           border-radius: 3px 3px 3px 0;
           white-space: nowrap;
+        }
+
+        /* Wikilink styles */
+        .wikilink-chip {
+          display: inline;
+          padding: 1px 6px;
+          border-radius: 4px;
+          background: rgba(0, 200, 255, 0.15);
+          color: var(--theme-accent-primary);
+          cursor: pointer;
+          font-size: 0.9em;
+        }
+        .wikilink-chip:hover {
+          background: rgba(0, 200, 255, 0.25);
+        }
+        .wikilink-inline {
+          color: var(--theme-accent-primary);
+          text-decoration: underline;
+          text-decoration-style: dotted;
+          cursor: pointer;
+        }
+
+        /* Note embed styles */
+        .note-embed-inline {
+          background: rgba(0, 200, 255, 0.08);
+          border-left: 2px solid var(--theme-accent-primary);
+          padding: 0 4px;
+        }
+        .note-embed-block {
+          border: 1px solid var(--theme-border);
+          border-radius: 6px;
+          padding: 8px 12px;
+          margin: 8px 0;
+          background: var(--theme-bg-secondary);
         }
       `}</style>
     </div>

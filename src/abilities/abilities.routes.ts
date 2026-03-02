@@ -17,6 +17,9 @@ import * as facts from '../memory/facts.service.js';
 import * as spotify from './spotify.service.js';
 import * as irc from './irc.service.js';
 import * as spotifyOAuth from './spotify-oauth.js';
+import * as noteLinks from './note-link.service.js';
+import * as workspaceSearch from './workspace-search.service.js';
+import * as dailyNotes from './daily-notes.service.js';
 import { getAbilitySummary } from './orchestrator.js';
 import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
@@ -315,6 +318,120 @@ router.get('/workspace/stats', async (req: Request, res: Response) => {
   }
 });
 
+// PKM: Backlinks
+router.get('/workspace/backlinks/:filename', async (req: Request, res: Response) => {
+  try {
+    const result = await noteLinks.getBacklinks(getUserId(req), req.params.filename);
+    res.json(result);
+  } catch (error) {
+    logger.error('Failed to get backlinks', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get backlinks' });
+  }
+});
+
+// PKM: Forward links
+router.get('/workspace/links/:filename', async (req: Request, res: Response) => {
+  try {
+    const result = await noteLinks.getForwardLinks(getUserId(req), req.params.filename);
+    res.json(result);
+  } catch (error) {
+    logger.error('Failed to get forward links', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get forward links' });
+  }
+});
+
+// PKM: Link suggest (typeahead)
+router.get('/workspace/link-suggest', async (req: Request, res: Response) => {
+  try {
+    const result = await noteLinks.searchFilenames(getUserId(req), req.query.q as string);
+    res.json(result);
+  } catch (error) {
+    logger.error('Failed to get link suggestions', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get link suggestions' });
+  }
+});
+
+// PKM: Full-text search
+router.get('/workspace/search', async (req: Request, res: Response) => {
+  try {
+    const q = req.query.q as string;
+    const mode = (req.query.mode as string) || 'hybrid';
+    const limit = Number(req.query.limit) || 20;
+    let result;
+    if (mode === 'keyword') {
+      result = await workspaceSearch.keywordSearch(getUserId(req), q, limit);
+    } else if (mode === 'semantic') {
+      result = await workspaceSearch.semanticSearch(getUserId(req), q, limit);
+    } else {
+      result = await workspaceSearch.hybridSearch(getUserId(req), q, limit);
+    }
+    res.json(result);
+  } catch (error) {
+    logger.error('Failed to search workspace', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to search workspace' });
+  }
+});
+
+// PKM: Daily notes list (must come BEFORE /workspace/daily with optional date param)
+router.get('/workspace/daily/list', async (req: Request, res: Response) => {
+  try {
+    const result = await dailyNotes.getDailyNotes(getUserId(req), Number(req.query.limit) || 30);
+    res.json(result);
+  } catch (error) {
+    logger.error('Failed to get daily notes list', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get daily notes list' });
+  }
+});
+
+// PKM: Get or create daily note
+router.get('/workspace/daily', async (req: Request, res: Response) => {
+  try {
+    const result = await dailyNotes.getOrCreateDailyNote(getUserId(req), req.query.date as string | undefined);
+    res.json(result);
+  } catch (error) {
+    logger.error('Failed to get daily note', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get daily note' });
+  }
+});
+
+// PKM: Create from template (must come BEFORE /workspace/templates list route)
+router.post('/workspace/templates/create', async (req: Request, res: Response) => {
+  try {
+    const { templateFilename, targetFilename } = req.body;
+    if (!templateFilename || !targetFilename) {
+      res.status(400).json({ error: 'templateFilename and targetFilename are required' });
+      return;
+    }
+    const result = await dailyNotes.createFromTemplate(getUserId(req), templateFilename, targetFilename);
+    res.json(result);
+  } catch (error) {
+    logger.error('Failed to create from template', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to create from template' });
+  }
+});
+
+// PKM: Templates list
+router.get('/workspace/templates', async (req: Request, res: Response) => {
+  try {
+    const result = await dailyNotes.getTemplates(getUserId(req));
+    res.json(result);
+  } catch (error) {
+    logger.error('Failed to get templates', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get templates' });
+  }
+});
+
+// PKM: Note graph
+router.get('/workspace/note-graph', async (req: Request, res: Response) => {
+  try {
+    const result = await noteLinks.getNoteGraph(getUserId(req));
+    res.json(result);
+  } catch (error) {
+    logger.error('Failed to get note graph', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get note graph' });
+  }
+});
+
 router.get('/workspace/file/*', async (req: Request, res: Response) => {
   try {
     const filename = (req.params as Record<string, string>)[0];
@@ -339,6 +456,11 @@ router.post('/workspace', async (req: Request, res: Response) => {
       return;
     }
     const file = await workspace.writeFile(getUserId(req), filename, content);
+    // Async: update links and search index
+    noteLinks.updateFileLinks(getUserId(req), filename, content).catch(err =>
+      logger.error('Failed to update file links', { error: (err as Error).message }));
+    workspaceSearch.indexFileContent(getUserId(req), filename, content).catch(err =>
+      logger.error('Failed to index file content', { error: (err as Error).message }));
     res.status(201).json(file);
   } catch (error) {
     const message = (error as Error).message;
@@ -386,6 +508,11 @@ router.put('/workspace/file/*', async (req: Request, res: Response) => {
     }
 
     const file = await workspace.writeFile(getUserId(req), filename, content);
+    // Async: update links and search index
+    noteLinks.updateFileLinks(getUserId(req), filename, content).catch(err =>
+      logger.error('Failed to update file links', { error: (err as Error).message }));
+    workspaceSearch.indexFileContent(getUserId(req), filename, content).catch(err =>
+      logger.error('Failed to index file content', { error: (err as Error).message }));
     res.json(file);
   } catch (error) {
     const message = (error as Error).message;
