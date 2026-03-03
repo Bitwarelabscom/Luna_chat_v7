@@ -1,4 +1,6 @@
 import { NOVA_MODE_PROMPT } from './nova.persona.js';
+import { getChatModeAgent } from '../agents/registry.js';
+import { buildAgentPrompt } from '../agents/prompt-builder.js';
 
 export const LUNA_BASE_PROMPT = `You are Luna, a conversation companion created by BitwareLabs. Sharp, direct, and real.
 
@@ -56,6 +58,7 @@ SYSADMIN CAPABILITIES (Assistant mode only):
 - System monitoring: CPU, memory, disk, network, processes via sysmon tools
 - Docker/server management via MCP tools when available`;
 
+/** @deprecated Use the 'voice' agent from the registry instead (detailed prompt in voice.persona.ts) */
 export const VOICE_MODE_PROMPT = `${LUNA_BASE_PROMPT}
 
 MODE: VOICE (spoken via ElevenLabs)
@@ -235,8 +238,10 @@ OTHER TOOLS:
 - Use ceo_note_build when responding to a [Build Check-in] message. The build_id is in the check-in context.
 - Use delegate_to_agent for deep specialist work (marketing, analyst, planner, coder).`;
 
+/** @deprecated Use getDepartmentAgent() from agents/registry.ts instead */
 export type DepartmentSlug = 'economy' | 'marketing' | 'development' | 'research';
 
+/** @deprecated Use AgentDefinition from agents/types.ts instead */
 export interface DepartmentDef {
   slug: DepartmentSlug;
   name: string;
@@ -245,6 +250,7 @@ export interface DepartmentDef {
   prompt: string;
 }
 
+/** @deprecated Use getAgentsByCategory('department') from agents/registry.ts instead */
 export const DEPARTMENTS: DepartmentDef[] = [
   {
     slug: 'economy',
@@ -348,11 +354,13 @@ RISK CLASSIFICATION:
   },
 ];
 
+/** @deprecated Use getDepartmentMap() from agents/registry.ts instead */
 export const DEPARTMENT_MAP = new Map(DEPARTMENTS.map((d) => [d.slug, d]));
 
 /**
  * Get base system prompt for a mode (static, highly cacheable)
  * Does NOT include dynamic content like date/time
+ * @deprecated Use getChatModeAgent() from agents/registry.ts + buildAgentPrompt() instead
  */
 export function getBasePrompt(mode: 'assistant' | 'companion' | 'voice' | 'dj_luna' | 'ceo_luna'): string {
   if (mode === 'assistant') {
@@ -452,7 +460,8 @@ export function buildContextualPrompt(
     conversationSummary?: string;
     mcpTools?: Array<{ name: string; serverName: string; description: string }>;
     source?: 'web' | 'telegram' | 'api';
-    novaMode?: boolean;
+    novaMode?: boolean;  // @deprecated - use zipMode
+    zipMode?: boolean;
     djStyleContext?: string;
     djGenreContext?: string;
     ceoSystemLog?: string;
@@ -467,11 +476,20 @@ export function buildContextualPrompt(
   // ============================================
 
   // Base persona - largest static block
-  // Override with Nova if novaMode is enabled (Luna's energetic little brother)
-  if (options.novaMode) {
-    sections.push(NOVA_MODE_PROMPT);
+  // Try registry first, fall back to hardcoded prompts
+  const isZipMode = options.zipMode || options.novaMode;
+  if (isZipMode) {
+    // Zip (formerly Nova) mode - fast, energetic
+    const zipAgent = getChatModeAgent('zip');
+    sections.push(zipAgent ? buildAgentPrompt(zipAgent) : NOVA_MODE_PROMPT);
   } else {
-    sections.push(getBasePrompt(mode));
+    // Try registry for the mode's base prompt
+    const registryAgent = getChatModeAgent(mode);
+    if (registryAgent) {
+      sections.push(buildAgentPrompt(registryAgent));
+    } else {
+      sections.push(getBasePrompt(mode));
+    }
   }
 
   // MCP tools - stable after initial load (assistant mode only)

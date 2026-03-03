@@ -37,6 +37,7 @@ export interface CompletionRequest {
 
 export interface CompletionResult {
   content: string;
+  thinking?: string;
   tokensUsed: number;
   model: string;
   provider: ProviderId;
@@ -79,25 +80,6 @@ export const PROVIDERS: LLMProvider[] = [
         capabilities: ['chat', 'code', 'analysis'],
         costPer1kInput: 0.00125,
         costPer1kOutput: 0.01,
-      },
-      // GPT-5 Series
-      {
-        id: 'gpt-5-mini',
-        name: 'GPT-5 Mini',
-        contextWindow: 1047576,
-        maxOutputTokens: 32768,
-        capabilities: ['chat', 'code', 'fast'],
-        costPer1kInput: 0.00025,
-        costPer1kOutput: 0.002,
-      },
-      {
-        id: 'gpt-5-nano',
-        name: 'GPT-5 Nano',
-        contextWindow: 1047576,
-        maxOutputTokens: 32768,
-        capabilities: ['chat', 'fast'],
-        costPer1kInput: 0.00005,
-        costPer1kOutput: 0.0004,
       },
       // GPT-4.1 Series
       {
@@ -766,6 +748,15 @@ export const PROVIDERS: LLMProvider[] = [
     name: 'Ollama (Remote 10.0.0.30)',
     enabled: true,
     models: [
+      {
+        id: 'qwen3:8b',
+        name: 'Qwen 3 8B',
+        contextWindow: 32768,
+        maxOutputTokens: 8192,
+        capabilities: ['chat', 'code', 'analysis'],
+        costPer1kInput: 0,
+        costPer1kOutput: 0,
+      },
       {
         id: 'qwen2.5:1.5b',
         name: 'Qwen 2.5 1.5B',

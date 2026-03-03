@@ -108,6 +108,7 @@ export interface ChatCompletionOptions {
   provider?: ProviderId;
   model?: string;
   reasoning?: boolean;  // For xAI Grok 4.1 Fast reasoning models
+  thinkingMode?: boolean;  // For Ollama models that support think: true (Qwen3, etc.)
   loggingContext?: LLMLoggingContext;  // Optional logging context for activity tracking
   response_format?: OpenAI.Chat.Completions.ChatCompletionCreateParams['response_format'];
 }
@@ -133,10 +134,16 @@ export async function createChatCompletion(
     provider = 'openai',
     model,
     reasoning,
+    thinkingMode,
     loggingContext,
     response_format,
   } = options;
-  const resolvedMaxTokens = maxTokens ?? (provider === 'ollama_tertiary' ? 8192 : 4096);
+  // When thinking mode is on for Ollama, increase max tokens since thinking consumes output tokens
+  const resolvedMaxTokens = maxTokens ?? (
+    provider === 'ollama_tertiary'
+      ? (thinkingMode ? 32768 : 8192)
+      : 4096
+  );
   const tertiaryNumCtx = config.ollamaTertiary?.numCtx ?? 65536;
 
   const modelToUse = model || config.openai.model;
@@ -294,14 +301,15 @@ export async function createChatCompletion(
         modelToUse,
         messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
         provider === 'ollama_tertiary'
-          ? { temperature, maxTokens: resolvedMaxTokens, numCtx: tertiaryNumCtx }
-          : { temperature, maxTokens: resolvedMaxTokens }
+          ? { temperature, maxTokens: resolvedMaxTokens, numCtx: tertiaryNumCtx, think: thinkingMode }
+          : { temperature, maxTokens: resolvedMaxTokens, think: thinkingMode }
       );
       const completionResult: ChatCompletionResult = {
         content: result.content,
+        reasoning: result.thinking,
         tokensUsed: result.tokensUsed,
-        promptTokens: 0,
-        completionTokens: 0,
+        promptTokens: result.inputTokens || 0,
+        completionTokens: result.outputTokens || 0,
         toolCalls: undefined,
         finishReason: 'stop',
       };
@@ -470,9 +478,23 @@ export async function createChatCompletion(
       );
     }
 
+    // Extract reasoning from provider-specific fields
+    let completionContent = choice.message.content || '';
+    let completionReasoning = (choice.message as any).reasoning_content || (choice.message as any).reasoning || (choice.message as any).thinking || '';
+
+    // Fallback: parse <think> tags from content (Ollama Qwen models without think: true)
+    const isOllama = provider === 'ollama' || provider === 'ollama_secondary' || provider === 'ollama_tertiary';
+    if (!completionReasoning && isOllama && completionContent.includes('<think>')) {
+      const thinkMatch = completionContent.match(/<think>([\s\S]*?)<\/think>/);
+      if (thinkMatch) {
+        completionReasoning = thinkMatch[1].trim();
+        completionContent = completionContent.replace(/<think>[\s\S]*?<\/think>\s*/, '').trim();
+      }
+    }
+
     const completionResult: ChatCompletionResult = {
-      content: choice.message.content || '',
-      reasoning: (choice.message as any).reasoning_content || (choice.message as any).reasoning,
+      content: completionContent,
+      reasoning: completionReasoning || undefined,
       tokensUsed: response.usage?.total_tokens || 0,
       promptTokens: response.usage?.prompt_tokens || 0,
       completionTokens: response.usage?.completion_tokens || 0,
@@ -499,17 +521,18 @@ export async function createChatCompletion(
 
     if (shouldFallbackFromOpenRouter) {
       logErrorActivity(errorMessage);
-      const fallbackModel = 'gpt-5-nano';
-      logger.warn('OpenRouter free model failed, falling back to OpenAI', {
+      const fallbackProvider = 'ollama_tertiary' as ProviderId;
+      const fallbackModel = 'qwen3:8b';
+      logger.warn('OpenRouter free model failed, falling back to ollama_tertiary', {
         fromProvider: provider,
         fromModel: modelToUse,
-        toProvider: 'openai',
+        toProvider: fallbackProvider,
         toModel: fallbackModel,
         error: errorMessage,
       });
       return createChatCompletion({
         ...options,
-        provider: 'openai',
+        provider: fallbackProvider,
         model: fallbackModel,
       });
     }

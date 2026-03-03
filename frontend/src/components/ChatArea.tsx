@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useMemo, ChangeEvent } from 'react';
 import { useChatStore } from '@/lib/store';
 import { useActivityStore } from '@/lib/activity-store';
 import { streamMessage, streamMessageWithFiles, regenerateMessage, chatApi, autonomousApi, backgroundApi, type AutonomousQuestion } from '@/lib/api';
-import { Send, Moon, Loader2, Mic, Sparkles, Paperclip, Bot } from 'lucide-react';
+import { Send, Moon, Loader2, Mic, Sparkles, Paperclip, Bot, Brain } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import clsx from 'clsx';
 import MessageActions from './MessageActions';
@@ -185,7 +185,7 @@ function StandardChatArea() {
   const [localSystemBubbles, setLocalSystemBubbles] = useState<{ id: string; text: string }[]>([]);
   const [input, setInput] = useState('');
   const [thinkingMode, setThinkingMode] = useState(false);
-  const [novaMode, setNovaMode] = useState(false);
+  const [zipMode, setZipMode] = useState(false);
   const [verificationQuestion, setVerificationQuestion] = useState<AutonomousQuestion | null>(null);
   const [verificationAnswer, setVerificationAnswer] = useState('');
   const [verificationBusy, setVerificationBusy] = useState(false);
@@ -388,8 +388,8 @@ function StandardChatArea() {
       let accumulatedContent = '';
       const skillContext = slash.activeSkill?.content;
       const streamFunction = files.length > 0
-        ? streamMessageWithFiles(sessionId, message, files, false, thinkingMode, novaMode)
-        : streamMessage(sessionId, message, false, thinkingMode, novaMode, undefined, undefined, undefined, skillContext);
+        ? streamMessageWithFiles(sessionId, message, files, false, thinkingMode, zipMode)
+        : streamMessage(sessionId, message, false, thinkingMode, zipMode, undefined, undefined, undefined, skillContext);
 
       for await (const chunk of streamFunction) {
         if (chunk.type === 'status' && chunk.status) {
@@ -720,17 +720,21 @@ function StandardChatArea() {
               </div>
             ))}
 
-            {/* Reasoning content (xAI Grok thinking) */}
+            {/* Reasoning content (thinking output) */}
             {reasoningContent && (
               <div className="flex flex-col items-start">
                 <div className="flex items-center gap-1 mb-1 ml-1">
                   <Bot size={12} className="text-gray-500" />
                   <span className="text-[11px] text-gray-500">Luna</span>
                 </div>
-                <details className="inline-block max-w-[85%]" open>
+                <details className="inline-block max-w-[85%]" open={isSending}>
                   <summary className="cursor-pointer px-3 py-2 rounded-lg bg-gray-800 text-gray-400 text-sm flex items-center gap-2 hover:bg-gray-700 transition-colors">
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>{thinkingPhrase}...</span>
+                    {isSending ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Brain className="w-4 h-4" />
+                    )}
+                    <span>{isSending ? `${thinkingPhrase}...` : 'Thought process'}</span>
                   </summary>
                   <div className="mt-2 px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-gray-400 text-sm font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
                     {reasoningContent}
@@ -903,16 +907,16 @@ function StandardChatArea() {
                 label="Thinking"
                 active={thinkingMode}
                 onToggle={() => {
-                  if (!thinkingMode) setNovaMode(false);
+                  if (!thinkingMode) setZipMode(false);
                   setThinkingMode(!thinkingMode);
                 }}
               />
               <TogglePill
-                label="Nova"
-                active={novaMode}
+                label="Zip"
+                active={zipMode}
                 onToggle={() => {
-                  if (!novaMode) setThinkingMode(false);
-                  setNovaMode(!novaMode);
+                  if (!zipMode) setThinkingMode(false);
+                  setZipMode(!zipMode);
                 }}
               />
               <div className="w-px h-4 bg-gray-700 mx-1" />

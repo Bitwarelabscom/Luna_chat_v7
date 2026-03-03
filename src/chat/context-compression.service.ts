@@ -255,6 +255,16 @@ export async function updateRollingSummary(
     // Get current summary info
     const summaryInfo = await getSessionSummaryInfo(sessionId);
 
+    // Dedup guard: skip if last summarization was < 30 seconds ago
+    // Prevents double calls from sync (forced) and async (background) paths
+    if (summaryInfo.lastSummarizedAt) {
+      const secondsSinceLast = (Date.now() - summaryInfo.lastSummarizedAt.getTime()) / 1000;
+      if (secondsSinceLast < 30) {
+        logger.debug('Skipping summarization - too recent', { sessionId, secondsSinceLast: Math.round(secondsSinceLast) });
+        return;
+      }
+    }
+
     // Get messages to summarize (older than verbatim window, newer than last summary)
     const messagesToSummarize = await getMessagesToSummarize(
       sessionId,
@@ -272,7 +282,7 @@ export async function updateRollingSummary(
       .map(m => `${m.role}: ${m.content.slice(0, 300)}`)
       .join('\n');
 
-    // Generate summary using OpenAI gpt-5-nano (faster than local CPU)
+    // Generate summary using background LLM settings
     const response = await createBackgroundCompletionWithFallback({
       userId: _userId,
       sessionId,

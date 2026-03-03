@@ -160,7 +160,7 @@ export const DEFAULT_BACKGROUND_LLM_SETTINGS: BackgroundLlmSettings = {
     fallback: { provider: 'xai', model: 'grok-4-1-fast' },
   },
   news_filter: {
-    primary: { provider: 'ollama_tertiary', model: 'HoseaDev/qwen2.5-7b-instruct-q4-gguf:latest' },
+    primary: { provider: 'ollama_tertiary', model: 'qwen3.5:9b' },
     fallback: { provider: 'ollama', model: 'llama3.2:3b' },
   },
   research_synthesis: {
@@ -176,11 +176,11 @@ export const DEFAULT_BACKGROUND_LLM_SETTINGS: BackgroundLlmSettings = {
     fallback: { provider: 'xai', model: 'grok-4-1-fast' },
   },
   supervisor_critique: {
-    primary: { provider: 'ollama_tertiary', model: 'HoseaDev/qwen2.5-7b-instruct-q4-gguf:latest' },
+    primary: { provider: 'ollama_tertiary', model: 'qwen3.5:9b' },
     fallback: { provider: 'xai', model: 'grok-4-1-fast' },
   },
   music_trend_analysis: {
-    primary: { provider: 'ollama_tertiary', model: 'HoseaDev/qwen2.5-7b-instruct-q4-gguf:latest' },
+    primary: { provider: 'ollama_tertiary', model: 'qwen3.5:9b' },
     fallback: { provider: 'xai', model: 'grok-4-1-fast' },
   },
   query_refinement: {
@@ -192,11 +192,11 @@ export const DEFAULT_BACKGROUND_LLM_SETTINGS: BackgroundLlmSettings = {
     fallback: { provider: 'xai', model: 'grok-4-1-fast' },
   },
   ceo_org_execution: {
-    primary: { provider: 'ollama_tertiary', model: 'HoseaDev/qwen2.5-7b-instruct-q4-gguf:latest' },
+    primary: { provider: 'ollama_tertiary', model: 'qwen3.5:9b' },
     fallback: { provider: 'ollama_secondary', model: 'llama3.2:3b' },
   },
   edge_classification: {
-    primary: { provider: 'ollama_tertiary', model: 'HoseaDev/qwen2.5-7b-instruct-q4-gguf:latest' },
+    primary: { provider: 'ollama_tertiary', model: 'qwen3.5:9b' },
     fallback: { provider: 'ollama', model: 'llama3.2:3b' },
   },
 };

@@ -69,7 +69,7 @@ ${linesList}`;
       },
     ];
 
-    const result = await ollamaTertiary.createCompletion('HoseaDev/qwen2.5-7b-instruct-q4-gguf:latest', messages, {
+    const result = await ollamaTertiary.createCompletion('qwen3:8b', messages, {
       temperature: 0.8,
       maxTokens: 8192,
       numCtx: 32768,

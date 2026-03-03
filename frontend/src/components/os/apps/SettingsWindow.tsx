@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import {
   Settings, Palette, MessageSquare, Cpu, Link, Server, FolderOpen, Image,
-  CheckSquare, Brain, Zap, Bell, BarChart3, Database, Users, Bookmark
+  CheckSquare, Brain, Zap, Bell, BarChart3, Database, Users, Bookmark, Bot
 } from 'lucide-react';
 import AppearanceTab from '@/components/settings/AppearanceTab';
 import BackgroundTab from '@/components/settings/BackgroundTab';
@@ -21,6 +21,7 @@ import DataTab from '@/components/settings/DataTab';
 import FriendsTab from '@/components/settings/FriendsTab';
 import BackgroundModelsTab from '@/components/settings/BackgroundModelsTab';
 import PresetsTab from '@/components/settings/PresetsTab';
+import AgentsTab from '@/components/settings/AgentsTab';
 
 type SettingsTab =
   | 'appearance'
@@ -29,6 +30,7 @@ type SettingsTab =
   | 'models'
   | 'presets'
   | 'backgroundai'
+  | 'agents'
   | 'integrations'
   | 'mcp'
   | 'workspace'
@@ -67,6 +69,7 @@ const sections: TabSection[] = [
       { id: 'models', label: 'Models', icon: Cpu, description: 'AI model configuration' },
       { id: 'presets', label: 'Presets', icon: Bookmark, description: 'Quick-switch model presets' },
       { id: 'backgroundai', label: 'Background AI', icon: Cpu, description: 'Background AI model selectors' },
+      { id: 'agents', label: 'Agents', icon: Bot, description: 'AI agent definitions and tool access' },
     ],
   },
   {
@@ -121,6 +124,8 @@ export default function SettingsWindow() {
         return <PresetsTab />;
       case 'backgroundai':
         return <BackgroundModelsTab />;
+      case 'agents':
+        return <AgentsTab />;
       case 'integrations':
         return <IntegrationsTab />;
       case 'mcp':

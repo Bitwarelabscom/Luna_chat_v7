@@ -86,7 +86,7 @@ const jobs: Job[] = [
   },
   {
     name: 'suggestionRefresher',
-    intervalMs: 15 * 60 * 1000, // Every 15 minutes
+    intervalMs: 2 * 60 * 60 * 1000, // Every 2 hours (suggestions are low-priority UI chrome)
     enabled: true,
     running: false,
     handler: refreshSuggestions,
@@ -906,13 +906,25 @@ async function finalizeIdleSessions(): Promise<void> {
       return;
     }
 
-    // Batch fetch all messages for idle sessions
+    // Batch fetch all messages and metadata for idle sessions
     const sessionIds = idleLogs.map(l => l.sessionId);
-    const allMessages = await pool.query(
-      `SELECT session_id, role, content FROM messages
-       WHERE session_id = ANY($1) ORDER BY session_id, created_at ASC`,
-      [sessionIds]
-    );
+    const [allMessages, allIntents, sessionMeta] = await Promise.all([
+      pool.query(
+        `SELECT session_id, role, content FROM messages
+         WHERE session_id = ANY($1) ORDER BY session_id, created_at ASC`,
+        [sessionIds]
+      ),
+      pool.query(
+        `SELECT DISTINCT session_id, intent_id FROM intent_touches
+         WHERE session_id = ANY($1)`,
+        [sessionIds]
+      ),
+      pool.query(
+        `SELECT sl.session_id, sl.started_at, sl.tools_used
+         FROM session_logs sl WHERE sl.session_id = ANY($1)`,
+        [sessionIds]
+      ),
+    ]);
 
     // Group messages by session_id
     const messagesBySession = new Map<string, Array<{ role: string; content: string }>>();
@@ -920,8 +932,18 @@ async function finalizeIdleSessions(): Promise<void> {
       if (!messagesBySession.has(row.session_id)) messagesBySession.set(row.session_id, []);
       messagesBySession.get(row.session_id)!.push({ role: row.role, content: row.content });
     }
+    const intentsBySession = new Map<string, string[]>();
+    for (const row of allIntents.rows) {
+      if (!intentsBySession.has(row.session_id)) intentsBySession.set(row.session_id, []);
+      intentsBySession.get(row.session_id)!.push(row.intent_id);
+    }
+    const metaBySession = new Map<string, { started_at: Date; tools_used: string[] }>();
+    for (const row of sessionMeta.rows) {
+      metaBySession.set(row.session_id, { started_at: row.started_at, tools_used: row.tools_used || [] });
+    }
 
     let finalized = 0;
+    const now = new Date();
     for (const { sessionId, userId } of idleLogs) {
       try {
         const messages = messagesBySession.get(sessionId) || [];
@@ -932,15 +954,36 @@ async function finalizeIdleSessions(): Promise<void> {
           continue;
         }
 
-        const analysis = await sessionLogService.analyzeSession(messages, userId);
-
-        await sessionLogService.finalizeSessionLog(
+        // Generate detailed summary (single LLM call) that also stores context summary
+        const meta = metaBySession.get(sessionId);
+        const intentIds = intentsBySession.get(sessionId) || [];
+        const detailed = await sessionLogService.generateDetailedSessionSummary(
           sessionId,
-          analysis.summary,
-          analysis.mood,
-          analysis.energy,
-          analysis.topics
+          userId,
+          messages,
+          intentIds,
+          [],
+          meta?.tools_used || [],
+          meta?.started_at || now,
+          now
         );
+
+        // Use detailed summary output to finalize the session log
+        if (detailed) {
+          const mood = detailed.moodArc?.toLowerCase().includes('frustrat') ? 'negative'
+            : detailed.moodArc?.toLowerCase().includes('satisf') ? 'positive'
+            : 'neutral';
+          await sessionLogService.finalizeSessionLog(
+            sessionId,
+            detailed.oneLiner || detailed.summary?.split('.')[0] || 'Session completed',
+            mood,
+            detailed.energyEnd || 'medium',
+            detailed.topics || []
+          );
+        } else {
+          // Fallback if detailed generation failed
+          await sessionLogService.finalizeSessionLog(sessionId, 'Session completed', 'neutral', 'medium', []);
+        }
 
         finalized++;
       } catch (err) {
@@ -1410,10 +1453,11 @@ async function maintainSearchIndex(): Promise<void> {
  */
 async function refreshIntentSummaries(): Promise<void> {
   try {
-    // Get users with active intents
+    // Get users with active intents only - suspended intents are static
+    // and already get summaries generated on status change
     const result = await pool.query(`
       SELECT DISTINCT user_id FROM user_intents
-      WHERE status IN ('active', 'suspended')
+      WHERE status = 'active'
         AND last_touched_at > NOW() - INTERVAL '7 days'
       LIMIT 20
     `);

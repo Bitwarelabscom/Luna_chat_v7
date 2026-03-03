@@ -248,6 +248,79 @@ export interface SystemMetrics {
   hostname: string;
 }
 
+// Agent Definition Types
+export type AgentCategory = 'chat_mode' | 'specialist' | 'friend' | 'council' | 'department' | 'utility';
+export type ToolSetId = 'companion' | 'assistant' | 'dj_luna' | 'ceo_luna' | 'trading' | 'voice' | 'workspace' | 'code_execution' | 'search' | 'none';
+
+export type ProviderStrategy =
+  | { type: 'user_config'; taskType: string }
+  | { type: 'fixed'; provider: string; model: string }
+  | { type: 'inherit' };
+
+export interface AgentDefinitionDTO {
+  id: string;
+  name: string;
+  category: AgentCategory;
+  basePromptId: string | null;
+  promptTemplate: string;
+  promptComposable: boolean;
+  providerStrategy: ProviderStrategy;
+  temperature: number;
+  maxTokens: number | null;
+  toolSets: ToolSetId[];
+  additionalTools: string[];
+  canBeSummoned: boolean;
+  canSummon: string[];
+  avatarEmoji: string | null;
+  color: string | null;
+  personality: string | null;
+  maxResponseTokens: number | null;
+  cacheTierEnabled: boolean;
+  isBuiltin: boolean;
+  isActive: boolean;
+  sortOrder: number;
+  userId: string | null;
+  builtinParentId: string | null;
+  isOverridden: boolean;
+  overrideId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentFormData {
+  name: string;
+  category: AgentCategory;
+  basePromptId?: string | null;
+  promptTemplate: string;
+  promptComposable?: boolean;
+  providerStrategy: ProviderStrategy;
+  temperature?: number;
+  maxTokens?: number | null;
+  toolSets?: ToolSetId[];
+  additionalTools?: string[];
+  canBeSummoned?: boolean;
+  canSummon?: string[];
+  avatarEmoji?: string | null;
+  color?: string | null;
+  personality?: string | null;
+  maxResponseTokens?: number | null;
+  cacheTierEnabled?: boolean;
+  isActive?: boolean;
+  sortOrder?: number;
+}
+
+export interface ToolSetOption {
+  id: ToolSetId;
+  label: string;
+  description: string;
+}
+
+export interface ToolOption {
+  name: string;
+  description: string;
+  includedInSets: ToolSetId[];
+}
+
 export const settingsApi = {
   // System Metrics
   getSystemMetrics: () =>
@@ -369,4 +442,29 @@ export const settingsApi = {
 
   resetCoderSettings: () =>
     api<{ success: boolean }>('/api/settings/coder', { method: 'DELETE' }),
+
+  // Agent Settings
+  getAgents: () =>
+    api<{ agents: AgentDefinitionDTO[] }>('/api/settings/agents'),
+
+  getAgent: (id: string) =>
+    api<{ agent: AgentDefinitionDTO }>(`/api/settings/agents/${encodeURIComponent(id)}`),
+
+  getToolOptions: () =>
+    api<{ toolSets: ToolSetOption[]; tools: ToolOption[] }>('/api/settings/agents/tool-options'),
+
+  createAgent: (data: AgentFormData) =>
+    api<{ agent: AgentDefinitionDTO }>('/api/settings/agents', { method: 'POST', body: data }),
+
+  updateAgent: (id: string, data: Partial<AgentFormData>) =>
+    api<{ agent: AgentDefinitionDTO }>(`/api/settings/agents/${encodeURIComponent(id)}`, { method: 'PATCH', body: data }),
+
+  deleteAgent: (id: string) =>
+    api<{ success: boolean }>(`/api/settings/agents/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  saveBuiltinOverride: (builtinId: string, data: Partial<AgentFormData>) =>
+    api<{ agent: AgentDefinitionDTO }>(`/api/settings/agents/${encodeURIComponent(builtinId)}/override`, { method: 'PUT', body: data }),
+
+  resetBuiltinOverride: (builtinId: string) =>
+    api<{ success: boolean }>(`/api/settings/agents/${encodeURIComponent(builtinId)}/override`, { method: 'DELETE' }),
 };

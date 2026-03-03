@@ -124,7 +124,7 @@ export async function* streamMessage(
   message: string,
   projectMode?: boolean,
   thinkingMode?: boolean,
-  novaMode?: boolean,
+  zipMode?: boolean,
   djStyleContext?: string,
   ceoSystemLog?: string,
   djGenreContext?: string,
@@ -136,7 +136,7 @@ export async function* streamMessage(
       'Content-Type': 'application/json',
     },
     credentials: 'include',
-    body: JSON.stringify({ message, stream: true, projectMode, thinkingMode, novaMode, djStyleContext, ceoSystemLog, djGenreContext, skillContext }),
+    body: JSON.stringify({ message, stream: true, projectMode, thinkingMode, zipMode, djStyleContext, ceoSystemLog, djGenreContext, skillContext }),
   });
 
   if (!response.ok) {
@@ -180,14 +180,14 @@ export async function* streamMessageWithFiles(
   files: File[],
   projectMode?: boolean,
   thinkingMode?: boolean,
-  novaMode?: boolean
+  zipMode?: boolean
 ): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'reasoning' | 'background_refresh' | 'video_action' | 'media_action' | 'canvas_artifact'; content?: string | any; status?: string; messageId?: string; metrics?: MessageMetrics; action?: string; url?: string; videos?: any[]; query?: string; items?: any[]; source?: string; artifactId?: string }> {
   const formData = new FormData();
   formData.append('message', message);
   formData.append('stream', 'true');
   if (projectMode) formData.append('projectMode', 'true');
   if (thinkingMode) formData.append('thinkingMode', 'true');
-  if (novaMode) formData.append('novaMode', 'true');
+  if (zipMode) formData.append('zipMode', 'true');
 
   // Add files to FormData
   for (const file of files) {

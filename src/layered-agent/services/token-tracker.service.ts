@@ -79,8 +79,6 @@ const MODEL_COSTS: Record<string, { input: number; output: number }> = {
   // OpenAI
   'gpt-5.1-chat-latest': { input: 0.00125, output: 0.01 },
   'gpt-5.1-codex': { input: 0.00125, output: 0.01 },
-  'gpt-5-mini': { input: 0.00025, output: 0.002 },
-  'gpt-5-nano': { input: 0.00005, output: 0.0004 },
   'gpt-4.1': { input: 0.002, output: 0.008 },
   'gpt-4.1-mini': { input: 0.0004, output: 0.0016 },
   'gpt-4.1-nano': { input: 0.0001, output: 0.0004 },

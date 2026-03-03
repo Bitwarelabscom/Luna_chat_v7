@@ -5,6 +5,7 @@ import { getDashboard } from './ceo.service.js';
 import { listTasks } from './ceo-org.service.js';
 import { getCrossDeptMemos, createMemo, looksLikeDecision, extractDecisionTitle, searchMemos, type MemoDeptSlug } from './ceo-memos.service.js';
 import { DEPARTMENT_MAP, type DepartmentSlug } from '../persona/luna.persona.js';
+import { getDepartmentAgent } from '../agents/registry.js';
 import type { ChatMessage } from '../llm/types.js';
 import logger from '../utils/logger.js';
 
@@ -157,8 +158,11 @@ export async function sendStaffMessage(
   );
   if (sessionResult.rowCount === 0) throw new Error('Session not found');
   const session = mapSessionRow(sessionResult.rows[0] as Record<string, unknown>);
-  const dept = DEPARTMENT_MAP.get(session.departmentSlug as DepartmentSlug);
-  if (!dept) throw new Error(`Unknown department: ${session.departmentSlug}`);
+  // Try registry first, fall back to legacy DEPARTMENT_MAP
+  const registryDept = getDepartmentAgent(session.departmentSlug);
+  const legacyDept = DEPARTMENT_MAP.get(session.departmentSlug as DepartmentSlug);
+  if (!registryDept && !legacyDept) throw new Error(`Unknown department: ${session.departmentSlug}`);
+  const deptPrompt = registryDept ? registryDept.promptTemplate : legacyDept!.prompt;
 
   // Store user message
   await pool.query(
@@ -173,7 +177,7 @@ export async function sendStaffMessage(
   const messages: ChatMessage[] = [
     {
       role: 'system',
-      content: `${dept.prompt}\n\nYou are speaking directly to the company owner in a staff chat. Be helpful, proactive, and share department-specific insights. Use data from the context below when relevant.\n\n${context}`,
+      content: `${deptPrompt}\n\nYou are speaking directly to the company owner in a staff chat. Be helpful, proactive, and share department-specific insights. Use data from the context below when relevant.\n\n${context}`,
     },
   ];
 
@@ -299,16 +303,22 @@ Pick 1-3 departments most relevant to the request. Craft specific questions for 
   resultMessages.push(mapMessageRow(orchestrationInsert.rows[0] as Record<string, unknown>));
 
   // Step 2: Department calls in parallel
-  const validDepts = orchestration.departments.filter(d => DEPARTMENT_MAP.has(d as DepartmentSlug));
+  const validDepts = orchestration.departments.filter(d => {
+    const regDept = getDepartmentAgent(d);
+    return regDept || DEPARTMENT_MAP.has(d as DepartmentSlug);
+  });
   const deptResponses = await Promise.all(
     validDepts.map(async (deptSlug) => {
-      const dept = DEPARTMENT_MAP.get(deptSlug as DepartmentSlug)!;
+      const regDept = getDepartmentAgent(deptSlug);
+      const legDept = DEPARTMENT_MAP.get(deptSlug as DepartmentSlug);
+      const meetingPrompt = regDept ? regDept.promptTemplate : legDept!.prompt;
+      const meetingName = regDept ? regDept.name : legDept!.name;
       const question = orchestration.questions[deptSlug] || message;
 
       const deptMessages: ChatMessage[] = [
         {
           role: 'system',
-          content: `${dept.prompt}\n\nYou are in a team meeting. The CEO has asked you a specific question. Answer concisely and with your department's perspective.\n\n${context}`,
+          content: `${meetingPrompt}\n\nYou are in a team meeting. The CEO has asked you a specific question. Answer concisely and with your department's perspective.\n\n${context}`,
         },
         { role: 'user', content: question },
       ];
@@ -318,7 +328,7 @@ Pick 1-3 departments most relevant to the request. Craft specific questions for 
         return { deptSlug, response };
       } catch (err) {
         logger.warn('Meeting dept call failed', { dept: deptSlug, error: (err as Error).message });
-        return { deptSlug, response: `[${dept.name} could not respond at this time]` };
+        return { deptSlug, response: `[${meetingName} could not respond at this time]` };
       }
     })
   );
@@ -335,8 +345,10 @@ Pick 1-3 departments most relevant to the request. Craft specific questions for 
   // Step 3: Synthesis - CEO Luna combines responses
   const synthesisContext = deptResponses
     .map(({ deptSlug, response }) => {
-      const dept = DEPARTMENT_MAP.get(deptSlug as DepartmentSlug);
-      return `**${dept?.name || deptSlug}:**\n${response}`;
+      const regDept = getDepartmentAgent(deptSlug);
+      const legDept = DEPARTMENT_MAP.get(deptSlug as DepartmentSlug);
+      const synthName = regDept?.name || legDept?.name || deptSlug;
+      return `**${synthName}:**\n${response}`;
     })
     .join('\n\n');
 

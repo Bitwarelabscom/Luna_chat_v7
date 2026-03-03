@@ -3,7 +3,7 @@
  *
  * Two responsibilities:
  * 1. scoreMessageComplexity() - Pure heuristic, no LLM call (~0ms)
- * 2. curateMemory() - Uses gpt-5-nano to select relevant memories for injection
+ * 2. curateMemory() - Uses background LLM to select relevant memories for injection
  */
 
 import { createBackgroundCompletionWithFallback } from '../llm/background-completion.service.js';
@@ -122,7 +122,7 @@ export function scoreMessageComplexity(message: string): ComplexityScore {
 }
 
 // ============================================
-// Phase 5: Memory Curation with gpt-5-nano
+// Phase 5: Memory Curation via background LLM
 // ============================================
 
 const CURATION_SYSTEM_PROMPT = `You are a memory curator for an AI companion named Luna. Given the user's current message, select which memories are relevant to include in Luna's context.
@@ -147,7 +147,7 @@ Output ONLY a JSON object (no markdown, no explanation outside JSON):
 Use array indices (0-based) to reference items from each candidate list.`;
 
 /**
- * Use gpt-5-nano to curate which memories to inject into Luna's context.
+ * Use background LLM to curate which memories to inject into Luna's context.
  * On any failure, returns { skipped: true } so caller falls back to direct formatting.
  */
 export async function curateMemory(

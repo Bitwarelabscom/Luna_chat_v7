@@ -490,10 +490,56 @@ export async function getDocumentContextBlock(
 
       const isImage = mimeType.startsWith('image/');
 
+      // If image is still processing, wait for vision analysis to complete
+      // Vision typically takes 5-30s depending on image size and model load
+      if (chunkResult.rows.length === 0 && isImage && status === 'processing') {
+        const maxWaitMs = 60_000;
+        const pollIntervalMs = 1_500;
+        const startWait = Date.now();
+        let found = false;
+
+        while (Date.now() - startWait < maxWaitMs) {
+          await new Promise(r => setTimeout(r, pollIntervalMs));
+
+          const poll = await pool.query(
+            `SELECT d.status, (SELECT COUNT(*) FROM document_chunks WHERE document_id = $1) as chunk_count
+             FROM documents d WHERE d.id = $1`,
+            [docId]
+          );
+
+          if (poll.rows.length === 0) break;
+          const pollStatus = poll.rows[0].status as string;
+          const chunkCount = Number(poll.rows[0].chunk_count);
+
+          if (pollStatus === 'error') {
+            sections.push(`--- ${originalName} (image analysis failed) ---`);
+            found = true;
+            break;
+          }
+
+          if (chunkCount > 0) {
+            // Chunks are ready - fetch and use them
+            const readyChunks = await pool.query(
+              `SELECT content FROM document_chunks WHERE document_id = $1 ORDER BY chunk_index ASC`,
+              [docId]
+            );
+            const fullContent = (readyChunks.rows as { content: string }[]).map(r => r.content).join('\n');
+            sections.push(`--- ${originalName} ---\n${fullContent}`);
+            found = true;
+            break;
+          }
+        }
+
+        if (!found) {
+          sections.push(`--- ${originalName} (image analysis timed out - ask user to resend) ---`);
+        }
+        continue;
+      }
+
       if (chunkResult.rows.length === 0) {
-        // No chunks yet - vision analysis still in progress
+        // No chunks yet for non-image document
         if (status === 'processing') {
-          sections.push(`--- ${originalName} (still being analyzed - let the user know and they can resend the message in a moment) ---`);
+          sections.push(`--- ${originalName} (still being analyzed) ---`);
         }
         continue;
       }

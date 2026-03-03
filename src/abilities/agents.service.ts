@@ -17,6 +17,8 @@ import {
   workspaceReadTool,
   workspaceWriteTool,
 } from '../llm/tools/index.js';
+import { getAgent, getAgentsByCategory } from '../agents/registry.js';
+import { buildAgentPrompt } from '../agents/prompt-builder.js';
 
 /**
  * Execute command using spawn (more reliable than execFile for Claude CLI)
@@ -675,9 +677,27 @@ Most failures should retry_same (transient) or modify_task (unclear requirements
 };
 
 /**
- * Get built-in agents
+ * Get built-in agents - reads from registry first, falls back to hardcoded list
  */
 export function getBuiltInAgents(): Array<Omit<AgentConfig, 'id' | 'createdAt'>> {
+  // Try registry first
+  const registrySpecialists = getAgentsByCategory('specialist');
+  const registryUtilities = getAgentsByCategory('utility');
+  const registryAgents = [...registrySpecialists, ...registryUtilities];
+
+  if (registryAgents.length > 0) {
+    return registryAgents.map(a => ({
+      name: a.id,
+      description: a.personality || a.id,
+      systemPrompt: buildAgentPrompt(a),
+      model: a.providerStrategy.type === 'fixed' ? a.providerStrategy.model : 'o4-mini',
+      temperature: a.temperature,
+      tools: a.toolSets as string[],
+      isDefault: false,
+    }));
+  }
+
+  // Fallback to hardcoded
   return Object.values(BUILT_IN_AGENTS);
 }
 
@@ -778,8 +798,12 @@ export async function executeAgentTask(
     let systemPrompt: string;
     let temperature = 0.7;
 
-    // Check built-in agents first
-    if (BUILT_IN_AGENTS[effectiveAgentName]) {
+    // Check registry first, then built-in agents, then custom DB agents
+    const registryAgent = getAgent(effectiveAgentName);
+    if (registryAgent) {
+      systemPrompt = buildAgentPrompt(registryAgent);
+      temperature = registryAgent.temperature;
+    } else if (BUILT_IN_AGENTS[effectiveAgentName]) {
       const builtIn = BUILT_IN_AGENTS[effectiveAgentName];
       systemPrompt = builtIn.systemPrompt;
       temperature = builtIn.temperature;

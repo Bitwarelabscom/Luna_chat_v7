@@ -37,6 +37,7 @@ import ceoRoutes from './ceo/ceo.routes.js';
 import sunoRoutes from './chat/suno.routes.js';
 import djLunaRoutes from './abilities/dj-luna.routes.js';
 import memoryLabRoutes from './memory/memory-lab.routes.js';
+import agentSettingsRoutes from './agents/agent-settings.routes.js';
 import { startJobs, stopJobs } from './jobs/job-runner.js';
 import { setBroadcastFunction } from './activity/activity.service.js';
 import { initializeCritiqueQueue, shutdownCritiqueQueue } from './layered-agent/services/critique-queue.service.js';
@@ -57,6 +58,7 @@ import { verifyToken } from './auth/jwt.js';
 import { isWireGuardRequest, WIREGUARD_USER } from './auth/auth.middleware.js';
 import { ircService } from './abilities/irc.service.js';
 import { getAllActiveUsers } from './auth/auth.service.js';
+import { initializeRegistry } from './agents/registry.js';
 
 const app = express();
 
@@ -210,6 +212,7 @@ app.use('/api/ceo', ceoRoutes);
 app.use('/api/suno', sunoRoutes);
 app.use('/api/dj', djLunaRoutes);
 app.use('/api/memory-lab', memoryLabRoutes);
+app.use('/api/settings/agents', agentSettingsRoutes);
 app.use('/api/consolidation', consciousnessRoutes);  // Consolidation logs share routes
 
 // Connect activity service to delivery service's SSE broadcast
@@ -323,6 +326,11 @@ server.listen(config.port, () => {
     env: config.nodeEnv,
     memorycore: config.memorycore.enabled ? 'enabled' : 'disabled',
     searxng: config.searxng.enabled ? 'enabled' : 'disabled',
+  });
+
+  // Initialize agent registry (loads all agent definitions from DB)
+  initializeRegistry().catch(err => {
+    logger.error('Failed to initialize agent registry on startup', { error: err.message });
   });
 
   // Initialize trading WebSocket (connect to Binance)

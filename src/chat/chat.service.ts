@@ -6,59 +6,7 @@ import {
   formatAgentResultForContext,
   type ChatMessage,
 } from '../llm/openai.client.js';
-import {
-  searchTool,
-  youtubeSearchTool,
-  localMediaSearchTool,
-  localMediaPlayTool,
-  mediaDownloadTool,
-  delegateToAgentTool,
-  workspaceWriteTool,
-  workspaceExecuteTool,
-  workspaceListTool,
-  workspaceReadTool,
-  sendEmailTool,
-  checkEmailTool,
-  readEmailTool,
-  deleteEmailTool,
-  replyEmailTool,
-  markEmailReadTool,
-  sendTelegramTool,
-  sendFileToTelegramTool,
-  searchDocumentsTool,
-  suggestGoalTool,
-  fetchUrlTool,
-  listTodosTool,
-  createTodoTool,
-  completeTodoTool,
-  updateTodoTool,
-  createCalendarEventTool,
-  listCalendarEventsTool,
-  sessionNoteTool,
-  ceoNoteBuildTool,
-  commitWeeklyPlanTool,
-  queryDepartmentHistoryTool,
-  startTaskTool,
-  getTaskStatusTool,
-  createReminderTool,
-  listRemindersTool,
-  cancelReminderTool,
-  openUrlTool,
-  generateImageTool,
-  generateBackgroundTool,
-  researchTool,
-  n8nWebhookTool,
-  loadContextTool,
-  correctSummaryTool,
-  generateArtifactTool,
-  rewriteArtifactTool,
-  updateHighlightedTool,
-  saveArtifactFileTool,
-  listArtifactsTool,
-  loadArtifactTool,
-  getArtifactDownloadLinkTool,
-  sunoGenerateTool,
-} from '../llm/tools/index.js';
+// Tool definitions moved to src/agents/tool-resolver.ts
 import * as loadContextHandler from '../context/load-context.handler.js';
 import * as browserScreencast from '../abilities/browser-screencast.service.js';
 
@@ -112,6 +60,9 @@ import * as memorycoreClient from '../memory/memorycore.client.js';
 import * as preferencesService from '../memory/preferences.service.js';
 import * as abilities from '../abilities/orchestrator.js';
 import { buildContextualPrompt } from '../persona/luna.persona.js';
+import { getChatModeAgentForUser } from '../agents/registry.js';
+import { getToolsForAgent } from '../agents/tool-resolver.js';
+import { summonAgent } from '../agents/communication.js';
 import { getDesktopContext, hasDesktopBrowser, executeRemoteBrowserCommand, sendDesktopAction } from '../desktop/desktop.websocket.js';
 import * as sessionService from './session.service.js';
 import * as contextCompression from './context-compression.service.js';
@@ -494,7 +445,8 @@ export interface ChatInput {
   source?: 'web' | 'telegram' | 'api';
   projectMode?: boolean;
   thinkingMode?: boolean;
-  novaMode?: boolean;
+  zipMode?: boolean;
+  novaMode?: boolean;  // @deprecated - use zipMode
   documentIds?: string[];
   djStyleContext?: string;
   djGenreContext?: string;
@@ -510,7 +462,8 @@ export interface ChatOutput {
 }
 
 export async function processMessage(input: ChatInput): Promise<ChatOutput> {
-  const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode, novaMode, documentIds, djStyleContext, djGenreContext, ceoSystemLog, skillContext } = input;
+  const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode, zipMode: inputZipMode, novaMode: inputNovaMode, documentIds, djStyleContext, djGenreContext, ceoSystemLog, skillContext } = input;
+  const zipMode = inputZipMode || inputNovaMode;  // Support both names during transition
 
   // Initialize MemoryCore session for consolidation tracking
   // This enables episodic memory recording and NeuralSleep LNN processing
@@ -560,7 +513,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   // THINKING MODE: Override router decision to force 'pro' tier minimum
   // NOVA MODE: Override router decision to force 'nano' tier (fast responses)
   // Note: Thinking and Nova modes are mutually exclusive (enforced in frontend)
-  if (thinkingMode && !novaMode && routerDecision) {
+  if (thinkingMode && !zipMode && routerDecision) {
     // If router chose 'nano', upgrade to 'pro'
     if (routerDecision.route === 'nano') {
       logger.info('Thinking mode enabled - upgrading route from nano to pro', {
@@ -574,9 +527,9 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
       };
     }
     // If 'pro' or 'pro+tools', keep as-is (already sufficient for thinking mode)
-  } else if (novaMode && !thinkingMode && routerDecision) {
+  } else if (zipMode && !thinkingMode && routerDecision) {
     // Nova mode: force fast 'nano' route for quick, energetic responses
-    logger.info('Nova mode enabled - forcing nano route for fast responses', {
+    logger.info('Zip mode enabled - forcing nano route for fast responses', {
       userId,
       sessionId,
       originalRoute: routerDecision.route,
@@ -824,7 +777,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
         conversationSummary: compressedCtx.systemPrefix,
         mcpTools: mcpToolsForPrompt,
         source,
-        novaMode,
+        zipMode,
         djStyleContext,
         djGenreContext,
         ceoSystemLog,
@@ -874,45 +827,12 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     enrichment: { emotionalValence: pmEnrichment.emotionalValence, attentionScore: pmEnrichment.attentionScore },
   });
 
-  // TOOL GATING: Filter tools by mode and smalltalk detection
-  // Companion mode: conversational partner + workspace tools
-  // Assistant mode: full sysadmin capabilities
+  // TOOL GATING: Registry-driven tool resolution
   const mcpToolsForLLM = mcpService.formatMcpToolsForLLM(mcpUserTools.map(t => ({ ...t, serverId: t.serverId })));
-
-  // Companion tools - conversational (includes workspace tools)
-  const companionTools = [
-    searchTool, youtubeSearchTool, localMediaSearchTool, localMediaPlayTool, mediaDownloadTool,
-    fetchUrlTool,
-    sendEmailTool, checkEmailTool, readEmailTool, deleteEmailTool, replyEmailTool, markEmailReadTool,
-    sendTelegramTool, sendFileToTelegramTool, searchDocumentsTool, suggestGoalTool,
-    listTodosTool, createTodoTool, completeTodoTool, updateTodoTool,
-    createCalendarEventTool, listCalendarEventsTool,
-    sessionNoteTool, createReminderTool, listRemindersTool, cancelReminderTool,
-    openUrlTool,
-    generateImageTool, generateBackgroundTool, researchTool, n8nWebhookTool, delegateToAgentTool,
-    loadContextTool, correctSummaryTool,
-    workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool,
-    generateArtifactTool, rewriteArtifactTool, updateHighlightedTool, saveArtifactFileTool,
-    listArtifactsTool, loadArtifactTool, getArtifactDownloadLinkTool
-  ];
-
-  // Assistant tools - full sysadmin capabilities (sysmon, MCP)
-  const assistantTools = [
-    ...companionTools,
-    ...sysmonTools,
-    ...mcpToolsForLLM
-  ];
-
-  // Select tools based on mode
-  // CEO mode uses assistant toolset with stricter persona constraints
-  let modeTools = mode === 'companion' ? companionTools : assistantTools;
-  if (mode === 'dj_luna') {
-    modeTools = [searchTool, fetchUrlTool, youtubeSearchTool, mediaDownloadTool, sunoGenerateTool];
-  }
-  if (mode === 'ceo_luna') {
-    modeTools = [...modeTools, ceoNoteBuildTool, commitWeeklyPlanTool, queryDepartmentHistoryTool, startTaskTool, getTaskStatusTool];
-  }
-  const availableTools = isSmallTalkMessageLegacy ? [] : modeTools;
+  const chatModeAgent = getChatModeAgentForUser(mode, userId);
+  const availableTools = chatModeAgent
+    ? getToolsForAgent(chatModeAgent, { sysmonTools, mcpTools: mcpToolsForLLM, isSmallTalk: isSmallTalkMessageLegacy })
+    : [];
   let searchResults: SearchResult[] | undefined;
   let agentResults: Array<{ agent: string; result: string; success: boolean }> = [];
 
@@ -1066,6 +986,31 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
           role: 'tool',
           tool_call_id: toolCall.id,
           content: formatAgentResultForContext(args.agent, result.result, result.success),
+        } as ChatMessage);
+      } else if (toolCall.function.name === 'summon_agent') {
+        const args = JSON.parse(toolCall.function.arguments);
+        logger.info('Summoning agent', { agentId: args.agent_id, reason: args.reason?.substring(0, 100) });
+
+        // Build conversation context from recent messages
+        const recentContext = messages
+          .filter(m => m.role === 'user' || m.role === 'assistant')
+          .slice(-6)
+          .map(m => `${m.role}: ${typeof m.content === 'string' ? m.content.substring(0, 300) : ''}`)
+          .join('\n');
+
+        const summonResult = await summonAgent({
+          fromAgentId: mode,
+          toAgentId: args.agent_id,
+          reason: args.reason,
+          conversationContext: recentContext,
+          sessionId,
+          userId,
+        });
+
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: `[${summonResult.agentName} responds]\n${summonResult.response}`,
         } as ChatMessage);
       } else if (toolCall.function.name === 'workspace_write') {
         const args = JSON.parse(toolCall.function.arguments);
@@ -2982,7 +2927,8 @@ export interface StreamMetrics {
 export async function* streamMessage(
   input: ChatInput
 ): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'background_refresh' | 'reasoning' | 'video_action' | 'media_action' | 'canvas_artifact'; content?: string | any; status?: string; messageId?: string; tokensUsed?: number; metrics?: StreamMetrics; action?: string; url?: string; videos?: any[]; query?: string; items?: any[]; source?: string; artifactId?: string }> {
-  const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode, novaMode, documentIds, djStyleContext, djGenreContext, ceoSystemLog, skillContext } = input;
+  const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode, zipMode: inputZipMode, novaMode: inputNovaMode, documentIds, djStyleContext, djGenreContext, ceoSystemLog, skillContext } = input;
+  const zipMode = inputZipMode || inputNovaMode;  // Support both names during transition
 
   // Initialize MemoryCore session for consolidation tracking
   // This enables episodic memory recording and NeuralSleep LNN processing
@@ -3031,7 +2977,7 @@ export async function* streamMessage(
   // THINKING MODE: Override router decision to force 'pro' tier minimum
   // NOVA MODE: Override router decision to force 'nano' tier (fast responses)
   // Note: Thinking and Nova modes are mutually exclusive (enforced in frontend)
-  if (thinkingMode && !novaMode && routerDecision) {
+  if (thinkingMode && !zipMode && routerDecision) {
     // If router chose 'nano', upgrade to 'pro'
     if (routerDecision.route === 'nano') {
       logger.info('Thinking mode enabled - upgrading route from nano to pro (streaming)', {
@@ -3045,9 +2991,9 @@ export async function* streamMessage(
       };
     }
     // If 'pro' or 'pro+tools', keep as-is (already sufficient for thinking mode)
-  } else if (novaMode && !thinkingMode && routerDecision) {
+  } else if (zipMode && !thinkingMode && routerDecision) {
     // Nova mode: force fast 'nano' route for quick, energetic responses
-    logger.info('Nova mode enabled - forcing nano route for fast responses (streaming)', {
+    logger.info('Zip mode enabled - forcing nano route for fast responses (streaming)', {
       userId,
       sessionId,
       originalRoute: routerDecision.route,
@@ -3566,7 +3512,7 @@ export async function* streamMessage(
         conversationSummary: compressedCtx.systemPrefix,
         mcpTools: mcpToolsForPrompt,
         source,
-        novaMode,
+        zipMode,
         djStyleContext,
         djGenreContext,
         ceoSystemLog,
@@ -3616,48 +3562,12 @@ export async function* streamMessage(
     enrichment: { emotionalValence: smEnrichment.emotionalValence, attentionScore: smEnrichment.attentionScore },
   });
 
-  // TOOL GATING: Router-First Architecture + Mode-based filtering
-  // - nano route: No tools (fast, cheap responses)
-  // - pro route: Optional tools (reasoning depth)
-  // - pro+tools route: All tools available (verified answers)
-  // - Companion mode: Conversational + Workspace tools (no sysmon/MCP)
-  // - Assistant mode: Full sysadmin capabilities
+  // TOOL GATING: Registry-driven tool resolution
   const mcpToolsForLLM = mcpService.formatMcpToolsForLLM(mcpUserTools.map(t => ({ ...t, serverId: t.serverId })));
-
-  // Companion tools - conversational (includes workspace tools)
-  const companionTools = [
-    searchTool, youtubeSearchTool, localMediaSearchTool, localMediaPlayTool, mediaDownloadTool,
-    fetchUrlTool,
-    sendEmailTool, checkEmailTool, readEmailTool, deleteEmailTool, replyEmailTool, markEmailReadTool,
-    sendTelegramTool, sendFileToTelegramTool, searchDocumentsTool, suggestGoalTool,
-    listTodosTool, createTodoTool, completeTodoTool, updateTodoTool,
-    createCalendarEventTool, listCalendarEventsTool,
-    sessionNoteTool, createReminderTool, listRemindersTool, cancelReminderTool,
-    openUrlTool,
-    generateImageTool, generateBackgroundTool, researchTool, n8nWebhookTool, delegateToAgentTool,
-    loadContextTool, correctSummaryTool,
-    workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool,
-    generateArtifactTool, rewriteArtifactTool, updateHighlightedTool, saveArtifactFileTool,
-    listArtifactsTool, loadArtifactTool, getArtifactDownloadLinkTool
-  ];
-
-  // Assistant tools - full sysadmin capabilities (sysmon, MCP)
-  const assistantTools = [
-    ...companionTools,
-    ...sysmonTools,
-    ...mcpToolsForLLM
-  ];
-
-  // Select tools based on mode
-  // CEO mode uses assistant toolset with stricter persona constraints
-  let modeTools = mode === 'companion' ? companionTools : assistantTools;
-  if (mode === 'dj_luna') {
-    modeTools = [searchTool, fetchUrlTool, youtubeSearchTool, mediaDownloadTool, sunoGenerateTool];
-  }
-  if (mode === 'ceo_luna') {
-    modeTools = [...modeTools, ceoNoteBuildTool, commitWeeklyPlanTool, queryDepartmentHistoryTool, startTaskTool, getTaskStatusTool];
-  }
-  const availableTools = isSmallTalkMessage ? [] : modeTools;
+  const smChatModeAgent = getChatModeAgentForUser(mode, userId);
+  const availableTools = smChatModeAgent
+    ? getToolsForAgent(smChatModeAgent, { sysmonTools, mcpTools: mcpToolsForLLM, isSmallTalk: isSmallTalkMessage })
+    : [];
   let searchResults: SearchResult[] | undefined;
 
   logger.info('Tool availability', {
@@ -3673,6 +3583,7 @@ export async function* streamMessage(
     tools: availableTools.length > 0 ? availableTools : undefined,
     provider: modelConfig.provider,
     model: modelConfig.model,
+    thinkingMode,
     loggingContext: {
       userId,
       sessionId,
@@ -3870,6 +3781,32 @@ export async function* streamMessage(
           role: 'tool',
           tool_call_id: toolCall.id,
           content: formatAgentResultForContext(result.agentName, result.result, result.success),
+        } as ChatMessage);
+      } else if (toolCall.function.name === 'summon_agent') {
+        const args = JSON.parse(toolCall.function.arguments);
+        yield { type: 'reasoning', content: `> Summoning ${args.agent_id}...\n` };
+        logger.info('Summoning agent in stream', { agentId: args.agent_id, reason: args.reason?.substring(0, 100) });
+
+        const recentContext = messages
+          .filter(m => m.role === 'user' || m.role === 'assistant')
+          .slice(-6)
+          .map(m => `${m.role}: ${typeof m.content === 'string' ? m.content.substring(0, 300) : ''}`)
+          .join('\n');
+
+        const summonResult = await summonAgent({
+          fromAgentId: mode,
+          toAgentId: args.agent_id,
+          reason: args.reason,
+          conversationContext: recentContext,
+          sessionId,
+          userId,
+        });
+
+        yield { type: 'reasoning', content: `> ${summonResult.agentName} responded.\n` };
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: `[${summonResult.agentName} responds]\n${summonResult.response}`,
         } as ChatMessage);
       } else if (toolCall.function.name === 'workspace_write') {
         const args = JSON.parse(toolCall.function.arguments);
@@ -5093,6 +5030,32 @@ export async function* streamMessage(
             role: 'tool',
             tool_call_id: toolCall.id,
             content: formatAgentResultForContext(result.agentName, result.result, result.success),
+          } as ChatMessage);
+        } else if (toolCall.function.name === 'summon_agent') {
+          const args = JSON.parse(toolCall.function.arguments);
+          yield { type: 'status', status: `Summoning ${args.agent_id}...` };
+          logger.info('Summoning agent in follow-up', { agentId: args.agent_id, reason: args.reason?.substring(0, 100) });
+
+          const recentContext = messages
+            .filter(m => m.role === 'user' || m.role === 'assistant')
+            .slice(-6)
+            .map(m => `${m.role}: ${typeof m.content === 'string' ? m.content.substring(0, 300) : ''}`)
+            .join('\n');
+
+          const summonResult = await summonAgent({
+            fromAgentId: mode,
+            toAgentId: args.agent_id,
+            reason: args.reason,
+            conversationContext: recentContext,
+            sessionId,
+            userId,
+          });
+
+          yield { type: 'status', status: `${summonResult.agentName} responded` };
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: `[${summonResult.agentName} responds]\n${summonResult.response}`,
           } as ChatMessage);
         } else if (toolCall.function.name === 'web_search') {
           const args = JSON.parse(toolCall.function.arguments);

@@ -57,7 +57,8 @@ const sendMessageSchema = z.object({
   stream: z.boolean().optional(),
   projectMode: z.boolean().optional(),
   thinkingMode: z.boolean().optional(),
-  novaMode: z.boolean().optional(),
+  zipMode: z.boolean().optional(),
+  novaMode: z.boolean().optional(),  // @deprecated - use zipMode
   djStyleContext: z.string().max(500).optional(),
   djGenreContext: z.string().max(500).optional(),
   ceoSystemLog: z.string().max(500).optional(),
@@ -269,7 +270,7 @@ router.post('/sessions/:id/send', rateLimit, upload.array('files', 5), async (re
         stream: req.body.stream === 'true' || req.body.stream === true,
         projectMode: req.body.projectMode === 'true' || req.body.projectMode === true,
         thinkingMode: req.body.thinkingMode === 'true' || req.body.thinkingMode === true,
-        novaMode: req.body.novaMode === 'true' || req.body.novaMode === true,
+        zipMode: req.body.zipMode === 'true' || req.body.zipMode === true || req.body.novaMode === 'true' || req.body.novaMode === true,
       };
 
       // Process uploaded files
@@ -315,7 +316,7 @@ router.post('/sessions/:id/send', rateLimit, upload.array('files', 5), async (re
         mode: session.mode,
         projectMode: data.projectMode,
         thinkingMode: data.thinkingMode,
-        novaMode: data.novaMode,
+        zipMode: data.zipMode,
         documentIds: documentIds.length > 0 ? documentIds : undefined,
         djStyleContext: data.djStyleContext,
         djGenreContext: data.djGenreContext,
@@ -381,7 +382,7 @@ router.post('/sessions/:id/send', rateLimit, upload.array('files', 5), async (re
         mode: session.mode,
         projectMode: data.projectMode,
         thinkingMode: data.thinkingMode,
-        novaMode: data.novaMode,
+        zipMode: data.zipMode,
         documentIds: documentIds.length > 0 ? documentIds : undefined,
         djStyleContext: data.djStyleContext,
         djGenreContext: data.djGenreContext,
