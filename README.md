@@ -60,6 +60,7 @@ Luna has a "job" even when you aren't chatting. She can research news, track you
 *   🧑‍🤝‍🧑 **Friends System:** Luna has AI "friend" personas she discusses topics with -- a gossip queue with importance ranking, auto-discussion timers, and theater mode for watching deliberations live.
 *   🥽 **VR Luna:** An Unreal Engine 5.5 companion app for Steam Index VR with MetaHuman avatar, spatial voice chat, and three themed rooms (Music, CEO Office, Relax).
 *   🖥️ **KDE Integration:** Desktop integration via WebSocket for seamless Linux desktop notifications and control.
+*   🧬 **Luna Streams (Mamba SSM):** Continuous cognition layer -- three parallel Mamba state-space models running 24/7 on CPU via llama.cpp GGUF inference (97ms/step). Persistent hidden states encode compressed understanding with EMA dual-state buffers and drift detection.
 *   🤖 **Multi-Provider LLM:** Supports OpenAI, Anthropic, Google Gemini (with tool/function calling), Groq, xAI, OpenRouter, and local Ollama models.
 
 ---
@@ -154,6 +155,8 @@ Semantic Memory (PostgreSQL, persistent)
 ```
 
 Sessions automatically consolidate through tiers over time. NeuralSleep's Dual-LNN architecture (Thematic + Relational streams) processes memories with consciousness metrics including Phi (integrated information), temporal integration, and self-reference depth.
+
+**Luna Streams** adds a continuous cognition layer on top of this -- three Mamba state-space models (371M params each) process memory events in real-time via GGUF/llama.cpp inference at 97ms per step. Each stream maintains persistent hidden states with dual EMA buffers (fast + slow) and drift detection, injecting compressed context (~120 tokens) into Luna's system prompt.
 
 **Recent additions (March 2026):**
 - **Spreading Activation**: Graph retrieval now uses BFS spreading activation from seed entities instead of static narrative blobs. Signal decays per hop with configurable thresholds, hub fan limits, and session bonuses.
@@ -254,7 +257,7 @@ docker compose -f docker-compose.portable.yml up -d
 | **[CEO_LUNA.md](docs/CEO_LUNA.md)**: Business hub & album creator. | **[CLAUDE.md](CLAUDE.md)**: Coding standards for contributors. |
 | **[DJ_LUNA.md](docs/DJ_LUNA.md)**: Music studio & 55 genre presets. | **[MEMORY.md](docs/MEMORY.md)**: Memory & MemoryCore deep dive. |
 | **[SYSTEM_FLOW.md](docs/SYSTEM_FLOW.md)**: Internal data flows. | **[musicgen.md](docs/musicgen.md)**: Suno tag reference. |
-| **[INSTALL.md](INSTALL.md)**: Detailed setup steps. | |
+| **[INSTALL.md](INSTALL.md)**: Detailed setup steps. | **[Luna Streams](../luna-streams/README.md)**: Mamba SSM cognition layer. |
 
 ---
 

@@ -9,6 +9,7 @@ import {
 // Tool definitions moved to src/agents/tool-resolver.ts
 import * as loadContextHandler from '../context/load-context.handler.js';
 import * as browserScreencast from '../abilities/browser-screencast.service.js';
+import * as lunaStreamsClient from '../integration/luna-streams.client.js';
 
 /**
  * Decode HTML entities in a string
@@ -477,6 +478,14 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   // Record enriched user message to MemoryCore (async, non-blocking)
   memorycoreClient.recordChatInteraction(sessionId, 'message', message, { mode, source }, pmEnrichment).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
 
+  // Emit to Luna Streams (fire-and-forget)
+  lunaStreamsClient.emitChatInteraction(message, {
+    mode,
+    sentiment: pmEnrichment?.emotionalValence,
+    attentionScore: pmEnrichment?.attentionScore,
+    responseTimeMs: pmEnrichment?.interMessageMs,
+  });
+
   // Track session activity for automatic consolidation after inactivity
   sessionActivityService.recordActivity(sessionId, userId).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
 
@@ -760,6 +769,9 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   const stableContext = [stableMemoryPrompt, abilityPrompt, prefPrompt, canvasStylePrompt].filter(Boolean).join('\n\n');
   const volatileContext = [volatileMemoryPrompt, intentPrompt, abilityActionResult, canvasSessionPrompt].filter(Boolean).join('\n\n');
 
+  // Fetch Mamba stream context (delta-tracked, ~120 tokens, non-blocking on failure)
+  const mambaStreamContext = await lunaStreamsClient.getStreamContext(userId).catch(() => null);
+
   // Build messages array with MCP tool info and compressed context
   const mcpToolsForPrompt = mcpUserTools.map(t => ({
     name: t.name,
@@ -783,6 +795,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
         ceoSystemLog,
         skillContext,
         desktopContext: getDesktopContext(userId),
+        mambaStreamContext: mambaStreamContext || undefined,
       }),
     },
   ];
@@ -2226,6 +2239,14 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
       provider: modelConfig.provider,
       tokensUsed: completion.tokensUsed,
     }, enrichment);
+
+    // Emit to Luna Streams (fire-and-forget)
+    lunaStreamsClient.emitChatInteraction(completion.content, {
+      model: modelConfig.model,
+      mode,
+      sentiment: enrichment?.emotionalValence,
+      attentionScore: enrichment?.attentionScore,
+    });
   }).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
 
   // Process facts from conversation (async, every few messages)
@@ -3495,6 +3516,9 @@ export async function* streamMessage(
   const stableContext = [stableMemoryPrompt, abilityPrompt, prefPrompt, canvasStylePrompt].filter(Boolean).join('\n\n');
   const volatileContext = [volatileMemoryPrompt, intentPrompt, abilityActionResult, canvasSessionPrompt].filter(Boolean).join('\n\n');
 
+  // Fetch Mamba stream context (delta-tracked, ~120 tokens, non-blocking on failure)
+  const mambaStreamContext = await lunaStreamsClient.getStreamContext(userId).catch(() => null);
+
   // Build messages array with MCP tool info and compressed context
   const mcpToolsForPrompt = mcpUserTools.map(t => ({
     name: t.name,
@@ -3518,6 +3542,7 @@ export async function* streamMessage(
         ceoSystemLog,
         skillContext,
         desktopContext: getDesktopContext(userId),
+        mambaStreamContext: mambaStreamContext || undefined,
       }),
     },
   ];

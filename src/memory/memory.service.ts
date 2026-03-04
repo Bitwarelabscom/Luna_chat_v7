@@ -11,6 +11,7 @@ import { UNTRUSTED_EMAIL_FRAME } from '../email/email-gatekeeper.service.js';
 import { formatRelativeTime } from './time-utils.js';
 import { scoreMessageComplexity, curateMemory } from './memory-curation.service.js';
 import { classifyEdges } from './edge-classification.service.js';
+import * as lunaStreamsClient from '../integration/luna-streams.client.js';
 
 /**
  * Memory context split into stable (cacheable) and volatile (per-query) parts
@@ -554,6 +555,9 @@ export async function processMessageMemory(
     role === 'user' ? 'user' : 'model'
   ).then(result => {
     if (result?.entities && result.entities.length >= 2) {
+      // Emit entity update to Luna Streams (fire-and-forget)
+      lunaStreamsClient.emitEntityUpdate(result.entities, result.cooccurrences || 0);
+
       classifyEdges(userId, sessionId, content, role, result.entities).catch(err => {
         logger.error('Failed to classify edges', { error: err.message });
       });

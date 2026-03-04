@@ -19,7 +19,8 @@
 10. [Trading System](#trading-system)
 11. [Friends System](#friends-system)
 12. [VR Luna](#vr-luna)
-13. [Integrations](#integrations)
+13. [Luna Streams](#luna-streams)
+14. [Integrations](#integrations)
 14. [Developer Guide](#developer-guide)
 15. [API Reference](#api-reference)
 16. [Configuration](#configuration)
@@ -86,6 +87,7 @@ Luna Chat is a local-first, privacy-focused AI companion with advanced memory, a
 | **Local LLM** | Ollama (BGE-M3, Qwen, Llama) | Embeddings, local processing |
 | **Memory** | MemoryCore + NeuralSleep | 3-tier memory consolidation |
 | **Trading** | TradeCore (Go) | High-performance trading engine |
+| **Cognition** | Luna Streams (Mamba SSM, llama.cpp) | Continuous state-space inference |
 | **Coordination** | Sanhedrin (A2A Protocol) | Multi-agent task delegation |
 
 ### Data Flow
@@ -903,6 +905,90 @@ Build/Scripts/build.sh package
 
 ---
 
+## Luna Streams
+
+Luna Streams is a continuous cognition layer -- three parallel Mamba state-space models (SSMs) running 24/7 on CPU, processing memory events in real-time. Each stream maintains a persistent hidden state encoding compressed understanding. No context windows. No batch jobs. Always on.
+
+**Standalone project**: `/opt/luna-streams/` (Python, FastAPI on port 8100)
+
+### Architecture
+
+```
+Luna Chat                          Luna Streams
+---------                          ------------
+chat.service.ts  --POST /api/events-->  [Event Queue]
+memory.service.ts                            |
+                                    [User Model Stream] --> EMA Buffer --> State (safetensors)
+                                    [Knowledge Graph Stream] (planned)
+                                    [Conversation Dynamics Stream] (planned)
+                                             |
+luna.persona.ts  <--GET /api/context--  [Context Injector] (~120 tokens)
+```
+
+### Inference
+
+- **Model**: `state-spaces/mamba-370m-hf` (371M params)
+- **Format**: GGUF Q8_0 via llama-cpp-python (optimized C++ CPU kernels)
+- **Performance**: 97ms mean latency, 10.3 events/sec, 509MB RAM per stream
+- **Target**: <150ms mean latency per step -- PASSED
+
+PyTorch/HuggingFace Mamba falls back to sequential Python loops on CPU (no CUDA kernels), making it unusable (~595ms for 370M). GGUF via llama.cpp provides native C++ Mamba support with AVX2 vectorization.
+
+### Compact Event Encoding
+
+Events are tokenized into ~16 tokens for the Mamba model (critical for <150ms latency):
+
+```
+mem_e conv Luna,Henke architecture 0.6 0.8 Working on Mamba integration
+```
+
+### EMA Dual-State Buffer
+
+Each stream maintains two exponential moving averages of the hidden state:
+
+- **Fast state**: Current SSM output (replaced each step)
+- **Slow state**: EMA with decay 0.999 (tracks long-term trends)
+- **Drift signal**: `L2(fast - slow) / norm(slow)` -- spikes on behavioral changes
+
+Both states are persisted via safetensors with 3-snapshot rotation.
+
+### Luna Chat Integration
+
+| File | Purpose |
+|------|---------|
+| `src/integration/luna-streams.client.ts` | Fire-and-forget event emission + delta-tracked context |
+| `src/chat/chat.service.ts` | Emits chat interactions as memory_entry events |
+| `src/memory/memory.service.ts` | Emits entity_update events after graph extraction |
+| `src/persona/luna.persona.ts` | Injects stream context in Tier 2 (stable) |
+
+**Context injection format** (~120 tokens):
+```
+[Continuous Cognition - Mamba Streams]
+[User State] Henke is deep in architecture work...
+[Drift] 0.15 (low - business as usual)
+```
+
+Delta tracker returns `changed: false` when state delta < 0.01, so context only regenerates on meaningful shifts.
+
+### Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LUNA_STREAMS_URL` | `http://luna-streams:8100` | Luna Streams service URL |
+| `LUNA_STREAMS_ENABLED` | `false` | Enable event emission and context injection |
+
+### Status
+
+- [x] Phase 0: Benchmark (97ms mean, PASSED)
+- [x] Phase 1: FastAPI app + memory bridge + event ingestion
+- [x] Phase 4: Stream 1 deployment with GGUF inference
+- [x] Phase 5: Luna Chat integration (client, emission, context injection)
+- [ ] Phase 2-3: Training data preparation + LoRA fine-tune
+- [ ] Phase 6: Validation gate
+- [ ] Phase 7-10: Summary decoder, Streams 2-3, cross-stream, NeuralSleep
+
+---
+
 ## Integrations
 
 ### Calendar (CalDAV)
@@ -1366,6 +1452,10 @@ See [README.md](../README.md#api-reference) for full endpoint listing.
 - `OLLAMA_HOST`: Ollama URL (default: http://luna-ollama:11434)
 - `SEARXNG_URL`: SearXNG search engine URL
 - `ELEVENLABS_API_KEY`: ElevenLabs TTS API key
+
+**Luna Streams**:
+- `LUNA_STREAMS_URL`: Luna Streams service URL (default: http://luna-streams:8100)
+- `LUNA_STREAMS_ENABLED`: Enable Mamba Streams event emission and context injection (default: false)
 
 **Memory**:
 - `MEMORYCORE_URL`: MemoryCore API URL (default: http://memorycore-api:3007)

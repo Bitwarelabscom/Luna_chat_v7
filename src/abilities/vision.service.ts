@@ -204,7 +204,7 @@ async function analyzeWithOllama(
         },
       ],
     }),
-    signal: AbortSignal.timeout(60000),
+    signal: AbortSignal.timeout(180000),
   });
 
   if (!response.ok) {

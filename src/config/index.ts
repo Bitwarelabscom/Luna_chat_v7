@@ -124,6 +124,11 @@ const configSchema = z.object({
     phiThreshold: z.coerce.number().default(0.5),
   }),
 
+  lunaStreams: z.object({
+    url: z.string().default('http://luna-streams:8100'),
+    enabled: z.coerce.boolean().default(false),
+  }).optional(),
+
   neo4j: z.object({
     uri: z.string().default('bolt://luna-neo4j:7687'),
     user: z.string().default('neo4j'),
@@ -356,6 +361,11 @@ const rawConfig = {
     enabled: process.env.MEMORYCORE_ENABLED,
     consciousnessEnabled: process.env.MEMORYCORE_CONSCIOUSNESS_ENABLED,
     phiThreshold: process.env.MEMORYCORE_PHI_THRESHOLD,
+  },
+
+  lunaStreams: {
+    url: process.env.LUNA_STREAMS_URL,
+    enabled: process.env.LUNA_STREAMS_ENABLED,
   },
 
   neo4j: {

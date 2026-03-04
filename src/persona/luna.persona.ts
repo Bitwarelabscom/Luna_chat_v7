@@ -467,6 +467,7 @@ export function buildContextualPrompt(
     ceoSystemLog?: string;
     skillContext?: string;
     desktopContext?: string;
+    mambaStreamContext?: string;
   }
 ): string {
   const sections: string[] = [];
@@ -529,6 +530,11 @@ You have access to additional tools via MCP (Model Context Protocol). These exte
   // Stable memory (facts, learnings, abilities, preferences) - rarely changes
   if (options.stableMemoryContext) {
     sections.push(options.stableMemoryContext);
+  }
+
+  // Mamba continuous cognition context - stable, delta-tracked (~120 tokens)
+  if (options.mambaStreamContext) {
+    sections.push(options.mambaStreamContext);
   }
 
   // ============================================

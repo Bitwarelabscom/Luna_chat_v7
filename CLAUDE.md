@@ -125,3 +125,44 @@ docker exec memorycore-postgres psql -U memorycore -d memorycore -c \
 docker exec memorycore-postgres psql -U memorycore -d memorycore -c \
   "SELECT * FROM session_summaries ORDER BY timestamp DESC LIMIT 5;"
 ```
+
+## Luna Streams Integration
+
+Luna Streams is a separate Python service (`/opt/luna-streams/`) that runs three parallel Mamba state-space models for continuous cognition. It processes memory events in real-time and injects context (~120 tokens) into the chat system prompt.
+
+### How It Works
+
+1. **Event emission** (fire-and-forget): Chat interactions and entity extractions are emitted to Luna Streams via HTTP POST. Never blocks chat.
+2. **Context injection** (delta-tracked): Before each LLM call, Luna Chat fetches the current stream context. Only updates when state has meaningfully shifted (delta > 0.01).
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `src/integration/luna-streams.client.ts` | HTTP client - emitEvent(), getStreamContext() |
+| `src/chat/chat.service.ts` | Emission points (alongside recordChatInteraction) |
+| `src/memory/memory.service.ts` | Entity update emission (after extractGraphEntities) |
+| `src/persona/luna.persona.ts` | Context injection in Tier 2 (mambaStreamContext option) |
+| `src/config/index.ts` | lunaStreams config (url, enabled) |
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `LUNA_STREAMS_URL` | Luna Streams API URL | http://luna-streams:8100 |
+| `LUNA_STREAMS_ENABLED` | Enable Luna Streams integration | false |
+
+### Testing
+
+```bash
+# Check if luna-streams is reachable from luna-api
+docker exec luna-api curl -s http://luna-streams:8100/health
+
+# Post a test event
+curl -X POST http://localhost:8100/api/events -H 'Content-Type: application/json' -d '{
+  "events": [{"timestamp": "2026-03-04T00:00:00Z", "event_type": "memory_entry", "source": "conversation", "content": {"summary": "test"}}]
+}'
+
+# Check stream state
+curl http://localhost:8100/api/streams
+```
