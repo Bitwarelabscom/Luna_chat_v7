@@ -68,6 +68,5 @@ work2.md
 # Claude Code settings (local development)
 .claude/
 
-# Trading engine files (proprietary)
-src/trading/
 buildme.md
+clauding/
