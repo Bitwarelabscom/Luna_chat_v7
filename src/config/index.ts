@@ -266,7 +266,7 @@ const configSchema = z.object({
   suno: z.object({
     apiUrl: z.string().url().default('http://10.0.0.10:3000'),
     ollamaUrl: z.string().url().default('http://10.0.0.30:11434'),
-    ollamaModel: z.string().default('qwen3.5:9b'),
+    ollamaModel: z.string().default('qwen3.5:4b-q4_K_M'),
   }),
 });
 

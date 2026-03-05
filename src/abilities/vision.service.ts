@@ -5,7 +5,7 @@ import { activityHelpers } from '../activity/activity.service.js';
 
 // Vision-capable models by provider
 const VISION_MODELS = {
-  ollama: 'qwen3.5:9b',
+  ollama: 'qwen3.5:4b-q4_K_M',
   xai: 'grok-4.1-fast',
 };
 
@@ -87,7 +87,7 @@ function logVisionActivity(
 }
 
 /**
- * Analyze an image using Ollama (qwen3.5:9b) with Grok (xAI) as fallback
+ * Analyze an image using Ollama (qwen3.5:4b-q4_K_M) with Grok (xAI) as fallback
  */
 export async function analyzeImage(
   imageBuffer: Buffer,

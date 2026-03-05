@@ -128,7 +128,7 @@ services:
       - MEMORYCORE_URL=http://memorycore-api:3002
       - MEMORYCORE_ENABLED=${MEMORYCORE_ENABLED:-true}
       - LUNA_STREAMS_URL=http://luna-streams:8100
-      - LUNA_STREAMS_ENABLED=${LUNA_STREAMS_ENABLED:-false}
+      - LUNA_STREAMS_ENABLED=${LUNA_STREAMS_ENABLED:-true}
       - SEARXNG_URL=http://searxng:8080
       - SEARXNG_ENABLED=${SEARXNG_ENABLED:-true}
       - RATE_LIMIT_WINDOW_MS=${RATE_LIMIT_WINDOW_MS:-60000}
