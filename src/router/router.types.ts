@@ -59,7 +59,7 @@ export interface RouterConfig {
   classifierModel: string;
 
   /** Provider for the classifier model */
-  classifierProvider: 'anthropic' | 'google' | 'groq' | 'openai';
+  classifierProvider: 'anthropic' | 'google' | 'groq';
 
   /** Timeout for classifier calls (ms) */
   classifierTimeoutMs: number;

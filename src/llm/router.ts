@@ -1,5 +1,4 @@
 import type { ProviderId, ChatMessage, CompletionResult, StreamChunk } from './types.js';
-import * as openaiProvider from './providers/openai.provider.js';
 import * as groqProvider from './providers/groq.provider.js';
 import * as anthropicProvider from './providers/anthropic.provider.js';
 import type { CacheableSystemBlock } from './providers/anthropic.provider.js';
@@ -83,7 +82,6 @@ interface ProviderModule {
 }
 
 const providers: Record<ProviderId, ProviderModule> = {
-  openai: openaiProvider,
   groq: groqProvider,
   anthropic: anthropicProvider,
   xai: xaiProvider,

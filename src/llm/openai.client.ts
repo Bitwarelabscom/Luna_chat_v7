@@ -9,13 +9,10 @@ import { activityHelpers } from '../activity/activity.service.js';
 // Provider clients cache
 const clients: Partial<Record<ProviderId, OpenAI>> = {};
 
-function getClient(provider: ProviderId = 'openai'): OpenAI {
+function getClient(provider: ProviderId = 'xai'): OpenAI {
   if (!clients[provider]) {
     logger.info('Creating OpenAI client for provider', { provider });
     switch (provider) {
-      case 'openai':
-        clients.openai = new OpenAI({ apiKey: config.openai.apiKey });
-        break;
       case 'groq':
         if (!config.groq?.apiKey) throw new Error('Groq API key not configured');
         clients.groq = new OpenAI({
@@ -131,7 +128,7 @@ export async function createChatCompletion(
     tools,
     temperature = 0.7,
     maxTokens,
-    provider = 'openai',
+    provider = 'xai',
     model,
     reasoning,
     thinkingMode,
@@ -146,7 +143,7 @@ export async function createChatCompletion(
   );
   const tertiaryNumCtx = config.ollamaTertiary?.numCtx ?? 65536;
 
-  const modelToUse = model || config.openai.model;
+  const modelToUse = model || 'grok-4-1-fast';
   const startTime = Date.now();
   const activityMessages = messages.map(m => ({
     role: m.role,
@@ -417,13 +414,7 @@ export async function createChatCompletion(
   const client = getClient(provider);
 
   try {
-    // Use max_completion_tokens for OpenAI (newer models), max_tokens for others
-    // Skip temperature for OpenAI gpt-5 and o4 models (only supports default)
-    const skipTemperature = modelToUse.includes('gpt-5') || modelToUse.includes('o4-') || modelToUse.startsWith('o4');
-    
-    const tokenParam = provider === 'openai'
-      ? { max_completion_tokens: resolvedMaxTokens }
-      : { max_tokens: resolvedMaxTokens };
+    const tokenParam = { max_tokens: resolvedMaxTokens };
 
     // xAI Grok 4.1 Fast supports reasoning mode
     const isXAIReasoning = provider === 'xai' &&
@@ -444,7 +435,7 @@ export async function createChatCompletion(
       model: modelToUse,
       messages: formattedMessages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
       ...(tools ? { tools } : {}),
-      ...(skipTemperature ? {} : { temperature }),
+      temperature,
       ...tokenParam,
       response_format,
       // Add reasoning for xAI fast/reasoning models (enabled by default, can be disabled)
@@ -558,14 +549,14 @@ export async function* streamChatCompletion(
     tools,
     temperature = 0.7,
     maxTokens,
-    provider = 'openai',
+    provider = 'xai',
     model,
     loggingContext,
   } = options;
   const resolvedMaxTokens = maxTokens ?? (provider === 'ollama_tertiary' ? 8192 : 4096);
 
   const client = getClient(provider);
-  const modelToUse = model || config.openai.model;
+  const modelToUse = model || 'grok-4-1-fast';
   const startTime = Date.now();
   let fullContent = '';
   let fullReasoning = '';
@@ -615,15 +606,11 @@ export async function* streamChatCompletion(
   };
 
   try {
-    // Use max_completion_tokens for OpenAI (newer models), max_tokens for others
-    // Skip temperature for OpenAI gpt-5 and o4 models (only supports default)
     // Moonshot reasoning models require temperature 1.0
     const isMoonshotReasoning = provider === 'moonshot' && (modelToUse.includes('thinking') || modelToUse.includes('k2.5'));
-    const skipTemperature = modelToUse.includes('gpt-5') || modelToUse.includes('o4-') || modelToUse.includes('o1-') || modelToUse.includes('o3-') || modelToUse.startsWith('o4') || isMoonshotReasoning;
-    
-    const tokenParam = provider === 'openai'
-      ? { max_completion_tokens: resolvedMaxTokens }
-      : { max_tokens: resolvedMaxTokens };
+    const skipTemperature = isMoonshotReasoning;
+
+    const tokenParam = { max_tokens: resolvedMaxTokens };
 
     // Format messages for OpenAI API (handle tool calls and tool results)
     const formattedMessages = messages.map(m => {

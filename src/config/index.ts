@@ -39,7 +39,7 @@ const configSchema = z.object({
   router: z.object({
     enabled: z.coerce.boolean().default(false),
     classifierModel: z.string().default('llama-3.1-8b-instant'),
-    classifierProvider: z.enum(['anthropic', 'google', 'groq', 'openai']).default('groq'),
+    classifierProvider: z.enum(['anthropic', 'google', 'groq']).default('groq'),
     classifierTimeoutMs: z.coerce.number().default(200),
     rulesTimeoutMs: z.coerce.number().default(50),
     fallbackRoute: z.enum(['nano', 'pro', 'pro+tools']).default('pro+tools'),
@@ -71,7 +71,6 @@ const configSchema = z.object({
 
   openai: z.object({
     apiKey: z.string(),
-    model: z.string().default('gpt-5.1-chat-latest'),
   }),
 
   moonshot: z.object({
@@ -310,7 +309,6 @@ const rawConfig = {
 
   openai: {
     apiKey: secrets.openaiApiKey,
-    model: process.env.OPENAI_MODEL,
   },
 
   moonshot: {

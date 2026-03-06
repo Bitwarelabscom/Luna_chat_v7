@@ -98,7 +98,7 @@ export async function getUserModelConfig(
     const defaultConfig = CONFIGURABLE_TASKS.find(t => t.taskType === taskType);
     return defaultConfig
       ? { provider: defaultConfig.defaultProvider, model: defaultConfig.defaultModel }
-      : { provider: 'openai', model: 'gpt-5.1-chat-latest' };
+      : { provider: 'xai', model: 'grok-4-1-fast' };
   }
 }
 

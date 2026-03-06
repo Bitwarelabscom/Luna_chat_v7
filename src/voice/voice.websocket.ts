@@ -185,8 +185,8 @@ async function processTextCommand(
   try {
       const stream = streamChatCompletion({
           messages,
-          model: 'gpt-4o', // Force fast model for voice
-          provider: 'openai',
+          model: 'grok-4-1-fast', // Force fast model for voice
+          provider: 'xai',
           maxTokens: 300,
           loggingContext: {
             userId,
@@ -319,8 +319,8 @@ async function processUtterance(
   try {
       const stream = streamChatCompletion({
           messages,
-          model: 'gpt-4o', // Force fast model for voice
-          provider: 'openai',
+          model: 'grok-4-1-fast', // Force fast model for voice
+          provider: 'xai',
           maxTokens: 300,
           loggingContext: {
             userId,

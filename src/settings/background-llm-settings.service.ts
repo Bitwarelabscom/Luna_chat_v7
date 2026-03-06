@@ -38,7 +38,6 @@ export interface BackgroundLlmFeatureMeta {
 }
 
 const VALID_PROVIDERS: ProviderId[] = [
-  'openai',
   'groq',
   'anthropic',
   'xai',

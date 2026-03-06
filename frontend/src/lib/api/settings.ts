@@ -184,7 +184,7 @@ export interface TtsSettings {
 }
 
 // Coder Settings Types
-export type ProviderId = 'openai' | 'groq' | 'anthropic' | 'xai' | 'openrouter' | 'ollama' | 'ollama_secondary' | 'ollama_tertiary' | 'google' | 'sanhedrin' | 'moonshot';
+export type ProviderId = 'groq' | 'anthropic' | 'xai' | 'openrouter' | 'ollama' | 'ollama_secondary' | 'ollama_tertiary' | 'google' | 'sanhedrin' | 'moonshot';
 
 export interface TriggerWords {
   claude: string[];

@@ -1,6 +1,6 @@
 // LLM Provider Types
 
-export type ProviderId = 'openai' | 'groq' | 'anthropic' | 'xai' | 'openrouter' | 'ollama' | 'ollama_secondary' | 'ollama_tertiary' | 'google' | 'sanhedrin' | 'moonshot';
+export type ProviderId = 'groq' | 'anthropic' | 'xai' | 'openrouter' | 'ollama' | 'ollama_secondary' | 'ollama_tertiary' | 'google' | 'sanhedrin' | 'moonshot';
 
 export interface LLMProvider {
   id: ProviderId;
@@ -57,100 +57,6 @@ export interface StreamChunk {
 
 // Available providers and models registry
 export const PROVIDERS: LLMProvider[] = [
-  {
-    id: 'openai',
-    name: 'OpenAI',
-    enabled: true,
-    models: [
-      // GPT-5.1 Series (Latest)
-      {
-        id: 'gpt-5.1-chat-latest',
-        name: 'GPT-5.1',
-        contextWindow: 1047576,
-        maxOutputTokens: 32768,
-        capabilities: ['chat', 'code', 'analysis', 'creative'],
-        costPer1kInput: 0.00125,
-        costPer1kOutput: 0.01,
-      },
-      {
-        id: 'gpt-5.1-codex',
-        name: 'GPT-5.1 Codex',
-        contextWindow: 1047576,
-        maxOutputTokens: 32768,
-        capabilities: ['chat', 'code', 'analysis'],
-        costPer1kInput: 0.00125,
-        costPer1kOutput: 0.01,
-      },
-      // GPT-4.1 Series
-      {
-        id: 'gpt-4.1',
-        name: 'GPT-4.1',
-        contextWindow: 1047576,
-        maxOutputTokens: 32768,
-        capabilities: ['chat', 'code', 'analysis', 'creative'],
-        costPer1kInput: 0.002,
-        costPer1kOutput: 0.008,
-      },
-      {
-        id: 'gpt-4.1-mini',
-        name: 'GPT-4.1 Mini',
-        contextWindow: 1047576,
-        maxOutputTokens: 32768,
-        capabilities: ['chat', 'code', 'fast'],
-        costPer1kInput: 0.0004,
-        costPer1kOutput: 0.0016,
-      },
-      {
-        id: 'gpt-4.1-nano',
-        name: 'GPT-4.1 Nano',
-        contextWindow: 1047576,
-        maxOutputTokens: 32768,
-        capabilities: ['chat', 'fast'],
-        costPer1kInput: 0.0001,
-        costPer1kOutput: 0.0004,
-      },
-      // GPT-4o Series
-      {
-        id: 'gpt-4o',
-        name: 'GPT-4o',
-        contextWindow: 128000,
-        maxOutputTokens: 16384,
-        capabilities: ['chat', 'code', 'analysis', 'creative'],
-        costPer1kInput: 0.0025,
-        costPer1kOutput: 0.01,
-      },
-      {
-        id: 'gpt-4o-mini',
-        name: 'GPT-4o Mini',
-        contextWindow: 128000,
-        maxOutputTokens: 16384,
-        capabilities: ['chat', 'code', 'fast'],
-        costPer1kInput: 0.00015,
-        costPer1kOutput: 0.0006,
-      },
-      // o3/o4 Reasoning
-      {
-        id: 'o3',
-        name: 'o3 (Reasoning)',
-        contextWindow: 200000,
-        maxOutputTokens: 100000,
-        capabilities: ['chat', 'code', 'analysis'],
-        costPer1kInput: 0.002,
-        costPer1kOutput: 0.008,
-      },
-      {
-        id: 'o4-mini',
-        name: 'o4 Mini (Reasoning)',
-        contextWindow: 200000,
-        maxOutputTokens: 100000,
-        capabilities: ['chat', 'code', 'analysis', 'fast'],
-        costPer1kInput: 0.0011,
-        costPer1kOutput: 0.0044,
-      },
-      // Excluded expensive models:
-      // gpt-5-pro: $15/$120, o1: $15/$60, o1-pro: $150/$600, o3-pro: $20/$80
-    ],
-  },
   {
     id: 'groq',
     name: 'Groq',
@@ -571,6 +477,15 @@ export const PROVIDERS: LLMProvider[] = [
         contextWindow: 131072,
         maxOutputTokens: 8192,
         capabilities: ['chat', 'code'],
+        costPer1kInput: 0,
+        costPer1kOutput: 0,
+      },
+      {
+        id: 'qwen/qwen3-next-80b-a3b-instruct:free',
+        name: 'Qwen3 Next 80B (Free)',
+        contextWindow: 131072,
+        maxOutputTokens: 16384,
+        capabilities: ['chat', 'code', 'analysis', 'creative'],
         costPer1kInput: 0,
         costPer1kOutput: 0,
       },
@@ -1146,7 +1061,7 @@ export function getModel(providerId: ProviderId, modelId: string): ModelConfig |
 export function getDefaultTaskConfig(taskType: ConfigurableTask): { provider: ProviderId; model: string } {
   const task = CONFIGURABLE_TASKS.find(t => t.taskType === taskType);
   if (!task) {
-    return { provider: 'openai', model: 'gpt-5.1-chat-latest' };
+    return { provider: 'xai', model: 'grok-4-1-fast' };
   }
   return { provider: task.defaultProvider, model: task.defaultModel };
 }

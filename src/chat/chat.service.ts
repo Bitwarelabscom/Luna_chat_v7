@@ -496,7 +496,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
       const routerConfig = {
         enabled: config.router.enabled,
         classifierModel: config.router.classifierModel,
-        classifierProvider: config.router.classifierProvider as 'anthropic' | 'google' | 'groq' | 'openai',
+        classifierProvider: config.router.classifierProvider as 'anthropic' | 'google' | 'groq',
         classifierTimeoutMs: config.router.classifierTimeoutMs,
         rulesTimeoutMs: config.router.rulesTimeoutMs,
         fallbackRoute: config.router.fallbackRoute as 'nano' | 'pro' | 'pro+tools',
@@ -2973,7 +2973,7 @@ export async function* streamMessage(
       const routerConfig = {
         enabled: config.router.enabled,
         classifierModel: config.router.classifierModel,
-        classifierProvider: config.router.classifierProvider as 'anthropic' | 'google' | 'groq' | 'openai',
+        classifierProvider: config.router.classifierProvider as 'anthropic' | 'google' | 'groq',
         classifierTimeoutMs: config.router.classifierTimeoutMs,
         rulesTimeoutMs: config.router.rulesTimeoutMs,
         fallbackRoute: config.router.fallbackRoute as 'nano' | 'pro' | 'pro+tools',

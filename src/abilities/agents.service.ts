@@ -909,14 +909,13 @@ async function executeWithOpenAI(
 ): Promise<AgentResult> {
   logger.info('Executing agent task via OpenAI o4-mini', { agentName });
 
-  // o4-mini doesn't support custom temperature, only default (1)
   const completion = await createChatCompletion({
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userMessage }
     ],
-    provider: 'openai',
-    model: 'o4-mini',
+    provider: 'google',
+    model: 'gemini-2.5-flash',
     loggingContext: {
       userId,
       source: 'agents',
@@ -998,8 +997,8 @@ Based on these search results, provide a comprehensive answer. Include specific 
         { role: 'system', content: synthesisPrompt },
         { role: 'user', content: userMessage }
       ],
-      provider: 'openai',
-      model: 'o4-mini',
+      provider: 'google',
+      model: 'gemini-2.5-flash',
       loggingContext: {
         userId,
         source: 'agents',
@@ -1527,8 +1526,8 @@ ${userMessage}`;
         { role: 'system', content: systemPrompt },
         { role: 'user', content: workspacePrompt }
       ],
-      provider: 'openai',
-      model: 'codex-mini-latest',
+      provider: 'xai',
+      model: 'grok-4-1-fast',
       loggingContext: {
         userId,
         source: 'agents',

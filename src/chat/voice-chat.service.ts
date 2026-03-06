@@ -542,7 +542,7 @@ export async function processMessage(input: VoiceChatInput): Promise<VoiceChatOu
   let modelConfig = await getUserModelConfig(userId, 'fast_llm');
 
   // Voice chat requires tool support - fall back to xai/grok if provider doesn't support tools
-  const providersWithToolSupport = ['anthropic', 'openai', 'groq', 'xai', 'openrouter'];
+  const providersWithToolSupport = ['anthropic', 'groq', 'xai', 'openrouter'];
   if (!providersWithToolSupport.includes(modelConfig.provider)) {
     logger.info('Voice chat falling back to xai/grok (configured provider does not support tools)', {
       configuredProvider: modelConfig.provider,

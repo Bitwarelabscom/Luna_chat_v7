@@ -473,12 +473,12 @@ router.get('/models', async (req: Request, res: Response) => {
 // Update model configuration for a task
 const updateModelConfigSchema = z.object({
   taskType: z.string().min(1),
-  provider: z.enum(['openai', 'groq', 'anthropic', 'xai', 'openrouter', 'ollama', 'ollama_secondary', 'ollama_tertiary', 'google', 'sanhedrin', 'moonshot']),
+  provider: z.enum(['groq', 'anthropic', 'xai', 'openrouter', 'ollama', 'ollama_secondary', 'ollama_tertiary', 'google', 'sanhedrin', 'moonshot']),
   model: z.string().min(1),
 });
 
 const modelSelectorSchema = z.object({
-  provider: z.enum(['openai', 'groq', 'anthropic', 'xai', 'openrouter', 'ollama', 'ollama_secondary', 'ollama_tertiary', 'google', 'sanhedrin', 'moonshot']),
+  provider: z.enum(['groq', 'anthropic', 'xai', 'openrouter', 'ollama', 'ollama_secondary', 'ollama_tertiary', 'google', 'sanhedrin', 'moonshot']),
   model: z.string().min(1),
 });
 
@@ -598,7 +598,7 @@ const updateCoderSettingsSchema = z.object({
   geminiCliEnabled: z.boolean().optional(),
   codexCliEnabled: z.boolean().optional(),
   coderApiEnabled: z.boolean().optional(),
-  coderApiProvider: z.enum(['openai', 'groq', 'anthropic', 'xai', 'openrouter', 'ollama', 'ollama_secondary', 'ollama_tertiary', 'google', 'sanhedrin', 'moonshot']).nullable().optional(),
+  coderApiProvider: z.enum(['groq', 'anthropic', 'xai', 'openrouter', 'ollama', 'ollama_secondary', 'ollama_tertiary', 'google', 'sanhedrin', 'moonshot']).nullable().optional(),
   coderApiModel: z.string().nullable().optional(),
   triggerWords: z.object({
     claude: z.array(z.string()),

@@ -70,8 +70,8 @@ export default function ModelsTab() {
     const taskConfig = tasks.find(t => t.taskType === taskType);
     return {
       taskType,
-      provider: taskConfig?.defaultProvider || 'openai',
-      model: taskConfig?.defaultModel || 'gpt-4o',
+      provider: taskConfig?.defaultProvider || 'xai',
+      model: taskConfig?.defaultModel || 'grok-4-1-fast',
     };
   }
 

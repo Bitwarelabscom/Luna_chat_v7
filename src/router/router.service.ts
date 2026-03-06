@@ -24,7 +24,6 @@ import { determineRoute, quickRoute } from './rules/route-decision.js';
 import { createCompletion as anthropicCompletion } from '../llm/providers/anthropic.provider.js';
 import { createCompletion as groqCompletion } from '../llm/providers/groq.provider.js';
 import { createCompletion as googleCompletion } from '../llm/providers/google.provider.js';
-import { createCompletion as openaiCompletion } from '../llm/providers/openai.provider.js';
 import logger from '../utils/logger.js';
 
 // Provider completion functions
@@ -32,7 +31,6 @@ const providerCompletions = {
   anthropic: anthropicCompletion,
   groq: groqCompletion,
   google: googleCompletion,
-  openai: openaiCompletion,
 } as const;
 
 // Cache for classifier results to avoid repeated calls

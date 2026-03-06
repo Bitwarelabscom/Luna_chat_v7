@@ -3,13 +3,6 @@ import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
 import type { ModelConfig, LLMProvider } from './types.js';
 
-interface OpenAIModel {
-  id: string;
-  object: string;
-  created: number;
-  owned_by: string;
-}
-
 interface AnthropicModel {
   type: string;
   id: string;
@@ -58,15 +51,6 @@ interface XAIModel {
 
 // Known model pricing (per 1K tokens) - fallback when API doesn't provide it
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
-  // OpenAI
-  'gpt-4o': { input: 0.0025, output: 0.01 },
-  'gpt-4o-mini': { input: 0.00015, output: 0.0006 },
-  'gpt-4-turbo': { input: 0.01, output: 0.03 },
-  'gpt-4': { input: 0.03, output: 0.06 },
-  'gpt-3.5-turbo': { input: 0.0005, output: 0.0015 },
-  'o1-preview': { input: 0.015, output: 0.06 },
-  'o1-mini': { input: 0.003, output: 0.012 },
-  'o3-mini': { input: 0.0011, output: 0.0044 },
   // Anthropic
   'claude-3-5-sonnet': { input: 0.003, output: 0.015 },
   'claude-3-5-haiku': { input: 0.0008, output: 0.004 },
@@ -126,63 +110,6 @@ function inferCapabilities(modelId: string, modelName?: string): ModelConfig['ca
   }
 
   return [...new Set(capabilities)] as ModelConfig['capabilities'];
-}
-
-// Fetch OpenAI models
-async function fetchOpenAIModels(): Promise<ModelConfig[]> {
-  if (!config.openai.apiKey) {
-    return [];
-  }
-
-  try {
-    const response = await fetch('https://api.openai.com/v1/models', {
-      headers: {
-        'Authorization': `Bearer ${config.openai.apiKey}`,
-      },
-    });
-
-    if (!response.ok) {
-      logger.warn('Failed to fetch OpenAI models', { status: response.status });
-      return [];
-    }
-
-    const data = await response.json() as { data: OpenAIModel[] };
-
-    // Filter to chat models only
-    const chatModels = data.data.filter(m =>
-      (m.id.startsWith('gpt-') || m.id.startsWith('o1') || m.id.startsWith('o3') || m.id.startsWith('o4') || m.id.startsWith('chatgpt')) &&
-      !m.id.includes('instruct') &&
-      !m.id.includes('vision') &&
-      !m.id.includes('audio') &&
-      !m.id.includes('realtime') &&
-      !m.id.includes('search') &&
-      !m.id.includes('tts') &&
-      !m.id.includes('whisper') &&
-      !m.id.includes('dall-e') &&
-      !m.id.includes('embedding')
-    );
-
-    return chatModels.map(m => {
-      const pricing = findPricing(m.id);
-      return {
-        id: m.id,
-        name: formatModelName(m.id, 'openai'),
-        contextWindow: getContextWindow(m.id),
-        maxOutputTokens: getMaxOutputTokens(m.id),
-        capabilities: inferCapabilities(m.id),
-        costPer1kInput: pricing.input,
-        costPer1kOutput: pricing.output,
-      };
-    }).sort((a, b) => {
-      // Sort by model family then capability
-      const aScore = getModelSortScore(a.id);
-      const bScore = getModelSortScore(b.id);
-      return bScore - aScore;
-    });
-  } catch (error) {
-    logger.error('Error fetching OpenAI models', { error: (error as Error).message });
-    return [];
-  }
 }
 
 // Fetch Anthropic models
@@ -542,13 +469,6 @@ function formatModelName(modelId: string, provider: string): string {
 function getContextWindow(modelId: string): number {
   const id = modelId.toLowerCase();
 
-  // OpenAI
-  if (id.includes('gpt-4o')) return 128000;
-  if (id.includes('gpt-4-turbo')) return 128000;
-  if (id.includes('gpt-4')) return 8192;
-  if (id.includes('gpt-3.5')) return 16385;
-  if (id.includes('o1') || id.includes('o3') || id.includes('o4')) return 200000;
-
   // Anthropic
   if (id.includes('claude')) return 200000;
 
@@ -568,12 +488,6 @@ function getContextWindow(modelId: string): number {
 // Helper to get max output tokens
 function getMaxOutputTokens(modelId: string): number {
   const id = modelId.toLowerCase();
-
-  // OpenAI
-  if (id.includes('gpt-4o')) return 16384;
-  if (id.includes('o1') || id.includes('o3')) return 100000;
-  if (id.includes('gpt-4')) return 8192;
-  if (id.includes('gpt-3.5')) return 4096;
 
   // Anthropic
   if (id.includes('claude-3')) return 8192;
@@ -652,8 +566,7 @@ async function fetchSanhedrinModels(): Promise<ModelConfig[]> {
 export async function fetchAllModels(): Promise<LLMProvider[]> {
   logger.info('Fetching models from all providers...');
 
-  const [openai, anthropic, google, xai, groq, openrouter, sanhedrin, moonshot, ollama, ollamaSecondary, ollamaTertiary] = await Promise.all([
-    fetchOpenAIModels(),
+  const [anthropic, google, xai, groq, openrouter, sanhedrin, moonshot, ollama, ollamaSecondary, ollamaTertiary] = await Promise.all([
     fetchAnthropicModels(),
     fetchGoogleModels(),
     fetchXAIModels(),
@@ -667,15 +580,6 @@ export async function fetchAllModels(): Promise<LLMProvider[]> {
   ]);
 
   const providers: LLMProvider[] = [];
-
-  if (openai.length > 0) {
-    providers.push({
-      id: 'openai',
-      name: 'OpenAI',
-      enabled: true,
-      models: openai,
-    });
-  }
 
   if (anthropic.length > 0) {
     providers.push({
@@ -778,7 +682,6 @@ export async function fetchAllModels(): Promise<LLMProvider[]> {
 
   logger.info('Fetched models from providers', {
     counts: {
-      openai: openai.length,
       anthropic: anthropic.length,
       google: google.length,
       xai: xai.length,
