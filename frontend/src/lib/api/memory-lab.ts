@@ -165,19 +165,25 @@ export const memoryLabApi = {
     api<{ nodes: GraphNode[] }>(`/api/memory-lab/graph/split/${mergeId}`, { method: 'POST' }),
 
   // Facts
-  getFacts: (params?: { category?: string; limit?: number }) => {
+  getFacts: (params?: { category?: string; limit?: number; status?: 'active' | 'all' }) => {
     const qs = new URLSearchParams();
     if (params?.category) qs.set('category', params.category);
     if (params?.limit) qs.set('limit', String(params.limit));
+    if (params?.status) qs.set('status', params.status);
     return api<{ facts: UserFact[] }>(`/api/memory-lab/facts?${qs}`);
   },
 
-  createFact: (data: { category: string; factKey: string; factValue: string; confidence?: number }) =>
+  createFact: (data: {
+    category: string; factKey: string; factValue: string; confidence?: number;
+    factType?: string; validFrom?: string | null; validUntil?: string | null;
+  }) =>
     api<{ success: boolean }>('/api/memory-lab/facts', { method: 'POST', body: data }),
 
-  updateFact: (factId: string, factValue: string, reason?: string) =>
+  updateFact: (factId: string, factValue: string, reason?: string, updates?: {
+    factType?: string; validFrom?: string | null; validUntil?: string | null;
+  }) =>
     api<{ success: boolean; oldValue?: string }>(`/api/memory-lab/facts/${factId}`, {
-      method: 'PATCH', body: { factValue, reason },
+      method: 'PATCH', body: { factValue, reason, ...updates },
     }),
 
   deleteFact: (factId: string, reason?: string) =>
@@ -190,6 +196,9 @@ export const memoryLabApi = {
 
   getFactHistory: (limit?: number) =>
     api<{ history: FactCorrection[] }>(`/api/memory-lab/facts/history?limit=${limit || 50}`),
+
+  getFactChain: (factId: string) =>
+    api<{ chain: UserFact[] }>(`/api/memory-lab/facts/${factId}/chain`),
 
   // Consciousness
   getMetrics: () =>

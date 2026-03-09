@@ -13,6 +13,12 @@ export interface UserFact {
   lastMentioned: Date;
   mentionCount: number;
   intentId: string | null;
+  factStatus: 'active' | 'overridden' | 'superseded' | 'expired';
+  factType: 'permanent' | 'default' | 'temporary';
+  validFrom: Date | null;
+  validUntil: Date | null;
+  supersedesId: string | null;
+  overridePriority: number;
 }
 
 export interface ExtractedFact {
@@ -20,6 +26,10 @@ export interface ExtractedFact {
   factKey: string;
   factValue: string;
   confidence: number;
+  factType?: 'permanent' | 'default' | 'temporary';
+  validFrom?: string | null;
+  validUntil?: string | null;
+  isCorrection?: boolean;
 }
 
 const FACT_CATEGORIES = [
@@ -32,7 +42,8 @@ const FACT_CATEGORIES = [
   'context',       // current situation, recent events
 ];
 
-const EXTRACTION_PROMPT = `You are a fact extraction assistant. Extract personal facts about the user from the conversation.
+function buildExtractionPrompt(existingFacts?: UserFact[]): string {
+  let prompt = `You are a fact extraction assistant. Extract personal facts about the user from the conversation.
 
 Rules:
 - Only extract facts the user explicitly states about themselves
@@ -41,11 +52,47 @@ Rules:
 - Confidence: 1.0 for explicit statements, 0.8 for strongly implied, 0.6 for somewhat implied
 - Categories: personal, work, preference, hobby, relationship, goal, context
 
+Lifecycle detection:
+- If the user corrects or updates a previously known fact, set "isCorrection": true
+- If the user describes a temporary state (vacation, visiting, shift change with end date), set "factType": "temporary" and "validUntil": ISO date if end is clear
+- If the user describes a change with unclear duration ("doing evenings for a while", "staying at mom's"), set "factType": "temporary" and "validUntil": null
+- If the user describes a recurring baseline ("I usually work day shift"), set "factType": "default"
+- If ambiguous whether temporary or permanent, default to "permanent" with "isCorrection": true
+
 Output JSON array of facts:
-[{"category": "personal", "factKey": "name", "factValue": "Henke", "confidence": 1.0}]
+[{"category": "personal", "factKey": "name", "factValue": "Henke", "confidence": 1.0, "isCorrection": false, "factType": "permanent", "validUntil": null}]
 
 Return empty array [] if no facts can be extracted.
 Only return the JSON array, no other text.`;
+
+  if (existingFacts && existingFacts.length > 0) {
+    prompt += `\n\nCurrently known facts for context (detect contradictions against these):`;
+    for (const f of existingFacts) {
+      prompt += `\n- ${f.category}/${f.factKey}: ${f.factValue} (${f.mentionCount}x)`;
+    }
+  }
+
+  return prompt;
+}
+
+function mapRowToFact(row: Record<string, unknown>): UserFact {
+  return {
+    id: row.id as string,
+    category: row.category as string,
+    factKey: row.fact_key as string,
+    factValue: row.fact_value as string,
+    confidence: parseFloat(row.confidence as string),
+    lastMentioned: row.last_mentioned as Date,
+    mentionCount: row.mention_count as number,
+    intentId: row.intent_id as string | null,
+    factStatus: (row.fact_status as string || 'active') as UserFact['factStatus'],
+    factType: (row.fact_type as string || 'permanent') as UserFact['factType'],
+    validFrom: row.valid_from as Date | null,
+    validUntil: row.valid_until as Date | null,
+    supersedesId: row.supersedes_id as string | null,
+    overridePriority: (row.override_priority as number) || 0,
+  };
+}
 
 /**
  * Extract facts from a conversation using LLM
@@ -63,13 +110,23 @@ export async function extractFactsFromMessages(
 
   if (!userMessages.trim()) return [];
 
+  // Get existing facts for context if userId is available
+  let existingFacts: UserFact[] | undefined;
+  if (userId) {
+    try {
+      existingFacts = await getUserFacts(userId, { limit: 30 });
+    } catch {
+      // Non-blocking - extraction still works without context
+    }
+  }
+
   try {
     const response = await createBackgroundCompletionWithFallback({
       userId,
       sessionId,
       feature: 'memory_curation',
       messages: [
-        { role: 'system', content: EXTRACTION_PROMPT },
+        { role: 'system', content: buildExtractionPrompt(existingFacts) },
         { role: 'user', content: `Extract facts from:\n\n${userMessages}` },
       ],
       temperature: 0.1,
@@ -106,7 +163,7 @@ export async function extractFactsFromMessages(
 }
 
 /**
- * Store or update a user fact
+ * Store or update a user fact with lifecycle-aware supersession
  */
 export async function storeFact(
   userId: string,
@@ -115,24 +172,100 @@ export async function storeFact(
   sourceSessionId?: string,
   intentId?: string | null
 ): Promise<void> {
+  const client = await pool.connect();
   try {
-    await pool.query(
-      `INSERT INTO user_facts
-        (user_id, category, fact_key, fact_value, confidence, source_message_id, source_session_id, intent_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       ON CONFLICT (user_id, category, fact_key, COALESCE(intent_id, '00000000-0000-0000-0000-000000000000'::uuid)) DO UPDATE SET
-         fact_value = CASE
-           WHEN EXCLUDED.confidence >= user_facts.confidence THEN EXCLUDED.fact_value
-           ELSE user_facts.fact_value
-         END,
-         confidence = GREATEST(EXCLUDED.confidence, user_facts.confidence),
-         last_mentioned = NOW(),
-         mention_count = user_facts.mention_count + 1,
-         source_message_id = COALESCE(EXCLUDED.source_message_id, user_facts.source_message_id),
-         source_session_id = COALESCE(EXCLUDED.source_session_id, user_facts.source_session_id),
-         updated_at = NOW()`,
-      [userId, fact.category, fact.factKey, fact.factValue, fact.confidence, sourceMessageId, sourceSessionId, intentId || null]
+    await client.query('BEGIN');
+
+    // 1. Find existing active fact with same key
+    const existingResult = await client.query(
+      `SELECT id, fact_value, mention_count, fact_type, fact_status
+       FROM user_facts
+       WHERE user_id = $1 AND category = $2 AND fact_key = $3
+         AND (intent_id = $4 OR (intent_id IS NULL AND $4 IS NULL))
+         AND fact_status = 'active'
+       ORDER BY override_priority DESC, mention_count DESC
+       LIMIT 1`,
+      [userId, fact.category, fact.factKey, intentId || null]
     );
+
+    const existing = existingResult.rows[0];
+
+    if (!existing) {
+      // 2. No existing fact - INSERT new
+      const factType = fact.factType || 'permanent';
+      const priority = factType === 'temporary' ? 20 : (fact.isCorrection ? 10 : 0);
+
+      await client.query(
+        `INSERT INTO user_facts
+          (user_id, category, fact_key, fact_value, confidence, source_message_id, source_session_id, intent_id,
+           fact_status, fact_type, valid_from, valid_until, override_priority)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9, $10, $11, $12)`,
+        [userId, fact.category, fact.factKey, fact.factValue, fact.confidence,
+         sourceMessageId, sourceSessionId, intentId || null,
+         factType, fact.validFrom || null, fact.validUntil || null, priority]
+      );
+    } else if (existing.fact_value === fact.factValue) {
+      // 3. Same value - bump mention_count
+      await client.query(
+        `UPDATE user_facts SET
+           mention_count = mention_count + 1,
+           last_mentioned = NOW(),
+           confidence = GREATEST(confidence, $2),
+           updated_at = NOW()
+         WHERE id = $1`,
+        [existing.id, fact.confidence]
+      );
+    } else {
+      // 4. Different value - supersession logic
+      const incomingType = fact.factType || 'permanent';
+      const inheritedMentionCount = (existing.mention_count as number) + 1;
+
+      if (incomingType === 'temporary') {
+        // Temporary override: mark old as overridden
+        await client.query(
+          `UPDATE user_facts SET fact_status = 'overridden', updated_at = NOW() WHERE id = $1`,
+          [existing.id]
+        );
+
+        await client.query(
+          `INSERT INTO user_facts
+            (user_id, category, fact_key, fact_value, confidence, source_message_id, source_session_id, intent_id,
+             fact_status, fact_type, valid_from, valid_until, supersedes_id, override_priority, mention_count)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', 'temporary', $9, $10, $11, 20, $12)`,
+          [userId, fact.category, fact.factKey, fact.factValue, fact.confidence,
+           sourceMessageId, sourceSessionId, intentId || null,
+           fact.validFrom || null, fact.validUntil || null, existing.id, inheritedMentionCount]
+        );
+      } else {
+        // Correction: mark old as superseded
+        await client.query(
+          `UPDATE user_facts SET fact_status = 'superseded', updated_at = NOW() WHERE id = $1`,
+          [existing.id]
+        );
+
+        await client.query(
+          `INSERT INTO user_facts
+            (user_id, category, fact_key, fact_value, confidence, source_message_id, source_session_id, intent_id,
+             fact_status, fact_type, valid_from, valid_until, supersedes_id, override_priority, mention_count)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9, $10, $11, $12, 10, $13)`,
+          [userId, fact.category, fact.factKey, fact.factValue, fact.confidence,
+           sourceMessageId, sourceSessionId, intentId || null,
+           incomingType, fact.validFrom || null, fact.validUntil || null, existing.id, inheritedMentionCount]
+        );
+      }
+
+      // Log the correction
+      await client.query(
+        `INSERT INTO fact_corrections
+          (user_id, fact_key, old_value, new_value, correction_type, reason)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [userId, fact.factKey, existing.fact_value, fact.factValue,
+         incomingType === 'temporary' ? 'temporary_override' : 'correction',
+         incomingType === 'temporary' ? 'Temporary override' : 'Value correction']
+      );
+    }
+
+    await client.query('COMMIT');
 
     logger.debug('Stored user fact', {
       userId,
@@ -141,41 +274,36 @@ export async function storeFact(
       intentId
     });
 
-    // Sync to Neo4j (non-blocking) - get the stored fact ID
+    // Sync to Neo4j (non-blocking)
     pool.query(
-      `SELECT id, mention_count, last_mentioned FROM user_facts
+      `SELECT id, mention_count, last_mentioned, fact_status, fact_type FROM user_facts
        WHERE user_id = $1 AND category = $2 AND fact_key = $3
        AND (intent_id = $4 OR (intent_id IS NULL AND $4 IS NULL))
+       AND fact_status = 'active'
        LIMIT 1`,
       [userId, fact.category, fact.factKey, intentId || null]
     ).then(result => {
       if (result.rows[0]) {
-        const storedFact: UserFact = {
-          id: result.rows[0].id,
-          category: fact.category,
-          factKey: fact.factKey,
-          factValue: fact.factValue,
-          confidence: fact.confidence,
-          lastMentioned: result.rows[0].last_mentioned,
-          mentionCount: result.rows[0].mention_count,
-          intentId: intentId || null,
-        };
+        const storedFact = mapRowToFact(result.rows[0]);
         knowledgeGraphService.syncFactToGraph(userId, storedFact).catch(err => {
           logger.warn('Failed to sync fact to Neo4j', { error: (err as Error).message });
         });
       }
     }).catch(e => logger.debug('Fact ID lookup for Neo4j sync failed', { err: (e as Error).message }));
   } catch (error) {
+    await client.query('ROLLBACK');
     logger.error('Failed to store fact', {
       error: (error as Error).message,
       userId,
       fact
     });
+  } finally {
+    client.release();
   }
 }
 
 /**
- * Get all active facts for a user
+ * Get active facts for a user with priority-aware deduplication
  */
 export async function getUserFacts(
   userId: string,
@@ -183,20 +311,60 @@ export async function getUserFacts(
     category?: string;
     limit?: number;
     intentId?: string | null;
+    status?: 'active' | 'all';
   } = {}
 ): Promise<UserFact[]> {
-  const { category, limit = 50, intentId } = options;
+  const { category, limit = 50, intentId, status = 'active' } = options;
 
   try {
+    if (status === 'all') {
+      // Return all facts without deduplication
+      let query = `
+        SELECT id, category, fact_key, fact_value, confidence, last_mentioned, mention_count, intent_id,
+               fact_status, fact_type, valid_from, valid_until, supersedes_id, override_priority
+        FROM user_facts
+        WHERE user_id = $1 AND is_active = true
+      `;
+      const params: (string | number | null)[] = [userId];
+
+      if (category) {
+        query += ` AND category = $${params.length + 1}`;
+        params.push(category);
+      }
+
+      query += ` ORDER BY category, fact_key, override_priority DESC, mention_count DESC LIMIT $${params.length + 1}`;
+      params.push(limit);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result = await pool.query(query, params as any[]);
+      return result.rows.map(mapRowToFact);
+    }
+
+    // Priority-aware retrieval: only return winning fact per key
     let query = `
-      SELECT id, category, fact_key, fact_value, confidence, last_mentioned, mention_count, intent_id
-      FROM user_facts
-      WHERE user_id = $1 AND is_active = true
+      WITH ranked AS (
+        SELECT id, category, fact_key, fact_value, confidence, last_mentioned, mention_count, intent_id,
+               fact_status, fact_type, valid_from, valid_until, supersedes_id, override_priority,
+               ROW_NUMBER() OVER (
+                 PARTITION BY category, fact_key, COALESCE(intent_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                 ORDER BY
+                   CASE WHEN fact_type = 'temporary' AND fact_status = 'active'
+                        AND (valid_until IS NULL OR valid_until > NOW())
+                        THEN 0 ELSE 1 END,
+                   override_priority DESC,
+                   mention_count DESC,
+                   last_mentioned DESC
+               ) as rn
+        FROM user_facts
+        WHERE user_id = $1
+          AND is_active = true
+          AND fact_status = 'active'
+          AND NOT (fact_type = 'temporary' AND valid_until IS NOT NULL AND valid_until <= NOW())
     `;
     const params: (string | number | null)[] = [userId];
 
     if (category) {
-      query += ` AND category = $2`;
+      query += ` AND category = $${params.length + 1}`;
       params.push(category);
     }
 
@@ -207,22 +375,15 @@ export async function getUserFacts(
       query += ` AND intent_id IS NULL`;
     }
 
-    query += ` ORDER BY intent_id NULLS LAST, mention_count DESC, last_mentioned DESC LIMIT $${params.length + 1}`;
+    query += `)
+      SELECT * FROM ranked WHERE rn = 1
+      ORDER BY intent_id NULLS LAST, mention_count DESC, last_mentioned DESC
+      LIMIT $${params.length + 1}`;
     params.push(limit);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const result = await pool.query(query, params as any[]);
-
-    return result.rows.map((row: Record<string, unknown>) => ({
-      id: row.id as string,
-      category: row.category as string,
-      factKey: row.fact_key as string,
-      factValue: row.fact_value as string,
-      confidence: parseFloat(row.confidence as string),
-      lastMentioned: row.last_mentioned as Date,
-      mentionCount: row.mention_count as number,
-      intentId: row.intent_id as string | null,
-    }));
+    return result.rows.map(mapRowToFact);
   } catch (error) {
     logger.error('Failed to get user facts', {
       error: (error as Error).message,
@@ -234,8 +395,7 @@ export async function getUserFacts(
 
 /**
  * Format facts for inclusion in prompt
- * Uses deterministic ordering (sorted by category and key) for cache optimization
- * @param includeTimestamps - When true, appends mention count and relative time to each fact
+ * Annotates temporary facts with validity info
  */
 export function formatFactsForPrompt(facts: UserFact[], includeTimestamps = false): string {
   if (facts.length === 0) return '';
@@ -243,6 +403,17 @@ export function formatFactsForPrompt(facts: UserFact[], includeTimestamps = fals
   const grouped = facts.reduce((acc, fact) => {
     if (!acc[fact.category]) acc[fact.category] = [];
     let line = `${fact.factKey}: ${fact.factValue}`;
+
+    // Annotate temporary facts
+    if (fact.factType === 'temporary') {
+      if (fact.validUntil) {
+        const until = new Date(fact.validUntil).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        line += ` [temporary, until ${until}]`;
+      } else {
+        line += ` [temporary, ongoing]`;
+      }
+    }
+
     if (includeTimestamps) {
       const timeParts: string[] = [];
       if (fact.mentionCount > 1) timeParts.push(`${fact.mentionCount}x`);
@@ -258,12 +429,149 @@ export function formatFactsForPrompt(facts: UserFact[], includeTimestamps = fals
   const sortedCategories = Object.keys(grouped).sort();
 
   const sections = sortedCategories.map(category => {
-    // Sort items within each category for determinism
     const sortedItems = grouped[category].sort();
     return `${category.charAt(0).toUpperCase() + category.slice(1)}:\n${sortedItems.map(i => `  - ${i}`).join('\n')}`;
   });
 
   return `[Known Facts About User]\n${sections.join('\n\n')}`;
+}
+
+/**
+ * Expire temporary facts and restore predecessors
+ */
+export async function expireTemporaryFacts(): Promise<number> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Find active temporary facts past their valid_until
+    const expiredResult = await client.query(
+      `SELECT id, user_id, fact_key, fact_value, supersedes_id, category
+       FROM user_facts
+       WHERE fact_status = 'active'
+         AND fact_type = 'temporary'
+         AND valid_until IS NOT NULL
+         AND valid_until <= NOW()`
+    );
+
+    const expired = expiredResult.rows;
+    if (expired.length === 0) {
+      await client.query('COMMIT');
+      return 0;
+    }
+
+    for (const fact of expired) {
+      // Mark as expired
+      await client.query(
+        `UPDATE user_facts SET fact_status = 'expired', updated_at = NOW() WHERE id = $1`,
+        [fact.id]
+      );
+
+      // Chain-aware restore: walk supersedes_id chain to find restorable ancestor
+      if (fact.supersedes_id) {
+        let ancestorId: string | null = fact.supersedes_id;
+        let restoredId: string | null = null;
+
+        // Walk down the chain looking for an overridden ancestor
+        while (ancestorId && !restoredId) {
+          const ancestorResult = await client.query(
+            `SELECT id, fact_status, supersedes_id FROM user_facts WHERE id = $1`,
+            [ancestorId]
+          );
+
+          if (ancestorResult.rows.length === 0) break;
+
+          const ancestor = ancestorResult.rows[0];
+          if (ancestor.fact_status === 'overridden') {
+            restoredId = ancestor.id;
+          } else {
+            ancestorId = ancestor.supersedes_id;
+          }
+        }
+
+        if (restoredId) {
+          await client.query(
+            `UPDATE user_facts SET fact_status = 'active', updated_at = NOW() WHERE id = $1`,
+            [restoredId]
+          );
+          logger.info('Restored predecessor fact after expiry', { restoredId, expiredId: fact.id });
+        }
+      }
+
+      // Log the expiry
+      await client.query(
+        `INSERT INTO fact_corrections
+          (user_id, fact_key, old_value, new_value, correction_type, reason)
+         VALUES ($1, $2, $3, NULL, 'expiry', 'Temporary fact expired')`,
+        [fact.user_id, fact.fact_key, fact.fact_value]
+      );
+    }
+
+    await client.query('COMMIT');
+    logger.info('Expired temporary facts', { count: expired.length });
+    return expired.length;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    logger.error('Failed to expire temporary facts', { error: (error as Error).message });
+    return 0;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Get supersession chain for a fact (both directions)
+ */
+export async function getFactChain(
+  userId: string,
+  factId: string
+): Promise<UserFact[]> {
+  try {
+    // Walk up: find all facts this one supersedes
+    const chain: UserFact[] = [];
+
+    // Get the starting fact
+    const startResult = await pool.query(
+      `SELECT * FROM user_facts WHERE id = $1 AND user_id = $2`,
+      [factId, userId]
+    );
+    if (startResult.rows.length === 0) return [];
+
+    const startFact = mapRowToFact(startResult.rows[0]);
+    chain.push(startFact);
+
+    // Walk down (predecessors via supersedes_id)
+    let currentSupersedesId = startFact.supersedesId;
+    while (currentSupersedesId) {
+      const result = await pool.query(
+        `SELECT * FROM user_facts WHERE id = $1 AND user_id = $2`,
+        [currentSupersedesId, userId]
+      );
+      if (result.rows.length === 0) break;
+      const fact = mapRowToFact(result.rows[0]);
+      chain.push(fact);
+      currentSupersedesId = fact.supersedesId;
+    }
+
+    // Walk up (successors that supersede this fact)
+    let currentId = factId;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const result = await pool.query(
+        `SELECT * FROM user_facts WHERE supersedes_id = $1 AND user_id = $2 LIMIT 1`,
+        [currentId, userId]
+      );
+      if (result.rows.length === 0) break;
+      const fact = mapRowToFact(result.rows[0]);
+      chain.unshift(fact);
+      currentId = fact.id;
+    }
+
+    return chain;
+  } catch (error) {
+    logger.error('Failed to get fact chain', { error: (error as Error).message, factId });
+    return [];
+  }
 }
 
 /**
@@ -312,7 +620,7 @@ export async function generateConversationSummary(
   keyPoints: string[];
   sentiment: string;
 } | null> {
-  if (messages.length < 4) return null; // Need at least 2 exchanges
+  if (messages.length < 4) return null;
 
   try {
     const conversation = messages
@@ -371,25 +679,15 @@ export async function getFactById(
 ): Promise<UserFact | null> {
   try {
     const result = await pool.query(
-      `SELECT id, category, fact_key, fact_value, confidence, last_mentioned, mention_count, intent_id
+      `SELECT id, category, fact_key, fact_value, confidence, last_mentioned, mention_count, intent_id,
+              fact_status, fact_type, valid_from, valid_until, supersedes_id, override_priority
        FROM user_facts
        WHERE id = $1 AND user_id = $2 AND is_active = true`,
       [factId, userId]
     );
 
     if (result.rows.length === 0) return null;
-
-    const row = result.rows[0];
-    return {
-      id: row.id,
-      category: row.category,
-      factKey: row.fact_key,
-      factValue: row.fact_value,
-      confidence: parseFloat(row.confidence),
-      lastMentioned: row.last_mentioned,
-      mentionCount: row.mention_count,
-      intentId: row.intent_id || null,
-    };
+    return mapRowToFact(result.rows[0]);
   } catch (error) {
     logger.error('Failed to get fact by ID', {
       error: (error as Error).message,
@@ -410,9 +708,10 @@ export async function getFactByKey(
 ): Promise<UserFact | null> {
   try {
     let query = `
-      SELECT id, category, fact_key, fact_value, confidence, last_mentioned, mention_count, intent_id
+      SELECT id, category, fact_key, fact_value, confidence, last_mentioned, mention_count, intent_id,
+             fact_status, fact_type, valid_from, valid_until, supersedes_id, override_priority
       FROM user_facts
-      WHERE user_id = $1 AND fact_key = $2 AND is_active = true
+      WHERE user_id = $1 AND fact_key = $2 AND is_active = true AND fact_status = 'active'
     `;
     const params: string[] = [userId, factKey];
 
@@ -426,18 +725,7 @@ export async function getFactByKey(
     const result = await pool.query(query, params);
 
     if (result.rows.length === 0) return null;
-
-    const row = result.rows[0];
-    return {
-      id: row.id,
-      category: row.category,
-      factKey: row.fact_key,
-      factValue: row.fact_value,
-      confidence: parseFloat(row.confidence),
-      lastMentioned: row.last_mentioned,
-      mentionCount: row.mention_count,
-      intentId: row.intent_id || null,
-    };
+    return mapRowToFact(result.rows[0]);
   } catch (error) {
     logger.error('Failed to get fact by key', {
       error: (error as Error).message,
@@ -455,13 +743,13 @@ export async function updateFact(
   userId: string,
   factId: string,
   newValue: string,
-  reason?: string
+  reason?: string,
+  updates?: { factType?: string; validFrom?: string | null; validUntil?: string | null }
 ): Promise<{ success: boolean; oldValue?: string }> {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
-    // Get the current fact
     const currentResult = await client.query(
       `SELECT fact_key, fact_value, category FROM user_facts
        WHERE id = $1 AND user_id = $2 AND is_active = true`,
@@ -475,7 +763,6 @@ export async function updateFact(
 
     const oldFact = currentResult.rows[0];
 
-    // Record the correction in history
     await client.query(
       `INSERT INTO fact_corrections
         (user_id, fact_key, old_value, new_value, correction_type, reason)
@@ -483,13 +770,29 @@ export async function updateFact(
       [userId, oldFact.fact_key, oldFact.fact_value, newValue, reason || null]
     );
 
-    // Update the fact
-    await client.query(
-      `UPDATE user_facts
-       SET fact_value = $1, updated_at = NOW(), last_mentioned = NOW()
-       WHERE id = $2 AND user_id = $3`,
-      [newValue, factId, userId]
-    );
+    // Build dynamic update
+    let updateQuery = `UPDATE user_facts SET fact_value = $1, updated_at = NOW(), last_mentioned = NOW()`;
+    const updateParams: (string | null)[] = [newValue];
+
+    if (updates?.factType) {
+      updateParams.push(updates.factType);
+      updateQuery += `, fact_type = $${updateParams.length}`;
+    }
+
+    if (updates && 'validFrom' in updates) {
+      updateParams.push(updates.validFrom || null);
+      updateQuery += `, valid_from = $${updateParams.length}`;
+    }
+
+    if (updates && 'validUntil' in updates) {
+      updateParams.push(updates.validUntil || null);
+      updateQuery += `, valid_until = $${updateParams.length}`;
+    }
+
+    updateParams.push(factId, userId);
+    updateQuery += ` WHERE id = $${updateParams.length - 1} AND user_id = $${updateParams.length}`;
+
+    await client.query(updateQuery, updateParams);
 
     await client.query('COMMIT');
 
@@ -527,7 +830,6 @@ export async function deleteFact(
   try {
     await client.query('BEGIN');
 
-    // Get the current fact
     const currentResult = await client.query(
       `SELECT fact_key, fact_value, category FROM user_facts
        WHERE id = $1 AND user_id = $2 AND is_active = true`,
@@ -541,7 +843,6 @@ export async function deleteFact(
 
     const fact = currentResult.rows[0];
 
-    // Record the deletion in history
     await client.query(
       `INSERT INTO fact_corrections
         (user_id, fact_key, old_value, new_value, correction_type, reason)
@@ -549,7 +850,6 @@ export async function deleteFact(
       [userId, fact.fact_key, fact.fact_value, reason || null]
     );
 
-    // Soft delete the fact
     await client.query(
       `UPDATE user_facts
        SET is_active = false, updated_at = NOW()
@@ -629,7 +929,7 @@ export async function getFactCorrectionHistory(
 }
 
 /**
- * Search facts by matching against key or value (for LLM to find relevant fact)
+ * Search facts by matching against key or value
  */
 export async function searchFacts(
   userId: string,
@@ -637,7 +937,8 @@ export async function searchFacts(
 ): Promise<UserFact[]> {
   try {
     const result = await pool.query(
-      `SELECT id, category, fact_key, fact_value, confidence, last_mentioned, mention_count, intent_id
+      `SELECT id, category, fact_key, fact_value, confidence, last_mentioned, mention_count, intent_id,
+              fact_status, fact_type, valid_from, valid_until, supersedes_id, override_priority
        FROM user_facts
        WHERE user_id = $1 AND is_active = true
          AND (fact_key ILIKE $2 OR fact_value ILIKE $2)
@@ -646,16 +947,7 @@ export async function searchFacts(
       [userId, `%${searchTerm}%`]
     );
 
-    return result.rows.map((row: Record<string, unknown>) => ({
-      id: row.id as string,
-      category: row.category as string,
-      factKey: row.fact_key as string,
-      factValue: row.fact_value as string,
-      confidence: parseFloat(row.confidence as string),
-      lastMentioned: row.last_mentioned as Date,
-      mentionCount: row.mention_count as number,
-      intentId: row.intent_id as string | null,
-    }));
+    return result.rows.map(mapRowToFact);
   } catch (error) {
     logger.error('Failed to search facts', {
       error: (error as Error).message,
@@ -679,4 +971,6 @@ export default {
   deleteFact,
   getFactCorrectionHistory,
   searchFacts,
+  expireTemporaryFacts,
+  getFactChain,
 };

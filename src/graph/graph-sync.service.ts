@@ -149,6 +149,12 @@ export async function syncUserFacts(userId: string): Promise<{ synced: number; f
         lastMentioned: new Date(row.last_mentioned),
         mentionCount: row.mention_count,
         intentId: row.intent_id,
+        factStatus: row.fact_status || 'active',
+        factType: row.fact_type || 'permanent',
+        validFrom: row.valid_from || null,
+        validUntil: row.valid_until || null,
+        supersedesId: row.supersedes_id || null,
+        overridePriority: row.override_priority || 0,
       };
 
       const success = await knowledgeGraphService.syncFactToGraph(userId, fact);

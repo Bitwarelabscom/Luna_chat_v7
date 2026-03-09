@@ -264,14 +264,16 @@ router.post('/graph/purge-noise', async (req: Request, res: Response) => {
 
 /**
  * GET /api/memory-lab/facts
- * Query params: category, limit
+ * Query params: category, limit, status (default 'active', 'all' shows everything)
  */
 router.get('/facts', async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId;
+    const status = (req.query.status as string) || 'active';
     const facts = await factsService.getUserFacts(userId, {
       category: req.query.category as string | undefined,
       limit: parseInt(req.query.limit as string) || 100,
+      status: status === 'all' ? 'all' : 'active',
     });
     res.json({ facts });
   } catch (error) {
@@ -282,12 +284,12 @@ router.get('/facts', async (req: Request, res: Response) => {
 
 /**
  * POST /api/memory-lab/facts
- * Body: { category, factKey, factValue, confidence? }
+ * Body: { category, factKey, factValue, confidence?, factType?, validFrom?, validUntil? }
  */
 router.post('/facts', async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId;
-    const { category, factKey, factValue, confidence } = req.body;
+    const { category, factKey, factValue, confidence, factType, validFrom, validUntil } = req.body;
 
     if (!category || !factKey || !factValue) {
       res.status(400).json({ error: 'category, factKey, and factValue are required' });
@@ -299,6 +301,9 @@ router.post('/facts', async (req: Request, res: Response) => {
       factKey,
       factValue,
       confidence: confidence ?? 1.0,
+      factType,
+      validFrom,
+      validUntil,
     });
     res.json({ success: true });
   } catch (error) {
@@ -309,20 +314,24 @@ router.post('/facts', async (req: Request, res: Response) => {
 
 /**
  * PATCH /api/memory-lab/facts/:factId
- * Body: { factValue, reason? }
+ * Body: { factValue, reason?, factType?, validFrom?, validUntil? }
  */
 router.patch('/facts/:factId', async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId;
     const { factId } = req.params;
-    const { factValue, reason } = req.body;
+    const { factValue, reason, factType, validFrom, validUntil } = req.body;
 
     if (!factValue) {
       res.status(400).json({ error: 'factValue is required' });
       return;
     }
 
-    const result = await factsService.updateFact(userId, factId, factValue, reason);
+    const updates = (factType || validFrom !== undefined || validUntil !== undefined)
+      ? { factType, validFrom, validUntil }
+      : undefined;
+
+    const result = await factsService.updateFact(userId, factId, factValue, reason, updates);
     res.json(result);
   } catch (error) {
     logger.error('Failed to update fact', { error: (error as Error).message });
@@ -345,6 +354,22 @@ router.delete('/facts/:factId', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to delete fact', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to delete fact' });
+  }
+});
+
+/**
+ * GET /api/memory-lab/facts/:factId/chain
+ * Returns supersession chain for a fact
+ */
+router.get('/facts/:factId/chain', async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const { factId } = req.params;
+    const chain = await factsService.getFactChain(userId, factId);
+    res.json({ chain });
+  } catch (error) {
+    logger.error('Failed to get fact chain', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get fact chain' });
   }
 });
 

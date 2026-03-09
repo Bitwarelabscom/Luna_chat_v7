@@ -34,6 +34,7 @@ import * as sunoService from '../abilities/suno-generator.service.js';
 import * as memorycoreGraphService from '../memory/memorycore-graph.service.js';
 import * as ceoOrgService from '../ceo/ceo-org.service.js';
 import * as ceoProposals from '../ceo/ceo-proposals.service.js';
+import * as factsService from '../memory/facts.service.js';
 
 // ============================================
 // Job Definitions
@@ -400,6 +401,13 @@ const jobs: Job[] = [
     enabled: true,
     running: false,
     handler: runCeoProposalExpiry,
+  },
+  {
+    name: 'factExpiry',
+    intervalMs: 60 * 60 * 1000, // Hourly
+    enabled: true,
+    running: false,
+    handler: runFactExpiryJob,
   },
 ];
 
@@ -1865,6 +1873,17 @@ async function runCeoProposalExpiry(): Promise<void> {
     await ceoProposals.expireStaleProposals();
   } catch (error) {
     logger.error('CEO proposal expiry failed', { error: (error as Error).message });
+  }
+}
+
+async function runFactExpiryJob(): Promise<void> {
+  try {
+    const count = await factsService.expireTemporaryFacts();
+    if (count > 0) {
+      logger.info('Fact expiry job completed', { expiredCount: count });
+    }
+  } catch (error) {
+    logger.error('Fact expiry job failed', { error: (error as Error).message });
   }
 }
 

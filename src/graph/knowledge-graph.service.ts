@@ -50,6 +50,8 @@ export async function syncFactToGraph(userId: string, fact: UserFact): Promise<b
         f.confidence = $confidence,
         f.mentionCount = $mentionCount,
         f.lastMentioned = datetime($lastMentioned),
+        f.factStatus = $factStatus,
+        f.factType = $factType,
         f.updatedAt = datetime()
     RETURN f
   `;
@@ -63,6 +65,8 @@ export async function syncFactToGraph(userId: string, fact: UserFact): Promise<b
     confidence: fact.confidence,
     mentionCount: fact.mentionCount,
     lastMentioned: fact.lastMentioned.toISOString(),
+    factStatus: fact.factStatus || 'active',
+    factType: fact.factType || 'permanent',
   });
 }
 

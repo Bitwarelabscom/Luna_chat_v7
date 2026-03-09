@@ -178,6 +178,12 @@ export interface UserFact {
   confidence: number;
   lastMentioned: string;
   mentionCount: number;
+  factStatus: 'active' | 'overridden' | 'superseded' | 'expired';
+  factType: 'permanent' | 'default' | 'temporary';
+  validFrom: string | null;
+  validUntil: string | null;
+  supersedesId: string | null;
+  overridePriority: number;
 }
 
 export interface FactCorrection {
@@ -185,7 +191,7 @@ export interface FactCorrection {
   factKey: string;
   oldValue: string | null;
   newValue: string | null;
-  correctionType: 'delete' | 'update';
+  correctionType: 'delete' | 'update' | 'correction' | 'temporary_override' | 'expiry';
   reason: string | null;
   createdAt: string;
 }

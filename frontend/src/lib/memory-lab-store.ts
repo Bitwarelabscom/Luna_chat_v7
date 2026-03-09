@@ -34,7 +34,10 @@ interface MemoryLabState {
   editingFactId: string | null;
   factsFilter: string;
   factsSearch: string;
+  factsStatusFilter: 'active' | 'all';
   factHistory: FactCorrection[];
+  factChain: UserFact[];
+  factChainId: string | null;
   isLoadingFacts: boolean;
 
   // Consciousness
@@ -65,13 +68,16 @@ interface MemoryLabState {
   mergeNodes: (sourceId: string, targetId: string, reason?: string) => Promise<void>;
 
   loadFacts: () => Promise<void>;
-  createFact: (data: { category: string; factKey: string; factValue: string }) => Promise<void>;
+  createFact: (data: { category: string; factKey: string; factValue: string; factType?: string; validFrom?: string | null; validUntil?: string | null }) => Promise<void>;
   updateFact: (factId: string, newValue: string, reason?: string) => Promise<void>;
   deleteFact: (factId: string, reason?: string) => Promise<void>;
   setEditingFactId: (id: string | null) => void;
   setFactsSearch: (search: string) => void;
   setFactsFilter: (filter: string) => void;
+  setFactsStatusFilter: (status: 'active' | 'all') => void;
   loadFactHistory: () => Promise<void>;
+  loadFactChain: (factId: string) => Promise<void>;
+  clearFactChain: () => void;
 
   loadConsciousness: () => Promise<void>;
   triggerAnalysis: () => Promise<void>;
@@ -108,7 +114,10 @@ export const useMemoryLabStore = create<MemoryLabState>((set, get) => ({
   editingFactId: null,
   factsFilter: '',
   factsSearch: '',
+  factsStatusFilter: 'active',
   factHistory: [],
+  factChain: [],
+  factChainId: null,
   isLoadingFacts: false,
 
   // Consciousness initial
@@ -281,7 +290,8 @@ export const useMemoryLabStore = create<MemoryLabState>((set, get) => ({
     set({ isLoadingFacts: true });
     try {
       const { memoryLabApi } = await import('./api/memory-lab');
-      const { facts } = await memoryLabApi.getFacts({ limit: 200 });
+      const status = get().factsStatusFilter;
+      const { facts } = await memoryLabApi.getFacts({ limit: 200, status });
       set({ facts, isLoadingFacts: false });
     } catch (err) {
       console.error('Failed to load facts:', err);
@@ -322,6 +332,10 @@ export const useMemoryLabStore = create<MemoryLabState>((set, get) => ({
   setEditingFactId: (id) => set({ editingFactId: id }),
   setFactsSearch: (search) => set({ factsSearch: search }),
   setFactsFilter: (filter) => set({ factsFilter: filter }),
+  setFactsStatusFilter: (status) => {
+    set({ factsStatusFilter: status });
+    get().loadFacts();
+  },
 
   loadFactHistory: async () => {
     try {
@@ -332,6 +346,18 @@ export const useMemoryLabStore = create<MemoryLabState>((set, get) => ({
       console.error('Failed to load fact history:', err);
     }
   },
+
+  loadFactChain: async (factId: string) => {
+    try {
+      const { memoryLabApi } = await import('./api/memory-lab');
+      const { chain } = await memoryLabApi.getFactChain(factId);
+      set({ factChain: chain, factChainId: factId });
+    } catch (err) {
+      console.error('Failed to load fact chain:', err);
+    }
+  },
+
+  clearFactChain: () => set({ factChain: [], factChainId: null }),
 
   // Consciousness actions
   loadConsciousness: async () => {
