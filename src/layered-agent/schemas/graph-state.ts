@@ -43,6 +43,9 @@ export const GraphStateSchema = z.object({
   // Fast path - hint injection and self-correction
   injected_hints: z.string().nullable().optional(),
   correction_prompt: z.string().nullable().optional(),
+
+  // Mamba continuous cognition context
+  mamba_context: z.string().nullable().optional(),
 });
 export type GraphState = z.infer<typeof GraphStateSchema>;
 
@@ -104,7 +107,7 @@ export function createInitialState(
   input: GraphStateInput,
   identity: IdentityProfile,
   agentView: AgentView,
-  options?: { injectedHints?: string | null; correctionPrompt?: string | null }
+  options?: { injectedHints?: string | null; correctionPrompt?: string | null; mambaContext?: string | null }
 ): GraphState {
   return {
     session_id: input.session_id,
@@ -122,6 +125,7 @@ export function createInitialState(
     started_at: new Date(),
     injected_hints: options?.injectedHints ?? null,
     correction_prompt: options?.correctionPrompt ?? null,
+    mamba_context: options?.mambaContext ?? null,
   };
 }
 

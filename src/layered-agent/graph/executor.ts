@@ -52,6 +52,7 @@ export async function executeGraph(
     maxAttempts = DEFAULT_MAX_ATTEMPTS,
     timeoutMs = DEFAULT_TIMEOUT_MS,
     fastPath = true, // Default to fast path for sub-5s responses
+    mambaContext,
     onNodeStart,
     onNodeEnd,
     onError,
@@ -89,10 +90,11 @@ export async function executeGraph(
     }
   }
 
-  // Initialize state with hints
+  // Initialize state with hints and mamba context
   let state = createInitialState(input, identity, agentView, {
     injectedHints,
     correctionPrompt,
+    mambaContext: mambaContext ?? null,
   });
 
   // Create token tracker for this turn

@@ -2963,6 +2963,14 @@ export async function* streamMessage(
   // Record enriched user message to MemoryCore (async, non-blocking)
   memorycoreClient.recordChatInteraction(sessionId, 'message', message, { mode, source }, smEnrichment).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
 
+  // Emit to Luna Streams (fire-and-forget)
+  lunaStreamsClient.emitChatInteraction(message, {
+    mode,
+    sentiment: smEnrichment?.emotionalValence,
+    attentionScore: smEnrichment?.attentionScore,
+    responseTimeMs: smEnrichment?.interMessageMs,
+  });
+
   // Track session activity for automatic consolidation after inactivity
   sessionActivityService.recordActivity(sessionId, userId).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
 
@@ -3595,9 +3603,18 @@ export async function* streamMessage(
     : [];
   let searchResults: SearchResult[] | undefined;
 
+  // Strip tools for small Ollama models (<=9b) - they can't handle 40+ tool
+  // definitions and still follow the system prompt reliably.
+  // Larger Ollama models (32b+) and all cloud providers keep tools.
+  const smallModelPattern = /\b([1-9]b|[1-9]\.\d+b|4b|7b|8b|9b)\b/i;
+  const isOllamaProvider = modelConfig.provider === 'ollama' || modelConfig.provider === 'ollama_secondary' || modelConfig.provider === 'ollama_tertiary';
+  const isSmallOllamaModel = isOllamaProvider && smallModelPattern.test(modelConfig.model);
+  const effectiveTools = isSmallOllamaModel ? [] : availableTools;
+
   logger.info('Tool availability', {
     isSmallTalk: isSmallTalkMessage,
-    toolsProvided: availableTools.length,
+    toolsProvided: effectiveTools.length,
+    toolsStripped: isSmallOllamaModel ? availableTools.length : 0,
     routerRoute: routerDecision?.route || 'legacy',
     provider: modelConfig.provider,
     model: modelConfig.model
@@ -3605,7 +3622,7 @@ export async function* streamMessage(
 
   const initialCompletion = await createChatCompletion({
     messages,
-    tools: availableTools.length > 0 ? availableTools : undefined,
+    tools: effectiveTools.length > 0 ? effectiveTools : undefined,
     provider: modelConfig.provider,
     model: modelConfig.model,
     thinkingMode,
@@ -4992,7 +5009,7 @@ export async function* streamMessage(
       // Make a non-streaming call with tools to check if more tool calls are needed
       const followUpCompletion = await createChatCompletion({
         messages,
-        tools: availableTools.length > 0 ? availableTools : undefined,
+        tools: effectiveTools.length > 0 ? effectiveTools : undefined,
         provider: modelConfig.provider,
         model: modelConfig.model,
         loggingContext: {

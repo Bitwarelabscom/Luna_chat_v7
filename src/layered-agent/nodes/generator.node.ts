@@ -91,6 +91,11 @@ function buildDraftPrompt(state: GraphState): { system: string; user: string } {
     systemParts.push(`\n${state.injected_hints}`);
   }
 
+  // Mamba continuous cognition context (user state from neural streams)
+  if (state.mamba_context) {
+    systemParts.push(`\n${state.mamba_context}`);
+  }
+
   const userParts: string[] = [];
 
   // Agent view

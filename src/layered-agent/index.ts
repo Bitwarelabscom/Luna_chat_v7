@@ -12,6 +12,7 @@ import { executeGraph } from './graph/executor.js';
 import * as identityStore from './stores/identity.store.js';
 import * as stateStore from './stores/state.store.js';
 import * as tokenTracker from './services/token-tracker.service.js';
+import * as lunaStreamsClient from '../integration/luna-streams.client.js';
 import logger from '../utils/logger.js';
 
 // Default identity file path
@@ -86,8 +87,11 @@ export async function processLayeredAgent(
       DEFAULT_IDENTITY_PATH
     );
 
-    // 2. Get current state snapshot
-    const agentView = await stateStore.getSnapshotFast(sessionId);
+    // 2. Get current state snapshot + Mamba context in parallel
+    const [agentView, mambaContext] = await Promise.all([
+      stateStore.getSnapshotFast(sessionId),
+      lunaStreamsClient.getStreamContext(userId).catch(() => null),
+    ]);
 
     // 3. Build graph input
     const graphInput: GraphStateInput = {
@@ -98,7 +102,7 @@ export async function processLayeredAgent(
     };
 
     // 4. Execute the graph
-    const result = await executeGraph(graphInput, identity, agentView, userId);
+    const result = await executeGraph(graphInput, identity, agentView, userId, { mambaContext });
 
     // 5. Store memory for this turn (async, don't block)
     // DISABLED: Handled in chat.service.ts to ensure correct message IDs and avoid FK violations
