@@ -656,7 +656,7 @@ export async function fetchAllModels(): Promise<LLMProvider[]> {
   if (ollamaSecondary.length > 0 || config.ollamaSecondary?.enabled) {
     providers.push({
       id: 'ollama_secondary',
-      name: 'Ollama (Remote 10.0.0.3)',
+      name: 'Ollama (Remote 10.0.0.30:11435)',
       enabled: true,
       models: ollamaSecondary,
     });

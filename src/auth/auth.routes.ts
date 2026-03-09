@@ -113,7 +113,51 @@ function getCookie(req: Request, name: string): string | undefined {
   return match ? decodeURIComponent(match.split('=')[1] || '') : undefined;
 }
 
-// Registration disabled - users are created manually
+// Register with invite code
+const registerInviteSchema = z.object({
+  inviteCode: z.string().min(1).max(32),
+  email: z.string().email(),
+  password: z.string().min(8, 'Password must be at least 8 characters'),
+  displayName: z.string().min(1).max(100),
+});
+
+router.post('/register-invite', loginLimiter, async (req: Request, res: Response) => {
+  try {
+    const data = registerInviteSchema.parse(req.body);
+    const result = await authService.registerWithInvite(
+      data.inviteCode,
+      data.email,
+      data.password,
+      data.displayName
+    );
+
+    setAuthCookies(req, res, result.tokens);
+
+    res.json({
+      user: {
+        id: result.user.id,
+        email: result.user.email,
+        displayName: result.user.displayName,
+        avatarUrl: result.user.avatarUrl,
+        settings: result.user.settings,
+        createdAt: result.user.createdAt,
+      },
+      ...result.tokens,
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: 'Validation error', details: error.errors });
+      return;
+    }
+    const message = (error as Error).message;
+    if (message.includes('invite code') || message.includes('Invite code') || message === 'Email already registered') {
+      res.status(400).json({ error: message });
+      return;
+    }
+    logger.error('Invite registration failed', { error: message });
+    res.status(500).json({ error: 'Registration failed' });
+  }
+});
 
 // Helper to get client IP
 function getClientIP(req: Request): string {

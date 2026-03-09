@@ -38,6 +38,7 @@ import sunoRoutes from './chat/suno.routes.js';
 import djLunaRoutes from './abilities/dj-luna.routes.js';
 import memoryLabRoutes from './memory/memory-lab.routes.js';
 import agentSettingsRoutes from './agents/agent-settings.routes.js';
+import createRoutes from './create/create.routes.js';
 import { startJobs, stopJobs } from './jobs/job-runner.js';
 import { setBroadcastFunction } from './activity/activity.service.js';
 import { initializeCritiqueQueue, shutdownCritiqueQueue } from './layered-agent/services/critique-queue.service.js';
@@ -213,6 +214,7 @@ app.use('/api/suno', sunoRoutes);
 app.use('/api/dj', djLunaRoutes);
 app.use('/api/memory-lab', memoryLabRoutes);
 app.use('/api/settings/agents', agentSettingsRoutes);
+app.use('/api/create', createRoutes);
 app.use('/api/consolidation', consciousnessRoutes);  // Consolidation logs share routes
 
 // Connect activity service to delivery service's SSE broadcast

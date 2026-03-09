@@ -1,4 +1,5 @@
 import bcrypt from 'bcrypt';
+import crypto from 'crypto';
 import { query, queryOne } from '../db/postgres.js';
 import { generateTokens, verifyToken, getRefreshExpiry } from './jwt.js';
 import type { User, UserCreate, AuthTokens } from '../types/index.js';
@@ -213,4 +214,84 @@ export async function getAllActiveUsers(): Promise<Array<Omit<User, 'settings'> 
     'SELECT * FROM users WHERE is_active = true'
   );
   return users.map(mapDbUser);
+}
+
+// Invite code system
+
+export async function createInviteCode(createdByUserId: string): Promise<{ code: string; expiresAt: Date }> {
+  const code = crypto.randomBytes(4).toString('hex'); // 8 chars
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+
+  await query(
+    `INSERT INTO invite_codes (code, created_by, expires_at)
+     VALUES ($1, $2, $3)`,
+    [code, createdByUserId, expiresAt]
+  );
+
+  logger.info('Invite code created', { code, createdBy: createdByUserId });
+  return { code, expiresAt };
+}
+
+export async function listInviteCodes(createdByUserId: string): Promise<Array<{
+  code: string;
+  expiresAt: Date;
+  usedBy: string | null;
+  usedAt: Date | null;
+  createdAt: Date;
+}>> {
+  const rows = await query<{
+    code: string;
+    expires_at: Date;
+    used_by: string | null;
+    used_at: Date | null;
+    created_at: Date;
+  }>(
+    `SELECT code, expires_at, used_by, used_at, created_at
+     FROM invite_codes WHERE created_by = $1
+     ORDER BY created_at DESC LIMIT 50`,
+    [createdByUserId]
+  );
+  return rows.map(r => ({
+    code: r.code,
+    expiresAt: r.expires_at,
+    usedBy: r.used_by,
+    usedAt: r.used_at,
+    createdAt: r.created_at,
+  }));
+}
+
+export async function registerWithInvite(
+  inviteCode: string,
+  email: string,
+  password: string,
+  displayName: string
+): Promise<{ user: Omit<User, 'settings'> & { settings: Record<string, unknown> }; tokens: AuthTokens }> {
+  // Validate invite code
+  const invite = await queryOne<{ id: string; used_by: string | null; expires_at: Date }>(
+    `SELECT id, used_by, expires_at FROM invite_codes WHERE code = $1`,
+    [inviteCode]
+  );
+
+  if (!invite) {
+    throw new Error('Invalid invite code');
+  }
+  if (invite.used_by) {
+    throw new Error('Invite code already used');
+  }
+  if (new Date(invite.expires_at) < new Date()) {
+    throw new Error('Invite code expired');
+  }
+
+  // Register user using existing register function
+  const result = await register({ email, password, displayName });
+
+  // Mark invite code as used
+  await query(
+    `UPDATE invite_codes SET used_by = $1, used_at = NOW() WHERE code = $2`,
+    [result.user.id, inviteCode]
+  );
+
+  logger.info('User registered with invite code', { userId: result.user.id, inviteCode });
+
+  return result;
 }

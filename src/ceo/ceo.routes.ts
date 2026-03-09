@@ -13,6 +13,7 @@ import { GENRE_PRESETS } from '../abilities/genre-presets.js';
 import * as genreRegistry from '../abilities/genre-registry.service.js';
 import * as customGenreInferrer from '../abilities/custom-genre-inferrer.service.js';
 import { pool } from '../db/index.js';
+import * as authService from '../auth/auth.service.js';
 import logger from '../utils/logger.js';
 
 // Category keyword auto-mapping for /slash/cost
@@ -1549,6 +1550,27 @@ router.delete('/staff/sessions/:sessionId', async (req: Request, res: Response) 
   } catch (error) {
     logger.error('Failed to clear staff session', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to clear staff session' });
+  }
+});
+
+// Invite code management
+router.post('/invite-codes', async (req: Request, res: Response) => {
+  try {
+    const result = await authService.createInviteCode(req.user!.userId);
+    res.json(result);
+  } catch (error) {
+    logger.error('Failed to create invite code', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to create invite code' });
+  }
+});
+
+router.get('/invite-codes', async (req: Request, res: Response) => {
+  try {
+    const codes = await authService.listInviteCodes(req.user!.userId);
+    res.json({ codes });
+  } catch (error) {
+    logger.error('Failed to list invite codes', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to list invite codes' });
   }
 });
 

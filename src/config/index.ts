@@ -206,7 +206,7 @@ const configSchema = z.object({
   }),
 
   ollamaSecondary: z.object({
-    url: z.string().url().default('http://10.0.0.3:11434'),
+    url: z.string().url().default('http://10.0.0.30:11435'),
     enabled: z.coerce.boolean().default(true),
   }).optional(),
 

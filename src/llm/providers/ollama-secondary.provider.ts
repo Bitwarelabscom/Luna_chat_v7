@@ -2,7 +2,7 @@ import { config } from '../../config/index.js';
 import type { ChatMessage, CompletionResult, StreamChunk } from '../types.js';
 import logger from '../../utils/logger.js';
 
-const OLLAMA_URL = config.ollamaSecondary?.url || 'http://10.0.0.3:11434';
+const OLLAMA_URL = config.ollamaSecondary?.url || 'http://10.0.0.30:11435';
 
 export async function createCompletion(
   model: string,

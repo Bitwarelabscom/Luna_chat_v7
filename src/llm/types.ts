@@ -608,7 +608,7 @@ export const PROVIDERS: LLMProvider[] = [
   },
   {
     id: 'ollama_secondary',
-    name: 'Ollama (Remote 10.0.0.3)',
+    name: 'Ollama (Remote 10.0.0.30:11435)',
     enabled: true,
     models: [
       {
