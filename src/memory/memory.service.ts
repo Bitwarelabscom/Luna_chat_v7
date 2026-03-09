@@ -12,6 +12,9 @@ import { formatRelativeTime } from './time-utils.js';
 import { scoreMessageComplexity, curateMemory } from './memory-curation.service.js';
 import { classifyEdges } from './edge-classification.service.js';
 import * as lunaStreamsClient from '../integration/luna-streams.client.js';
+import * as emotionalMoments from './emotional-moments.service.js';
+import * as contradictionService from './contradiction.service.js';
+import * as behavioralPatterns from './behavioral-patterns.service.js';
 
 /**
  * Memory context split into stable (cacheable) and volatile (per-query) parts
@@ -32,12 +35,16 @@ export interface MemoryContext {
     consolidatedPatterns?: string;  // NeuralSleep consolidated patterns
     consolidatedKnowledge?: string;  // NeuralSleep preferences + known facts
     semanticMemory?: string;  // MemoryCore high-tier semantic knowledge
+    emotionalMoments?: string;  // Recent raw emotional moments
+    behavioralObservations?: string;  // Specific behavioral pattern observations
   };
   // Volatile (not cached) - changes per query, goes in Tier 4
   volatile: {
     relevantHistory: string;      // Semantic search results
     conversationContext: string;  // Similar conversation summaries
     curationReasoning?: string;   // Debug: why curation selected these memories
+    contradictions?: string;      // Unsurfaced contradiction signals
+    contradictionIds?: string[];  // IDs for marking as surfaced post-response
   };
 }
 
@@ -77,20 +84,15 @@ export function formatStableMemory(context: MemoryContext): string {
   if (context.stable.semanticMemory) {
     parts.push(context.stable.semanticMemory);
   }
-  // Add consciousness context if available (high temporal integration indicates strong memory coherence)
-  if (context.stable.consciousness) {
-    const { temporalIntegration, consciousnessLevel } = context.stable.consciousness;
-    const consciousnessInfo: string[] = [];
-    if (temporalIntegration >= 0.5) {
-      consciousnessInfo.push(`Memory coherence: ${(temporalIntegration * 100).toFixed(0)}%`);
-    }
-    if (consciousnessLevel) {
-      consciousnessInfo.push(`Integration level: ${consciousnessLevel}`);
-    }
-    if (consciousnessInfo.length > 0) {
-      parts.push(`[Memory State]\n${consciousnessInfo.join('\n')}`);
-    }
+  // Emotional moments - raw, specific memories
+  if (context.stable.emotionalMoments) {
+    parts.push(context.stable.emotionalMoments);
   }
+  // Behavioral observations - specific things Luna has noticed
+  if (context.stable.behavioralObservations) {
+    parts.push(context.stable.behavioralObservations);
+  }
+  // Note: consciousness metrics intentionally excluded from prompt - diagnostic only
   return parts.join('\n\n');
 }
 
@@ -105,6 +107,9 @@ export function formatVolatileMemory(context: MemoryContext): string {
   }
   if (context.volatile.conversationContext) {
     parts.push(context.volatile.conversationContext);
+  }
+  if (context.volatile.contradictions) {
+    parts.push(context.volatile.contradictions);
   }
   return parts.join('\n\n');
 }
@@ -125,7 +130,7 @@ export async function buildMemoryContext(
     const intentId = session?.primaryIntentId || null;
 
     // Run all queries in parallel for better performance
-    const [facts, similarMessages, similarConversations, learningsContext, consciousnessMetrics, consolidatedModel, graphContext, localGraphContext, semanticMemoryData] = await Promise.all([
+    const [facts, similarMessages, similarConversations, learningsContext, consciousnessMetrics, consolidatedModel, graphContext, localGraphContext, semanticMemoryData, recentEmotionalMoments, activeObservations, unsurfacedContradictions] = await Promise.all([
       // Get user facts (filtered by intent if available)
       factsService.getUserFacts(userId, { limit: 30, intentId }),
       // Search for relevant past messages (excluding current session, scoped to intent)
@@ -158,6 +163,12 @@ export async function buildMemoryContext(
       neo4jService.buildLocalGraphContext(userId),
       // Get semantic memory from MemoryCore (high-tier consolidated knowledge)
       memorycoreClient.getSemanticMemory(userId),
+      // Get recent emotional moments (resonant memory)
+      emotionalMoments.getRecentMoments(userId, 5, 7),
+      // Get active behavioral observations (resonant memory)
+      behavioralPatterns.getActiveObservations(userId, 3),
+      // Get unsurfaced contradiction signals (volatile, session-scoped)
+      contradictionService.getUnsurfaced(currentSessionId),
     ]);
 
     // Score message complexity to decide whether to curate
@@ -178,7 +189,7 @@ export async function buildMemoryContext(
         .slice(0, 5)
         .map(p => `- ${p.pattern} (${p.type})`);
       if (patterns.length > 0) {
-        consolidatedPatterns = `[Consolidated Memory Patterns]\n${patterns.join('\n')}`;
+        consolidatedPatterns = `[Patterns You've Noticed]\n${patterns.join('\n')}`;
       }
     }
 
@@ -190,7 +201,10 @@ export async function buildMemoryContext(
         const prefs = consolidatedModel.preferences
           .filter(p => p.confidence > 0.5)
           .slice(0, 5)
-          .map(p => `- Preference: ${p.theme} (valence: ${p.valence.toFixed(2)})`);
+          .map(p => {
+            const sentiment = p.valence > 0.5 ? 'genuinely enjoys' : p.valence > 0 ? 'likes' : p.valence < -0.3 ? 'dislikes' : 'is neutral about';
+            return `- ${sentiment} ${p.theme}`;
+          });
         if (prefs.length > 0) knowledgeParts.push(...prefs);
       }
       if (consolidatedModel.knownFacts && consolidatedModel.knownFacts.length > 0) {
@@ -201,7 +215,7 @@ export async function buildMemoryContext(
         if (facts2.length > 0) knowledgeParts.push(...facts2);
       }
       if (knowledgeParts.length > 0) {
-        consolidatedKnowledge = `[Consolidated Knowledge]\n${knowledgeParts.join('\n')}`;
+        consolidatedKnowledge = `[Things You Know About Them]\n${knowledgeParts.join('\n')}`;
       }
     }
 
@@ -211,7 +225,7 @@ export async function buildMemoryContext(
       const patterns = semanticMemoryData.recentPatterns
         .slice(0, 5)
         .map((p: { type: string; pattern: string }) => `- ${p.type}: ${p.pattern}`);
-      semanticMemory = `[Semantic Memory]\n${patterns.join('\n')}`;
+      semanticMemory = `[Things You've Learned Over Time]\n${patterns.join('\n')}`;
     }
 
     // Graph memory is already formatted by spreading activation
@@ -260,6 +274,12 @@ export async function buildMemoryContext(
         formatDirectWithTimestamps(facts, similarMessages, similarConversations, learningsContext));
     }
 
+    // Format resonant memory data
+    const emotionalMomentsFormatted = emotionalMoments.formatForContext(recentEmotionalMoments);
+    const behavioralObsFormatted = behavioralPatterns.formatForContext(activeObservations);
+    const contradictionsFormatted = contradictionService.formatForContext(unsurfacedContradictions);
+    const contradictionIds = unsurfacedContradictions.map(s => s.id);
+
     return {
       stable: {
         facts: factsPrompt,
@@ -270,11 +290,15 @@ export async function buildMemoryContext(
         consolidatedPatterns,
         consolidatedKnowledge,
         semanticMemory,
+        emotionalMoments: emotionalMomentsFormatted,
+        behavioralObservations: behavioralObsFormatted,
       },
       volatile: {
         relevantHistory,
         conversationContext,
         curationReasoning,
+        contradictions: contradictionsFormatted,
+        contradictionIds,
       },
     };
   } catch (error) {
@@ -296,7 +320,7 @@ export async function buildMemoryContext(
  */
 export async function buildStableMemoryOnly(userId: string): Promise<MemoryContext> {
   try {
-    const [facts, learningsContext, consciousnessMetrics, consolidatedModel, graphContext, localGraphContext, semanticMemoryData] = await Promise.all([
+    const [facts, learningsContext, consciousnessMetrics, consolidatedModel, graphContext, localGraphContext, semanticMemoryData, recentEmotionalMoments, activeObservations] = await Promise.all([
       factsService.getUserFacts(userId, { limit: 30 }),
       insightsService.getActiveLearningsForContext(userId, 10),
       memorycoreClient.getConsciousnessMetrics(userId),
@@ -304,6 +328,8 @@ export async function buildStableMemoryOnly(userId: string): Promise<MemoryConte
       graphContextFallback(userId),
       neo4jService.buildLocalGraphContext(userId),
       memorycoreClient.getSemanticMemory(userId),
+      emotionalMoments.getRecentMoments(userId, 5, 7),
+      behavioralPatterns.getActiveObservations(userId, 3),
     ]);
 
     // Use timestamps in stable-only mode (learnings already have timestamps from insights service)
@@ -329,7 +355,7 @@ export async function buildStableMemoryOnly(userId: string): Promise<MemoryConte
         .slice(0, 5)
         .map(p => `- ${p.pattern} (${p.type})`);
       if (patterns.length > 0) {
-        consolidatedPatterns = `[Consolidated Memory Patterns]\n${patterns.join('\n')}`;
+        consolidatedPatterns = `[Patterns You've Noticed]\n${patterns.join('\n')}`;
       }
     }
 
@@ -341,7 +367,10 @@ export async function buildStableMemoryOnly(userId: string): Promise<MemoryConte
         const prefs = consolidatedModel.preferences
           .filter(p => p.confidence > 0.5)
           .slice(0, 5)
-          .map(p => `- Preference: ${p.theme} (valence: ${p.valence.toFixed(2)})`);
+          .map(p => {
+            const sentiment = p.valence > 0.5 ? 'genuinely enjoys' : p.valence > 0 ? 'likes' : p.valence < -0.3 ? 'dislikes' : 'is neutral about';
+            return `- ${sentiment} ${p.theme}`;
+          });
         if (prefs.length > 0) knowledgeParts.push(...prefs);
       }
       if (consolidatedModel.knownFacts && consolidatedModel.knownFacts.length > 0) {
@@ -352,7 +381,7 @@ export async function buildStableMemoryOnly(userId: string): Promise<MemoryConte
         if (facts2.length > 0) knowledgeParts.push(...facts2);
       }
       if (knowledgeParts.length > 0) {
-        consolidatedKnowledge = `[Consolidated Knowledge]\n${knowledgeParts.join('\n')}`;
+        consolidatedKnowledge = `[Things You Know About Them]\n${knowledgeParts.join('\n')}`;
       }
     }
 
@@ -362,7 +391,7 @@ export async function buildStableMemoryOnly(userId: string): Promise<MemoryConte
       const patterns = semanticMemoryData.recentPatterns
         .slice(0, 5)
         .map((p: { type: string; pattern: string }) => `- ${p.type}: ${p.pattern}`);
-      semanticMemory = `[Semantic Memory]\n${patterns.join('\n')}`;
+      semanticMemory = `[Things You've Learned Over Time]\n${patterns.join('\n')}`;
     }
 
     // Graph memory is already formatted by fallback
@@ -381,6 +410,8 @@ export async function buildStableMemoryOnly(userId: string): Promise<MemoryConte
         consolidatedPatterns,
         consolidatedKnowledge,
         semanticMemory,
+        emotionalMoments: emotionalMoments.formatForContext(recentEmotionalMoments),
+        behavioralObservations: behavioralPatterns.formatForContext(activeObservations),
       },
       volatile: {
         relevantHistory: '',
@@ -435,20 +466,14 @@ export function formatMemoryForPrompt(context: MemoryContext): string {
   if (context.stable.semanticMemory) {
     parts.push(context.stable.semanticMemory);
   }
-  // Add consciousness context if available
-  if (context.stable.consciousness) {
-    const { temporalIntegration, consciousnessLevel } = context.stable.consciousness;
-    const consciousnessInfo: string[] = [];
-    if (temporalIntegration >= 0.5) {
-      consciousnessInfo.push(`Memory coherence: ${(temporalIntegration * 100).toFixed(0)}%`);
-    }
-    if (consciousnessLevel) {
-      consciousnessInfo.push(`Integration level: ${consciousnessLevel}`);
-    }
-    if (consciousnessInfo.length > 0) {
-      parts.push(`[Memory State]\n${consciousnessInfo.join('\n')}`);
-    }
+  // Emotional moments and behavioral observations
+  if (context.stable.emotionalMoments) {
+    parts.push(context.stable.emotionalMoments);
   }
+  if (context.stable.behavioralObservations) {
+    parts.push(context.stable.behavioralObservations);
+  }
+  // Note: consciousness metrics intentionally excluded - diagnostic only
 
   // Volatile parts
   if (context.volatile.relevantHistory) {
@@ -456,6 +481,9 @@ export function formatMemoryForPrompt(context: MemoryContext): string {
   }
   if (context.volatile.conversationContext) {
     parts.push(context.volatile.conversationContext);
+  }
+  if (context.volatile.contradictions) {
+    parts.push(context.volatile.contradictions);
   }
 
   if (parts.length === 0) return '';

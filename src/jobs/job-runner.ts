@@ -35,6 +35,7 @@ import * as memorycoreGraphService from '../memory/memorycore-graph.service.js';
 import * as ceoOrgService from '../ceo/ceo-org.service.js';
 import * as ceoProposals from '../ceo/ceo-proposals.service.js';
 import * as factsService from '../memory/facts.service.js';
+import * as behavioralPatterns from '../memory/behavioral-patterns.service.js';
 
 // ============================================
 // Job Definitions
@@ -408,6 +409,13 @@ const jobs: Job[] = [
     enabled: true,
     running: false,
     handler: runFactExpiryJob,
+  },
+  {
+    name: 'behavioralPatternDetector',
+    intervalMs: 15 * 60 * 1000, // Every 15 minutes
+    enabled: true,
+    running: false,
+    handler: runBehavioralPatternDetection,
   },
 ];
 
@@ -1884,6 +1892,14 @@ async function runFactExpiryJob(): Promise<void> {
     }
   } catch (error) {
     logger.error('Fact expiry job failed', { error: (error as Error).message });
+  }
+}
+
+async function runBehavioralPatternDetection(): Promise<void> {
+  try {
+    await behavioralPatterns.runDetection();
+  } catch (error) {
+    logger.error('Behavioral pattern detection failed', { error: (error as Error).message });
   }
 }
 

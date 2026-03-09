@@ -86,6 +86,8 @@ import * as embeddingService from '../memory/embedding.service.js';
 import * as sentimentService from '../memory/sentiment.service.js';
 import * as attentionService from '../memory/attention.service.js';
 import * as centroidService from '../memory/centroid.service.js';
+import * as emotionalMoments from '../memory/emotional-moments.service.js';
+import * as contradictionService from '../memory/contradiction.service.js';
 import type { InteractionEnrichment } from '../memory/memorycore.client.js';
 
 // Per-session tracking for enrichment pipeline
@@ -478,6 +480,20 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   // Record enriched user message to MemoryCore (async, non-blocking)
   memorycoreClient.recordChatInteraction(sessionId, 'message', message, { mode, source }, pmEnrichment).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
 
+  // Capture emotional moments when VAD thresholds are crossed (fire-and-forget)
+  if (pmEnrichment?.emotionalValence !== undefined) {
+    const valence = pmEnrichment.emotionalValence;
+    // Arousal is not directly in enrichment, re-analyze only for significant valence
+    if (Math.abs(valence) > 0.5) {
+      sentimentService.analyze(message).then(sentiment => {
+        if (Math.abs(sentiment.valence) > 0.5 || sentiment.arousal > 0.6) {
+          emotionalMoments.capture(userId, sessionId, null, message, sentiment)
+            .catch(err => logger.debug('Emotional moment capture failed', { err: (err as Error).message }));
+        }
+      }).catch(() => {});
+    }
+  }
+
   // Emit to Luna Streams (fire-and-forget)
   lunaStreamsClient.emitChatInteraction(message, {
     mode,
@@ -663,7 +679,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     sessionService.getSessionMessages(sessionId, { limit: 50 }),
     // Build memory context - skip volatile parts for smalltalk, but load stable facts in companion mode
     isSmallTalkMessageLegacy || mode === 'dj_luna'
-      ? (mode === 'companion' ? memoryService.buildStableMemoryOnly(userId) : Promise.resolve({ stable: { facts: '', learnings: '' }, volatile: { relevantHistory: '', conversationContext: '' } }))
+      ? (mode === 'companion' ? memoryService.buildStableMemoryOnly(userId) : Promise.resolve({ stable: { facts: '', learnings: '' }, volatile: { relevantHistory: '', conversationContext: '' } } as memoryService.MemoryContext))
       : memoryService.buildMemoryContext(userId, message, sessionId),
     // Build ability context - uses contextOptions for selective loading
     abilities.buildAbilityContext(userId, message, sessionId, contextOptions),
@@ -709,6 +725,12 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   const abilityPrompt = abilities.formatAbilityContextForPrompt(abilityContext);
   const prefPrompt = preferencesService.formatGuidelinesForPrompt(prefGuidelines);
   const intentPrompt = intentContextService.formatIntentsForPrompt(intentContext);
+
+  // Mark contradiction signals as surfaced (they are now in the volatile prompt)
+  if (memoryContext.volatile.contradictionIds && memoryContext.volatile.contradictionIds.length > 0) {
+    contradictionService.markSurfaced(memoryContext.volatile.contradictionIds)
+      .catch(err => logger.debug('Failed to mark contradictions surfaced', { err: (err as Error).message }));
+  }
 
   // Detect and learn from feedback signals
   const feedbackSignal = preferencesService.detectFeedbackSignals(message);
@@ -2965,6 +2987,19 @@ export async function* streamMessage(
   // Record enriched user message to MemoryCore (async, non-blocking)
   memorycoreClient.recordChatInteraction(sessionId, 'message', message, { mode, source }, smEnrichment).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
 
+  // Capture emotional moments when VAD thresholds are crossed (fire-and-forget)
+  if (smEnrichment?.emotionalValence !== undefined) {
+    const valence = smEnrichment.emotionalValence;
+    if (Math.abs(valence) > 0.5) {
+      sentimentService.analyze(message).then(sentiment => {
+        if (Math.abs(sentiment.valence) > 0.5 || sentiment.arousal > 0.6) {
+          emotionalMoments.capture(userId, sessionId, null, message, sentiment)
+            .catch(err => logger.debug('Emotional moment capture failed', { err: (err as Error).message }));
+        }
+      }).catch(() => {});
+    }
+  }
+
   // Emit to Luna Streams (fire-and-forget)
   lunaStreamsClient.emitChatInteraction(message, {
     mode,
@@ -3410,7 +3445,7 @@ export async function* streamMessage(
     sessionService.getSessionMessages(sessionId, { limit: 50 }),
     // Build memory context - skip volatile parts for smalltalk, but load stable facts in companion mode
     isSmallTalkMessage
-      ? (mode === 'companion' ? memoryService.buildStableMemoryOnly(userId) : Promise.resolve({ stable: { facts: '', learnings: '' }, volatile: { relevantHistory: '', conversationContext: '' } }))
+      ? (mode === 'companion' ? memoryService.buildStableMemoryOnly(userId) : Promise.resolve({ stable: { facts: '', learnings: '' }, volatile: { relevantHistory: '', conversationContext: '' } } as memoryService.MemoryContext))
       : memoryService.buildMemoryContext(userId, message, sessionId),
     // Build ability context - uses contextOptions for selective loading
     abilities.buildAbilityContext(userId, message, sessionId, contextOptions),
@@ -3467,6 +3502,12 @@ export async function* streamMessage(
   const abilityPrompt = abilities.formatAbilityContextForPrompt(abilityContext);
   const prefPrompt = preferencesService.formatGuidelinesForPrompt(prefGuidelines);
   const intentPrompt = intentContextService.formatIntentsForPrompt(intentContext);
+
+  // Mark contradiction signals as surfaced (they are now in the volatile prompt)
+  if (memoryContext.volatile.contradictionIds && memoryContext.volatile.contradictionIds.length > 0) {
+    contradictionService.markSurfaced(memoryContext.volatile.contradictionIds)
+      .catch(err => logger.debug('Failed to mark contradictions surfaced', { err: (err as Error).message }));
+  }
 
   // Detect and learn from feedback signals
   const feedbackSignal = preferencesService.detectFeedbackSignals(message);

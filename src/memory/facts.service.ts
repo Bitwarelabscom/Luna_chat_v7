@@ -1,6 +1,7 @@
 import { pool } from '../db/index.js';
 import { createBackgroundCompletionWithFallback } from '../llm/background-completion.service.js';
 import * as knowledgeGraphService from '../graph/knowledge-graph.service.js';
+import * as contradictionService from './contradiction.service.js';
 import logger from '../utils/logger.js';
 import { formatRelativeTime } from './time-utils.js';
 
@@ -263,6 +264,15 @@ export async function storeFact(
          incomingType === 'temporary' ? 'temporary_override' : 'correction',
          incomingType === 'temporary' ? 'Temporary override' : 'Value correction']
       );
+
+      // Emit contradiction signal for well-established facts
+      if ((existing.mention_count as number) >= 2) {
+        contradictionService.createSignal(
+          userId, sourceSessionId, fact.factKey,
+          fact.factValue, existing.fact_value as string,
+          fact.isCorrection ? 'correction' : 'misremember'
+        ).catch(err => logger.debug('Contradiction signal failed', { err: (err as Error).message }));
+      }
     }
 
     await client.query('COMMIT');
