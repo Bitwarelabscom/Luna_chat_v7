@@ -802,17 +802,19 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
 
   // Add semantically relevant older messages first (marked as earlier context)
   for (const relevant of compressedCtx.relevantMessages) {
+    const ts = contextCompression.formatMessageTimestamp(relevant.createdAt);
     messages.push({
       role: relevant.role as 'user' | 'assistant',
-      content: `[Earlier context] ${contextCompression.compressMessage({ content: relevant.content, role: relevant.role } as Message)}`,
+      content: `${ts}[Earlier context] ${contextCompression.compressMessage({ content: relevant.content, role: relevant.role } as Message)}`,
     });
   }
 
-  // Add recent messages (truncated for efficiency)
+  // Add recent messages (truncated for efficiency, with timestamps)
   for (const msg of compressedCtx.recentMessages) {
+    const ts = contextCompression.formatMessageTimestamp(msg.createdAt);
     messages.push({
       role: msg.role,
-      content: contextCompression.compressMessage(msg),
+      content: `${ts}${contextCompression.compressMessage(msg)}`,
     });
   }
 
@@ -3557,17 +3559,19 @@ export async function* streamMessage(
 
   // Add semantically relevant older messages first (marked as earlier context)
   for (const relevant of compressedCtx.relevantMessages) {
+    const ts = contextCompression.formatMessageTimestamp(relevant.createdAt);
     messages.push({
       role: relevant.role as 'user' | 'assistant',
-      content: `[Earlier context] ${contextCompression.compressMessage({ content: relevant.content, role: relevant.role } as Message)}`,
+      content: `${ts}[Earlier context] ${contextCompression.compressMessage({ content: relevant.content, role: relevant.role } as Message)}`,
     });
   }
 
-  // Add recent messages (truncated for efficiency)
+  // Add recent messages (truncated for efficiency, with timestamps)
   for (const msg of compressedCtx.recentMessages) {
+    const ts = contextCompression.formatMessageTimestamp(msg.createdAt);
     messages.push({
       role: msg.role,
-      content: contextCompression.compressMessage(msg),
+      content: `${ts}${contextCompression.compressMessage(msg)}`,
     });
   }
 

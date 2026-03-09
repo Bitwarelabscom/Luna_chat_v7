@@ -598,7 +598,7 @@ You have access to additional tools via MCP (Model Context Protocol). These exte
 
   // Date/time last (rounded to 15-min for some caching benefit)
   const { date, time } = getDateTime();
-  sections.push(`[Current Time]\n${date} at ${time} (CET+1)`);
+  sections.push(`[Current Time]\n${date} at ${time} (CET+1)\nMessage timestamps are in ISO 8601. Use temporal gaps to adjust tone - acknowledge time since last interaction, notice patterns in conversation timing.`);
 
   // Add source context if specified
   if (options.source && options.source !== 'web') {

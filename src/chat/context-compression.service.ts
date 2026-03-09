@@ -135,6 +135,17 @@ export function compressMessage(message: Message, maxLength: number = DEFAULT_CO
   return content;
 }
 
+/**
+ * Format a message timestamp as ISO 8601 prefix for LLM context.
+ * Returns empty string if no timestamp available.
+ */
+export function formatMessageTimestamp(createdAt: Date | string | undefined | null): string {
+  if (!createdAt) return '';
+  const d = createdAt instanceof Date ? createdAt : new Date(createdAt);
+  if (isNaN(d.getTime())) return '';
+  return `[${d.toISOString()}] `;
+}
+
 // ============================================
 // Strategy 1: Rolling Summarization
 // ============================================
