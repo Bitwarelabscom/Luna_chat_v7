@@ -184,25 +184,23 @@ export interface TtsSettings {
 }
 
 // Coder Settings Types
-export type ProviderId = 'groq' | 'anthropic' | 'xai' | 'openrouter' | 'ollama' | 'ollama_secondary' | 'ollama_tertiary' | 'google' | 'sanhedrin' | 'moonshot';
+export type ProviderId = 'groq' | 'anthropic' | 'xai' | 'openrouter' | 'ollama' | 'ollama_secondary' | 'ollama_tertiary' | 'google' | 'moonshot';
 
 export interface TriggerWords {
   claude: string[];
   gemini: string[];
   api: string[];
-  codex: string[];
 }
 
 export interface CoderSettings {
   userId: string;
   claudeCliEnabled: boolean;
   geminiCliEnabled: boolean;
-  codexCliEnabled: boolean;
   coderApiEnabled: boolean;
   coderApiProvider: ProviderId | null;
   coderApiModel: string | null;
   triggerWords: TriggerWords;
-  defaultCoder: 'claude' | 'gemini' | 'api' | 'codex';
+  defaultCoder: 'claude' | 'gemini' | 'api';
 }
 
 export type ThemeType = 'dark' | 'retro' | 'light' | 'cyberpunk' | 'nord' | 'solarized';

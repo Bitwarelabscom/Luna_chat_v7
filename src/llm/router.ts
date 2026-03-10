@@ -8,14 +8,13 @@ import * as ollamaProvider from './providers/ollama.provider.js';
 import * as ollamaSecondaryProvider from './providers/ollama-secondary.provider.js';
 import * as ollamaTertiaryProvider from './providers/ollama-tertiary.provider.js';
 import * as googleProvider from './providers/google.provider.js';
-import * as sanhedrinProvider from './providers/sanhedrin.provider.js';
 import * as moonshotProvider from './providers/moonshot.provider.js';
 import logger from '../utils/logger.js';
 import { activityHelpers } from '../activity/activity.service.js';
 import { pool } from '../db/postgres.js';
 
 // Providers to skip for llm_call_logs (local/free, no per-token cost)
-const EXCLUDED_PROVIDERS: Set<ProviderId> = new Set(['ollama', 'ollama_secondary', 'ollama_tertiary', 'sanhedrin']);
+const EXCLUDED_PROVIDERS: Set<ProviderId> = new Set(['ollama', 'ollama_secondary', 'ollama_tertiary']);
 
 interface LLMCallLogData {
   userId?: string;
@@ -90,7 +89,6 @@ const providers: Record<ProviderId, ProviderModule> = {
   ollama_secondary: ollamaSecondaryProvider,
   ollama_tertiary: ollamaTertiaryProvider,
   google: googleProvider,
-  sanhedrin: sanhedrinProvider,
   moonshot: moonshotProvider,
 };
 

@@ -64,13 +64,12 @@ export function ModelSelector() {
     setIsOpen(false);
   };
 
-  type CoderChoice = 'claude' | 'gemini' | 'codex' | 'api';
+  type CoderChoice = 'claude' | 'gemini' | 'api';
 
   const getEnabledCoderCount = (settings: CoderSettings) => {
     let count = 0;
     if (settings.claudeCliEnabled) count++;
     if (settings.geminiCliEnabled) count++;
-    if (settings.codexCliEnabled) count++;
     if (settings.coderApiEnabled && settings.coderApiProvider && settings.coderApiModel) count++;
     return count;
   };
@@ -80,7 +79,6 @@ export function ModelSelector() {
     if (enabledCount !== 1) return 'Mixed';
     if (settings.claudeCliEnabled) return 'Claude';
     if (settings.geminiCliEnabled) return 'Gemini';
-    if (settings.codexCliEnabled) return 'Codex Mini';
     if (settings.coderApiEnabled && settings.coderApiProvider && settings.coderApiModel) return 'Coder API';
     return 'Mixed';
   };
@@ -94,7 +92,6 @@ export function ModelSelector() {
       const updates = {
         claudeCliEnabled: choice === 'claude',
         geminiCliEnabled: choice === 'gemini',
-        codexCliEnabled: choice === 'codex',
         coderApiEnabled: choice === 'api',
         defaultCoder: choice,
       } as const;
@@ -218,7 +215,6 @@ export function ModelSelector() {
                   {[
                     { id: 'claude' as const, label: 'Claude CLI' },
                     { id: 'gemini' as const, label: 'Gemini CLI' },
-                    { id: 'codex' as const, label: 'Codex Mini' },
                     { id: 'api' as const, label: 'Coder API', disabled: !coderSettings.coderApiProvider || !coderSettings.coderApiModel },
                   ].map((coder) => (
                     <button

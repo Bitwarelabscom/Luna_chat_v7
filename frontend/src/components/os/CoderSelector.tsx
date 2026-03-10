@@ -4,13 +4,12 @@ import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, Loader2 } from 'lucide-react';
 import { settingsApi, type CoderSettings, type LLMProvider, type ProviderId } from '@/lib/api/settings';
 
-type CoderChoice = 'claude' | 'gemini' | 'codex' | 'api';
+type CoderChoice = 'claude' | 'gemini' | 'api';
 
 function getEnabledCoders(settings: CoderSettings): CoderChoice[] {
   const enabled: CoderChoice[] = [];
   if (settings.claudeCliEnabled) enabled.push('claude');
   if (settings.geminiCliEnabled) enabled.push('gemini');
-  if (settings.codexCliEnabled) enabled.push('codex');
   if (settings.coderApiEnabled && settings.coderApiProvider && settings.coderApiModel) enabled.push('api');
   return enabled;
 }
@@ -27,8 +26,6 @@ function getChoiceLabel(choice: '' | CoderChoice): string {
       return 'Coder: Claude';
     case 'gemini':
       return 'Coder: Gemini';
-    case 'codex':
-      return 'Coder: Codex';
     case 'api':
       return 'Coder: API';
     default:
@@ -135,7 +132,6 @@ export function CoderSelector() {
       const result = await settingsApi.updateCoderSettings({
         claudeCliEnabled: choice === 'claude',
         geminiCliEnabled: choice === 'gemini',
-        codexCliEnabled: choice === 'codex',
         coderApiEnabled: choice === 'api',
         coderApiProvider: nextApiProvider,
         coderApiModel: nextApiModel,
@@ -194,7 +190,6 @@ export function CoderSelector() {
               {[
                 { id: 'claude' as const, label: 'Claude CLI' },
                 { id: 'gemini' as const, label: 'Gemini CLI' },
-                { id: 'codex' as const, label: 'Codex Mini' },
                 {
                   id: 'api' as const,
                   label: 'Coder API',

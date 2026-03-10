@@ -524,55 +524,16 @@ function getModelSortScore(modelId: string): number {
   return score;
 }
 
-// Fetch Sanhedrin models (local A2A server)
-async function fetchSanhedrinModels(): Promise<ModelConfig[]> {
-  if (!config.sanhedrin?.enabled || !config.sanhedrin?.baseUrl) {
-    return [];
-  }
-
-  try {
-    const response = await fetch(`${config.sanhedrin.baseUrl}/health`);
-    if (!response.ok) {
-      return [];
-    }
-
-    // Sanhedrin is healthy, return static model list
-    return [
-      {
-        id: 'claude-code',
-        name: 'Claude Code (CLI)',
-        contextWindow: 200000,
-        maxOutputTokens: 64000,
-        capabilities: ['chat', 'code', 'analysis'],
-        costPer1kInput: 0,
-        costPer1kOutput: 0,
-      },
-      {
-        id: 'gemini-cli',
-        name: 'Gemini CLI',
-        contextWindow: 1000000,
-        maxOutputTokens: 32000,
-        capabilities: ['chat', 'code', 'analysis'],
-        costPer1kInput: 0,
-        costPer1kOutput: 0,
-      },
-    ];
-  } catch {
-    return [];
-  }
-}
-
 // Main function to fetch all models from all providers
 export async function fetchAllModels(): Promise<LLMProvider[]> {
   logger.info('Fetching models from all providers...');
 
-  const [anthropic, google, xai, groq, openrouter, sanhedrin, moonshot, ollama, ollamaSecondary, ollamaTertiary] = await Promise.all([
+  const [anthropic, google, xai, groq, openrouter, moonshot, ollama, ollamaSecondary, ollamaTertiary] = await Promise.all([
     fetchAnthropicModels(),
     fetchGoogleModels(),
     fetchXAIModels(),
     fetchGroqModels(),
     fetchOpenRouterModels(),
-    fetchSanhedrinModels(),
     fetchMoonshotModels(),
     fetchOllamaModels(),
     fetchOllamaSecondaryModels(),
@@ -671,15 +632,6 @@ export async function fetchAllModels(): Promise<LLMProvider[]> {
     });
   }
 
-  if (sanhedrin.length > 0) {
-    providers.push({
-      id: 'sanhedrin',
-      name: 'Sanhedrin (CLI Agents)',
-      enabled: true,
-      models: sanhedrin,
-    });
-  }
-
   logger.info('Fetched models from providers', {
     counts: {
       anthropic: anthropic.length,
@@ -687,7 +639,6 @@ export async function fetchAllModels(): Promise<LLMProvider[]> {
       xai: xai.length,
       groq: groq.length,
       openrouter: openrouter.length,
-      sanhedrin: sanhedrin.length,
       moonshot: moonshot.length,
       ollama: ollama.length,
       ollamaSecondary: ollamaSecondary.length,

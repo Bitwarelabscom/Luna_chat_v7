@@ -1,6 +1,6 @@
 // LLM Provider Types
 
-export type ProviderId = 'groq' | 'anthropic' | 'xai' | 'openrouter' | 'ollama' | 'ollama_secondary' | 'ollama_tertiary' | 'google' | 'sanhedrin' | 'moonshot';
+export type ProviderId = 'groq' | 'anthropic' | 'xai' | 'openrouter' | 'ollama' | 'ollama_secondary' | 'ollama_tertiary' | 'google' | 'moonshot';
 
 export interface LLMProvider {
   id: ProviderId;
@@ -798,49 +798,6 @@ export const PROVIDERS: LLMProvider[] = [
         capabilities: ['chat', 'fast'],
         costPer1kInput: 0.000075,
         costPer1kOutput: 0.0003,
-      },
-    ],
-  },
-  {
-    id: 'sanhedrin',
-    name: 'Sanhedrin (CLI Agents)',
-    enabled: true,
-    models: [
-      {
-        id: 'claude-code',
-        name: 'Claude Code (CLI)',
-        contextWindow: 200000,
-        maxOutputTokens: 64000,
-        capabilities: ['chat', 'code', 'analysis'],
-        costPer1kInput: 0,
-        costPer1kOutput: 0,
-      },
-      {
-        id: 'gemini-cli',
-        name: 'Gemini CLI',
-        contextWindow: 1000000,
-        maxOutputTokens: 32000,
-        capabilities: ['chat', 'code', 'analysis'],
-        costPer1kInput: 0,
-        costPer1kOutput: 0,
-      },
-      {
-        id: 'codex-cli',
-        name: 'Codex CLI',
-        contextWindow: 128000,
-        maxOutputTokens: 16000,
-        capabilities: ['chat', 'code'],
-        costPer1kInput: 0,
-        costPer1kOutput: 0,
-      },
-      {
-        id: 'ollama',
-        name: 'Ollama (via Sanhedrin)',
-        contextWindow: 32768,
-        maxOutputTokens: 8192,
-        capabilities: ['chat', 'code', 'fast'],
-        costPer1kInput: 0,
-        costPer1kOutput: 0,
       },
     ],
   },

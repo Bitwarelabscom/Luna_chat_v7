@@ -96,6 +96,8 @@ const configSchema = z.object({
   openrouter: z.object({
     apiKey: z.string().optional(),
     enabled: z.coerce.boolean().default(true),
+    embeddingModel: z.string().default('qwen/qwen3-embedding-8b'),
+    embeddingDimensions: z.coerce.number().int().positive().default(1024),
   }).optional(),
 
   google: z.object({
@@ -103,16 +105,16 @@ const configSchema = z.object({
     enabled: z.coerce.boolean().default(true),
   }).optional(),
 
-  sanhedrin: z.object({
-    baseUrl: z.string().url().default('http://localhost:8000'),
-    timeout: z.coerce.number().default(120000),
-    enabled: z.coerce.boolean().default(false),
-  }).optional(),
-
   elevenlabs: z.object({
     apiKey: z.string().optional(),
     voiceId: z.string().default('21m00Tcm4TlvDq8ikWAM'),  // Rachel - warm, calm voice
     model: z.string().default('eleven_v3'),  // v3 for best emotion tag support
+    enabled: z.coerce.boolean().default(true),
+  }).optional(),
+
+  orpheus: z.object({
+    url: z.string().default('http://10.0.0.30:5005'),
+    voice: z.string().default('tara'),
     enabled: z.coerce.boolean().default(true),
   }).optional(),
 
@@ -241,9 +243,10 @@ const configSchema = z.object({
   stt: z.object({
     provider: z.enum(['openai', 'groq', 'local']).default('openai'),
     model: z.string().default('whisper-1'),
+    baseUrl: z.string().optional(),
     language: z.string().optional(),
     silenceDetection: z.coerce.boolean().default(true),
-    silenceThreshold: z.coerce.number().default(-50), // dB
+    silenceThreshold: z.coerce.number().default(-35), // dB (normalized 0-1 RMS)
     silenceDuration: z.coerce.number().default(700), // ms
   }),
 
@@ -334,6 +337,8 @@ const rawConfig = {
   openrouter: {
     apiKey: secrets.openrouterApiKey,
     enabled: process.env.OPENROUTER_ENABLED,
+    embeddingModel: process.env.OPENROUTER_EMBEDDING_MODEL,
+    embeddingDimensions: process.env.OPENROUTER_EMBEDDING_DIMENSIONS,
   },
 
   google: {
@@ -341,17 +346,17 @@ const rawConfig = {
     enabled: process.env.GOOGLE_ENABLED,
   },
 
-  sanhedrin: {
-    baseUrl: process.env.SANHEDRIN_BASE_URL,
-    timeout: process.env.SANHEDRIN_TIMEOUT,
-    enabled: process.env.SANHEDRIN_ENABLED,
-  },
-
   elevenlabs: {
     apiKey: secrets.elevenlabsApiKey,
     voiceId: process.env.ELEVENLABS_VOICE_ID,
     model: process.env.ELEVENLABS_MODEL,
     enabled: process.env.ELEVENLABS_ENABLED,
+  },
+
+  orpheus: {
+    url: process.env.ORPHEUS_TTS_URL,
+    voice: process.env.ORPHEUS_TTS_VOICE,
+    enabled: process.env.ORPHEUS_TTS_ENABLED,
   },
 
   memorycore: {
@@ -479,6 +484,7 @@ const rawConfig = {
   stt: {
     provider: process.env.STT_PROVIDER,
     model: process.env.STT_MODEL,
+    baseUrl: process.env.STT_BASE_URL,
     language: process.env.STT_LANGUAGE,
     silenceDetection: process.env.STT_SILENCE_DETECTION,
     silenceThreshold: process.env.STT_SILENCE_THRESHOLD,

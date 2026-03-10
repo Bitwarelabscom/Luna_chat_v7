@@ -106,6 +106,7 @@ export interface ChatCompletionOptions {
   model?: string;
   reasoning?: boolean;  // For xAI Grok 4.1 Fast reasoning models
   thinkingMode?: boolean;  // For Ollama models that support think: true (Qwen3, etc.)
+  tool_choice?: 'auto' | 'required' | { type: 'function'; function: { name: string } };
   loggingContext?: LLMLoggingContext;  // Optional logging context for activity tracking
   response_format?: OpenAI.Chat.Completions.ChatCompletionCreateParams['response_format'];
 }
@@ -132,6 +133,7 @@ export async function createChatCompletion(
     model,
     reasoning,
     thinkingMode,
+    tool_choice,
     loggingContext,
     response_format,
   } = options;
@@ -226,34 +228,6 @@ export async function createChatCompletion(
       ).catch(e => logger.debug('Activity log failed', { err: (e as Error).message }));
     }
   };
-
-  // Route Sanhedrin to native provider (no tool support)
-  if (provider === 'sanhedrin') {
-    if (tools && tools.length > 0) {
-      throw new Error('Sanhedrin provider does not support tool calling. Use a different provider for voice chat.');
-    }
-    try {
-      const sanhedrinProvider = await import('./providers/sanhedrin.provider.js');
-      const result = await sanhedrinProvider.createCompletion(
-        modelToUse,
-        messages.map(m => ({ role: m.role as 'system' | 'user' | 'assistant', content: m.content })),
-        { temperature, maxTokens: resolvedMaxTokens }
-      );
-      const completionResult: ChatCompletionResult = {
-        content: result.content,
-        tokensUsed: result.tokensUsed,
-        promptTokens: 0,
-        completionTokens: 0,
-        toolCalls: undefined,
-        finishReason: 'stop',
-      };
-      logActivity(completionResult);
-      return completionResult;
-    } catch (error) {
-      logErrorActivity((error as Error).message || 'Sanhedrin completion failed');
-      throw error;
-    }
-  }
 
   // Route Moonshot to native provider (OpenAI SDK compatible but has its own stream handling)
   if (provider === 'moonshot') {
@@ -435,6 +409,7 @@ export async function createChatCompletion(
       model: modelToUse,
       messages: formattedMessages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
       ...(tools ? { tools } : {}),
+      ...(tools && tool_choice ? { tool_choice } : {}),
       temperature,
       ...tokenParam,
       response_format,

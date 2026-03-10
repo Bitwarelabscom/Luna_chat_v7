@@ -525,7 +525,7 @@ export async function getEnhancedStats(userId: string): Promise<EnhancedStats> {
        FROM llm_call_logs
        WHERE user_id = $1
          AND success = true
-         AND provider NOT IN ('ollama', 'ollama_secondary', 'ollama_tertiary', 'sanhedrin')
+         AND provider NOT IN ('ollama', 'ollama_secondary', 'ollama_tertiary')
        GROUP BY model, provider`,
       [userId, startOfToday, startOfWeek, startOfMonth]
     ),
@@ -543,7 +543,7 @@ export async function getEnhancedStats(userId: string): Promise<EnhancedStats> {
 
   for (const row of [...modelStatsQuery.rows, ...bgStatsQuery.rows]) {
     const model = row.model;
-    const isOllama = ['ollama', 'ollama_secondary', 'ollama_tertiary', 'sanhedrin'].includes(row.provider);
+    const isOllama = ['ollama', 'ollama_secondary', 'ollama_tertiary'].includes(row.provider);
 
     // Parse values
     const todayStats = {
@@ -601,7 +601,7 @@ export async function getEnhancedStats(userId: string): Promise<EnhancedStats> {
       byModel[model] = { today: todayStats, thisWeek: weekStats, thisMonth: monthStats, total: totalStats };
     }
 
-    // Only add to totals if not Ollama/sanhedrin (for cost tracking)
+    // Only add to totals if not Ollama (for cost tracking)
     if (!isOllama) {
       totals.today.inputTokens += todayStats.inputTokens;
       totals.today.outputTokens += todayStats.outputTokens;
@@ -814,7 +814,7 @@ export async function getDailyTokenStats(userId: string): Promise<DailyTokenStat
        WHERE s.user_id = $1
          AND m.created_at >= $2
          AND m.model IS NOT NULL
-         AND (m.provider IS NULL OR m.provider NOT IN ('ollama', 'ollama_secondary', 'ollama_tertiary', 'sanhedrin'))
+         AND (m.provider IS NULL OR m.provider NOT IN ('ollama', 'ollama_secondary', 'ollama_tertiary'))
        GROUP BY m.model`,
       [userId, startOfToday]
     ),
@@ -829,7 +829,7 @@ export async function getDailyTokenStats(userId: string): Promise<DailyTokenStat
        WHERE user_id = $1
          AND created_at >= $2
          AND success = true
-         AND provider NOT IN ('ollama', 'ollama_secondary', 'ollama_tertiary', 'sanhedrin')
+         AND provider NOT IN ('ollama', 'ollama_secondary', 'ollama_tertiary')
        GROUP BY model`,
       [userId, startOfToday]
     ),

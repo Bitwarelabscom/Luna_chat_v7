@@ -28,7 +28,6 @@ CAPABILITIES:
 DELEGATION (delegate_to_agent):
 - coder-claude: complex/security-critical code, refactoring, architecture, debugging
 - coder-gemini: simple scripts, tests, explanations, boilerplate
-- coder-codex: fast practical coding, focused patches, implementation with tests
 - researcher/writer/analyst/planner: specialized non-coding tasks
 When in doubt, delegate - the agents are more capable for programming tasks.
 
@@ -476,6 +475,7 @@ export function buildContextualPrompt(
     skillContext?: string;
     desktopContext?: string;
     mambaStreamContext?: string;
+    onboardingContext?: string;
   }
 ): string {
   const sections: string[] = [];
@@ -543,6 +543,11 @@ You have access to additional tools via MCP (Model Context Protocol). These exte
   // Mamba continuous cognition context - stable, delta-tracked (~120 tokens)
   if (options.mambaStreamContext) {
     sections.push(options.mambaStreamContext);
+  }
+
+  // Onboarding interview context - guides Luna through structured discovery
+  if (options.onboardingContext) {
+    sections.push(options.onboardingContext);
   }
 
   // ============================================

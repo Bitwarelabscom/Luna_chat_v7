@@ -8,7 +8,6 @@ export const delegateToAgentTool: OpenAI.Chat.Completions.ChatCompletionTool = {
 - researcher: Deep research, information gathering, fact-finding
 - coder-claude: SENIOR ENGINEER - Use for HIGH COMPLEXITY: architecture, refactoring, debugging hard errors, security-critical code
 - coder-gemini: RAPID PROTOTYPER - Use for HIGH VOLUME/SPEED: simple scripts, unit tests, log analysis, code explanations, boilerplate
-- coder-codex: BALANCED CODER - Use for FAST PRACTICAL DELIVERY: focused patches, implementation with tests, concise code fixes
 - writer: Creative writing, professional writing, editing, content creation
 - analyst: Data analysis, calculations, statistics, insights
 - marketing: Marketing strategy, positioning, channel plans, campaign experiments, growth copy
@@ -24,17 +23,14 @@ CODING AGENT DECISION MATRIX:
 | "Write unit tests" | coder-gemini |
 | "Create a simple utility script" | coder-gemini |
 | "Explain what this code does" | coder-gemini |
-| "Ship this practical bugfix quickly" | coder-codex |
-| "Implement a focused patch with tests" | coder-codex |
-
-Default: coder-claude for deep complexity, coder-gemini for high-volume generation, coder-codex for balanced practical patches.
+Default: coder-claude for deep complexity, coder-gemini for high-volume generation.
 The coding agents can execute code, create files/folders in the workspace, and persist work across sessions.`,
     parameters: {
       type: 'object',
       properties: {
         agent: {
           type: 'string',
-          enum: ['researcher', 'coder-claude', 'coder-gemini', 'coder-codex', 'writer', 'analyst', 'marketing', 'planner'],
+          enum: ['researcher', 'coder-claude', 'coder-gemini', 'writer', 'analyst', 'marketing', 'planner'],
           description: 'The specialist agent to delegate to',
         },
         task: {

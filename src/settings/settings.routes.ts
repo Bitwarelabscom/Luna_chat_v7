@@ -473,12 +473,12 @@ router.get('/models', async (req: Request, res: Response) => {
 // Update model configuration for a task
 const updateModelConfigSchema = z.object({
   taskType: z.string().min(1),
-  provider: z.enum(['groq', 'anthropic', 'xai', 'openrouter', 'ollama', 'ollama_secondary', 'ollama_tertiary', 'google', 'sanhedrin', 'moonshot']),
+  provider: z.enum(['groq', 'anthropic', 'xai', 'openrouter', 'ollama', 'ollama_secondary', 'ollama_tertiary', 'google', 'moonshot']),
   model: z.string().min(1),
 });
 
 const modelSelectorSchema = z.object({
-  provider: z.enum(['groq', 'anthropic', 'xai', 'openrouter', 'ollama', 'ollama_secondary', 'ollama_tertiary', 'google', 'sanhedrin', 'moonshot']),
+  provider: z.enum(['groq', 'anthropic', 'xai', 'openrouter', 'ollama', 'ollama_secondary', 'ollama_tertiary', 'google', 'moonshot']),
   model: z.string().min(1),
 });
 
@@ -596,17 +596,15 @@ router.get('/coder', async (req: Request, res: Response) => {
 const updateCoderSettingsSchema = z.object({
   claudeCliEnabled: z.boolean().optional(),
   geminiCliEnabled: z.boolean().optional(),
-  codexCliEnabled: z.boolean().optional(),
   coderApiEnabled: z.boolean().optional(),
-  coderApiProvider: z.enum(['groq', 'anthropic', 'xai', 'openrouter', 'ollama', 'ollama_secondary', 'ollama_tertiary', 'google', 'sanhedrin', 'moonshot']).nullable().optional(),
+  coderApiProvider: z.enum(['groq', 'anthropic', 'xai', 'openrouter', 'ollama', 'ollama_secondary', 'ollama_tertiary', 'google', 'moonshot']).nullable().optional(),
   coderApiModel: z.string().nullable().optional(),
   triggerWords: z.object({
     claude: z.array(z.string()),
     gemini: z.array(z.string()),
     api: z.array(z.string()),
-    codex: z.array(z.string()),
   }).optional(),
-  defaultCoder: z.enum(['claude', 'gemini', 'api', 'codex']).optional(),
+  defaultCoder: z.enum(['claude', 'gemini', 'api']).optional(),
 });
 
 router.put('/coder', async (req: Request, res: Response) => {
@@ -644,6 +642,7 @@ router.get('/tts', async (_req: Request, res: Response) => {
     res.json({
       settings,
       availableVoices: ttsService.OPENAI_VOICES,
+      availableOrpheusVoices: ttsService.ORPHEUS_VOICES,
     });
   } catch (error) {
     logger.error('Failed to get TTS settings', { error: (error as Error).message });
@@ -653,8 +652,9 @@ router.get('/tts', async (_req: Request, res: Response) => {
 
 // Update TTS settings
 const updateTtsSettingsSchema = z.object({
-  engine: z.enum(['elevenlabs', 'openai']).optional(),
+  engine: z.enum(['elevenlabs', 'openai', 'orpheus']).optional(),
   openaiVoice: z.enum(['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer']).optional(),
+  orpheusVoice: z.enum(['tara', 'leah', 'jess', 'leo', 'dan', 'mia', 'zac', 'naomi']).optional(),
 });
 
 router.put('/tts', async (req: Request, res: Response) => {

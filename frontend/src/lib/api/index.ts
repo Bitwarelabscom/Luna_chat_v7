@@ -23,3 +23,4 @@ export * from './abilities';
 export * from './rpg';
 export * from './memory-lab';
 export * from './create';
+export * from './onboarding';

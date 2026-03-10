@@ -46,7 +46,6 @@ const VALID_PROVIDERS: ProviderId[] = [
   'ollama_secondary',
   'ollama_tertiary',
   'google',
-  'sanhedrin',
   'moonshot',
 ];
 

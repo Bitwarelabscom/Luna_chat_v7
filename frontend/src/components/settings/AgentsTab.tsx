@@ -11,6 +11,7 @@ import {
   type ProviderStrategy,
   type ToolSetOption,
   type ToolOption,
+  type LLMProvider,
 } from '@/lib/api';
 
 type EditorSection = 'general' | 'prompt' | 'provider' | 'tools' | 'advanced';
@@ -153,6 +154,7 @@ const defaultForm: FormState = {
 
 export default function AgentsTab() {
   const [agents, setAgents] = useState<AgentDefinitionDTO[]>([]);
+  const [providers, setProviders] = useState<LLMProvider[]>([]);
   const [toolSetOptions, setToolSetOptions] = useState<ToolSetOption[]>([]);
   const [toolOptions, setToolOptions] = useState<ToolOption[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -174,13 +176,15 @@ export default function AgentsTab() {
     setIsLoading(true);
     setError(null);
     try {
-      const [agentsRes, toolsRes] = await Promise.all([
+      const [agentsRes, toolsRes, modelsRes] = await Promise.all([
         settingsApi.getAgents(),
         settingsApi.getToolOptions(),
+        settingsApi.getAvailableModels(),
       ]);
       setAgents(agentsRes.agents);
       setToolSetOptions(toolsRes.toolSets);
       setToolOptions(toolsRes.tools);
+      setProviders(modelsRes.providers);
     } catch {
       setError('Failed to load agents');
     } finally {
@@ -433,7 +437,7 @@ export default function AgentsTab() {
                 <PromptSection form={form} setForm={setForm} />
               )}
               {activeSection === 'provider' && (
-                <ProviderSection form={form} setForm={setForm} />
+                <ProviderSection form={form} setForm={setForm} providers={providers} />
               )}
               {activeSection === 'tools' && (
                 <ToolsSection form={form} setForm={setForm} toolSetOptions={toolSetOptions} toolOptions={toolOptions} />
@@ -658,7 +662,15 @@ function PromptSection({ form, setForm }: { form: FormState; setForm: (f: FormSt
   );
 }
 
-function ProviderSection({ form, setForm }: { form: FormState; setForm: (f: FormState) => void }) {
+function ProviderSection({ form, setForm, providers }: { form: FormState; setForm: (f: FormState) => void; providers: LLMProvider[] }) {
+  function handleProviderChange(newProvider: string) {
+    const providerModels = providers.find(p => p.id === newProvider)?.models || [];
+    const firstModel = providerModels[0]?.id || '';
+    setForm({ ...form, provider: newProvider, model: firstModel });
+  }
+
+  const selectedProviderModels = providers.find(p => p.id === form.provider)?.models || [];
+
   return (
     <div className="space-y-3">
       <Field label="Strategy">
@@ -690,24 +702,34 @@ function ProviderSection({ form, setForm }: { form: FormState; setForm: (f: Form
       {form.providerStrategyType === 'fixed' && (
         <>
           <Field label="Provider">
-            <input
-              type="text"
+            <select
               value={form.provider}
-              onChange={e => setForm({ ...form, provider: e.target.value })}
-              placeholder="anthropic, openai, ollama, etc."
+              onChange={e => handleProviderChange(e.target.value)}
               className="w-full px-3 py-1.5 rounded text-sm"
               style={{ background: 'var(--theme-bg-tertiary)', color: 'var(--theme-text-primary)', border: '1px solid var(--theme-border-default)' }}
-            />
+            >
+              {providers.length === 0 && (
+                <option value="">Loading providers...</option>
+              )}
+              {providers.map(p => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
           </Field>
           <Field label="Model">
-            <input
-              type="text"
+            <select
               value={form.model}
               onChange={e => setForm({ ...form, model: e.target.value })}
-              placeholder="claude-3-5-sonnet-20241022"
               className="w-full px-3 py-1.5 rounded text-sm"
               style={{ background: 'var(--theme-bg-tertiary)', color: 'var(--theme-text-primary)', border: '1px solid var(--theme-border-default)' }}
-            />
+            >
+              {selectedProviderModels.length === 0 && (
+                <option value="">No models available</option>
+              )}
+              {selectedProviderModels.map(m => (
+                <option key={m.id} value={m.id}>{m.name}</option>
+              ))}
+            </select>
           </Field>
         </>
       )}

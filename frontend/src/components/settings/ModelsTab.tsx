@@ -95,13 +95,12 @@ export default function ModelsTab() {
     return { input: model.costPer1kInput, output: model.costPer1kOutput };
   }
 
-  type CoderChoice = 'claude' | 'gemini' | 'codex' | 'api';
+  type CoderChoice = 'claude' | 'gemini' | 'api';
 
   function getEnabledCoders(settings: CoderSettings): CoderChoice[] {
     const enabled: CoderChoice[] = [];
     if (settings.claudeCliEnabled) enabled.push('claude');
     if (settings.geminiCliEnabled) enabled.push('gemini');
-    if (settings.codexCliEnabled) enabled.push('codex');
     if (settings.coderApiEnabled && settings.coderApiProvider && settings.coderApiModel) {
       enabled.push('api');
     }
@@ -128,7 +127,6 @@ export default function ModelsTab() {
       const result = await settingsApi.updateCoderSettings({
         claudeCliEnabled: choice === 'claude',
         geminiCliEnabled: choice === 'gemini',
-        codexCliEnabled: choice === 'codex',
         coderApiEnabled: choice === 'api',
         defaultCoder: choice,
       });
@@ -261,7 +259,6 @@ export default function ModelsTab() {
             ollama: 'bg-gray-500',
             ollama_secondary: 'bg-gray-400',
             ollama_tertiary: 'bg-gray-300',
-            sanhedrin: 'bg-indigo-500',
             moonshot: 'bg-yellow-500',
           };
           return (
@@ -355,7 +352,6 @@ export default function ModelsTab() {
                         <option value="" disabled>Mixed (not locked)</option>
                         <option value="claude">Claude CLI</option>
                         <option value="gemini">Gemini CLI</option>
-                        <option value="codex">Codex Mini</option>
                         <option value="api" disabled={!coderSettings.coderApiProvider || !coderSettings.coderApiModel}>
                           Coder API
                         </option>

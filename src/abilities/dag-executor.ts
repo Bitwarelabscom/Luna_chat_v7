@@ -31,7 +31,7 @@ export interface DAGExecutorConfig {
   maxRetries: number;
   enableSummarization: boolean;
   summarizationModel: string;
-  lockedCodingAgent?: 'coder-claude' | 'coder-gemini' | 'coder-codex' | 'coder-api';
+  lockedCodingAgent?: 'coder-claude' | 'coder-gemini' | 'coder-api';
 }
 
 export interface FixerSuggestion {
@@ -70,7 +70,7 @@ Output JSON only:
 {
   "action": "retry_same|modify_task|switch_agent|abort",
   "modifiedTask": "new task text if action is modify_task",
-  "newAgent": "researcher|coder-claude|coder-gemini|coder-codex|writer|analyst|marketing if action is switch_agent",
+  "newAgent": "researcher|coder-claude|coder-gemini|writer|analyst|marketing if action is switch_agent",
   "explanation": "brief explanation of your reasoning"
 }
 
@@ -78,7 +78,6 @@ Available agents:
 - researcher: Deep research, information gathering, web search
 - coder-claude: SENIOR ENGINEER - Complex architecture, refactoring, debugging hard errors, security-critical
 - coder-gemini: RAPID PROTOTYPER - Simple scripts, unit tests, large context analysis, code explanations
-- coder-codex: BALANCED CODER - Practical implementation, focused patches, test-oriented delivery
 - writer: Creative writing, content synthesis, drafting
 - analyst: Data analysis, calculations, insights
 - marketing: Go-to-market strategy, channel plans, messaging, growth experiments
@@ -86,17 +85,15 @@ Available agents:
 CODING AGENT FAILOVER:
 - If coder-claude fails on a simple task, suggest switch to coder-gemini
 - If coder-gemini fails on complex logic, suggest switch to coder-claude
-- If coder-codex fails on deep architecture, suggest coder-claude
 - If either fails on large context, suggest coder-gemini (1M token window)`;
 
 // Coding agent pairs for auto-failover
 const CODING_AGENT_FAILOVER: Record<string, string> = {
   'coder-claude': 'coder-gemini',
   'coder-gemini': 'coder-claude',
-  'coder-codex': 'coder-claude',
 };
 
-const ALL_CODING_AGENTS = new Set(['coder-claude', 'coder-gemini', 'coder-codex', 'coder-api']);
+const ALL_CODING_AGENTS = new Set(['coder-claude', 'coder-gemini', 'coder-api']);
 
 function isCodingAgent(agentName: string): boolean {
   return ALL_CODING_AGENTS.has(agentName);
