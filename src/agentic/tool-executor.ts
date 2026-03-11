@@ -6,6 +6,7 @@
  */
 
 import type { ToolExecutionContext, ToolExecutionResult } from './types.js';
+import { convertLocalTimeToUTC } from './shared-helpers.js';
 import { isArtifactTool, handleArtifactToolCall } from '../chat/artifact-tool-handler.js';
 import {
   formatSearchResultsForContext,
@@ -162,13 +163,6 @@ async function executeSharedBrowserToolCall(
   }
 
   throw new Error(`Unknown shared browser tool: ${toolName}`);
-}
-
-function convertLocalTimeToUTC(localDate: Date, timezone: string): Date {
-  const localStr = localDate.toLocaleString('en-US', { timeZone: timezone });
-  const utcStr = localDate.toLocaleString('en-US', { timeZone: 'UTC' });
-  const diff = new Date(utcStr).getTime() - new Date(localStr).getTime();
-  return new Date(localDate.getTime() + diff);
 }
 
 // --- Interface for tool call shape ---

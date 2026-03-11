@@ -1,3 +1,4 @@
+import { convertLocalTimeToUTC } from '../agentic/shared-helpers.js';
 import * as knowledge from './knowledge.service.js';
 import * as tasks from './tasks.service.js';
 import * as sandbox from './sandbox.service.js';
@@ -325,38 +326,6 @@ function parseCalendarEventFromText(text: string, userTimezone?: string): Parsed
   }
 
   return result;
-}
-
-/**
- * Convert local time to UTC Date considering user's timezone
- * Takes a Date with time components set in local time and returns UTC equivalent
- */
-function convertLocalTimeToUTC(localDate: Date, timezone: string): Date {
-  try {
-    // Extract time components that were set as "local" time
-    const year = localDate.getFullYear();
-    const month = localDate.getMonth() + 1;
-    const day = localDate.getDate();
-    const hours = localDate.getHours();
-    const minutes = localDate.getMinutes();
-
-    // Create ISO string representing the time in user's timezone
-    const isoString = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00`;
-
-    // Parse this string as UTC, then get what time that would be in user's timezone
-    const utcDate = new Date(isoString + 'Z');
-    const localizedString = utcDate.toLocaleString('en-US', { timeZone: timezone, hour12: false });
-    const parsedBack = new Date(localizedString);
-
-    // Calculate the offset between what we wanted and what we got
-    const offset = parsedBack.getTime() - utcDate.getTime();
-
-    // Adjust the UTC date by the opposite offset to get the correct UTC time
-    return new Date(utcDate.getTime() - offset);
-  } catch (error) {
-    logger.warn('Failed to convert timezone, using local time as UTC', { error: (error as Error).message, timezone });
-    return localDate;
-  }
 }
 
 /**
