@@ -994,32 +994,43 @@ async function consolidateUserWeekly(userId: string): Promise<void> {
  * bump activation counts on conflict, then deactivate the merged node.
  */
 async function safelyMergeNodes(userId: string, keepId: string, mergeId: string): Promise<void> {
-  // Redirect edges where mergeId is the source
+  // 1. Deactivate mergeId edges that would conflict with existing keepId edges
+  //    (same target/source + same edge_type already exists on keepId)
+  await mcQuery(
+    `UPDATE memory_edges me SET is_active = false
+    WHERE me.user_id = $1 AND me.source_node_id = $3 AND me.is_active = true
+      AND me.target_node_id != $2
+      AND EXISTS (
+        SELECT 1 FROM memory_edges ke
+        WHERE ke.user_id = $1 AND ke.source_node_id = $2
+          AND ke.target_node_id = me.target_node_id AND ke.edge_type = me.edge_type
+          AND ke.is_active = true
+      )`,
+    [userId, keepId, mergeId]
+  );
+  await mcQuery(
+    `UPDATE memory_edges me SET is_active = false
+    WHERE me.user_id = $1 AND me.target_node_id = $3 AND me.is_active = true
+      AND me.source_node_id != $2
+      AND EXISTS (
+        SELECT 1 FROM memory_edges ke
+        WHERE ke.user_id = $1 AND ke.target_node_id = $2
+          AND ke.source_node_id = me.source_node_id AND ke.edge_type = me.edge_type
+          AND ke.is_active = true
+      )`,
+    [userId, keepId, mergeId]
+  );
+
+  // 2. Redirect remaining non-conflicting edges from mergeId to keepId
   await mcQuery(
     `UPDATE memory_edges SET source_node_id = $2
     WHERE user_id = $1 AND source_node_id = $3 AND target_node_id != $2 AND is_active = true`,
     [userId, keepId, mergeId]
   );
-
-  // Redirect edges where mergeId is the target
   await mcQuery(
     `UPDATE memory_edges SET target_node_id = $2
     WHERE user_id = $1 AND target_node_id = $3 AND source_node_id != $2 AND is_active = true`,
     [userId, keepId, mergeId]
-  );
-
-  // Deactivate any duplicate edges that now exist (same source+target+type)
-  await mcQuery(
-    `UPDATE memory_edges e1 SET is_active = false
-    FROM memory_edges e2
-    WHERE e1.user_id = $1 AND e2.user_id = $1
-      AND e1.is_active = true AND e2.is_active = true
-      AND e1.source_node_id = e2.source_node_id
-      AND e1.target_node_id = e2.target_node_id
-      AND e1.edge_type = e2.edge_type
-      AND e1.id > e2.id
-      AND (e1.source_node_id = $2 OR e1.target_node_id = $2)`,
-    [userId, keepId]
   );
 
   // Deactivate the co-occurrence edge between the two nodes
