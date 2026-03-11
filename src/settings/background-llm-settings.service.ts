@@ -142,7 +142,7 @@ export const DEFAULT_BACKGROUND_LLM_SETTINGS: BackgroundLlmSettings = {
     fallback: { provider: 'xai', model: 'grok-4-1-fast' },
   },
   memory_curation: {
-    primary: { provider: 'ollama', model: 'llama3.2:3b' },
+    primary: { provider: 'openrouter', model: 'stepfun/step-3.5-flash:free' },
     fallback: { provider: 'xai', model: 'grok-4-1-fast' },
   },
   friend_summary: {

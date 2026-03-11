@@ -129,36 +129,59 @@ export async function buildMemoryContext(
     const session = await queryOne<Session>(`SELECT primary_intent_id as "primaryIntentId", secondary_intent_ids as "secondaryIntentIds" FROM sessions WHERE id = $1`, [currentSessionId]);
     const intentId = session?.primaryIntentId || null;
 
-    // Per-query timeout: return fallback if a single query exceeds 2s
-    const withTimeout = <T>(promise: Promise<T>, fallback: T, label: string): Promise<T> =>
+    // Each source is independently wrapped: try-catch + 5s timeout.
+    // A failure in one source never affects another. Uses Promise.allSettled
+    // so all queries complete independently - degraded but never broken.
+    const QUERY_TIMEOUT_MS = 5000;
+    const safeQuery = <T>(promise: Promise<T>, fallback: T, label: string): Promise<T> =>
       Promise.race([
-        promise,
+        promise.catch(err => {
+          logger.warn(`Memory source failed: ${label}`, { userId, error: (err as Error).message });
+          return fallback;
+        }),
         new Promise<T>(resolve => setTimeout(() => {
-          logger.warn(`Memory query timed out: ${label}`, { userId });
+          logger.warn(`Memory source timed out: ${label}`, { userId });
           resolve(fallback);
-        }, 2000)),
+        }, QUERY_TIMEOUT_MS)),
       ]);
 
-    // Run all queries in parallel for better performance
-    const [facts, similarMessages, similarConversations, learningsContext, consciousnessMetrics, consolidatedModel, graphContext, localGraphContext, semanticMemoryData, recentEmotionalMoments, activeObservations, unsurfacedContradictions] = await Promise.all([
-      withTimeout(factsService.getUserFacts(userId, { limit: 30, intentId }), [], 'facts'),
-      withTimeout(embeddingService.searchSimilarMessages(
+    // Run all 12 sources in parallel - each independently fault-isolated
+    const results = await Promise.allSettled([
+      safeQuery(factsService.getUserFacts(userId, { limit: 30, intentId }), [], 'facts'),
+      safeQuery(embeddingService.searchSimilarMessages(
         currentMessage, userId,
         { limit: 5, threshold: 0.75, excludeSessionId: currentSessionId, intentId }
       ), [], 'similarMessages'),
-      withTimeout(embeddingService.searchSimilarConversations(
+      safeQuery(embeddingService.searchSimilarConversations(
         currentMessage, userId, 3, intentId
       ), [], 'similarConversations'),
-      withTimeout(insightsService.getActiveLearningsForContext(userId, 10), '', 'learnings'),
-      withTimeout(memorycoreClient.getConsciousnessMetrics(userId), null, 'consciousness'),
-      withTimeout(memorycoreClient.getConsolidatedModel(userId), null, 'consolidatedModel'),
-      withTimeout(graphContextForMessage(userId, currentMessage, currentSessionId), '', 'graphContext'),
-      withTimeout(neo4jService.buildLocalGraphContext(userId), null, 'localGraph'),
-      withTimeout(memorycoreClient.getSemanticMemory(userId), null, 'semanticMemory'),
-      withTimeout(emotionalMoments.getRecentMoments(userId, 5, 7), [], 'emotionalMoments'),
-      withTimeout(behavioralPatterns.getActiveObservations(userId, 3), [], 'behavioralObservations'),
-      withTimeout(contradictionService.getUnsurfaced(userId, currentSessionId), [], 'contradictions'),
+      safeQuery(insightsService.getActiveLearningsForContext(userId, 10), '', 'learnings'),
+      safeQuery(memorycoreClient.getConsciousnessMetrics(userId), null, 'consciousness'),
+      safeQuery(memorycoreClient.getConsolidatedModel(userId), null, 'consolidatedModel'),
+      safeQuery(graphContextForMessage(userId, currentMessage, currentSessionId), '', 'graphContext'),
+      safeQuery(neo4jService.buildLocalGraphContext(userId), null, 'localGraph'),
+      safeQuery(memorycoreClient.getSemanticMemory(userId), null, 'semanticMemory'),
+      safeQuery(emotionalMoments.getRecentMoments(userId, 5, 7), [], 'emotionalMoments'),
+      safeQuery(behavioralPatterns.getActiveObservations(userId, 3), [], 'behavioralObservations'),
+      safeQuery(contradictionService.getUnsurfaced(userId, currentSessionId), [], 'contradictions'),
     ]);
+
+    // Extract values - allSettled always fulfills since safeQuery never rejects
+    const val = <T>(r: PromiseSettledResult<T>, fallback: T): T =>
+      r.status === 'fulfilled' ? r.value : fallback;
+
+    const facts = val(results[0] as PromiseSettledResult<factsService.UserFact[]>, []);
+    const similarMessages = val(results[1] as PromiseSettledResult<embeddingService.SimilarMessage[]>, []);
+    const similarConversations = val(results[2] as PromiseSettledResult<Array<{ sessionId: string; summary: string; topics: string[]; similarity: number; updatedAt: Date }>>, []);
+    const learningsContext = val(results[3] as PromiseSettledResult<string>, '');
+    const consciousnessMetrics = val(results[4] as PromiseSettledResult<Awaited<ReturnType<typeof memorycoreClient.getConsciousnessMetrics>>>, null);
+    const consolidatedModel = val(results[5] as PromiseSettledResult<Awaited<ReturnType<typeof memorycoreClient.getConsolidatedModel>>>, null);
+    const graphContext = val(results[6] as PromiseSettledResult<string>, '');
+    const localGraphContext = val(results[7] as PromiseSettledResult<Awaited<ReturnType<typeof neo4jService.buildLocalGraphContext>>>, null);
+    const semanticMemoryData = val(results[8] as PromiseSettledResult<Awaited<ReturnType<typeof memorycoreClient.getSemanticMemory>>>, null);
+    const recentEmotionalMoments = val(results[9] as PromiseSettledResult<Awaited<ReturnType<typeof emotionalMoments.getRecentMoments>>>, []);
+    const activeObservations = val(results[10] as PromiseSettledResult<Awaited<ReturnType<typeof behavioralPatterns.getActiveObservations>>>, []);
+    const unsurfacedContradictions = val(results[11] as PromiseSettledResult<Awaited<ReturnType<typeof contradictionService.getUnsurfaced>>>, []);
 
     // Score message complexity to decide whether to curate
     const complexity = scoreMessageComplexity(currentMessage);
@@ -263,11 +286,31 @@ export async function buildMemoryContext(
         formatDirectWithTimestamps(facts, similarMessages, similarConversations, learningsContext));
     }
 
-    // Format resonant memory data
-    const emotionalMomentsFormatted = emotionalMoments.formatForContext(recentEmotionalMoments);
+    // Format resonant memory data (cap emotional moments at 500 chars to prevent bloat)
+    let emotionalMomentsFormatted = emotionalMoments.formatForContext(recentEmotionalMoments);
+    if (emotionalMomentsFormatted.length > 500) {
+      emotionalMomentsFormatted = emotionalMomentsFormatted.slice(0, 500).replace(/\n[^\n]*$/, '');
+    }
     const behavioralObsFormatted = behavioralPatterns.formatForContext(activeObservations);
     const contradictionsFormatted = contradictionService.formatForContext(unsurfacedContradictions);
     const contradictionIds = unsurfacedContradictions.map(s => s.id);
+
+    // Diagnostic: log per-source sizes so we can see what responded
+    const sourceSizes = {
+      facts: factsPrompt.length, learnings: learnings.length,
+      relevantHistory: relevantHistory.length, conversationContext: conversationContext.length,
+      graphMemory: graphMemory.length, localGraphMemory: localGraphMemory.length,
+      consolidatedPatterns: consolidatedPatterns.length, consolidatedKnowledge: consolidatedKnowledge.length,
+      semanticMemory: semanticMemory.length, emotionalMoments: emotionalMomentsFormatted.length,
+      behavioralObservations: behavioralObsFormatted.length, contradictions: contradictionsFormatted.length,
+    };
+    const totalChars = Object.values(sourceSizes).reduce((a, b) => a + b, 0);
+    const responded = Object.values(sourceSizes).filter(v => v > 0).length;
+    logger.info('Memory context built', {
+      userId, sourceSizes, totalChars,
+      approxTokens: Math.round(totalChars / 4),
+      sourcesResponded: `${responded}/12`,
+    });
 
     return {
       stable: {
@@ -309,17 +352,44 @@ export async function buildMemoryContext(
  */
 export async function buildStableMemoryOnly(userId: string): Promise<MemoryContext> {
   try {
-    const [facts, learningsContext, consciousnessMetrics, consolidatedModel, graphContext, localGraphContext, semanticMemoryData, recentEmotionalMoments, activeObservations] = await Promise.all([
-      factsService.getUserFacts(userId, { limit: 30 }),
-      insightsService.getActiveLearningsForContext(userId, 10),
-      memorycoreClient.getConsciousnessMetrics(userId),
-      memorycoreClient.getConsolidatedModel(userId),
-      graphContextFallback(userId),
-      neo4jService.buildLocalGraphContext(userId),
-      memorycoreClient.getSemanticMemory(userId),
-      emotionalMoments.getRecentMoments(userId, 5, 7),
-      behavioralPatterns.getActiveObservations(userId, 3),
+    // Each source independently fault-isolated with try-catch + 5s timeout
+    const QUERY_TIMEOUT_MS = 5000;
+    const safeQuery = <T>(promise: Promise<T>, fallback: T, label: string): Promise<T> =>
+      Promise.race([
+        promise.catch(err => {
+          logger.warn(`Memory source failed: ${label}`, { userId, error: (err as Error).message });
+          return fallback;
+        }),
+        new Promise<T>(resolve => setTimeout(() => {
+          logger.warn(`Memory source timed out: ${label}`, { userId });
+          resolve(fallback);
+        }, QUERY_TIMEOUT_MS)),
+      ]);
+
+    const stableResults = await Promise.allSettled([
+      safeQuery(factsService.getUserFacts(userId, { limit: 30 }), [], 'facts'),
+      safeQuery(insightsService.getActiveLearningsForContext(userId, 10), '', 'learnings'),
+      safeQuery(memorycoreClient.getConsciousnessMetrics(userId), null, 'consciousness'),
+      safeQuery(memorycoreClient.getConsolidatedModel(userId), null, 'consolidatedModel'),
+      safeQuery(graphContextFallback(userId), '', 'graphContext'),
+      safeQuery(neo4jService.buildLocalGraphContext(userId), null, 'localGraph'),
+      safeQuery(memorycoreClient.getSemanticMemory(userId), null, 'semanticMemory'),
+      safeQuery(emotionalMoments.getRecentMoments(userId, 5, 7), [], 'emotionalMoments'),
+      safeQuery(behavioralPatterns.getActiveObservations(userId, 3), [], 'behavioralObservations'),
     ]);
+
+    const sval = <T>(r: PromiseSettledResult<T>, fallback: T): T =>
+      r.status === 'fulfilled' ? r.value : fallback;
+
+    const facts = sval(stableResults[0] as PromiseSettledResult<factsService.UserFact[]>, []);
+    const learningsContext = sval(stableResults[1] as PromiseSettledResult<string>, '');
+    const consciousnessMetrics = sval(stableResults[2] as PromiseSettledResult<Awaited<ReturnType<typeof memorycoreClient.getConsciousnessMetrics>>>, null);
+    const consolidatedModel = sval(stableResults[3] as PromiseSettledResult<Awaited<ReturnType<typeof memorycoreClient.getConsolidatedModel>>>, null);
+    const graphContext = sval(stableResults[4] as PromiseSettledResult<string>, '');
+    const localGraphContext = sval(stableResults[5] as PromiseSettledResult<Awaited<ReturnType<typeof neo4jService.buildLocalGraphContext>>>, null);
+    const semanticMemoryData = sval(stableResults[6] as PromiseSettledResult<Awaited<ReturnType<typeof memorycoreClient.getSemanticMemory>>>, null);
+    const recentEmotionalMoments = sval(stableResults[7] as PromiseSettledResult<Awaited<ReturnType<typeof emotionalMoments.getRecentMoments>>>, []);
+    const activeObservations = sval(stableResults[8] as PromiseSettledResult<Awaited<ReturnType<typeof behavioralPatterns.getActiveObservations>>>, []);
 
     // Use timestamps in stable-only mode (learnings already have timestamps from insights service)
     const factsPrompt = factsService.formatFactsForPrompt(facts, true);
@@ -399,7 +469,11 @@ export async function buildStableMemoryOnly(userId: string): Promise<MemoryConte
         consolidatedPatterns,
         consolidatedKnowledge,
         semanticMemory,
-        emotionalMoments: emotionalMoments.formatForContext(recentEmotionalMoments),
+        emotionalMoments: (() => {
+          let em = emotionalMoments.formatForContext(recentEmotionalMoments);
+          if (em.length > 500) em = em.slice(0, 500).replace(/\n[^\n]*$/, '');
+          return em;
+        })(),
         behavioralObservations: behavioralPatterns.formatForContext(activeObservations),
       },
       volatile: {
