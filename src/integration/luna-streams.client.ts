@@ -10,7 +10,13 @@ import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
 
 // Cache for delta tracking - context only changes on meaningful state shifts
-const contextCache = new Map<string, { context: string; hash: string; tokenCount: number }>();
+const contextCache = new Map<string, { context: string; tokenCount: number; fetchedAt: number }>();
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const CACHE_MAX_SIZE = 100;
+
+// Consecutive failure tracking for emit
+let consecutiveEmitFailures = 0;
+const MAX_EMIT_FAILURES_BEFORE_BACKOFF = 5;
 
 function getBaseUrl(): string {
   return config.lunaStreams?.url || 'http://luna-streams:8100';
@@ -48,19 +54,40 @@ interface StreamEvent {
 
 /**
  * Emit a structured event to luna-streams. Fire-and-forget - never blocks chat.
+ * Retries once on failure. Stops retrying after 5 consecutive failures until
+ * a health check succeeds.
  */
 export function emitEvent(event: StreamEvent): void {
   if (!isEnabled()) return;
 
-  // Fire-and-forget: no await, catch errors silently
-  fetch(`${getBaseUrl()}/api/events`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ events: [event] }),
-    signal: AbortSignal.timeout(5000),
-  }).catch(err => {
-    logger.debug(`[luna-streams] emit failed: ${err.message}`);
-  });
+  // Circuit breaker: stop retrying if service appears down
+  if (consecutiveEmitFailures >= MAX_EMIT_FAILURES_BEFORE_BACKOFF) {
+    return;
+  }
+
+  const doFetch = (attempt: number) => {
+    fetch(`${getBaseUrl()}/api/events`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ events: [event] }),
+      signal: AbortSignal.timeout(5000),
+    }).then(() => {
+      consecutiveEmitFailures = 0;
+    }).catch(err => {
+      if (attempt < 2) {
+        setTimeout(() => doFetch(attempt + 1), 500 * attempt);
+      } else {
+        consecutiveEmitFailures++;
+        if (consecutiveEmitFailures === MAX_EMIT_FAILURES_BEFORE_BACKOFF) {
+          logger.error('[luna-streams] emit circuit breaker open after 5 consecutive failures');
+        } else {
+          logger.warn(`[luna-streams] emit failed after retry: ${err.message}`);
+        }
+      }
+    });
+  };
+
+  doFetch(1);
 }
 
 /**
@@ -185,6 +212,9 @@ interface StreamContextResponse {
 export async function getStreamContext(userId?: string): Promise<string | null> {
   if (!isEnabled()) return null;
 
+  const cacheKey = userId || '__default__';
+  const cached = contextCache.get(cacheKey);
+
   try {
     const url = userId
       ? `${getBaseUrl()}/api/context?user_id=${encodeURIComponent(userId)}`
@@ -196,28 +226,40 @@ export async function getStreamContext(userId?: string): Promise<string | null> 
       signal: AbortSignal.timeout(3000),
     });
 
-    if (!response.ok) return null;
+    if (!response.ok) {
+      // Return cached context on error if within TTL
+      return cached && (Date.now() - cached.fetchedAt < CACHE_TTL_MS) ? cached.context : null;
+    }
 
     const data = (await response.json()) as StreamContextResponse;
 
-    // Delta tracking: return null if nothing changed
-    const cacheKey = userId || '__default__';
-    const cached = contextCache.get(cacheKey);
+    // Delta tracking: return cached if nothing changed
     if (cached && !data.changed) {
+      cached.fetchedAt = Date.now(); // Refresh TTL
       return cached.context;
+    }
+
+    // Evict oldest entries if cache is too large
+    if (contextCache.size >= CACHE_MAX_SIZE) {
+      const oldest = [...contextCache.entries()].sort((a, b) => a[1].fetchedAt - b[1].fetchedAt)[0];
+      if (oldest) contextCache.delete(oldest[0]);
     }
 
     // Update cache
     contextCache.set(cacheKey, {
       context: data.context,
-      hash: '', // Server handles delta detection via 'changed' field
       tokenCount: data.token_count,
+      fetchedAt: Date.now(),
     });
+
+    // Reset circuit breaker on successful context fetch
+    consecutiveEmitFailures = 0;
 
     return data.context;
   } catch (err) {
-    logger.debug(`[luna-streams] context fetch failed: ${(err as Error).message}`);
-    return null;
+    logger.warn(`[luna-streams] context fetch failed: ${(err as Error).message}`);
+    // Return cached context as fallback if within TTL
+    return cached && (Date.now() - cached.fetchedAt < CACHE_TTL_MS) ? cached.context : null;
   }
 }
 
