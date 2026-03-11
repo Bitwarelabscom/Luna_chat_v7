@@ -585,6 +585,14 @@ export async function executeTool(
       return { toolResponse: 'Could not find a matching todo. Use list_todos to see available todos.', sideEffects };
     }
 
+    if (toolName === 'delete_todo') {
+      logger.info('Deleting todo', { taskId: args.taskId });
+      const taskId = args.taskId as string;
+      if (!taskId) return { toolResponse: 'Error: task ID is required', sideEffects };
+      const deleted = await tasksService.deleteTask(userId, taskId);
+      return { toolResponse: deleted ? 'Task deleted.' : 'Task not found.', sideEffects };
+    }
+
     // --- Calendar ---
     if (toolName === 'create_calendar_event') {
       logger.info('Creating calendar event', { title: args.title, startTime: args.startTime });
@@ -630,6 +638,58 @@ export async function executeTool(
           }).join('\n')
         : 'No upcoming events.';
       return { toolResponse: `Calendar events (next ${days} days):\n${eventList}`, sideEffects };
+    }
+
+    if (toolName === 'get_calendar_today') {
+      const events = await calendarService.getTodayEvents(userId);
+      if (events.length === 0) return { toolResponse: 'No events scheduled for today.', sideEffects };
+      const list = events.slice(0, 5).map((e, i) => {
+        const start = new Date(e.startAt);
+        const timeStr = start.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+        return `${i + 1}. ${e.title} at ${timeStr}${e.location ? ` (${e.location})` : ''}`;
+      }).join('\n');
+      return { toolResponse: `Today's events:\n${list}`, sideEffects };
+    }
+
+    if (toolName === 'get_calendar_upcoming') {
+      const events = await calendarService.getUpcomingEvents(userId, { days: 7, limit: 5 });
+      if (events.length === 0) return { toolResponse: 'No upcoming events in the next 7 days.', sideEffects };
+      const list = events.map((e, i) => {
+        const start = new Date(e.startAt);
+        const dateStr = start.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+        const timeStr = start.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+        return `${i + 1}. ${e.title} - ${dateStr} at ${timeStr}${e.location ? ` (${e.location})` : ''}`;
+      }).join('\n');
+      return { toolResponse: `Upcoming events:\n${list}`, sideEffects };
+    }
+
+    if (toolName === 'update_calendar_event') {
+      logger.info('Updating calendar event', { eventId: args.eventId });
+      const eventId = args.eventId as string;
+      if (!eventId) return { toolResponse: 'Error: event ID is required', sideEffects };
+      const updates: { title?: string; startAt?: Date; endAt?: Date; location?: string } = {};
+      if (args.title) updates.title = args.title;
+      if (args.startTime) updates.startAt = new Date(args.startTime);
+      if (args.endTime) updates.endAt = new Date(args.endTime);
+      if (args.location) updates.location = args.location;
+      try {
+        const event = await calendarService.updateEvent(userId, eventId, updates);
+        return { toolResponse: `Updated event: ${event.title}`, sideEffects };
+      } catch (error) {
+        return { toolResponse: `Failed to update event: ${(error as Error).message}`, sideEffects };
+      }
+    }
+
+    if (toolName === 'delete_calendar_event') {
+      logger.info('Deleting calendar event', { eventId: args.eventId });
+      const eventId = args.eventId as string;
+      if (!eventId) return { toolResponse: 'Error: event ID is required', sideEffects };
+      try {
+        await calendarService.deleteEvent(userId, eventId);
+        return { toolResponse: 'Event deleted.', sideEffects };
+      } catch (error) {
+        return { toolResponse: `Failed to delete event: ${(error as Error).message}`, sideEffects };
+      }
     }
 
     // --- Reminders ---
