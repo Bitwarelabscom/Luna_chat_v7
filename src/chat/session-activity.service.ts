@@ -57,14 +57,17 @@ export async function getInactiveSessions(): Promise<SessionActivity[]> {
   const now = Date.now();
 
   try {
-    // Scan for all activity keys
     const keys = await scanKeys(`${ACTIVITY_PREFIX}*`);
+    if (keys.length === 0) return [];
 
-    for (const key of keys) {
+    // Batch fetch all values in one round-trip
+    const values = await redis.mget(...keys);
+
+    for (let i = 0; i < values.length; i++) {
+      const data = values[i];
+      if (!data) continue;
+
       try {
-        const data = await redis.get(key);
-        if (!data) continue;
-
         const activity: SessionActivity = JSON.parse(data);
         const inactiveMs = now - activity.lastActivityAt;
 
@@ -72,7 +75,7 @@ export async function getInactiveSessions(): Promise<SessionActivity[]> {
           inactiveSessions.push(activity);
         }
       } catch (err) {
-        logger.warn('Failed to parse session activity', { key, error: (err as Error).message });
+        logger.warn('Failed to parse session activity', { key: keys[i], error: (err as Error).message });
       }
     }
 
