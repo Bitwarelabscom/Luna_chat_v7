@@ -286,21 +286,26 @@ export async function batchEnrichArticles(userId: string, limit = 25): Promise<n
     .filter(f => f.category === 'hobby' || f.category === 'preference')
     .map(f => f.factValue);
 
+  const toEnrich = articles.filter(a => a.signal === null);
   let enrichedCount = 0;
 
-  for (const article of articles) {
-    // Skip already enriched
-    if (article.signal !== null) continue;
-
-    try {
-      const result = await filterArticle(article.title, null, interests, userId);
-      await setCachedEnrichment(article.id, result);
-      enrichedCount++;
-
-      // Rate limit - 500ms between calls to not overload Ollama
-      await new Promise(r => setTimeout(r, 500));
-    } catch (err) {
-      logger.warn('Failed to enrich article', { articleId: article.id, error: (err as Error).message });
+  // Process with limited concurrency (3 parallel) to avoid overloading Ollama
+  const CONCURRENCY = 3;
+  for (let i = 0; i < toEnrich.length; i += CONCURRENCY) {
+    const batch = toEnrich.slice(i, i + CONCURRENCY);
+    const results = await Promise.allSettled(
+      batch.map(async (article) => {
+        const result = await filterArticle(article.title, null, interests, userId);
+        await setCachedEnrichment(article.id, result);
+        return article.id;
+      })
+    );
+    for (const r of results) {
+      if (r.status === 'fulfilled') {
+        enrichedCount++;
+      } else {
+        logger.warn('Failed to enrich article', { error: r.reason?.message });
+      }
     }
   }
 
