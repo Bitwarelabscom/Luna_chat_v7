@@ -3,6 +3,7 @@ import { createBackgroundCompletionWithFallback } from '../llm/background-comple
 import * as questionsService from './questions.service.js';
 import * as deliveryService from '../triggers/delivery.service.js';
 import * as factsService from '../memory/facts.service.js';
+import * as embeddingService from '../memory/embedding.service.js';
 import logger from '../utils/logger.js';
 
 interface TopicSuggestion {
@@ -84,6 +85,11 @@ export async function mineTopicCandidatesForUser(userId: string): Promise<number
       continue;
     }
 
+    // Semantic dedup: reject if semantically similar topic exists within 7 days
+    if (await isSemanticallySimilarToRecent(userId, topicText)) {
+      continue;
+    }
+
     await pool.query(
       `INSERT INTO friend_topic_candidates
        (user_id, source_type, topic_text, context, evidence, evidence_count, model_confidence, relevance_score, threshold_score, status, considered_at)
@@ -126,6 +132,54 @@ export async function getApprovedTopicCandidate(userId: string): Promise<TopicCa
   }
 
   return mapTopicCandidate(result.rows[0]);
+}
+
+/**
+ * Check if a topic is semantically similar (cosine > 0.85) to any
+ * recent topic candidate from the last 7 days. Uses batch embedding.
+ */
+async function isSemanticallySimilarToRecent(userId: string, topicText: string): Promise<boolean> {
+  try {
+    const recent = await pool.query(
+      `SELECT topic_text FROM friend_topic_candidates
+       WHERE user_id = $1 AND created_at > NOW() - INTERVAL '7 days'
+       ORDER BY created_at DESC LIMIT 20`,
+      [userId]
+    );
+    if (recent.rows.length === 0) return false;
+
+    const recentTexts = (recent.rows as Array<{ topic_text: string }>).map(r => r.topic_text);
+    const allTexts = [topicText, ...recentTexts];
+    const embeddings = await embeddingService.generateEmbeddingBatch(allTexts);
+
+    const newEmb = embeddings[0]?.embedding;
+    if (!newEmb) return false;
+
+    for (let i = 1; i < embeddings.length; i++) {
+      const existingEmb = embeddings[i]?.embedding;
+      if (!existingEmb) continue;
+
+      let dot = 0, normA = 0, normB = 0;
+      for (let j = 0; j < newEmb.length; j++) {
+        dot += newEmb[j] * existingEmb[j];
+        normA += newEmb[j] * newEmb[j];
+        normB += existingEmb[j] * existingEmb[j];
+      }
+      const sim = dot / (Math.sqrt(normA) * Math.sqrt(normB));
+      if (sim > 0.85) {
+        logger.debug('Skipping semantically similar topic', {
+          topicText,
+          similarTo: recentTexts[i - 1],
+          similarity: sim.toFixed(3),
+        });
+        return true;
+      }
+    }
+    return false;
+  } catch (err) {
+    logger.debug('Semantic dedup check failed, proceeding', { error: (err as Error).message });
+    return false;
+  }
 }
 
 export async function markTopicCandidateConsumed(candidateId: string, userId: string): Promise<void> {
