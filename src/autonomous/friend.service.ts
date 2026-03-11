@@ -466,11 +466,16 @@ function scoreFactRelevance(fact: UserFact, terms: string[]): number {
   );
 }
 
+const CORE_IDENTITY_KEYS = new Set([
+  'name', 'age', 'location', 'day_job', 'job_title', 'career_goal',
+  'primary_project', 'company', 'personality_type',
+]);
+
 async function buildTopicMemoryContext(
   userId: string,
   topic: string,
   context: string,
-  limit: number = 12
+  limit: number = 40
 ): Promise<TopicMemoryContext> {
   const allFacts = await factsService.getUserFacts(userId, { limit: 120 });
   if (allFacts.length === 0) {
@@ -478,16 +483,47 @@ async function buildTopicMemoryContext(
   }
 
   const queryTerms = Array.from(new Set(tokenizeForRelevance(`${topic}\n${context}`)));
-  const ranked = allFacts
-    .map(fact => ({ fact, score: scoreFactRelevance(fact, queryTerms) }))
-    .filter(item => item.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit)
+  const scored = allFacts
+    .map(fact => ({ fact, score: scoreFactRelevance(fact, queryTerms) }));
+
+  // Always include core identity facts regardless of relevance score
+  const coreFacts = scored
+    .filter(item => CORE_IDENTITY_KEYS.has(item.fact.factKey))
     .map(item => item.fact);
 
-  const memoryLines = ranked.map((fact, index) =>
-    `${index + 1}. [${fact.category}] ${fact.factKey}: ${fact.factValue} (confidence ${fact.confidence.toFixed(2)}, mentions ${fact.mentionCount})`
-  );
+  const coreIds = new Set(coreFacts.map(f => f.id));
+  const rankedRest = scored
+    .filter(item => !coreIds.has(item.fact.id) && item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit - coreFacts.length)
+    .map(item => item.fact);
+
+  const ranked = [...coreFacts, ...rankedRest];
+
+  // Group facts by category for better readability
+  const grouped = new Map<string, typeof ranked>();
+  for (const fact of ranked) {
+    const cat = fact.category;
+    if (!grouped.has(cat)) grouped.set(cat, []);
+    grouped.get(cat)!.push(fact);
+  }
+
+  const categoryLabels: Record<string, string> = {
+    personal: 'Personal',
+    work: 'Work',
+    context: 'Projects & Context',
+    preference: 'Preferences',
+    hobby: 'Hobbies',
+    relationship: 'Relationships',
+    goal: 'Goals',
+  };
+
+  const sections: string[] = [];
+  for (const [cat, facts] of grouped.entries()) {
+    const label = categoryLabels[cat] || cat.charAt(0).toUpperCase() + cat.slice(1);
+    const lines = facts.map(f => `- ${f.factKey}: ${f.factValue}`);
+    sections.push(`${label}:\n${lines.join('\n')}`);
+  }
 
   const connections: string[] = [];
   for (let i = 0; i < ranked.length && connections.length < 4; i++) {
@@ -504,8 +540,9 @@ async function buildTopicMemoryContext(
   }
 
   const memoryPrompt = [
-    'Relevant user memories:',
-    ...(memoryLines.length > 0 ? memoryLines : ['- none']),
+    'What we know about the user:',
+    '',
+    ...(sections.length > 0 ? sections : ['- none']),
     '',
     'Potential memory connections:',
     ...(connections.length > 0 ? connections.map(c => `- ${c}`) : ['- none identified']),
@@ -766,7 +803,7 @@ export async function startFriendDiscussion(
 
   logger.info('Starting friend discussion', { sessionId, topic, triggerType, friendName: friend.name });
   const normalizedRounds = Math.max(2, Math.min(rounds, 3));
-  const memoryContext = await buildTopicMemoryContext(userId, topic, context, 14);
+  const memoryContext = await buildTopicMemoryContext(userId, topic, context, 40);
 
   // Luna starts the conversation
   const lunaOpener = await generateLunaMessage(
@@ -1049,7 +1086,7 @@ export async function startFriendDiscussionStreaming(
 
     // Send start event
     const normalizedRounds = Math.max(2, Math.min(rounds, 3));
-    const memoryContext = await buildTopicMemoryContext(userId, topic, context, 14);
+    const memoryContext = await buildTopicMemoryContext(userId, topic, context, 40);
     onEvent({
       type: 'start',
       conversationId: conversation.id,
