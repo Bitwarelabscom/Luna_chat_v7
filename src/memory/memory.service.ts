@@ -129,46 +129,35 @@ export async function buildMemoryContext(
     const session = await queryOne<Session>(`SELECT primary_intent_id as "primaryIntentId", secondary_intent_ids as "secondaryIntentIds" FROM sessions WHERE id = $1`, [currentSessionId]);
     const intentId = session?.primaryIntentId || null;
 
+    // Per-query timeout: return fallback if a single query exceeds 2s
+    const withTimeout = <T>(promise: Promise<T>, fallback: T, label: string): Promise<T> =>
+      Promise.race([
+        promise,
+        new Promise<T>(resolve => setTimeout(() => {
+          logger.warn(`Memory query timed out: ${label}`, { userId });
+          resolve(fallback);
+        }, 2000)),
+      ]);
+
     // Run all queries in parallel for better performance
     const [facts, similarMessages, similarConversations, learningsContext, consciousnessMetrics, consolidatedModel, graphContext, localGraphContext, semanticMemoryData, recentEmotionalMoments, activeObservations, unsurfacedContradictions] = await Promise.all([
-      // Get user facts (filtered by intent if available)
-      factsService.getUserFacts(userId, { limit: 30, intentId }),
-      // Search for relevant past messages (excluding current session, scoped to intent)
-      embeddingService.searchSimilarMessages(
-        currentMessage,
-        userId,
-        {
-          limit: 5,
-          threshold: 0.75,
-          excludeSessionId: currentSessionId,
-          intentId
-        }
-      ),
-      // Search for similar conversation summaries (scoped to intent)
-      embeddingService.searchSimilarConversations(
-        currentMessage,
-        userId,
-        3,
-        intentId
-      ),
-      // Get active learnings from autonomous sessions
-      insightsService.getActiveLearningsForContext(userId, 10),
-      // Get consciousness metrics from MemoryCore/NeuralSleep
-      memorycoreClient.getConsciousnessMetrics(userId),
-      // Get consolidated model from NeuralSleep (bi-directional flow)
-      memorycoreClient.getConsolidatedModel(userId),
-      // Get graph memory via spreading activation (replaces static narrative blob)
-      graphContextForMessage(userId, currentMessage, currentSessionId),
-      // Get local graph context from Neo4j (fallback/supplement)
-      neo4jService.buildLocalGraphContext(userId),
-      // Get semantic memory from MemoryCore (high-tier consolidated knowledge)
-      memorycoreClient.getSemanticMemory(userId),
-      // Get recent emotional moments (resonant memory)
-      emotionalMoments.getRecentMoments(userId, 5, 7),
-      // Get active behavioral observations (resonant memory)
-      behavioralPatterns.getActiveObservations(userId, 3),
-      // Get unsurfaced contradiction signals (user-scoped, per-session filtering)
-      contradictionService.getUnsurfaced(userId, currentSessionId),
+      withTimeout(factsService.getUserFacts(userId, { limit: 30, intentId }), [], 'facts'),
+      withTimeout(embeddingService.searchSimilarMessages(
+        currentMessage, userId,
+        { limit: 5, threshold: 0.75, excludeSessionId: currentSessionId, intentId }
+      ), [], 'similarMessages'),
+      withTimeout(embeddingService.searchSimilarConversations(
+        currentMessage, userId, 3, intentId
+      ), [], 'similarConversations'),
+      withTimeout(insightsService.getActiveLearningsForContext(userId, 10), '', 'learnings'),
+      withTimeout(memorycoreClient.getConsciousnessMetrics(userId), null, 'consciousness'),
+      withTimeout(memorycoreClient.getConsolidatedModel(userId), null, 'consolidatedModel'),
+      withTimeout(graphContextForMessage(userId, currentMessage, currentSessionId), '', 'graphContext'),
+      withTimeout(neo4jService.buildLocalGraphContext(userId), null, 'localGraph'),
+      withTimeout(memorycoreClient.getSemanticMemory(userId), null, 'semanticMemory'),
+      withTimeout(emotionalMoments.getRecentMoments(userId, 5, 7), [], 'emotionalMoments'),
+      withTimeout(behavioralPatterns.getActiveObservations(userId, 3), [], 'behavioralObservations'),
+      withTimeout(contradictionService.getUnsurfaced(userId, currentSessionId), [], 'contradictions'),
     ]);
 
     // Score message complexity to decide whether to curate
