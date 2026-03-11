@@ -916,18 +916,18 @@ async function consolidateUserWeekly(userId: string): Promise<void> {
     [userId]
   );
 
-  // 4. Merge candidate analysis (log-only)
+  // 4. Merge candidate analysis and safe auto-merge
   // Find node pairs with same type, co-occurrence edge, similar labels
   // Require both labels >= 4 chars to avoid "Pi"/"Piano" false positives
   const mergeCandidates = await mcQuery<{
-    node1_id: string; node1_label: string;
-    node2_id: string; node2_label: string;
-    edge_weight: string;
+    node1_id: string; node1_label: string; node1_edge_count: string;
+    node2_id: string; node2_label: string; node2_edge_count: string;
+    edge_activation_count: string;
   }>(
     `SELECT
-      n1.id as node1_id, n1.node_label as node1_label,
-      n2.id as node2_id, n2.node_label as node2_label,
-      e.weight as edge_weight
+      n1.id as node1_id, n1.node_label as node1_label, n1.edge_count as node1_edge_count,
+      n2.id as node2_id, n2.node_label as node2_label, n2.edge_count as node2_edge_count,
+      e.activation_count as edge_activation_count
     FROM memory_edges e
     JOIN memory_nodes n1 ON n1.id = e.source_node_id AND n1.is_active = true
     JOIN memory_nodes n2 ON n2.id = e.target_node_id AND n2.is_active = true
@@ -947,17 +947,106 @@ async function consolidateUserWeekly(userId: string): Promise<void> {
     [userId]
   );
 
+  // Auto-merge high-confidence candidates (activation_count >= 5 + exact substring)
+  let mergedCount = 0;
+  for (const c of mergeCandidates) {
+    const activation = parseInt(c.edge_activation_count);
+    if (activation < 5) continue;
+
+    const l1 = c.node1_label.toLowerCase();
+    const l2 = c.node2_label.toLowerCase();
+    // Only auto-merge when one label fully contains the other
+    if (!l1.includes(l2) && !l2.includes(l1)) continue;
+
+    // Keep the node with more edges (more connected = more established)
+    const n1Edges = parseInt(c.node1_edge_count);
+    const n2Edges = parseInt(c.node2_edge_count);
+    const keepId = n1Edges >= n2Edges ? c.node1_id : c.node2_id;
+    const mergeId = keepId === c.node1_id ? c.node2_id : c.node1_id;
+
+    try {
+      await safelyMergeNodes(userId, keepId, mergeId);
+      mergedCount++;
+    } catch (mergeErr) {
+      logger.warn('Failed to merge nodes', {
+        error: (mergeErr as Error).message,
+        keepId, mergeId,
+      });
+    }
+  }
+
   const prunedCount = parseInt(pruneResult?.count || '0');
-  if (prunedCount > 0 || noiseResult.deactivatedNodes > 0 || mergeCandidates.length > 0) {
+  if (prunedCount > 0 || noiseResult.deactivatedNodes > 0 || mergeCandidates.length > 0 || mergedCount > 0) {
     logger.info('Weekly consolidation results', {
       userId,
       prunedNodes: prunedCount,
       noiseNodes: noiseResult.deactivatedNodes,
       noiseEdges: noiseResult.deactivatedEdges,
       mergeCandidates: mergeCandidates.length,
+      mergedNodes: mergedCount,
       candidates: mergeCandidates.map(c => `${c.node1_label} <-> ${c.node2_label}`),
     });
   }
+}
+
+/**
+ * Safely merge two nodes: redirect all edges from mergeId to keepId,
+ * bump activation counts on conflict, then deactivate the merged node.
+ */
+async function safelyMergeNodes(userId: string, keepId: string, mergeId: string): Promise<void> {
+  // Redirect edges where mergeId is the source
+  await mcQuery(
+    `UPDATE memory_edges SET source_node_id = $2
+    WHERE user_id = $1 AND source_node_id = $3 AND target_node_id != $2 AND is_active = true`,
+    [userId, keepId, mergeId]
+  );
+
+  // Redirect edges where mergeId is the target
+  await mcQuery(
+    `UPDATE memory_edges SET target_node_id = $2
+    WHERE user_id = $1 AND target_node_id = $3 AND source_node_id != $2 AND is_active = true`,
+    [userId, keepId, mergeId]
+  );
+
+  // Deactivate any duplicate edges that now exist (same source+target+type)
+  await mcQuery(
+    `UPDATE memory_edges e1 SET is_active = false
+    FROM memory_edges e2
+    WHERE e1.user_id = $1 AND e2.user_id = $1
+      AND e1.is_active = true AND e2.is_active = true
+      AND e1.source_node_id = e2.source_node_id
+      AND e1.target_node_id = e2.target_node_id
+      AND e1.edge_type = e2.edge_type
+      AND e1.id > e2.id
+      AND (e1.source_node_id = $2 OR e1.target_node_id = $2)`,
+    [userId, keepId]
+  );
+
+  // Deactivate the co-occurrence edge between the two nodes
+  await mcQuery(
+    `UPDATE memory_edges SET is_active = false
+    WHERE user_id = $1 AND is_active = true
+      AND ((source_node_id = $2 AND target_node_id = $3) OR (source_node_id = $3 AND target_node_id = $2))`,
+    [userId, keepId, mergeId]
+  );
+
+  // Deactivate the merged node
+  await mcQuery(
+    `UPDATE memory_nodes SET is_active = false WHERE user_id = $1 AND id = $2`,
+    [userId, mergeId]
+  );
+
+  // Recalculate edge_count for kept node
+  await mcQuery(
+    `UPDATE memory_nodes SET edge_count = (
+      SELECT COUNT(*) FROM memory_edges
+      WHERE user_id = $1 AND is_active = true
+        AND (source_node_id = $2 OR target_node_id = $2)
+    ) WHERE user_id = $1 AND id = $2`,
+    [userId, keepId]
+  );
+
+  logger.debug('Merged graph nodes', { userId, keepId, mergeId });
 }
 
 /**
