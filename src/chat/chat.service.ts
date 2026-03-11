@@ -653,6 +653,9 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     isSmallTalkMessageLegacy = false;
   }
 
+  // Start Mamba stream context fetch early so it runs in parallel with all context loading
+  const mambaStreamPromise = lunaStreamsClient.getStreamContext(userId).catch(() => null);
+
   // OPTIMIZED: Run context loading in parallel, but skip heavy loads for smalltalk
   const [
     modelConfig,
@@ -803,8 +806,8 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   const stableContext = [stableMemoryPrompt, abilityPrompt, prefPrompt, canvasStylePrompt].filter(Boolean).join('\n\n');
   const volatileContext = [volatileMemoryPrompt, intentPrompt, abilityActionResult, canvasSessionPrompt].filter(Boolean).join('\n\n');
 
-  // Fetch Mamba stream context (delta-tracked, ~120 tokens, non-blocking on failure)
-  const mambaStreamContext = await lunaStreamsClient.getStreamContext(userId).catch(() => null);
+  // Resolve Mamba stream context (started earlier in parallel with context loading)
+  const mambaStreamContext = await mambaStreamPromise;
 
   // Build messages array with MCP tool info and compressed context
   const mcpToolsForPrompt = mcpUserTools.map(t => ({
@@ -3323,6 +3326,9 @@ export async function* streamMessage(
     return;
   }
 
+  // Start Mamba stream context fetch early so it runs in parallel with all context loading
+  const mambaStreamPromise = lunaStreamsClient.getStreamContext(userId).catch(() => null);
+
   // OPTIMIZED: Run context loading in parallel, but skip heavy loads for smalltalk
   const [
     modelConfig,
@@ -3483,8 +3489,8 @@ export async function* streamMessage(
   const stableContext = [stableMemoryPrompt, abilityPrompt, prefPrompt, canvasStylePrompt].filter(Boolean).join('\n\n');
   const volatileContext = [volatileMemoryPrompt, intentPrompt, abilityActionResult, canvasSessionPrompt].filter(Boolean).join('\n\n');
 
-  // Fetch Mamba stream context (delta-tracked, ~120 tokens, non-blocking on failure)
-  const mambaStreamContext = await lunaStreamsClient.getStreamContext(userId).catch(() => null);
+  // Resolve Mamba stream context (started earlier in parallel with context loading)
+  const mambaStreamContext = await mambaStreamPromise;
 
   // Build messages array with MCP tool info and compressed context
   const mcpToolsForPrompt = mcpUserTools.map(t => ({
