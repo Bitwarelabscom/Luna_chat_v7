@@ -19,6 +19,63 @@ import type {
 } from './types.js';
 import logger from '../utils/logger.js';
 
+// Default context window sizes by model family (in tokens)
+const DEFAULT_CONTEXT_LIMIT = 128_000;
+
+/**
+ * Rough token estimate: ~4 chars per token on average.
+ */
+function estimateTokens(messages: ChatMessage[]): number {
+  let chars = 0;
+  for (const msg of messages) {
+    if (typeof msg.content === 'string') {
+      chars += msg.content.length;
+    }
+    // Count tool call arguments too
+    const toolCalls = (msg as unknown as Record<string, unknown>).tool_calls as Array<{ function: { arguments: string } }> | undefined;
+    if (toolCalls) {
+      for (const tc of toolCalls) {
+        chars += tc.function.arguments?.length || 0;
+      }
+    }
+  }
+  return Math.ceil(chars / 4);
+}
+
+/**
+ * Compress older tool results into a summary to free up context space.
+ * Keeps the system message, original user message, and recent messages intact.
+ * Compresses older tool results in the middle.
+ */
+function compressOlderToolResults(messages: ChatMessage[]): ChatMessage[] {
+  // Keep first 2 messages (system + user) and last 8 messages intact
+  const keepStart = 2;
+  const keepEnd = 8;
+
+  if (messages.length <= keepStart + keepEnd) return messages;
+
+  const head = messages.slice(0, keepStart);
+  const tail = messages.slice(-keepEnd);
+  const middle = messages.slice(keepStart, -keepEnd);
+
+  // Summarize middle section
+  const toolResults: string[] = [];
+  for (const msg of middle) {
+    if (msg.role === 'tool' && typeof msg.content === 'string') {
+      toolResults.push(msg.content.substring(0, 150));
+    }
+  }
+
+  const summary: ChatMessage = {
+    role: 'system',
+    content: `[Context compressed - ${middle.length} earlier messages summarized]\n` +
+      `Tools used: ${middle.filter(m => m.role === 'assistant').length} steps.\n` +
+      `Key results: ${toolResults.slice(0, 5).join(' | ')}`,
+  } as ChatMessage;
+
+  return [...head, summary, ...tail];
+}
+
 /**
  * Run the agentic loop. Yields events as the loop progresses.
  *
@@ -41,8 +98,24 @@ export async function* runAgentLoop(
   };
 
   const providerStr = config.provider || 'xai';
+  const contextLimit = config.maxContextTokens || DEFAULT_CONTEXT_LIMIT;
+
+  // Loop breaker tracking
+  let consecutiveEmptyResults = 0;
+  let lastToolCallSignature = '';
 
   while (true) {
+    // --- Context overflow check ---
+    const estimatedTokenCount = estimateTokens(state.messages);
+    if (estimatedTokenCount > contextLimit * 0.8) {
+      logger.warn('Agent loop compressing context', {
+        estimatedTokens: estimatedTokenCount,
+        contextLimit,
+        messageCount: state.messages.length,
+      });
+      state.messages = compressOlderToolResults(state.messages);
+    }
+
     // --- Call LLM ---
     const isFirstCall = state.stepCount === 0;
     const completion = await createChatCompletion({
@@ -96,6 +169,22 @@ export async function* runAgentLoop(
       costUsd: state.estimatedCostUsd.toFixed(4),
     });
 
+    // --- Loop breaker: detect stuck patterns ---
+    const currentSignature = completion.toolCalls
+      .map(tc => `${tc.function.name}:${tc.function.arguments}`)
+      .join('|');
+
+    if (currentSignature === lastToolCallSignature) {
+      logger.warn('Agent loop detected repeated tool call pattern, forcing exit', {
+        step: state.stepCount,
+        tools: toolNames,
+      });
+      yield { type: 'limit_hit', reason: 'max_steps', state };
+      yield* emitFinalSummary(state, config);
+      return;
+    }
+    lastToolCallSignature = currentSignature;
+
     // Add assistant message with tool_calls to conversation
     state.messages.push({
       role: 'assistant',
@@ -111,6 +200,7 @@ export async function* runAgentLoop(
       .join('\n');
 
     // Execute each tool call
+    let hasNonEmptyResult = false;
     for (const toolCall of completion.toolCalls) {
       yield { type: 'tool_start', tool: toolCall.function.name, args: toolCall.function.arguments };
 
@@ -137,7 +227,26 @@ export async function* runAgentLoop(
         content: result.toolResponse,
       } as ChatMessage);
 
+      if (result.toolResponse && result.toolResponse.length > 10) {
+        hasNonEmptyResult = true;
+      }
+
       yield { type: 'tool_result', tool: toolCall.function.name, result: result.toolResponse.substring(0, 200) };
+    }
+
+    // --- Loop breaker: consecutive empty results ---
+    if (!hasNonEmptyResult) {
+      consecutiveEmptyResults++;
+      if (consecutiveEmptyResults >= 3) {
+        logger.warn('Agent loop hit 3 consecutive empty results, forcing exit', {
+          step: state.stepCount,
+        });
+        yield { type: 'limit_hit', reason: 'max_steps', state };
+        yield* emitFinalSummary(state, config);
+        return;
+      }
+    } else {
+      consecutiveEmptyResults = 0;
     }
 
     // --- Check limits ---

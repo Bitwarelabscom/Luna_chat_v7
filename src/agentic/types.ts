@@ -27,6 +27,7 @@ export interface ToolExecutionResult {
 export interface AgentLoopConfig {
   maxSteps: number;
   maxCostUsd: number;
+  maxContextTokens?: number;
   tools: OpenAI.Chat.Completions.ChatCompletionTool[];
   provider: ChatCompletionOptions['provider'];
   model?: string;
