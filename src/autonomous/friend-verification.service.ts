@@ -348,9 +348,17 @@ export async function resolveVerificationForQuestion(
   );
 
   if (classification.resolution === 'confirmed') {
+    // Derive a normalized fact key from the claim text
+    const normalizedKey = row.claim_text
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, '')
+      .trim()
+      .split(/\s+/)
+      .slice(0, 5)
+      .join('_');
     await factsService.storeFact(userId, {
       category: 'context',
-      factKey: 'friend_verified_claim',
+      factKey: normalizedKey || 'verified_claim',
       factValue: row.claim_text,
       confidence: Math.max(0.75, Number(row.confidence) || 0.75),
     });
