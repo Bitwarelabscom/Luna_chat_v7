@@ -915,7 +915,74 @@ export async function startFriendDiscussion(
     factsExtracted: extractedFacts.length,
   });
 
+  // Check for council escalation
+  await checkAndEscalateToCouncil(userId, sessionId, topic, topicCandidateId, conversation);
+
   return conversation;
+}
+
+/**
+ * Check if a completed friend discussion should be escalated to the council.
+ * Escalation triggers: topic importance >= 4 (on 1-5 scale) or topic recurs 3+ times.
+ */
+async function checkAndEscalateToCouncil(
+  userId: string,
+  sessionId: string | null,
+  topic: string,
+  topicCandidateId: string | undefined,
+  conversation: FriendConversation
+): Promise<void> {
+  try {
+    // Check topic importance from candidate
+    let importance = 3;
+    if (topicCandidateId) {
+      const candidateRow = await pool.query(
+        `SELECT importance FROM friend_topic_candidates WHERE id = $1`,
+        [topicCandidateId]
+      );
+      if (candidateRow.rows.length > 0) {
+        importance = Number((candidateRow.rows[0] as Record<string, unknown>).importance || 3);
+      }
+    }
+
+    // Check recurrence: how many times has this topic been discussed?
+    const recurrenceResult = await pool.query(
+      `SELECT COUNT(*) as count FROM friend_conversations
+       WHERE user_id = $1 AND topic ILIKE $2
+       AND created_at > NOW() - INTERVAL '30 days'`,
+      [userId, `%${topic.substring(0, 50)}%`]
+    );
+    const recurrenceCount = parseInt((recurrenceResult.rows[0] as Record<string, unknown>).count as string);
+
+    const shouldEscalate = importance >= 4 || recurrenceCount >= 3;
+    if (!shouldEscalate) return;
+
+    const reason = importance >= 4
+      ? `High importance topic (${importance}/5)`
+      : `Recurring topic (discussed ${recurrenceCount} times in 30 days)`;
+
+    // If we have an active session, add to workspace for council pickup
+    if (sessionId) {
+      await sessionWorkspaceService.addFinding(
+        sessionId,
+        userId,
+        `[COUNCIL ESCALATION] ${reason}\nTopic: ${topic}\nSummary: ${conversation.summary || 'No summary'}\nFacts: ${(conversation.factsExtracted || []).join(', ')}`,
+        'act',
+        { escalation: true, conversationId: conversation.id, importance, recurrenceCount }
+      );
+    }
+
+    logger.info('Friend discussion escalated to council', {
+      userId,
+      topic,
+      reason,
+      importance,
+      recurrenceCount,
+      conversationId: conversation.id,
+    });
+  } catch (err) {
+    logger.debug('Council escalation check failed', { error: (err as Error).message });
+  }
 }
 
 // Event types for streaming
