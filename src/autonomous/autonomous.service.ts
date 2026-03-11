@@ -31,6 +31,8 @@ export interface AutonomousConfig {
   rssEnabled: boolean;
   insightsEnabled: boolean;
   voiceEnabled: boolean;
+  gossipEnabled: boolean;
+  gossipIntervalMinutes: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -184,11 +186,12 @@ export async function createOrUpdateConfig(
 ): Promise<AutonomousConfig> {
   const result = await pool.query(
     `INSERT INTO autonomous_config (
-       user_id, enabled, auto_start, session_interval_minutes, max_daily_sessions, 
-       rss_check_interval_minutes, idle_timeout_minutes, 
-       learning_enabled, rss_enabled, insights_enabled, voice_enabled
+       user_id, enabled, auto_start, session_interval_minutes, max_daily_sessions,
+       rss_check_interval_minutes, idle_timeout_minutes,
+       learning_enabled, rss_enabled, insights_enabled, voice_enabled,
+       gossip_enabled, gossip_interval_minutes
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
      ON CONFLICT (user_id) DO UPDATE SET
        enabled = COALESCE($2, autonomous_config.enabled),
        auto_start = COALESCE($3, autonomous_config.auto_start),
@@ -200,6 +203,8 @@ export async function createOrUpdateConfig(
        rss_enabled = COALESCE($9, autonomous_config.rss_enabled),
        insights_enabled = COALESCE($10, autonomous_config.insights_enabled),
        voice_enabled = COALESCE($11, autonomous_config.voice_enabled),
+       gossip_enabled = COALESCE($12, autonomous_config.gossip_enabled),
+       gossip_interval_minutes = COALESCE($13, autonomous_config.gossip_interval_minutes),
        updated_at = NOW()
      RETURNING *`,
     [
@@ -214,6 +219,8 @@ export async function createOrUpdateConfig(
       config.rssEnabled ?? true,
       config.insightsEnabled ?? true,
       config.voiceEnabled ?? true,
+      config.gossipEnabled ?? false,
+      config.gossipIntervalMinutes ?? 240,
     ]
   );
 
@@ -1874,6 +1881,8 @@ function mapConfigRow(row: Record<string, unknown>): AutonomousConfig {
     rssEnabled: row.rss_enabled as boolean ?? true,
     insightsEnabled: row.insights_enabled as boolean ?? true,
     voiceEnabled: row.voice_enabled as boolean ?? true,
+    gossipEnabled: row.gossip_enabled as boolean ?? false,
+    gossipIntervalMinutes: row.gossip_interval_minutes as number ?? 240,
     createdAt: new Date(row.created_at as string),
     updatedAt: new Date(row.updated_at as string),
   };

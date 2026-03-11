@@ -14,6 +14,8 @@ export interface AutonomousConfig {
   rssEnabled: boolean;
   insightsEnabled: boolean;
   voiceEnabled: boolean;
+  gossipEnabled: boolean;
+  gossipIntervalMinutes: number;
   createdAt: string;
   updatedAt: string;
 }

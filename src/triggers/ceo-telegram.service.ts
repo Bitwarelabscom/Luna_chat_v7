@@ -17,6 +17,9 @@ import * as chatService from '../chat/chat.service.js';
 import * as sessionService from '../chat/session.service.js';
 import { addMessage } from '../chat/session.service.js';
 import { DEPARTMENT_MAP } from '../persona/luna.persona.js';
+import * as modelConfigService from '../llm/model-config.service.js';
+import { PROVIDERS } from '../llm/types.js';
+import type { ProviderId } from '../llm/types.js';
 
 // ============================================
 // Types
@@ -104,9 +107,32 @@ function isUserAllowed(telegramUserId: number): boolean {
   return ALLOWED_TELEGRAM_IDS.has(telegramUserId);
 }
 
+// Pending state for model selection flow
+const pendingModelSelections: Map<number, { provider: ProviderId; models: Array<{ id: string; name: string }>; timestamp: number }> = new Map();
+const pendingMeetingInput: Set<number> = new Set(); // chatIds waiting for meeting topic text
+
+const PENDING_TTL = 10 * 60 * 1000;
+setInterval(() => {
+  const now = Date.now();
+  for (const [chatId, state] of pendingModelSelections) {
+    if (now - state.timestamp > PENDING_TTL) pendingModelSelections.delete(chatId);
+  }
+}, 60 * 1000);
+
 // ============================================
 // Telegram API
 // ============================================
+
+function getCeoPersistentKeyboard(): Record<string, unknown> {
+  return {
+    keyboard: [
+      [{ text: '/proposals' }, { text: '/meeting' }, { text: '/model' }],
+      [{ text: '/economy' }, { text: '/marketing' }, { text: '/development' }],
+    ],
+    resize_keyboard: true,
+    is_persistent: true,
+  };
+}
 
 async function telegramRequest(method: string, body?: Record<string, unknown>): Promise<unknown> {
   const token = getBotToken();
@@ -136,6 +162,7 @@ export async function sendMessage(
   options?: {
     parseMode?: 'HTML' | 'Markdown' | 'MarkdownV2';
     disableNotification?: boolean;
+    replyMarkup?: Record<string, unknown>;
   }
 ): Promise<boolean> {
   try {
@@ -144,6 +171,7 @@ export async function sendMessage(
       text,
       parse_mode: options?.parseMode,
       disable_notification: options?.disableNotification,
+      reply_markup: options?.replyMarkup,
     });
     return true;
   } catch (error) {
@@ -157,6 +185,7 @@ export async function sendMessage(
           chat_id: chatId,
           text,
           disable_notification: options?.disableNotification,
+          reply_markup: options?.replyMarkup,
         });
         return true;
       } catch (retryError) {
@@ -759,7 +788,176 @@ async function handleCallbackQuery(callback: NonNullable<TelegramUpdate['callbac
     return;
   }
 
+  // Department suggestion callbacks
+  if (data.startsWith('cdept:')) {
+    const parts = data.split(':');
+    const dept = parts[1];
+    const index = parseInt(parts[2], 10);
+    const suggestions = DEPARTMENT_SUGGESTIONS[dept as keyof typeof DEPARTMENT_SUGGESTIONS];
+
+    if (suggestions && index >= 0 && index < suggestions.length) {
+      const suggestion = suggestions[index];
+      await answerCallbackQuery(callback.id, 'Processing...');
+      await handleDepartmentMessage(connection, dept, suggestion.message);
+    } else {
+      await answerCallbackQuery(callback.id, 'Invalid selection');
+    }
+    return;
+  }
+
+  // Meeting suggestion callbacks
+  if (data.startsWith('cmtg:')) {
+    const topic = data.slice(5);
+    if (topic === 'custom') {
+      pendingMeetingInput.add(chatId);
+      await answerCallbackQuery(callback.id);
+      await sendMessage(chatId, 'Type your meeting topic:');
+    } else {
+      const topicMessages: Record<string, string> = {
+        weekly: 'Run our weekly planning meeting - review progress, blockers, and set priorities for the week',
+        project: 'Run a project review meeting - status updates on all active projects',
+        strategy: 'Run a strategy discussion - long term vision, market position, and key decisions',
+      };
+      const msg = topicMessages[topic] || topic;
+      await answerCallbackQuery(callback.id, 'Starting meeting...');
+      await handleMeetingMessage(connection, msg);
+    }
+    return;
+  }
+
+  // CEO model provider selection
+  if (data.startsWith('cmdl:p:')) {
+    const providerId = data.slice(7) as ProviderId;
+    const provider = PROVIDERS.find(p => p.id === providerId);
+    if (!provider) {
+      await answerCallbackQuery(callback.id, 'Provider not found');
+      return;
+    }
+
+    const chatModels = provider.models.filter(m => m.capabilities.includes('chat'));
+    pendingModelSelections.set(chatId, {
+      provider: providerId,
+      models: chatModels.map(m => ({ id: m.id, name: m.name })),
+      timestamp: Date.now(),
+    });
+
+    const buttons = chatModels.map((m, i) => ({
+      text: m.name,
+      callback: `cmdl:m:${i}`,
+    }));
+
+    await sendMessageWithButtons(chatId, `Select a ${provider.name} model:`, buttons, 1);
+    await answerCallbackQuery(callback.id);
+    return;
+  }
+
+  // CEO model selection
+  if (data.startsWith('cmdl:m:')) {
+    const index = parseInt(data.slice(7), 10);
+    const pending = pendingModelSelections.get(chatId);
+    if (!pending || index < 0 || index >= pending.models.length) {
+      await answerCallbackQuery(callback.id, 'Selection expired');
+      return;
+    }
+
+    const model = pending.models[index];
+    try {
+      await modelConfigService.setUserModelConfig(connection.userId, 'ceo_luna', pending.provider, model.id);
+      pendingModelSelections.delete(chatId);
+      await answerCallbackQuery(callback.id, `Switched to ${model.name}`);
+      await sendMessage(chatId, `CEO Luna model switched to ${model.name} (${pending.provider})`);
+    } catch {
+      await answerCallbackQuery(callback.id, 'Failed to switch model');
+    }
+    return;
+  }
+
+  // CEO quick model presets
+  if (data.startsWith('cqm:')) {
+    const presetMap: Array<{ provider: ProviderId; model: string; name: string }> = [
+      { provider: 'xai', model: 'grok-4-1-fast', name: 'Grok 4.1 Fast' },
+      { provider: 'anthropic', model: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4' },
+      { provider: 'groq', model: 'llama-3.3-70b-versatile', name: 'Llama 70B (Groq)' },
+      { provider: 'google', model: 'gemini-2.0-flash', name: 'Gemini Flash' },
+      { provider: 'xai', model: 'grok-4', name: 'Grok 4' },
+    ];
+
+    const index = parseInt(data.slice(4), 10);
+    const preset = presetMap[index];
+    if (!preset) {
+      await answerCallbackQuery(callback.id, 'Invalid preset');
+      return;
+    }
+
+    try {
+      await modelConfigService.setUserModelConfig(connection.userId, 'ceo_luna', preset.provider, preset.model);
+      await answerCallbackQuery(callback.id, `Switched to ${preset.name}`);
+      await sendMessage(chatId, `CEO Luna model switched to ${preset.name}`);
+    } catch {
+      await answerCallbackQuery(callback.id, 'Failed to switch model');
+    }
+    return;
+  }
+
   await answerCallbackQuery(callback.id);
+}
+
+// ============================================
+// Suggestion Data
+// ============================================
+
+const DEPARTMENT_SUGGESTIONS = {
+  economy: [
+    { text: 'Revenue report', message: 'Give me a revenue report for this period' },
+    { text: 'Cost analysis', message: 'Analyze our current costs and spending' },
+    { text: 'Budget status', message: 'What is our current budget status?' },
+  ],
+  marketing: [
+    { text: 'Social stats', message: 'Show me our social media statistics' },
+    { text: 'Content ideas', message: 'Generate some content ideas for this week' },
+    { text: 'Audience growth', message: 'How is our audience growth trending?' },
+  ],
+  development: [
+    { text: 'Sprint status', message: 'What is the current sprint status?' },
+    { text: 'Bug report', message: 'Give me a summary of open bugs' },
+    { text: 'Tech debt', message: 'What are our top tech debt items?' },
+  ],
+  research: [
+    { text: 'Latest findings', message: 'What are the latest research findings?' },
+    { text: 'Trend analysis', message: 'Analyze current market and tech trends' },
+    { text: 'Competitors', message: 'Give me a competitor analysis update' },
+  ],
+} as const;
+
+const MEETING_SUGGESTIONS = [
+  { text: 'Weekly planning', topic: 'weekly' },
+  { text: 'Project review', topic: 'project' },
+  { text: 'Strategy discussion', topic: 'strategy' },
+  { text: 'Custom topic', topic: 'custom' },
+];
+
+// ============================================
+// Model Command Handlers
+// ============================================
+
+async function handleCeoModelCommand(chatId: number): Promise<void> {
+  const enabledProviders = PROVIDERS.filter(p => p.enabled);
+  const buttons = enabledProviders.map(p => ({
+    text: p.name,
+    callback: `cmdl:p:${p.id}`,
+  }));
+  await sendMessageWithButtons(chatId, 'Select a provider:', buttons, 2);
+}
+
+async function handleCeoQuickModelCommand(chatId: number): Promise<void> {
+  const presets = [
+    { text: 'Grok 4.1 Fast', callback: 'cqm:0' },
+    { text: 'Claude Sonnet 4', callback: 'cqm:1' },
+    { text: 'Llama 70B (Groq)', callback: 'cqm:2' },
+    { text: 'Gemini Flash', callback: 'cqm:3' },
+    { text: 'Grok 4', callback: 'cqm:4' },
+  ];
+  await sendMessageWithButtons(chatId, 'Quick model presets for CEO Luna:', presets, 2);
 }
 
 // ============================================
@@ -805,24 +1003,49 @@ export async function processUpdate(update: TelegramUpdate): Promise<void> {
     return;
   }
 
+  if (text === '/model') {
+    // Check connection first
+    const conn = await getConnectionByChatId(chatId);
+    if (!conn) {
+      await sendMessage(chatId, 'Not connected. Link your account first.');
+      return;
+    }
+    await handleCeoModelCommand(chatId);
+    return;
+  }
+
+  if (text === '/quick') {
+    const conn = await getConnectionByChatId(chatId);
+    if (!conn) {
+      await sendMessage(chatId, 'Not connected. Link your account first.');
+      return;
+    }
+    await handleCeoQuickModelCommand(chatId);
+    return;
+  }
+
   if (text === '/help') {
     await sendMessage(
       chatId,
       'CEO Luna Telegram Commands:\n\n'
       + 'Department Chat:\n'
-      + '/economy <message> - Talk to Finance Luna\n'
-      + '/marketing <message> - Talk to Market Luna\n'
-      + '/development <message> - Talk to Dev Luna\n'
-      + '/research <message> - Talk to Research Luna\n'
-      + '/meeting <message> - Start a team meeting\n\n'
+      + '/economy - Talk to Finance Luna\n'
+      + '/marketing - Talk to Market Luna\n'
+      + '/development - Talk to Dev Luna\n'
+      + '/research - Talk to Research Luna\n'
+      + '/meeting - Start a team meeting\n\n'
       + 'Proposals:\n'
       + '/proposals - List pending proposals\n'
       + '/approve <id> - Approve a proposal\n'
       + '/reject <id> - Reject a proposal\n\n'
+      + 'Model:\n'
+      + '/model - Switch AI model\n'
+      + '/quick - Quick model presets\n\n'
       + 'Other:\n'
       + '/status - Check connection status\n'
       + '/unlink - Disconnect from CEO Luna\n'
-      + '/help - Show this help'
+      + '/help - Show this help',
+      { replyMarkup: getCeoPersistentKeyboard() }
     );
     return;
   }
@@ -844,6 +1067,13 @@ export async function processUpdate(update: TelegramUpdate): Promise<void> {
     return;
   }
 
+  // Check for pending meeting topic input
+  if (pendingMeetingInput.has(chatId)) {
+    pendingMeetingInput.delete(chatId);
+    await handleMeetingMessage(connection, text);
+    return;
+  }
+
   // Department commands
   for (const dept of VALID_DEPARTMENTS) {
     if (text.startsWith(`/${dept} `)) {
@@ -856,7 +1086,18 @@ export async function processUpdate(update: TelegramUpdate): Promise<void> {
       return;
     }
     if (text === `/${dept}`) {
-      await sendMessage(chatId, `Usage: /${dept} <your message>`);
+      const suggestions = DEPARTMENT_SUGGESTIONS[dept as keyof typeof DEPARTMENT_SUGGESTIONS];
+      if (suggestions) {
+        const buttons = suggestions.map((s, i) => ({
+          text: s.text,
+          callback: `cdept:${dept}:${i}`,
+        }));
+        const deptObj = DEPARTMENT_MAP.get(dept as typeof VALID_DEPARTMENTS[number]);
+        const deptName = deptObj?.name || dept;
+        await sendMessageWithButtons(chatId, `${deptName} - what would you like to know?`, buttons, 1);
+      } else {
+        await sendMessage(chatId, `Usage: /${dept} <your message>`);
+      }
       return;
     }
   }
@@ -872,7 +1113,11 @@ export async function processUpdate(update: TelegramUpdate): Promise<void> {
     return;
   }
   if (text === '/meeting') {
-    await sendMessage(chatId, 'Usage: /meeting <topic or question>');
+    const buttons = MEETING_SUGGESTIONS.map(s => ({
+      text: s.text,
+      callback: `cmtg:${s.topic}`,
+    }));
+    await sendMessageWithButtons(chatId, 'Start a meeting - choose a topic:', buttons, 2);
     return;
   }
 
@@ -932,8 +1177,10 @@ async function handleLinkCommand(
     + '- Chat with department agents (/economy, /marketing, /development, /research)\n'
     + '- Run team meetings (/meeting)\n'
     + '- Manage proposals (/proposals, /approve, /reject)\n'
+    + '- Switch AI models (/model, /quick)\n'
     + '- Receive proposal notifications with inline buttons\n\n'
-    + 'Type /help for the full command list.'
+    + 'Type /help for the full command list.',
+    { replyMarkup: getCeoPersistentKeyboard() }
   );
 }
 

@@ -12,6 +12,9 @@ import logger from '../utils/logger.js';
 import crypto from 'crypto';
 import * as tradingChatService from '../chat/trading-chat.service.js';
 import * as tradingService from '../trading/trading.service.js';
+import * as modelConfigService from '../llm/model-config.service.js';
+import { PROVIDERS } from '../llm/types.js';
+import type { ProviderId } from '../llm/types.js';
 
 // ============================================
 // Types
@@ -121,6 +124,27 @@ function isUserAllowed(telegramUserId: number): boolean {
   return ALLOWED_TELEGRAM_IDS.has(telegramUserId);
 }
 
+// Pending state for model selection
+const pendingModelSelections: Map<number, { provider: ProviderId; models: Array<{ id: string; name: string }>; timestamp: number }> = new Map();
+
+const PENDING_TTL = 10 * 60 * 1000;
+setInterval(() => {
+  const now = Date.now();
+  for (const [chatId, state] of pendingModelSelections) {
+    if (now - state.timestamp > PENDING_TTL) pendingModelSelections.delete(chatId);
+  }
+}, 60 * 1000);
+
+function getTradingPersistentKeyboard(): Record<string, unknown> {
+  return {
+    keyboard: [
+      [{ text: '/portfolio' }, { text: '/model' }, { text: '/help' }],
+    ],
+    resize_keyboard: true,
+    is_persistent: true,
+  };
+}
+
 // ============================================
 // Telegram API
 // ============================================
@@ -156,6 +180,7 @@ export async function sendMessage(
   options?: {
     parseMode?: 'HTML' | 'Markdown' | 'MarkdownV2';
     disableNotification?: boolean;
+    replyMarkup?: Record<string, unknown>;
   }
 ): Promise<boolean> {
   try {
@@ -164,6 +189,7 @@ export async function sendMessage(
       text,
       parse_mode: options?.parseMode,
       disable_notification: options?.disableNotification,
+      reply_markup: options?.replyMarkup,
     });
     return true;
   } catch (error) {
@@ -177,6 +203,7 @@ export async function sendMessage(
           chat_id: chatId,
           text,
           disable_notification: options?.disableNotification,
+          reply_markup: options?.replyMarkup,
         });
         return true;
       } catch (retryError) {
@@ -746,8 +773,19 @@ export async function processUpdate(update: TelegramUpdate): Promise<void> {
   if (text === '/help') {
     await sendMessage(
       chatId,
-      'Trader Luna Telegram Commands:\n\n/start - Get started\n/status - Check connection status\n/portfolio - View portfolio\n/unlink - Disconnect from Trader Luna\n/help - Show this help\n\nOr just send me a message to chat about trading!'
+      'Trader Luna Telegram Commands:\n\n/start - Get started\n/status - Check connection status\n/portfolio - View portfolio\n/model - Switch AI model\n/quick - Quick model presets\n/unlink - Disconnect from Trader Luna\n/help - Show this help\n\nOr just send me a message to chat about trading!',
+      { replyMarkup: getTradingPersistentKeyboard() }
     );
+    return;
+  }
+
+  if (text === '/model') {
+    await handleTradingModelCommand(chatId);
+    return;
+  }
+
+  if (text === '/quick') {
+    await handleTradingQuickModelCommand(chatId);
     return;
   }
 
@@ -797,7 +835,8 @@ async function handleLinkCommand(
 
   await sendMessage(
     chatId,
-    `Connected! Hi ${from.first_name}, you can now:\n\n- Chat with me about trading\n- Receive trade notifications\n- Confirm orders with buttons\n\nCommands:\n/portfolio - View your holdings\n/status - Check connection\n/unlink - Disconnect`
+    `Connected! Hi ${from.first_name}, you can now:\n\n- Chat with me about trading\n- Receive trade notifications\n- Confirm orders with buttons\n\nCommands:\n/portfolio - View your holdings\n/status - Check connection\n/unlink - Disconnect`,
+    { replyMarkup: getTradingPersistentKeyboard() }
   );
 }
 
@@ -857,6 +896,40 @@ async function handleUnlinkCommand(chatId: number): Promise<void> {
   }
 }
 
+async function handleTradingModelCommand(chatId: number): Promise<void> {
+  const connection = await getConnectionByChatId(chatId);
+  if (!connection) {
+    await sendMessage(chatId, 'Not connected to any Luna trading account.');
+    return;
+  }
+
+  const enabledProviders = PROVIDERS.filter(p => p.enabled);
+  const buttons = enabledProviders.map(p => ({
+    text: p.name,
+    callback: `tmdl:p:${p.id}`,
+  }));
+
+  await sendMessageWithButtons(chatId, 'Select a provider:', buttons, 2);
+}
+
+async function handleTradingQuickModelCommand(chatId: number): Promise<void> {
+  const connection = await getConnectionByChatId(chatId);
+  if (!connection) {
+    await sendMessage(chatId, 'Not connected to any Luna trading account.');
+    return;
+  }
+
+  const presets = [
+    { text: 'Grok 4.1 Fast', callback: 'tqm:0' },
+    { text: 'Claude Sonnet 4', callback: 'tqm:1' },
+    { text: 'Llama 70B (Groq)', callback: 'tqm:2' },
+    { text: 'Gemini Flash', callback: 'tqm:3' },
+    { text: 'Grok 4', callback: 'tqm:4' },
+  ];
+
+  await sendMessageWithButtons(chatId, 'Quick model presets:', presets, 2);
+}
+
 async function handleCallbackQuery(callback: NonNullable<TelegramUpdate['callback_query']>): Promise<void> {
   const chatId = callback.message?.chat.id;
   const messageId = callback.message?.message_id;
@@ -906,6 +979,80 @@ async function handleCallbackQuery(callback: NonNullable<TelegramUpdate['callbac
   // Handle trade actions (from trade notifications)
   if (data.startsWith('trade:')) {
     await handleTradeCallback(callback.id, chatId, messageId, connection.userId, data);
+    return;
+  }
+
+  // Trading model provider selection
+  if (data.startsWith('tmdl:p:')) {
+    const providerId = data.slice(7) as ProviderId;
+    const provider = PROVIDERS.find(p => p.id === providerId);
+    if (!provider) {
+      await answerCallbackQuery(callback.id, 'Provider not found');
+      return;
+    }
+
+    const chatModels = provider.models.filter(m => m.capabilities.includes('chat'));
+    pendingModelSelections.set(chatId, {
+      provider: providerId,
+      models: chatModels.map(m => ({ id: m.id, name: m.name })),
+      timestamp: Date.now(),
+    });
+
+    const buttons = chatModels.map((m, i) => ({
+      text: m.name,
+      callback: `tmdl:m:${i}`,
+    }));
+
+    await sendMessageWithButtons(chatId, `Select a ${provider.name} model:`, buttons, 1);
+    await answerCallbackQuery(callback.id);
+    return;
+  }
+
+  // Trading model selection
+  if (data.startsWith('tmdl:m:')) {
+    const index = parseInt(data.slice(7), 10);
+    const pending = pendingModelSelections.get(chatId);
+    if (!pending || index < 0 || index >= pending.models.length) {
+      await answerCallbackQuery(callback.id, 'Selection expired');
+      return;
+    }
+
+    const model = pending.models[index];
+    try {
+      await modelConfigService.setUserModelConfig(connection.userId, 'main_chat', pending.provider, model.id);
+      pendingModelSelections.delete(chatId);
+      await answerCallbackQuery(callback.id, `Switched to ${model.name}`);
+      await sendMessage(chatId, `Trading model switched to ${model.name} (${pending.provider})`);
+    } catch {
+      await answerCallbackQuery(callback.id, 'Failed to switch model');
+    }
+    return;
+  }
+
+  // Trading quick model presets
+  if (data.startsWith('tqm:')) {
+    const presetMap: Array<{ provider: ProviderId; model: string; name: string }> = [
+      { provider: 'xai', model: 'grok-4-1-fast', name: 'Grok 4.1 Fast' },
+      { provider: 'anthropic', model: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4' },
+      { provider: 'groq', model: 'llama-3.3-70b-versatile', name: 'Llama 70B (Groq)' },
+      { provider: 'google', model: 'gemini-2.0-flash', name: 'Gemini Flash' },
+      { provider: 'xai', model: 'grok-4', name: 'Grok 4' },
+    ];
+
+    const index = parseInt(data.slice(4), 10);
+    const preset = presetMap[index];
+    if (!preset) {
+      await answerCallbackQuery(callback.id, 'Invalid preset');
+      return;
+    }
+
+    try {
+      await modelConfigService.setUserModelConfig(connection.userId, 'main_chat', preset.provider, preset.model);
+      await answerCallbackQuery(callback.id, `Switched to ${preset.name}`);
+      await sendMessage(chatId, `Trading model switched to ${preset.name}`);
+    } catch {
+      await answerCallbackQuery(callback.id, 'Failed to switch model');
+    }
     return;
   }
 

@@ -24,6 +24,9 @@ import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { SlashCommandDropdown } from './shared/SlashCommandDropdown';
 import { ChatInputBadge } from './shared/ChatInputBadge';
 import { SaveToKnowledgeModal } from './SaveToKnowledgeModal';
+import { OnboardingProgress } from './chat/OnboardingProgress';
+import { OnboardingReview } from './chat/OnboardingReview';
+import { useOnboardingStore } from '@/lib/onboarding-store';
 
 const VoiceChatArea = dynamic(() => import('./VoiceChatArea'), {
   ssr: false,
@@ -97,6 +100,10 @@ function extractGeneratedImageFilenames(content: string): string[] {
   return filenames;
 }
 
+function stripOnboardingComments(content: string): string {
+  return content.replace(/<!--onboarding:\{[\s\S]*?\}-->/g, '').trim();
+}
+
 function StandardChatArea() {
   const pulseLunaControl = useWindowStore((state) => state.pulseLunaControl);
   const {
@@ -131,6 +138,10 @@ function StandardChatArea() {
   } = useChatStore();
 
   const thinkingPhrase = useThinkingMessage(isSending && !streamingContent, currentSession?.mode);
+
+  const onboardingState = useOnboardingStore((s) => s.state);
+  const reviewOpen = useOnboardingStore((s) => s.reviewOpen);
+  const fetchOnboardingStatus = useOnboardingStore((s) => s.fetchStatus);
 
   // Save to Knowledge modal state
   const [saveToKnowledgeContent, setSaveToKnowledgeContent] = useState<string | null>(null);
@@ -295,6 +306,13 @@ function StandardChatArea() {
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
   }, [currentSession?.id]);
+
+  // Fetch onboarding status when a companion session is active
+  useEffect(() => {
+    if (currentSession?.mode === 'companion') {
+      fetchOnboardingStatus();
+    }
+  }, [currentSession?.id, currentSession?.mode, fetchOnboardingStatus]);
 
   // Startup message trigger DISABLED - wait for user input instead
   // const startupTriggeredRef = useRef<string | null>(null);
@@ -586,7 +604,12 @@ function StandardChatArea() {
   );
 
   return (
-    <main className="flex-1 flex flex-col h-full overflow-hidden bg-gray-900">
+    <main className="flex-1 flex h-full overflow-hidden bg-gray-900">
+      <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Onboarding progress bar - shown above messages when interview is active */}
+      {onboardingState && onboardingState.status !== 'completed' && onboardingState.status !== 'not_started' && (
+        <OnboardingProgress />
+      )}
       {/* Messages area */}
       <div className="flex-1 overflow-y-auto">
         {isLoadingMessages ? (
@@ -672,7 +695,7 @@ function StandardChatArea() {
                   >
                     {msg.role === 'assistant' ? (
                       <div className="message-content prose prose-invert prose-sm max-w-none">
-                        {parseMediaBlocks(msg.content).map((block, idx) => (
+                        {parseMediaBlocks(stripOnboardingComments(msg.content)).map((block, idx) => (
                           block.type === 'image' ? (
                             <ImageEmbed
                               key={`img-${idx}`}
@@ -752,7 +775,7 @@ function StandardChatArea() {
                 </div>
                 <div className="inline-block max-w-[85%] rounded-xl px-3 py-2 text-sm bg-gray-800 text-gray-200 rounded-tl-sm">
                   <div className="message-content prose prose-invert prose-sm max-w-none">
-                    {parseMediaBlocks(streamingContent).map((block, idx) => (
+                    {parseMediaBlocks(stripOnboardingComments(streamingContent)).map((block, idx) => (
                       block.type === 'image' ? (
                         <ImageEmbed
                           key={`img-stream-${idx}`}
@@ -1019,6 +1042,9 @@ function StandardChatArea() {
           onClose={() => setSaveToKnowledgeContent(null)}
         />
       )}
+      </div>
+      {/* Onboarding review panel - slides in from right when in review phase */}
+      {reviewOpen && <OnboardingReview />}
     </main>
   );
 }

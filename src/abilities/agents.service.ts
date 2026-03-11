@@ -1091,7 +1091,10 @@ ${userMessage}`;
       maxBuffer: 100 * 1024 * 1024,
       timeout: 300000,
       cwd: userWorkspace, // Run from user's workspace directory
-      env: config.anthropic?.apiKey ? { ANTHROPIC_API_KEY: config.anthropic.apiKey } : {},
+      env: {
+        ...process.env,
+        ...(config.anthropic?.apiKey ? { ANTHROPIC_API_KEY: config.anthropic.apiKey } : {}),
+      },
     });
 
     if (stderr) {
@@ -1195,7 +1198,10 @@ ${userMessage}`;
       maxBuffer: 100 * 1024 * 1024,
       timeout: 300000,
       cwd: userWorkspace, // Run from user's workspace directory
-      env: config.google?.apiKey ? { GOOGLE_API_KEY: config.google.apiKey } : {},
+      env: {
+        ...process.env,
+        ...(config.google?.apiKey ? { GEMINI_API_KEY: config.google.apiKey, GOOGLE_API_KEY: config.google.apiKey } : {}),
+      },
     });
 
     if (stderr) {

@@ -33,11 +33,15 @@ const embeddingCache = new Map<string, CacheEntry>();
 // In-flight requests to prevent duplicate concurrent calls
 const inFlightRequests = new Map<string, Promise<EmbeddingResult>>();
 
+const OPENROUTER_EMBEDDINGS_URL = 'https://openrouter.ai/api/v1/embeddings';
+const MAX_INPUT_CHARS = 30000;
+const MAX_RETRIES = 3;
+const INITIAL_RETRY_DELAY_MS = 500;
+
 /**
  * Create a cache key from text (hash first 1000 chars for efficiency)
  */
 function getCacheKey(text: string): string {
-  // Use first 1000 chars as key (most queries are short)
   return text.slice(0, 1000);
 }
 
@@ -51,7 +55,6 @@ function cleanExpiredCache(): void {
       embeddingCache.delete(key);
     }
   }
-  // Also enforce max size (LRU-ish: remove oldest entries)
   if (embeddingCache.size > EMBEDDING_CACHE_MAX_SIZE) {
     const entries = Array.from(embeddingCache.entries())
       .sort((a, b) => a[1].timestamp - b[1].timestamp);
@@ -63,7 +66,7 @@ function cleanExpiredCache(): void {
 }
 
 /**
- * Generate embedding for text using Ollama
+ * Generate embedding for text using OpenRouter API
  * OPTIMIZED: Uses cache to prevent duplicate embedding generation
  */
 export async function generateEmbedding(text: string): Promise<EmbeddingResult> {
@@ -85,7 +88,7 @@ export async function generateEmbedding(text: string): Promise<EmbeddingResult> 
   }
 
   // Create the request promise
-  const requestPromise = generateEmbeddingFromOllama(text, cacheKey);
+  const requestPromise = generateEmbeddingInternal(text, cacheKey);
   inFlightRequests.set(cacheKey, requestPromise);
 
   try {
@@ -96,41 +99,201 @@ export async function generateEmbedding(text: string): Promise<EmbeddingResult> 
 }
 
 /**
- * Actually generate embedding from Ollama (internal function)
+ * Generate embeddings for multiple texts in a single API call
  */
-async function generateEmbeddingFromOllama(text: string, cacheKey: string): Promise<EmbeddingResult> {
-  try {
-    const response = await fetch(`${config.ollama.url}/api/embed`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: config.ollama.embeddingModel,
-        input: text.slice(0, 8000), // Limit to ~8k chars
-      }),
-    });
+export async function generateEmbeddingBatch(
+  texts: string[],
+  options: { chunkSize?: number } = {}
+): Promise<EmbeddingResult[]> {
+  const { chunkSize = 32 } = options;
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Ollama embedding failed: ${response.status} ${errorText}`);
+  if (texts.length === 0) return [];
+  if (texts.length === 1) return [await generateEmbedding(texts[0])];
+
+  const results: EmbeddingResult[] = new Array(texts.length);
+  const uncachedIndices: number[] = [];
+  const uncachedTexts: string[] = [];
+  const now = Date.now();
+
+  // Check cache for each text
+  for (let i = 0; i < texts.length; i++) {
+    const cacheKey = getCacheKey(texts[i]);
+    const cached = embeddingCache.get(cacheKey);
+    if (cached && (now - cached.timestamp) < EMBEDDING_CACHE_TTL_MS) {
+      results[i] = { embedding: cached.embedding, tokensUsed: 0 };
+    } else {
+      uncachedIndices.push(i);
+      uncachedTexts.push(texts[i]);
+    }
+  }
+
+  if (uncachedTexts.length === 0) return results;
+
+  // Process uncached texts in chunks
+  for (let start = 0; start < uncachedTexts.length; start += chunkSize) {
+    const chunk = uncachedTexts.slice(start, start + chunkSize);
+    const chunkResults = await callOpenRouterBatch(chunk);
+
+    for (let j = 0; j < chunkResults.length; j++) {
+      const originalIndex = uncachedIndices[start + j];
+      results[originalIndex] = chunkResults[j];
+
+      // Cache each result
+      const cacheKey = getCacheKey(texts[originalIndex]);
+      embeddingCache.set(cacheKey, {
+        embedding: chunkResults[j].embedding,
+        timestamp: Date.now(),
+      });
     }
 
-    const data = await response.json() as { embeddings: number[][] };
-    const embedding = data.embeddings[0];
+    // Small delay between chunks to avoid rate limiting
+    if (start + chunkSize < uncachedTexts.length) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  }
+
+  if (embeddingCache.size > EMBEDDING_CACHE_MAX_SIZE / 2) {
+    cleanExpiredCache();
+  }
+
+  return results;
+}
+
+/**
+ * Call OpenRouter embeddings API with batch input
+ */
+async function callOpenRouterBatch(texts: string[]): Promise<EmbeddingResult[]> {
+  const model = config.openrouter?.embeddingModel ?? 'qwen/qwen3-embedding-8b';
+  const dimensions = config.openrouter?.embeddingDimensions ?? 1024;
+  const apiKey = config.openrouter?.apiKey;
+
+  if (!apiKey) {
+    throw new Error('OpenRouter API key not configured for embeddings');
+  }
+
+  const truncatedTexts = texts.map(t => t.slice(0, MAX_INPUT_CHARS));
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await fetch(OPENROUTER_EMBEDDINGS_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          input: truncatedTexts.length === 1 ? truncatedTexts[0] : truncatedTexts,
+          dimensions,
+        }),
+      });
+
+      if (response.status === 429) {
+        const retryAfter = response.headers.get('retry-after');
+        const delayMs = retryAfter
+          ? parseInt(retryAfter, 10) * 1000
+          : INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt - 1);
+        logger.warn('OpenRouter embedding rate limited, retrying', { attempt, delayMs });
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        continue;
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`OpenRouter embedding failed: ${response.status} ${errorText}`);
+      }
+
+      const data = await response.json() as {
+        data: Array<{ embedding: number[]; index: number }>;
+        usage?: { prompt_tokens?: number; total_tokens?: number };
+      };
+
+      // Sort by index to maintain input order
+      const sorted = data.data.sort((a, b) => a.index - b.index);
+      const tokensUsed = data.usage?.total_tokens ?? 0;
+      const tokensPerText = Math.ceil(tokensUsed / texts.length);
+
+      return sorted.map(item => ({
+        embedding: item.embedding,
+        tokensUsed: tokensPerText,
+      }));
+    } catch (error) {
+      const isLastAttempt = attempt === MAX_RETRIES;
+      const errorMessage = (error as Error).message;
+
+      if (!isLastAttempt && !errorMessage.includes('API key not configured')) {
+        const delayMs = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt - 1);
+        logger.warn('OpenRouter embedding failed, retrying', {
+          attempt,
+          delayMs,
+          error: errorMessage,
+        });
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        continue;
+      }
+
+      // Last attempt failed - try Ollama fallback
+      if (config.ollama?.url) {
+        logger.warn('OpenRouter embedding failed, falling back to Ollama', {
+          error: errorMessage,
+        });
+        return fallbackToOllama(truncatedTexts);
+      }
+
+      throw error;
+    }
+  }
+
+  throw new Error('OpenRouter embedding failed after all retries');
+}
+
+/**
+ * Fallback to Ollama for embeddings if OpenRouter is unreachable
+ */
+async function fallbackToOllama(texts: string[]): Promise<EmbeddingResult[]> {
+  const results: EmbeddingResult[] = [];
+
+  for (const text of texts) {
+    try {
+      const response = await fetch(`${config.ollama.url}/api/embed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: config.ollama.embeddingModel ?? 'bge-m3',
+          input: text.slice(0, 8000),
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Ollama fallback failed: ${response.status}`);
+      }
+
+      const data = await response.json() as { embeddings: number[][] };
+      results.push({ embedding: data.embeddings[0], tokensUsed: 0 });
+    } catch (error) {
+      logger.error('Ollama fallback also failed', { error: (error as Error).message });
+      throw error;
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Generate embedding from OpenRouter (single text, internal)
+ */
+async function generateEmbeddingInternal(text: string, cacheKey: string): Promise<EmbeddingResult> {
+  try {
+    const [result] = await callOpenRouterBatch([text]);
 
     // Store in cache
-    embeddingCache.set(cacheKey, { embedding, timestamp: Date.now() });
+    embeddingCache.set(cacheKey, { embedding: result.embedding, timestamp: Date.now() });
 
-    // Clean expired entries periodically
     if (embeddingCache.size > EMBEDDING_CACHE_MAX_SIZE / 2) {
       cleanExpiredCache();
     }
 
-    return {
-      embedding,
-      tokensUsed: 0, // Ollama doesn't report token usage for embeddings
-    };
+    return result;
   } catch (error) {
     logger.error('Failed to generate embedding', { error: (error as Error).message });
     throw error;
@@ -374,6 +537,7 @@ export async function searchSimilarConversations(
 
 export default {
   generateEmbedding,
+  generateEmbeddingBatch,
   storeMessageEmbedding,
   searchSimilarMessages,
   storeConversationSummary,

@@ -10,16 +10,22 @@ const OPENAI_API_URL = 'https://api.openai.com/v1';
 export const OPENAI_VOICES = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'] as const;
 export type OpenAIVoice = typeof OPENAI_VOICES[number];
 
+// Orpheus TTS voices
+export const ORPHEUS_VOICES = ['tara', 'leah', 'jess', 'leo', 'dan', 'mia', 'zac', 'naomi'] as const;
+export type OrpheusVoice = typeof ORPHEUS_VOICES[number];
+
 // TTS Settings interface
 export interface TTSSettings {
-  engine: 'elevenlabs' | 'openai';
+  engine: 'elevenlabs' | 'openai' | 'orpheus';
   openaiVoice: OpenAIVoice;
+  orpheusVoice: OrpheusVoice;
 }
 
 // Default TTS settings
 const DEFAULT_TTS_SETTINGS: TTSSettings = {
   engine: 'elevenlabs',
   openaiVoice: 'nova',
+  orpheusVoice: 'tara',
 };
 
 // Voice settings for Luna - optimized for v3 emotional expression
@@ -61,6 +67,7 @@ export async function getTtsSettings(): Promise<TTSSettings> {
       return {
         engine: parsed.engine || DEFAULT_TTS_SETTINGS.engine,
         openaiVoice: parsed.openaiVoice || DEFAULT_TTS_SETTINGS.openaiVoice,
+        orpheusVoice: parsed.orpheusVoice || DEFAULT_TTS_SETTINGS.orpheusVoice,
       };
     }
   } catch (error) {
@@ -79,11 +86,17 @@ export async function updateTtsSettings(settings: Partial<TTSSettings>): Promise
   const updated: TTSSettings = {
     engine: settings.engine || current.engine,
     openaiVoice: settings.openaiVoice || current.openaiVoice,
+    orpheusVoice: settings.orpheusVoice || current.orpheusVoice,
   };
 
   // Validate OpenAI voice
   if (updated.engine === 'openai' && !OPENAI_VOICES.includes(updated.openaiVoice)) {
     throw new Error(`Invalid OpenAI voice: ${updated.openaiVoice}`);
+  }
+
+  // Validate Orpheus voice
+  if (updated.engine === 'orpheus' && !ORPHEUS_VOICES.includes(updated.orpheusVoice)) {
+    throw new Error(`Invalid Orpheus voice: ${updated.orpheusVoice}`);
   }
 
   await pool.query(
@@ -210,6 +223,10 @@ export async function synthesizeSpeech(options: TTSOptions): Promise<Buffer> {
     return synthesizeWithOpenAI(text, settings.openaiVoice);
   }
 
+  if (settings.engine === 'orpheus') {
+    return synthesizeWithOrpheus(text, settings.orpheusVoice);
+  }
+
   // Default to ElevenLabs
   return synthesizeWithElevenLabs(options);
 }
@@ -281,6 +298,60 @@ async function synthesizeWithElevenLabs(options: TTSOptions): Promise<Buffer> {
       error: (error as Error).message,
       textLength: text.length,
       voiceId,
+    });
+    throw error;
+  }
+}
+
+/**
+ * Synthesize speech using Orpheus TTS (local, GPU-accelerated)
+ */
+async function synthesizeWithOrpheus(text: string, voice: OrpheusVoice = 'tara'): Promise<Buffer> {
+  const orpheusUrl = config.orpheus?.url;
+  if (!orpheusUrl) {
+    throw new Error('Orpheus TTS URL not configured');
+  }
+
+  const maxLength = 4096;
+  const truncatedText = text.length > maxLength ? text.slice(0, maxLength) + '...' : text;
+
+  logger.info('Synthesizing speech with Orpheus TTS', {
+    textLength: truncatedText.length,
+    voice,
+  });
+
+  try {
+    const response = await fetch(`${orpheusUrl}/v1/audio/speech`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'orpheus',
+        input: truncatedText,
+        voice,
+        response_format: 'wav',
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      logger.error('Orpheus TTS API error', { status: response.status, error: errorText });
+      throw new Error(`Orpheus TTS API error: ${response.status} - ${errorText}`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    logger.info('Speech synthesized successfully with Orpheus', {
+      audioSize: buffer.length,
+      voice,
+    });
+
+    return buffer;
+  } catch (error) {
+    logger.error('Orpheus TTS synthesis error', {
+      error: (error as Error).message,
+      textLength: truncatedText.length,
+      voice,
     });
     throw error;
   }
@@ -420,4 +491,5 @@ export default {
   getTtsSettings,
   updateTtsSettings,
   OPENAI_VOICES,
+  ORPHEUS_VOICES,
 };

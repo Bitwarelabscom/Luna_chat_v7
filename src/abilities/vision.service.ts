@@ -5,7 +5,7 @@ import { activityHelpers } from '../activity/activity.service.js';
 
 // Vision-capable models by provider
 const VISION_MODELS = {
-  ollama: 'qwen3.5:4b-q4_K_M',
+  ollama: 'qwen3.5:9b',
   xai: 'grok-4.1-fast',
 };
 

@@ -4,7 +4,7 @@ import OpenAI from 'openai';
 import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
 import * as voiceChat from '../chat/voice-chat.service.js';
-import { synthesizeWithOpenAI } from '../llm/tts.service.js';
+import { synthesizeSpeech } from '../llm/tts.service.js';
 import { streamChatCompletion } from '../llm/openai.client.js';
 import { logActivityAndBroadcast } from '../activity/activity.service.js';
 import { getVoicePrompt } from '../persona/voice.persona.js';
@@ -12,7 +12,7 @@ import { getVoicePrompt } from '../persona/voice.persona.js';
 // Configuration
 const CHANNELS = 1;
 const BIT_DEPTH = 16;
-const VAD_THRESHOLD_DB = config.stt.silenceThreshold; // -50dB
+const VAD_THRESHOLD_DB = config.stt.silenceThreshold || -35; // -35dB (normalized)
 const VAD_SILENCE_DURATION_MS = config.stt.silenceDuration; // 700ms
 
 // VAD State
@@ -21,6 +21,7 @@ interface VADState {
   silenceStart: number | null;
   buffer: Buffer[];
   speechStart: number;
+  _lastDbLog?: number;
 }
 
 export function handleVoiceWsConnection(ws: WebSocket, req: IncomingMessage) {
@@ -45,6 +46,8 @@ export function handleVoiceWsConnection(ws: WebSocket, req: IncomingMessage) {
 
   // Session ID for conversation history
   let sessionId: string | null = null;
+  // Suppress VAD while TTS is playing to prevent feedback loops
+  (ws as any)._ttsPlaying = false;
 
   ws.on('message', async (data, isBinary) => {
     if (!isBinary) {
@@ -72,6 +75,9 @@ export function handleVoiceWsConnection(ws: WebSocket, req: IncomingMessage) {
       return;
     }
 
+    // Skip audio processing during TTS playback to prevent feedback loops
+    if ((ws as any)._ttsPlaying) return;
+
     const pcmData = data as Buffer;
     processAudioChunk(ws, userId || 'anonymous', pcmData, vadState, sessionId, currentSampleRate);
   });
@@ -94,9 +100,15 @@ async function processAudioChunk(
   sessionId: string | null,
   sampleRate: number
 ) {
-  // 1. Calculate RMS
-  const rms = calculateRMS(chunk);
-  const db = 20 * Math.log10(rms);
+  // 1. Calculate RMS (normalized to 0.0-1.0 range so dB is negative for quiet audio)
+  const rms = calculateRMS(chunk) / 32768;
+  const db = rms > 0 ? 20 * Math.log10(rms) : -100;
+
+  // Periodic debug: log dB level every ~2 seconds
+  if (!state._lastDbLog || Date.now() - state._lastDbLog > 2000) {
+    logger.info('VAD audio level', { db: Math.round(db * 10) / 10, rms: Math.round(rms), threshold: VAD_THRESHOLD_DB, chunkSize: chunk.length, isSpeaking: state.isSpeaking });
+    state._lastDbLog = Date.now();
+  }
 
   // 2. State Machine
   if (db > VAD_THRESHOLD_DB) {
@@ -104,7 +116,7 @@ async function processAudioChunk(
     if (!state.isSpeaking) {
       state.isSpeaking = true;
       state.speechStart = Date.now();
-      logger.debug('VAD: Speech started');
+      logger.info('VAD: Speech started', { db: Math.round(db * 10) / 10 });
     }
     state.silenceStart = null;
     state.buffer.push(chunk);
@@ -120,7 +132,7 @@ async function processAudioChunk(
       const silenceDuration = Date.now() - state.silenceStart;
       if (silenceDuration > VAD_SILENCE_DURATION_MS) {
         // Speech ended
-        logger.debug('VAD: Speech ended', { duration: Date.now() - state.speechStart });
+        logger.info('VAD: Speech ended', { duration: Date.now() - state.speechStart });
         state.isSpeaking = false;
         state.silenceStart = null;
         
@@ -243,12 +255,14 @@ async function processTextCommand(
       }
 
       if (sentenceBuffer.trim()) {
-          streamTTS(ws, sentenceBuffer.trim());
+          await streamTTS(ws, sentenceBuffer.trim());
       }
-      
+
       ws.send(JSON.stringify({ type: 'text_done' }));
+      clearTtsFlag(ws);
       await voiceChat.addMessage(sessionId, 'assistant', fullResponse);
   } catch (error) {
+     (ws as any)._ttsPlaying = false;
      logger.error('Text command processing failed', { error: (error as Error).message });
      ws.send(JSON.stringify({ type: 'error', error: 'Thinking failed' }));
   }
@@ -275,11 +289,12 @@ async function processUtterance(
 
   let transcript = '';
   try {
-    const openai = new OpenAI({ apiKey: config.openai.apiKey });
-    // Use configured STT model (Whisper)
-    const response = await openai.audio.transcriptions.create({
+    const sttClient = config.stt.baseUrl
+      ? new OpenAI({ apiKey: 'not-needed', baseURL: config.stt.baseUrl })
+      : new OpenAI({ apiKey: config.openai.apiKey });
+    const response = await sttClient.audio.transcriptions.create({
       file: file,
-      model: config.stt.model, 
+      model: config.stt.model,
       language: config.stt.language,
     });
     transcript = response.text.trim();
@@ -383,13 +398,15 @@ async function processUtterance(
       if (sentenceBuffer.trim()) {
           await streamTTS(ws, sentenceBuffer.trim());
       }
-      
+
       ws.send(JSON.stringify({ type: 'text_done' }));
+      clearTtsFlag(ws);
 
       // Save to history
       await voiceChat.addMessage(sessionId, 'assistant', fullResponse);
 
   } catch (error) {
+     (ws as any)._ttsPlaying = false;
      logger.error('Chat Streaming Failed', { error: (error as Error).message });
      ws.send(JSON.stringify({ type: 'error', error: 'Thinking failed' }));
   }
@@ -397,14 +414,22 @@ async function processUtterance(
 
 async function streamTTS(ws: WebSocket, text: string) {
     try {
-        const audioBuffer = await synthesizeWithOpenAI(text, 'nova'); // Default voice
+        (ws as any)._ttsPlaying = true;
+        const audioBuffer = await synthesizeSpeech({ text });
         // Send audio chunk
-        ws.send(JSON.stringify({ type: 'audio_start' })); 
-        ws.send(audioBuffer); 
+        ws.send(JSON.stringify({ type: 'audio_start' }));
+        ws.send(audioBuffer);
         ws.send(JSON.stringify({ type: 'audio_end' }));
     } catch (e) {
         logger.error('TTS Failed', { error: (e as Error).message });
     }
+}
+
+// Clear TTS flag with a cooldown after playback to let echo fade
+function clearTtsFlag(ws: WebSocket) {
+    setTimeout(() => {
+        (ws as any)._ttsPlaying = false;
+    }, 1500);
 }
 
 function createWavHeader(pcmData: Buffer, sampleRate: number): Buffer {

@@ -126,6 +126,8 @@ router.put('/config', async (req: Request, res: Response) => {
       maxDailySessions,
       rssCheckIntervalMinutes,
       idleTimeoutMinutes,
+      gossipEnabled,
+      gossipIntervalMinutes,
     } = req.body;
 
     const config = await autonomousService.createOrUpdateConfig(userId, {
@@ -135,6 +137,8 @@ router.put('/config', async (req: Request, res: Response) => {
       maxDailySessions,
       rssCheckIntervalMinutes,
       idleTimeoutMinutes,
+      gossipEnabled,
+      gossipIntervalMinutes,
     });
 
     res.json({ config });

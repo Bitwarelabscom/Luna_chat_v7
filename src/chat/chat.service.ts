@@ -89,6 +89,8 @@ import * as centroidService from '../memory/centroid.service.js';
 import * as emotionalMoments from '../memory/emotional-moments.service.js';
 import * as contradictionService from '../memory/contradiction.service.js';
 import type { InteractionEnrichment } from '../memory/memorycore.client.js';
+import * as onboardingService from '../onboarding/onboarding.service.js';
+import { getUserFacts } from '../memory/facts.service.js';
 
 // Per-session tracking for enrichment pipeline
 const sessionLastEmbedding = new Map<string, number[]>();
@@ -108,22 +110,6 @@ function getBrowserOpenUrl(userId: string, fallback = 'https://www.google.com'):
 
 function formatBrowserPageContentForTool(content: browserScreencast.BrowserPageContent): string {
   return JSON.stringify(content, null, 2);
-}
-
-function getBrowserToolStatusLine(toolName: string, args: Record<string, any>): string {
-  if (toolName === 'browser_navigate') {
-    return `Navigating to ${args.url}`;
-  }
-  if (toolName === 'browser_click') {
-    return `Clicking ${args.selector}`;
-  }
-  if (toolName === 'browser_type') {
-    return `Typing into ${args.selector}`;
-  }
-  if (toolName === 'browser_get_page_content') {
-    return 'Reading page content';
-  }
-  return 'Running browser action';
 }
 
 async function executeRemoteBrowserToolCall(
@@ -658,8 +644,14 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   }
 
   // INTENT GATING: Detect if this is smalltalk FIRST
-  const isSmallTalkMessageLegacy = abilities.isSmallTalk(message);
+  let isSmallTalkMessageLegacy = abilities.isSmallTalk(message);
   const contextOptions = abilities.getContextOptions(message);
+
+  // TOOL HINTS: Same regex-based detection as streamMessage path
+  const toolHintsLegacy = router.getToolHints(message);
+  if (toolHintsLegacy.triggered) {
+    isSmallTalkMessageLegacy = false;
+  }
 
   // OPTIMIZED: Run context loading in parallel, but skip heavy loads for smalltalk
   const [
@@ -720,6 +712,26 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   );
 
   const userName = user?.displayName || undefined;
+
+  // Auto-detect onboarding for companion mode
+  let onboardingContext: string | undefined;
+  if (mode === 'companion') {
+    try {
+      let obState = await onboardingService.getOnboardingState(userId);
+      if (!obState) {
+        const facts = await getUserFacts(userId, { limit: 1 });
+        if (facts.length === 0) {
+          obState = await onboardingService.initOnboarding(userId, sessionId);
+        }
+      }
+      if (obState && (obState.status === 'in_progress' || obState.status === 'reviewing')) {
+        onboardingContext = onboardingService.buildOnboardingPrompt(obState);
+      }
+    } catch (err) {
+      logger.debug('Onboarding check failed', { err: (err as Error).message });
+    }
+  }
+
   const stableMemoryPrompt = memoryService.formatStableMemory(memoryContext);
   const volatileMemoryPrompt = memoryService.formatVolatileMemory(memoryContext);
   const abilityPrompt = abilities.formatAbilityContextForPrompt(abilityContext);
@@ -818,6 +830,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
         skillContext,
         desktopContext: getDesktopContext(userId),
         mambaStreamContext: mambaStreamContext || undefined,
+        onboardingContext,
       }),
     },
   ];
@@ -867,15 +880,26 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   // TOOL GATING: Registry-driven tool resolution
   const mcpToolsForLLM = mcpService.formatMcpToolsForLLM(mcpUserTools.map(t => ({ ...t, serverId: t.serverId })));
   const chatModeAgent = getChatModeAgentForUser(mode, userId);
-  const availableTools = chatModeAgent
+  let legacyTools = chatModeAgent
     ? getToolsForAgent(chatModeAgent, { sysmonTools, mcpTools: mcpToolsForLLM, isSmallTalk: isSmallTalkMessageLegacy })
     : [];
   let searchResults: SearchResult[] | undefined;
   let agentResults: Array<{ agent: string; result: string; success: boolean }> = [];
 
+  // TOOL FOCUSING: Filter to hinted tools when regex matched
+  let legacyToolChoice: 'auto' | 'required' | undefined;
+  if (toolHintsLegacy.triggered && legacyTools.length > 0) {
+    const hinted = legacyTools.filter(t => toolHintsLegacy.toolNames.includes(t.function.name));
+    if (hinted.length > 0) {
+      legacyTools = hinted;
+      legacyToolChoice = 'auto';
+    }
+  }
+
   let completion = await createChatCompletion({
     messages,
-    tools: availableTools.length > 0 ? availableTools : undefined,
+    tools: legacyTools.length > 0 ? legacyTools : undefined,
+    tool_choice: legacyToolChoice,
     provider: modelConfig.provider,
     model: modelConfig.model,
     loggingContext: {
@@ -2256,6 +2280,12 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   // Store assistant message embedding (async)
   memoryService.processMessageMemory(userId, sessionId, assistantMessage.id, completion.content, 'assistant');
 
+  // Parse onboarding data from assistant response (fire-and-forget)
+  if (mode === 'companion') {
+    onboardingService.processAssistantResponse(userId, completion.content)
+      .catch(err => logger.debug('Onboarding parse failed', { err: (err as Error).message }));
+  }
+
   // Record enriched response to MemoryCore for consolidation (async, non-blocking)
   computeEnrichment(sessionId, completion.content).then(({ enrichment }) => {
     memorycoreClient.recordChatInteraction(sessionId, 'response', completion.content, {
@@ -3150,6 +3180,12 @@ export async function* streamMessage(
         // Store assistant message memory
         memoryService.processMessageMemory(userId, sessionId, assistantMessage.id, assistantContent, 'assistant');
 
+        // Parse onboarding data from assistant response (fire-and-forget)
+        if (mode === 'companion') {
+          onboardingService.processAssistantResponse(userId, assistantContent)
+            .catch(err => logger.debug('Onboarding parse failed', { err: (err as Error).message }));
+        }
+
         const processingTimeMs = Date.now() - startTime;
         const tokensPerSecond = processingTimeMs > 0 && chunk.metrics?.completionTokens
           ? (chunk.metrics.completionTokens / (processingTimeMs / 1000))
@@ -3187,10 +3223,23 @@ export async function* streamMessage(
 
   // INTENT GATING: Use router decision (from above) or fall back to isSmallTalk detection
   // Router's nano route is equivalent to smalltalk (no tools, fast model)
-  const isSmallTalkMessage = routerDecision
+  let isSmallTalkMessage = routerDecision
     ? routerDecision.route === 'nano'
     : abilities.isSmallTalk(message);
   const contextOptions = abilities.getContextOptions(message);
+
+  // TOOL HINTS: Regex-based tool detection runs before classifier.
+  // If the message clearly needs tools (e.g. "youtube", "email", "weather"),
+  // force-include them regardless of classifier/router decision.
+  const toolHints = router.getToolHints(message);
+  if (toolHints.triggered) {
+    isSmallTalkMessage = false; // Never strip tools when hints fire
+    logger.info('Tool hints detected', {
+      categories: toolHints.matchedCategories,
+      tools: toolHints.toolNames,
+      overrodeSmallTalk: isSmallTalkMessage,
+    });
+  }
 
   if (!isSmallTalkMessage) {
     yield { type: 'status', status: 'Loading context...' };
@@ -3274,159 +3323,6 @@ export async function* streamMessage(
     return;
   }
 
-  // Check if this task needs multi-agent orchestration (never for smalltalk)
-  if (!isSmallTalkMessage && agents.needsOrchestration(message)) {
-    logger.info('Detected orchestration-worthy task', { message: message.substring(0, 100) });
-
-    // Save user message first
-    const userMessage = await sessionService.addMessage({
-      sessionId,
-      role: 'user',
-      content: message,
-      source,
-    });
-
-    // Store user message embedding (async) - pass enrichment for valence/attention storage
-    memoryService.processMessageMemory(userId, sessionId, userMessage.id, message, 'user', {
-      enrichment: { emotionalValence: smEnrichment.emotionalValence, attentionScore: smEnrichment.attentionScore },
-    });
-
-    // Check if message relates to a pending todo - if so, include full todo context
-    // This prevents context loss when Luna decides to work on a todo
-    let orchestrationContext: string | undefined;
-    let relatedTodoId: string | undefined;
-    let relatedTodoTitle: string | undefined;
-    try {
-      const pendingTodos = await tasksService.getTasks(userId, { status: 'pending', limit: 20 });
-      const lowerMessage = message.toLowerCase();
-
-      // Find todos that match the message (title or description overlap)
-      const relatedTodo = pendingTodos.find(todo => {
-        const titleWords = todo.title.toLowerCase().split(/\s+/);
-        const descWords = (todo.description || '').toLowerCase().split(/\s+/);
-        // Check if significant words from message appear in todo
-        const messageWords = lowerMessage.split(/\s+/).filter(w => w.length > 3);
-        const matchCount = messageWords.filter(w =>
-          titleWords.some(tw => tw.includes(w) || w.includes(tw)) ||
-          descWords.some(dw => dw.includes(w) || w.includes(dw))
-        ).length;
-        return matchCount >= 2; // At least 2 significant word matches
-      });
-
-      if (relatedTodo) {
-        orchestrationContext = `This task is from a todo item:\n\nTitle: ${relatedTodo.title}\nDescription: ${relatedTodo.description || 'No description'}\nPriority: ${relatedTodo.priority}`;
-        relatedTodoId = relatedTodo.id;
-        relatedTodoTitle = relatedTodo.title;
-        logger.info('Found related todo for orchestration', {
-          todoId: relatedTodo.id,
-          todoTitle: relatedTodo.title
-        });
-      }
-    } catch (err) {
-      logger.warn('Failed to check for related todos', { error: (err as Error).message });
-    }
-
-    // Execute orchestration with streaming status updates
-    let orchestrationResult: agents.OrchestrationResult | null = null;
-
-    for await (const event of agents.orchestrateTaskStream(userId, message, orchestrationContext)) {
-      if (event.type === 'status') {
-        yield { type: 'status', status: event.status };
-      } else if (event.type === 'done') {
-        orchestrationResult = event.result;
-      }
-    }
-
-    if (!orchestrationResult) {
-      orchestrationResult = { plan: '', results: [], synthesis: 'Orchestration failed unexpectedly', success: false };
-    }
-
-    // Build the response content
-    let responseContent: string;
-    if (orchestrationResult.success) {
-      responseContent = orchestrationResult.synthesis;
-
-      // If this was related to a todo, add notes and offer to mark complete
-      if (relatedTodoId) {
-        try {
-          // Create a summary of what was done (first 500 chars of synthesis)
-          const summaryNote = `[Orchestration completed ${new Date().toISOString().split('T')[0]}]\n${orchestrationResult.synthesis.substring(0, 500)}${orchestrationResult.synthesis.length > 500 ? '...' : ''}`;
-
-          await tasksService.updateTask(userId, relatedTodoId, {
-            description: summaryNote,
-          });
-
-          // Add a note to the response about the todo
-          responseContent += `\n\n---\n**Todo Updated:** I've added notes to "${relatedTodoTitle}". Would you like me to mark it as complete, or is there more work to do on this task?`;
-
-          logger.info('Updated related todo with orchestration results', {
-            todoId: relatedTodoId,
-            todoTitle: relatedTodoTitle
-          });
-        } catch (err) {
-          logger.warn('Failed to update related todo', { error: (err as Error).message, todoId: relatedTodoId });
-        }
-      }
-    } else {
-      responseContent = `I encountered an issue while processing your request:\n\n${orchestrationResult.error || 'Unknown error'}\n\n`;
-      if (orchestrationResult.results.length > 0) {
-        responseContent += `**Partial Results:**\n`;
-        for (const result of orchestrationResult.results) {
-          responseContent += `\n### ${result.agentName}\n${result.result}\n`;
-        }
-      }
-    }
-
-    // Stream the response character by character for smooth display
-    yield { type: 'status', status: 'Presenting results...' };
-    const chunkSize = 20; // Characters per chunk for smoother streaming
-    for (let i = 0; i < responseContent.length; i += chunkSize) {
-      yield { type: 'content', content: responseContent.slice(i, i + chunkSize) };
-    }
-
-    // Save assistant response
-    const assistantMessage = await sessionService.addMessage({
-      sessionId,
-      role: 'assistant',
-      content: responseContent,
-      tokensUsed: 0, // Orchestration doesn't track tokens the same way
-      model: 'claude-cli',
-    });
-
-    // Store assistant message embedding (async)
-    memoryService.processMessageMemory(userId, sessionId, assistantMessage.id, responseContent, 'assistant');
-
-    // Record enriched response to MemoryCore for consolidation (async, non-blocking)
-    computeEnrichment(sessionId, responseContent).then(({ enrichment }) =>
-      memorycoreClient.recordChatInteraction(sessionId, 'response', responseContent, undefined, enrichment)
-    ).catch(err => logger.debug('Background task failed', { error: (err as Error).message }));
-
-    // Update session title if first message
-    const history = await sessionService.getSessionMessages(sessionId, { limit: 1 });
-    if (history.length <= 1) {
-      const title = await sessionService.generateSessionTitle([
-        { role: 'user', content: message } as Message,
-      ], { userId, sessionId });
-      await sessionService.updateSession(sessionId, userId, { title });
-    }
-
-    const processingTimeMs = Date.now() - startTime;
-    yield {
-      type: 'done',
-      messageId: assistantMessage.id,
-      tokensUsed: 0,
-      metrics: {
-        promptTokens: 0,
-        completionTokens: 0,
-        processingTimeMs,
-        tokensPerSecond: 0,
-        toolsUsed: ['orchestration'],
-        model: 'claude-cli',
-      },
-    };
-    return;
-  }
-
   // OPTIMIZED: Run context loading in parallel, but skip heavy loads for smalltalk
   const [
     modelConfig,
@@ -3497,6 +3393,26 @@ export async function* streamMessage(
   }
 
   const userName = user?.displayName || undefined;
+
+  // Auto-detect onboarding for companion mode
+  let onboardingContext: string | undefined;
+  if (mode === 'companion') {
+    try {
+      let obState = await onboardingService.getOnboardingState(userId);
+      if (!obState) {
+        const facts = await getUserFacts(userId, { limit: 1 });
+        if (facts.length === 0) {
+          obState = await onboardingService.initOnboarding(userId, sessionId);
+        }
+      }
+      if (obState && (obState.status === 'in_progress' || obState.status === 'reviewing')) {
+        onboardingContext = onboardingService.buildOnboardingPrompt(obState);
+      }
+    } catch (err) {
+      logger.debug('Onboarding check failed', { err: (err as Error).message });
+    }
+  }
+
   const stableMemoryPrompt = memoryService.formatStableMemory(memoryContext);
   const volatileMemoryPrompt = memoryService.formatVolatileMemory(memoryContext);
   const abilityPrompt = abilities.formatAbilityContextForPrompt(abilityContext);
@@ -3594,6 +3510,7 @@ export async function* streamMessage(
         skillContext,
         desktopContext: getDesktopContext(userId),
         mambaStreamContext: mambaStreamContext || undefined,
+        onboardingContext,
       }),
     },
   ];
@@ -3646,7 +3563,6 @@ export async function* streamMessage(
   const availableTools = smChatModeAgent
     ? getToolsForAgent(smChatModeAgent, { sysmonTools, mcpTools: mcpToolsForLLM, isSmallTalk: isSmallTalkMessage })
     : [];
-  let searchResults: SearchResult[] | undefined;
 
   // Strip tools for small Ollama models (<=9b) - they can't handle 40+ tool
   // definitions and still follow the system prompt reliably.
@@ -3654,1801 +3570,92 @@ export async function* streamMessage(
   const smallModelPattern = /\b([1-9]b|[1-9]\.\d+b|4b|7b|8b|9b)\b/i;
   const isOllamaProvider = modelConfig.provider === 'ollama' || modelConfig.provider === 'ollama_secondary' || modelConfig.provider === 'ollama_tertiary';
   const isSmallOllamaModel = isOllamaProvider && smallModelPattern.test(modelConfig.model);
-  const effectiveTools = isSmallOllamaModel ? [] : availableTools;
+  let effectiveTools = isSmallOllamaModel ? [] : availableTools;
+
+  // TOOL FOCUSING: When tool hints matched, filter to just the hinted tools.
+  // This gives weaker models a much stronger signal - 3 focused tools instead of 46.
+  // The model is far more likely to call youtube_search when it's 1 of 3 tools
+  // than when it's 1 of 46.
+  if (toolHints.triggered && effectiveTools.length > 0) {
+    const hintedTools = effectiveTools.filter(t =>
+      toolHints.toolNames.includes(t.function.name)
+    );
+    // Only focus if we actually found matching tools in the available set
+    if (hintedTools.length > 0) {
+      effectiveTools = hintedTools;
+    }
+  }
 
   logger.info('Tool availability', {
     isSmallTalk: isSmallTalkMessage,
     toolsProvided: effectiveTools.length,
     toolsStripped: isSmallOllamaModel ? availableTools.length : 0,
+    toolHints: toolHints.triggered ? toolHints.matchedCategories : undefined,
+    toolsFocused: toolHints.triggered ? effectiveTools.map(t => t.function.name) : undefined,
     routerRoute: routerDecision?.route || 'legacy',
     provider: modelConfig.provider,
     model: modelConfig.model
   });
 
-  const initialCompletion = await createChatCompletion({
-    messages,
-    tools: effectiveTools.length > 0 ? effectiveTools : undefined,
+  // --- Agentic Loop ---
+  // The LLM decides when to stop by generating content instead of tool calls.
+  const { runAgentLoop } = await import('../agentic/agent-loop.js');
+  const toolCtx = {
+    userId,
+    sessionId,
+    mode,
+    mcpUserTools: mcpUserTools.map(t => ({ serverId: t.serverId, name: t.name })),
+  };
+
+  let fullContent = '';
+  let promptTokens = 0;
+  let completionTokens = 0;
+
+  const agentLoopConfig = {
+    maxSteps: 25,
+    maxCostUsd: 0.50,
+    tools: effectiveTools,
     provider: modelConfig.provider,
     model: modelConfig.model,
     thinkingMode,
     loggingContext: {
       userId,
       sessionId,
-      source: 'chat',
-      nodeName: 'chat_streaming_initial',
+      source: 'chat' as const,
+      nodeName: 'chat_streaming',
     },
-  });
+  };
 
-  if (initialCompletion.reasoning) {
-    yield { type: 'reasoning', content: initialCompletion.reasoning };
-  }
-
-  logger.info('Initial completion result', {
-    hasToolCalls: !!(initialCompletion.toolCalls && initialCompletion.toolCalls.length > 0),
-    toolCallsCount: initialCompletion.toolCalls?.length || 0,
-    finishReason: initialCompletion.finishReason,
-  });
-
-  // Handle tool calls using proper tool calling flow
-  if (initialCompletion.toolCalls && initialCompletion.toolCalls.length > 0) {
-    // Log what tools were called and track them
-    const toolNames = initialCompletion.toolCalls.map(tc => tc.function.name);
-    toolsUsed.push(...toolNames);
-    logger.info('Tool calls received from LLM (stream)', { toolNames, count: toolNames.length });
-
-    // Add assistant message with tool calls to conversation
-    messages.push({
-      role: 'assistant',
-      content: initialCompletion.content || '',
-      tool_calls: initialCompletion.toolCalls,
-    } as ChatMessage);
-
-    for (const toolCall of initialCompletion.toolCalls) {
-      if (toolCall.function.name === 'web_search') {
-        const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'reasoning', content: `> Searching: "${args.query}"\n` };
-        searchResults = await searxng.search(args.query);
-        logger.info('Search executed in stream', { query: args.query, results: searchResults?.length || 0 });
-
-        // Add tool result to conversation
-        const searchContext = searchResults && searchResults.length > 0
-          ? formatSearchResultsForContext(searchResults)
-          : 'No search results found.';
-        messages.push({
-          role: 'tool',
-          tool_call_id: toolCall.id,
-          content: searchContext,
-        } as ChatMessage);
-      } else if (toolCall.function.name === 'youtube_search') {
-        const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'reasoning', content: `> Searching YouTube: "${args.query}"\n` };
-        logger.info('YouTube search executing (stream)', { query: args.query, limit: args.limit });
-
-        const results = await youtube.searchYouTube(args.query, args.limit || 3);
-
-        if (results.videos.length > 0) {
-          yield { type: 'video_action', videos: results.videos, query: results.query };
-        }
-
-        messages.push({
-          role: 'tool',
-          tool_call_id: toolCall.id,
-          content: youtube.formatYouTubeForPrompt(results),
-        } as ChatMessage);
-      } else if (toolCall.function.name === 'local_media_search') {
-        const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'reasoning', content: `> Searching local media: "${args.query}"\n` };
-        logger.info('Local media search executing (stream)', { query: args.query });
-
-        const items = await localMedia.searchLocalMedia(args.query, args.limit || 5);
-
-        if (items.length > 0) {
-          yield { type: 'media_action', action: 'search', items, query: args.query, source: 'local' };
-        }
-
-        messages.push({
-          role: 'tool',
-          tool_call_id: toolCall.id,
-          content: localMedia.formatForPrompt(items, args.query),
-        } as ChatMessage);
-      } else if (toolCall.function.name === 'local_media_play') {
-        const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'reasoning', content: `> Starting stream for: ${args.fileName}\n` };
-        logger.info('Local media play executing (stream)', { fileId: args.fileId, fileName: args.fileName });
-
-        const streamUrl = localMedia.getStreamUrl(args.fileId);
-        // Detect type from decoded file path extension
-        const decodedPath = Buffer.from(args.fileId, 'base64url').toString();
-        const fileExt = decodedPath.toLowerCase().split('.').pop() || '';
-        const mediaType = ['mp3', 'flac', 'wav', 'm4a'].includes(fileExt) ? 'audio' : 'video';
-
-        // Signal frontend to play
-        yield {
-          type: 'media_action',
-          action: 'play',
-          items: [{
-            id: args.fileId,
-            name: args.fileName,
-            type: mediaType,
-            streamUrl
-          }],
-          query: args.fileName,
-          source: 'local'
-        };
-
-        messages.push({
-          role: 'tool',
-          tool_call_id: toolCall.id,
-          content: `Started streaming "${args.fileName}". Playback will start in the media player.`,
-        } as ChatMessage);
-      } else if (toolCall.function.name === 'media_download') {
-        const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'reasoning', content: `> Downloading ${args.format}: "${args.title}"\n` };
-        logger.info('Media download executing (stream)', { videoId: args.videoId, title: args.title, format: args.format });
-
-        try {
-          const job = args.format === 'audio'
-            ? await ytdlp.downloadAudio(args.videoId, args.title)
-            : await ytdlp.downloadVideo(args.videoId, args.title);
-
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Download started (ID: ${job.id}). "${args.title}" is being downloaded as ${args.format}. It will appear in the local media library once complete.`,
-          } as ChatMessage);
-        } catch (dlError) {
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Download failed: ${(dlError as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'browser_visual_search') {
-        const args = JSON.parse(toolCall.function.arguments);
-        const searchEngine = args.searchEngine || 'google_news';
-        const searchUrl = browserScreencast.getSearchUrl(args.query, searchEngine);
-        logger.info('Browser visual search (stream)', { query: args.query, searchEngine, searchUrl });
-
-        yield { type: 'reasoning', content: `> Opening visual browser: "${args.query}"\n` };
-
-        // Signal frontend to open browser window
-        yield { type: 'browser_action', action: 'open', url: searchUrl };
-
-        // Store pending URL for frontend to consume when browser window opens
-        browserScreencast.setPendingVisualBrowse(userId, searchUrl);
-
-        // Also do a text search to get content for the LLM to summarize
-        yield { type: 'reasoning', content: '> Fetching search results for context...\n' };
-        const searchResults = await searxng.search(args.query);
-        const searchContext = searchResults && searchResults.length > 0
-          ? formatSearchResultsForContext(searchResults)
-          : 'No search results found.';
-
-        messages.push({
-          role: 'tool',
-          tool_call_id: toolCall.id,
-          content: `Browser opened to ${searchUrl} for visual browsing.\n\nSearch results for context:\n${searchContext}`,
-        } as ChatMessage);
-      } else if (isArtifactTool(toolCall.function.name)) {
-        const args = JSON.parse(toolCall.function.arguments || '{}');
-        try {
-          const result = await handleArtifactToolCall(toolCall.function.name, args, userId, sessionId, true);
-          for (const chunk of result.chunks) {
-            yield chunk;
-          }
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: result.toolResponse,
-          } as ChatMessage);
-        } catch (error) {
-          logger.error(`Error in artifact tool ${toolCall.function.name} (stream):`, error);
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Failed: ${(error as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'delegate_to_agent') {
-        const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'reasoning', content: `> Invoking agent...\n` };
-        logger.info('Delegating to agent in stream', { agent: args.agent, task: args.task?.substring(0, 100) });
-
-        const result = await agents.executeAgentTask(userId, {
-          agentName: args.agent,
-          task: args.task,
-          context: args.context,
-        });
-
-        yield { type: 'reasoning', content: `> Agent ${result.agentName} completed.\n` };
-        logger.info('Agent completed in stream', { requestedAgent: args.agent, actualAgent: result.agentName, success: result.success, timeMs: result.executionTimeMs });
-
-        // Add tool result to conversation
-        messages.push({
-          role: 'tool',
-          tool_call_id: toolCall.id,
-          content: formatAgentResultForContext(result.agentName, result.result, result.success),
-        } as ChatMessage);
-      } else if (toolCall.function.name === 'summon_agent') {
-        const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'reasoning', content: `> Summoning ${args.agent_id}...\n` };
-        logger.info('Summoning agent in stream', { agentId: args.agent_id, reason: args.reason?.substring(0, 100) });
-
-        const recentContext = messages
-          .filter(m => m.role === 'user' || m.role === 'assistant')
-          .slice(-6)
-          .map(m => `${m.role}: ${typeof m.content === 'string' ? m.content.substring(0, 300) : ''}`)
-          .join('\n');
-
-        const summonResult = await summonAgent({
-          fromAgentId: mode,
-          toAgentId: args.agent_id,
-          reason: args.reason,
-          conversationContext: recentContext,
-          sessionId,
-          userId,
-        });
-
-        yield { type: 'reasoning', content: `> ${summonResult.agentName} responded.\n` };
-        messages.push({
-          role: 'tool',
-          tool_call_id: toolCall.id,
-          content: `[${summonResult.agentName} responds]\n${summonResult.response}`,
-        } as ChatMessage);
-      } else if (toolCall.function.name === 'workspace_write') {
-        const args = JSON.parse(toolCall.function.arguments);
-        logger.info('Workspace write tool called (stream)', { userId, filename: args.filename, contentLength: args.content?.length });
-        yield { type: 'reasoning', content: `> Saving file: ${args.filename}\n` };
-        try {
-          const file = await workspace.writeFile(userId, args.filename, args.content);
-          logger.info('Workspace file written successfully (stream)', { userId, filename: args.filename, size: file.size });
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `File "${args.filename}" saved successfully (${file.size} bytes)`,
-          } as ChatMessage);
-        } catch (error) {
-          logger.error('Workspace write failed (stream)', { userId, filename: args.filename, error: (error as Error).message });
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Error saving file: ${(error as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'workspace_execute') {
-        const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'reasoning', content: `> Executing script: ${args.filename}\n` };
-        const result = await sandbox.executeWorkspaceFile(userId, args.filename, sessionId, args.args || []);
-        messages.push({
-          role: 'tool',
-          tool_call_id: toolCall.id,
-          content: result.success
-            ? `Execution output:\n${result.output}`
-            : `Execution error:\n${result.error}`,
-        } as ChatMessage);
-      } else if (toolCall.function.name === 'workspace_list') {
-        yield { type: 'reasoning', content: '> Listing workspace files...\n' };
-        const files = await workspace.listFiles(userId);
-        const fileList = files.length > 0
-          ? files.map(f => `- ${f.name} (${f.size} bytes, ${f.mimeType})`).join('\n')
-          : 'No files in workspace';
-        messages.push({
-          role: 'tool',
-          tool_call_id: toolCall.id,
-          content: `Workspace files:\n${fileList}`,
-        } as ChatMessage);
-      } else if (toolCall.function.name === 'workspace_read') {
-        const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'reasoning', content: `> Reading file: ${args.filename}\n` };
-        try {
-          const content = await workspace.readFile(userId, args.filename);
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Contents of ${args.filename}:\n\`\`\`\n${content}\n\`\`\``,
-          } as ChatMessage);
-        } catch (error) {
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Error reading file: ${(error as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'send_email') {
-        const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'reasoning', content: `> Sending email to: ${args.to}\n` };
-        logger.info('Luna sending email', { to: args.to, subject: args.subject });
-        const result = await emailService.sendLunaEmail(
-          [args.to],
-          args.subject,
-          args.body
-        );
-        if (result.success) {
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Email sent successfully to ${args.to}. Message ID: ${result.messageId}`,
-          } as ChatMessage);
-        } else {
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Failed to send email: ${result.error}${result.blockedRecipients ? ` (blocked: ${result.blockedRecipients.join(', ')})` : ''}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'check_email') {
-        const args = JSON.parse(toolCall.function.arguments);
-        const unreadOnly = args.unreadOnly !== false;
-        yield { type: 'reasoning', content: '> Checking inbox...\n' };
-        logger.info('Luna checking email (gated)', { unreadOnly });
-        const { emails, quarantinedCount } = unreadOnly
-          ? await emailService.getLunaUnreadEmailsGated(userId)
-          : await emailService.checkLunaInboxGated(10, userId);
-        if (emails.length > 0 || quarantinedCount > 0) {
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Found ${emails.length} email(s):\n${emailService.formatGatedInboxForPrompt(emails, quarantinedCount)}`,
-          } as ChatMessage);
-        } else {
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: 'No emails found in inbox.',
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'send_telegram') {
-        const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'reasoning', content: '> Sending Telegram message...\n' };
-        logger.info('Luna sending Telegram message', { userId });
-
-        const connection = await telegramService.getTelegramConnection(userId);
-
-        if (!connection || !connection.isActive) {
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: 'Telegram is not connected for this user. Ask them to link their Telegram account in Settings.',
-          } as ChatMessage);
-        } else {
-          try {
-            await telegramService.sendTelegramMessage(connection.chatId, args.message, {
-              parseMode: 'Markdown',
-            });
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: 'Message sent successfully to Telegram.',
-            } as ChatMessage);
-          } catch (error) {
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: `Failed to send Telegram message: ${(error as Error).message}`,
-            } as ChatMessage);
-          }
-        }
-      } else if (toolCall.function.name === 'send_file_to_telegram') {
-        const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'reasoning', content: `> Sending file to Telegram: ${args.filename}\n` };
-        logger.info('Luna sending file to Telegram', { userId, filename: args.filename });
-
-        const connection = await telegramService.getTelegramConnection(userId);
-
-        if (!connection || !connection.isActive) {
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: 'Telegram is not connected for this user.',
-          } as ChatMessage);
-        } else {
-          try {
-            const exists = await workspace.fileExists(userId, args.filename);
-            if (!exists) {
-               messages.push({
-                role: 'tool',
-                tool_call_id: toolCall.id,
-                content: `File "${args.filename}" not found in workspace.`,
-              } as ChatMessage);
-            } else {
-              const filePath = `${workspace.getUserWorkspacePath(userId)}/${args.filename}`;
-              const success = await telegramService.sendTelegramDocument(
-                connection.chatId,
-                filePath,
-                args.caption
-              );
-              
-              messages.push({
-                role: 'tool',
-                tool_call_id: toolCall.id,
-                content: success 
-                  ? 'File sent successfully to Telegram.' 
-                  : 'Failed to send file to Telegram.',
-              } as ChatMessage);
-            }
-          } catch (error) {
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: `Failed to send file: ${(error as Error).message}`,
-            } as ChatMessage);
-          }
-        }
-      } else if (toolCall.function.name === 'search_documents') {
-        const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'reasoning', content: `> Searching documents for: "${args.query}"\n` };
-        logger.info('Luna searching documents', { query: args.query });
-        const chunks = await documents.searchDocuments(userId, args.query);
-        if (chunks.length > 0) {
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Found ${chunks.length} relevant document section(s):\n${documents.formatDocumentsForPrompt(chunks)}`,
-          } as ChatMessage);
-        } else {
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: 'No matching content found in uploaded documents.',
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'suggest_goal') {
-        const args = JSON.parse(toolCall.function.arguments);
-        logger.info('Luna suggesting goal', { title: args.title, goalType: args.goalType });
-
-        // Store the pending goal suggestion
-        await questionsService.storePendingGoalSuggestion(userId, {
-          title: args.title,
-          description: args.description,
-          goalType: args.goalType,
-        });
-
-        // Create a question for the user to confirm
-        await questionsService.askQuestion(userId, sessionId, {
-          question: `Would you like me to create a goal: "${args.title}"?${args.description ? ` (${args.description})` : ''}`,
-          context: `Goal type: ${args.goalType}`,
-          priority: 5,
-        });
-
-        messages.push({
-          role: 'tool',
-          tool_call_id: toolCall.id,
-          content: `Goal suggestion "${args.title}" created. The user will see a notification to confirm or decline.`,
-        } as ChatMessage);
-      } else if (toolCall.function.name === 'fetch_url') {
-        const args = JSON.parse(toolCall.function.arguments);
-        logger.info('Luna fetching URL', { url: args.url });
-        try {
-          const page = await webfetch.fetchPage(args.url);
-          const formattedContent = webfetch.formatPageForContext(page, 6000);
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Successfully fetched URL:\n${formattedContent}`,
-          } as ChatMessage);
-        } catch (error) {
-          logger.error('URL fetch failed', { url: args.url, error: (error as Error).message });
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Failed to fetch URL: ${(error as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'list_todos') {
-        const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'reasoning', content: '> Checking todo list...\n' };
-        logger.info('Luna listing todos (stream)', { includeCompleted: args.includeCompleted });
-        const todos = await tasksService.getTasks(userId, {
-          status: args.includeCompleted ? undefined : 'pending',
-          limit: 20,
-        });
-        const todoList = todos.length > 0
-          ? todos.map(t => {
-              let entry = `- [${t.id.slice(0, 8)}] ${t.title} (${t.status}, ${t.priority})`;
-              if (t.dueAt) entry += ` - due: ${new Date(t.dueAt).toLocaleDateString()}`;
-              if (t.description) entry += `\n  Notes: ${t.description}`;
-              return entry;
-            }).join('\n')
-          : 'No todos found.';
-        messages.push({
-          role: 'tool',
-          tool_call_id: toolCall.id,
-          content: `Found ${todos.length} todo(s):\n${todoList}`,
-        } as ChatMessage);
-      } else if (toolCall.function.name === 'create_todo') {
-        const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'reasoning', content: `> Creating todo: "${args.title}"\n` };
-        logger.info('Luna creating todo (stream)', { title: args.title, dueDate: args.dueDate });
-        const parsed = tasksService.parseTaskFromText(args.dueDate || '');
-        // Calculate remindAt from dueAt and remindMinutesBefore
-        let remindAt: Date | undefined;
-        if (parsed.dueAt && args.remindMinutesBefore) {
-          remindAt = new Date(parsed.dueAt.getTime() - args.remindMinutesBefore * 60 * 1000);
-        }
-        const todo = await tasksService.createTask(userId, {
-          title: args.title,
-          description: args.notes,
-          priority: args.priority || 'medium',
-          dueAt: parsed.dueAt,
-          remindAt: remindAt,
-          sourceSessionId: sessionId,
-        });
-        const dueStr = todo.dueAt ? ` - due: ${new Date(todo.dueAt).toLocaleString('sv-SE', { dateStyle: 'short', timeStyle: 'short' })}` : '';
-        const remindStr = remindAt ? ` (reminder ${args.remindMinutesBefore} min before)` : '';
-        messages.push({
-          role: 'tool',
-          tool_call_id: toolCall.id,
-          content: `Created todo: "${todo.title}" [${todo.id.slice(0, 8)}]${dueStr}${remindStr}`,
-        } as ChatMessage);
-      } else if (toolCall.function.name === 'complete_todo') {
-        const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'reasoning', content: '> Completing todo...\n' };
-        logger.info('Luna completing todo (stream)', { todoId: args.todoId, title: args.title });
-        let todoId = args.todoId;
-
-        // Support partial UUID matching (we show 8-char IDs in list_todos)
-        const todos = await tasksService.getTasks(userId, { limit: 50 });
-        if (todoId && todoId.length < 36) {
-          // Partial ID - find matching todo
-          const match = todos.find(t => t.id.startsWith(todoId));
-          if (match) todoId = match.id;
-        }
-        if (!todoId && args.title) {
-          const match = todos.find(t => t.title.toLowerCase().includes(args.title.toLowerCase()));
-          if (match) todoId = match.id;
-        }
-        if (todoId) {
-          const todo = await tasksService.updateTaskStatus(userId, todoId, 'completed');
-          if (todo) {
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: `Marked todo "${todo.title}" as completed.`,
-            } as ChatMessage);
-          } else {
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: 'Todo not found.',
-            } as ChatMessage);
-          }
-        } else {
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: 'Could not find a matching todo. Use list_todos to see available todos.',
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'update_todo') {
-        const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'reasoning', content: '> Updating todo...\n' };
-        logger.info('Luna updating todo (stream)', { todoId: args.todoId, title: args.title });
-        let todoId = args.todoId;
-
-        // Support partial UUID matching
-        const allTodos = await tasksService.getTasks(userId, { limit: 50 });
-        if (todoId && todoId.length < 36) {
-          const match = allTodos.find(t => t.id.startsWith(todoId));
-          if (match) todoId = match.id;
-        }
-        if (!todoId && args.title) {
-          const match = allTodos.find(t => t.title.toLowerCase().includes(args.title.toLowerCase()));
-          if (match) todoId = match.id;
-        }
-        if (todoId) {
-          const updates: Partial<tasksService.CreateTaskInput> = {};
-          if (args.notes !== undefined) updates.description = args.notes;
-          if (args.priority) updates.priority = args.priority;
-          if (args.dueDate) {
-            const parsed = tasksService.parseTaskFromText(args.dueDate);
-            if (parsed.dueAt) updates.dueAt = parsed.dueAt;
-          }
-          if (args.status) {
-            await tasksService.updateTaskStatus(userId, todoId, args.status);
-          }
-          const todo = Object.keys(updates).length > 0
-            ? await tasksService.updateTask(userId, todoId, updates)
-            : await tasksService.getTasks(userId, { limit: 1 }).then(t => t.find(x => x.id === todoId));
-          if (todo) {
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: `Updated todo "${todo.title}".${args.notes ? ` Notes: ${args.notes}` : ''}`,
-            } as ChatMessage);
-          } else {
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: 'Todo not found.',
-            } as ChatMessage);
-          }
-        } else {
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: 'Could not find a matching todo. Use list_todos to see available todos.',
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'create_calendar_event') {
-        const args = JSON.parse(toolCall.function.arguments);
-        logger.info('Luna creating calendar event', { title: args.title, startTime: args.startTime });
-        try {
-          // Get user's timezone for proper time conversion
-          let userTimezone = 'UTC';
-          try {
-            const userResult = await pool.query('SELECT settings FROM users WHERE id = $1', [userId]);
-            if (userResult.rows.length > 0) {
-              const settings = userResult.rows[0].settings as { timezone?: string };
-              userTimezone = settings.timezone || 'UTC';
-            }
-          } catch (error) {
-            logger.warn('Failed to fetch user timezone for calendar event, using UTC', { error: (error as Error).message });
-          }
-
-          const parsed = tasksService.parseTaskFromText(args.startTime || '');
-          let startAt = parsed.dueAt || new Date();
-
-          // Convert from user's local time to UTC
-          if (userTimezone !== 'UTC') {
-            startAt = convertLocalTimeToUTC(startAt, userTimezone);
-          }
-
-          let endAt: Date;
-          if (args.endTime) {
-            const endParsed = tasksService.parseTaskFromText(args.endTime);
-            endAt = endParsed.dueAt || new Date(startAt.getTime() + 60 * 60 * 1000);
-            if (userTimezone !== 'UTC') {
-              endAt = convertLocalTimeToUTC(endAt, userTimezone);
-            }
-          } else {
-            endAt = new Date(startAt.getTime() + 60 * 60 * 1000); // 1 hour default
-          }
-          const event = await calendarService.createEvent(userId, {
-            title: args.title,
-            description: args.description,
-            startAt,
-            endAt,
-            location: args.location,
-            isAllDay: args.isAllDay || false,
-            reminderMinutes: args.reminderMinutes ?? 15, // Default to 15 minutes if not specified
-          });
-          const dateStr = new Date(event.startAt).toLocaleString('sv-SE', { dateStyle: 'short', timeStyle: 'short' });
-          const reminderStr = event.reminderMinutes ? ` (reminder ${event.reminderMinutes} min before)` : '';
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Created calendar event: "${event.title}" on ${dateStr}${event.location ? ` @ ${event.location}` : ''}${reminderStr}`,
-          } as ChatMessage);
-        } catch (error) {
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Failed to create calendar event: ${(error as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'list_calendar_events') {
-        const args = JSON.parse(toolCall.function.arguments);
-        const days = args.days || 7;
-        const events = await calendarService.getUpcomingEvents(userId, { days, limit: 10 });
-        const eventList = events.length > 0
-          ? events.map(e => {
-              const d = new Date(e.startAt);
-              const dateStr = d.toLocaleString('sv-SE', { dateStyle: 'short', timeStyle: 'short' });
-              return `- ${e.title} (${dateStr})${e.location ? ` @ ${e.location}` : ''}`;
-            }).join('\n')
-          : 'No upcoming events.';
-        messages.push({
-          role: 'tool',
-          tool_call_id: toolCall.id,
-          content: `Calendar events (next ${days} days):\n${eventList}`,
-        } as ChatMessage);
-      } else if (toolCall.function.name === 'session_note') {
-        // Session note tool - appends notes to session log for future reference
-        const args = JSON.parse(toolCall.function.arguments);
-        logger.info('Luna adding session note', { sessionId, note: args.note });
-        await sessionLogService.appendToSummary(sessionId, args.note);
-        messages.push({
-          role: 'tool',
-          tool_call_id: toolCall.id,
-          content: 'Note saved. It will appear in future session greetings.',
-        } as ChatMessage);
-      } else if (toolCall.function.name === 'ceo_note_build') {
-        // CEO build note - saves progress note from check-in reply
-        const args = JSON.parse(toolCall.function.arguments);
-        logger.info('CEO Luna saving build note', { buildId: args.build_id, note: args.note });
-        try {
-          const { addNote } = await import('../ceo/build-tracker.service.js');
-          await addNote(args.build_id, userId, args.note, 'checkin');
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Progress note saved: "${args.note}"`,
-          } as ChatMessage);
-        } catch (error) {
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Failed to save note: ${(error as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'commit_weekly_plan') {
-        const args = JSON.parse(toolCall.function.arguments);
-        logger.info('CEO Luna committing weekly plan', { userId, goals: args.goals?.length, tasks: args.tasks?.length });
-        try {
-          const { commitWeeklyPlan } = await import('../ceo/ceo-org.service.js');
-          const result = await commitWeeklyPlan(userId, args);
-          messages.push({ role: 'tool', tool_call_id: toolCall.id, content: `Weekly plan committed: ${result.goalsCreated} goals, ${result.tasksCreated} tasks created.` } as ChatMessage);
-        } catch (error) {
-          messages.push({ role: 'tool', tool_call_id: toolCall.id, content: `Failed to commit weekly plan: ${(error as Error).message}` } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'query_department_history') {
-        const args = JSON.parse(toolCall.function.arguments);
-        try {
-          const { searchStaffHistory } = await import('../ceo/staff-chat.service.js');
-          const results = await searchStaffHistory(userId, args.query, args.department, 8);
-          const parts: string[] = [];
-          if (results.memoResults.length > 0) { parts.push('## Memos'); for (const m of results.memoResults) parts.push(`- [${m.department}/${m.type}] ${m.title}: ${m.content}`); }
-          if (results.chatResults.length > 0) { parts.push('## Chat History'); for (const c of results.chatResults) parts.push(`- [${c.department}] ${c.content}`); }
-          messages.push({ role: 'tool', tool_call_id: toolCall.id, content: parts.length > 0 ? parts.join('\n') : 'No results found.' } as ChatMessage);
-        } catch (error) {
-          messages.push({ role: 'tool', tool_call_id: toolCall.id, content: `Search failed: ${(error as Error).message}` } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'start_task') {
-        const args = JSON.parse(toolCall.function.arguments);
-        try {
-          const { startTaskExecution } = await import('../ceo/ceo-org.service.js');
-          const task = await startTaskExecution(userId, args.task_id);
-          messages.push({ role: 'tool', tool_call_id: toolCall.id, content: task ? `Task "${task.title}" started in background.` : 'Task not found or not startable.' } as ChatMessage);
-        } catch (error) {
-          messages.push({ role: 'tool', tool_call_id: toolCall.id, content: `Failed: ${(error as Error).message}` } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'get_task_status') {
-        const args = JSON.parse(toolCall.function.arguments);
-        try {
-          const { getRunningTasks, getRecentlyCompleted, listTasks } = await import('../ceo/ceo-org.service.js');
-          if (args.task_id) {
-            const tasks = await listTasks(userId, {});
-            const task = tasks.find(t => t.id === args.task_id);
-            messages.push({ role: 'tool', tool_call_id: toolCall.id, content: task ? `"${task.title}" [${task.departmentSlug}]: status=${task.status}, execution=${task.executionStatus || 'not started'}${task.resultSummary ? ', result: ' + task.resultSummary : ''}` : 'Task not found.' } as ChatMessage);
-          } else {
-            const [running, recent] = await Promise.all([getRunningTasks(userId), getRecentlyCompleted(userId, 10)]);
-            const parts: string[] = [];
-            if (running.length > 0) { parts.push(`Running (${running.length}):`); for (const t of running) parts.push(`- "${t.title}" [${t.departmentSlug}]`); }
-            if (recent.length > 0) { parts.push(`Recently completed (${recent.length}):`); for (const t of recent) parts.push(`- "${t.title}" [${t.departmentSlug}] ${t.executionStatus}: ${t.resultSummary || 'no summary'}`); }
-            messages.push({ role: 'tool', tool_call_id: toolCall.id, content: parts.length > 0 ? parts.join('\n') : 'No running or recently completed tasks.' } as ChatMessage);
-          }
-        } catch (error) {
-          messages.push({ role: 'tool', tool_call_id: toolCall.id, content: `Failed: ${(error as Error).message}` } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'create_reminder') {
-        // Quick reminder tool
-        const args = JSON.parse(toolCall.function.arguments);
-        logger.info('Luna creating reminder', { sessionId, userId, message: args.message, delayMinutes: args.delay_minutes });
-        try {
-          const reminder = await reminderService.createReminder(userId, args.message, args.delay_minutes);
-          const remindAt = reminder.remindAt.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Reminder set! I'll notify you via Telegram at ${remindAt} about: "${args.message}"`,
-          } as ChatMessage);
-        } catch (error) {
-          logger.error('Failed to create reminder', { error: (error as Error).message });
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Failed to create reminder: ${(error as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'list_reminders') {
-        // List reminders tool
-        logger.info('Luna listing reminders', { sessionId, userId });
-        try {
-          const reminders = await reminderService.listReminders(userId);
-          if (reminders.length === 0) {
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: 'No pending reminders.',
-            } as ChatMessage);
-          } else {
-            const list = reminders.map(r => {
-              const time = r.remindAt.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
-              return `- [${r.id.slice(0, 8)}] at ${time}: "${r.message}"`;
-            }).join('\n');
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: `Pending reminders:\n${list}`,
-            } as ChatMessage);
-          }
-        } catch (error) {
-          logger.error('Failed to list reminders', { error: (error as Error).message });
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Failed to list reminders: ${(error as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'cancel_reminder') {
-        // Cancel reminder tool
-        const args = JSON.parse(toolCall.function.arguments);
-        logger.info('Luna cancelling reminder', { sessionId, userId, reminderId: args.reminder_id });
-        try {
-          const cancelled = await reminderService.cancelReminder(userId, args.reminder_id);
-          if (cancelled) {
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: 'Reminder cancelled.',
-            } as ChatMessage);
-          } else {
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: 'Reminder not found or already delivered.',
-            } as ChatMessage);
-          }
-        } catch (error) {
-          logger.error('Failed to cancel reminder', { error: (error as Error).message });
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Failed to cancel reminder: ${(error as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'open_url') {
-        const args = JSON.parse(toolCall.function.arguments || '{}');
-        logger.info('open_url tool (stream)', { userId, url: args.url });
-        let content: string;
-        try {
-          const parsed = new URL(args.url);
-          if (!['http:', 'https:'].includes(parsed.protocol)) {
-            content = `Rejected: only http and https URLs are allowed (got ${parsed.protocol})`;
-          } else {
-            const sent = sendDesktopAction(userId, 'open_url', { url: parsed.href });
-            content = sent
-              ? `Opened ${parsed.href} in Firefox on the desktop.`
-              : 'Desktop not connected - could not open URL.';
-          }
-        } catch {
-          content = `Invalid URL: ${args.url}`;
-        }
-        messages.push({ role: 'tool', tool_call_id: toolCall.id, content } as ChatMessage);
-      } else if (
-        toolCall.function.name === 'browser_navigate' ||
-        toolCall.function.name === 'browser_click' ||
-        toolCall.function.name === 'browser_type' ||
-        toolCall.function.name === 'browser_get_page_content'
-      ) {
-        const args = JSON.parse(toolCall.function.arguments || '{}');
-        const openUrl = typeof args.url === 'string' && args.url.length > 0
-          ? args.url
-          : getBrowserOpenUrl(userId);
-
-        yield { type: 'reasoning', content: `> Browser: ${getBrowserToolStatusLine(toolCall.function.name, args)}\n` };
-        yield { type: 'browser_action', action: 'open', url: openUrl };
-        yield { type: 'browser_action', action: toolCall.function.name, url: openUrl };
-        browserScreencast.setPendingVisualBrowse(userId, openUrl);
-
-        logger.info('Shared browser tool (stream)', {
-          userId,
-          tool: toolCall.function.name,
-          url: args.url,
-          selector: args.selector,
-        });
-
-        try {
-          const result = await executeSharedBrowserToolCall(userId, toolCall.function.name, args);
-          if (result.openUrl && result.openUrl !== openUrl) {
-            yield { type: 'browser_action', action: 'open', url: result.openUrl };
-          }
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: result.toolResponse,
-          } as ChatMessage);
-        } catch (error) {
-          logger.error('Shared browser tool failed (stream)', {
-            userId,
-            tool: toolCall.function.name,
-            error: (error as Error).message,
-          });
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Browser error: ${(error as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'browser_screenshot') {
-        // Browser screenshot tool - takes screenshot and saves to disk for display
-        const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'reasoning', content: '> Browser: Taking screenshot...\n' };
-        // Signal frontend to open browser window
-        yield { type: 'browser_action', action: 'open', url: args.url };
-        logger.info('Browser screenshot (stream)', { userId, url: args.url, fullPage: args.fullPage });
-        try {
-          const result = await browser.screenshot(userId, args.url, {
-            fullPage: args.fullPage,
-            selector: args.selector,
-          });
-
-          // If screenshot was captured, save it to disk and format for display
-          if (result.success && result.screenshot) {
-            const saveResult = await imageGeneration.saveScreenshot(
-              userId,
-              result.screenshot,
-              result.pageUrl || args.url
-            );
-
-            if (saveResult.success && saveResult.imageUrl) {
-              const caption = `Screenshot of ${result.pageTitle || result.pageUrl || args.url}`;
-              const imageBlock = imageGeneration.formatImageForChat(saveResult.imageUrl, caption);
-              messages.push({
-                role: 'tool',
-                tool_call_id: toolCall.id,
-                content: `Screenshot captured successfully.\n\n${imageBlock}\n\nPage: ${result.pageUrl || args.url}\nTitle: ${result.pageTitle || 'N/A'}`,
-              } as ChatMessage);
-            } else {
-              // Save failed - don't claim we have a displayable image
-              logger.warn('Screenshot save failed (stream)', { userId, url: args.url, error: saveResult.error });
-              messages.push({
-                role: 'tool',
-                tool_call_id: toolCall.id,
-                content: `Screenshot was captured but could not be saved for display.\nPage visited: ${result.pageUrl || args.url}\nTitle: ${result.pageTitle || 'N/A'}`,
-              } as ChatMessage);
-            }
-          } else {
-            // Screenshot capture failed
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: `Screenshot failed: ${result.error || 'Unknown error'}\nPage: ${result.pageUrl || args.url}`,
-            } as ChatMessage);
-          }
-        } catch (error) {
-          logger.error('Browser screenshot failed (stream)', { error: (error as Error).message });
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Browser error: ${(error as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'browser_fill') {
-        // Browser fill tool
-        const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'reasoning', content: '> Browser: Filling form...\n' };
-        // Signal frontend to open browser window
-        yield { type: 'browser_action', action: 'open', url: args.url };
-        logger.info('Browser fill (stream)', { userId, url: args.url, selector: args.selector });
-        try {
-          const result = await browser.fill(userId, args.url, args.selector, args.value);
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: browser.formatBrowserResultForPrompt(result),
-          } as ChatMessage);
-        } catch (error) {
-          logger.error('Browser fill failed (stream)', { error: (error as Error).message });
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Browser error: ${(error as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'browser_extract') {
-        // Browser extract tool
-        const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'reasoning', content: '> Browser: Extracting content...\n' };
-        // Signal frontend to open browser window
-        yield { type: 'browser_action', action: 'open', url: args.url };
-        logger.info('Browser extract (stream)', { userId, url: args.url, selector: args.selector });
-        try {
-          const result = args.selector
-            ? await browser.extractElements(userId, args.url, args.selector, args.limit)
-            : await browser.getContent(userId, args.url);
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: browser.formatBrowserResultForPrompt(result),
-          } as ChatMessage);
-        } catch (error) {
-          logger.error('Browser extract failed (stream)', { error: (error as Error).message });
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Browser error: ${(error as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'browser_wait') {
-        // Browser wait tool
-        const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'reasoning', content: '> Browser: Waiting for element...\n' };
-        // Signal frontend to open browser window
-        yield { type: 'browser_action', action: 'open', url: args.url };
-        logger.info('Browser wait (stream)', { userId, url: args.url, selector: args.selector });
-        try {
-          const result = await browser.waitFor(userId, args.url, args.selector, args.timeout);
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: browser.formatBrowserResultForPrompt(result),
-          } as ChatMessage);
-        } catch (error) {
-          logger.error('Browser wait failed', { error: (error as Error).message });
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Browser error: ${(error as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'browser_close') {
-        // Browser close tool
-        yield { type: 'reasoning', content: '> Browser: Closing...\n' };
-        logger.info('Browser close', { userId });
-        try {
-          const result = await browser.closeBrowser(userId);
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: browser.formatBrowserResultForPrompt(result),
-          } as ChatMessage);
-        } catch (error) {
-          logger.error('Browser close failed', { error: (error as Error).message });
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Browser error: ${(error as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'browser_render_html') {
-        // Browser render HTML tool - renders HTML content and takes screenshot
-        const args = JSON.parse(toolCall.function.arguments);
-        // Decode HTML entities in case LLM encoded them
-        const htmlContent = decodeHtmlEntities(args.html);
-        const pageTitle = args.title || 'Luna HTML Page';
-        logger.info('Browser render HTML', { userId, htmlLength: htmlContent.length, title: pageTitle });
-        yield { type: 'reasoning', content: '> Rendering HTML page...\n' };
-        try {
-          const result = await browser.renderHtml(userId, htmlContent);
-
-          // If screenshot was captured, save it to disk and format for display
-          if (result.success && result.screenshot) {
-            const saveResult = await imageGeneration.saveScreenshot(
-              userId,
-              result.screenshot,
-              'rendered-html'
-            );
-
-            if (saveResult.success && saveResult.imageUrl) {
-              const caption = pageTitle;
-              const imageBlock = imageGeneration.formatImageForChat(saveResult.imageUrl, caption);
-              messages.push({
-                role: 'tool',
-                tool_call_id: toolCall.id,
-                content: `HTML page rendered successfully.\n\n${imageBlock}\n\nTitle: ${pageTitle}`,
-              } as ChatMessage);
-            } else {
-              // Save failed
-              logger.warn('HTML render save failed', { userId, error: saveResult.error });
-              messages.push({
-                role: 'tool',
-                tool_call_id: toolCall.id,
-                content: `HTML was rendered but the screenshot could not be saved for display.`,
-              } as ChatMessage);
-            }
-          } else {
-            // Render failed
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: `HTML render failed: ${result.error || 'Unknown error'}`,
-            } as ChatMessage);
-          }
-        } catch (error) {
-          logger.error('Browser render HTML failed', { error: (error as Error).message });
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Browser error: ${(error as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'generate_image') {
-        // Image generation tool
-        const args = JSON.parse(toolCall.function.arguments);
-        logger.info('Generate image', { userId, promptLength: args.prompt?.length });
-        try {
-          const result = await imageGeneration.generateImage(userId, args.prompt);
-          if (result.success && result.imageUrl) {
-            
-            // Send to Telegram if connected
-            const connection = await telegramService.getTelegramConnection(userId);
-            if (connection && connection.isActive && result.filePath) {
-              telegramService.sendTelegramPhoto(
-                connection.chatId,
-                result.filePath,
-                `Generated image: ${args.prompt.substring(0, 100)}`
-              ).catch(err => logger.error('Failed to send generated image to Telegram', { error: (err as Error).message }));
-            }
-
-            const imageBlock = imageGeneration.formatImageForChat(
-              result.imageUrl,
-              `Generated image: ${args.prompt.substring(0, 100)}${args.prompt.length > 100 ? '...' : ''}`
-            );
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: `Image generated successfully.\n\n${imageBlock}`,
-            } as ChatMessage);
-          } else {
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: `Failed to generate image: ${result.error || 'Unknown error'}`,
-            } as ChatMessage);
-          }
-        } catch (error) {
-          logger.error('Image generation failed', { error: (error as Error).message });
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Image generation error: ${(error as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'generate_desktop_background') {
-        // Desktop background generation tool (streaming)
-        const args = JSON.parse(toolCall.function.arguments);
-        yield { type: 'reasoning', content: '> Generating desktop background...\n' };
-        logger.info('Generate desktop background (stream)', { userId, promptLength: args.prompt?.length, style: args.style });
-        try {
-          const result = await backgroundService.generateBackground(
-            userId,
-            args.prompt,
-            args.style || 'custom'
-          );
-          if (result.success && result.background) {
-            // Optionally set as active (default true)
-            const setActive = args.setActive !== false;
-            if (setActive) {
-              await backgroundService.setActiveBackground(userId, result.background.id);
-              // Signal frontend to refresh background
-              yield { type: 'background_refresh' };
-            }
-            const imageBlock = imageGeneration.formatImageForChat(
-              result.background.imageUrl,
-              `Desktop background: ${result.background.name}`
-            );
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: `Desktop background generated successfully!${setActive ? ' It is now set as your active background.' : ' You can set it as active in Settings > Background.'}\n\n${imageBlock}`,
-            } as ChatMessage);
-          } else {
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: `Failed to generate background: ${result.error || 'Unknown error'}`,
-            } as ChatMessage);
-          }
-        } catch (error) {
-          logger.error('Background generation failed (stream)', { error: (error as Error).message });
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Background generation error: ${(error as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'research') {
-        // Research agent tool - uses Claude CLI for in-depth research (streaming)
-        const args = JSON.parse(toolCall.function.arguments);
-        const depthLabel = args.depth === 'quick' ? 'Quick research' : 'Deep research';
-        yield { type: 'reasoning', content: `> ${depthLabel}: ${args.query?.substring(0, 50)}...\n` };
-        logger.info('Research tool called (stream)', { userId, query: args.query?.substring(0, 100), depth: args.depth });
-        try {
-          const result = await researchAgent.executeResearch(args.query, userId, {
-            depth: args.depth || 'thorough',
-            saveToFile: args.save_to_file,
-          });
-          if (result.success) {
-            let content = `**Research Summary:**\n${result.summary}\n\n**Details:**\n${result.details}`;
-            if (result.savedFile) {
-              content += `\n\n**Saved to:** ${result.savedFile}`;
-            }
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content,
-            } as ChatMessage);
-          } else {
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: `Research failed: ${result.error || 'Unknown error'}`,
-            } as ChatMessage);
-          }
-        } catch (error) {
-          logger.error('Research tool failed (stream)', { error: (error as Error).message });
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Research error: ${(error as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'n8n_webhook') {
-        const args = JSON.parse(toolCall.function.arguments || '{}');
-        yield { type: 'reasoning', content: `> Triggering n8n workflow: ${args.workflow_path || 'unknown'}\n` };
-        logger.info('n8n webhook tool called (stream)', { userId, workflowPath: args.workflow_path });
-        try {
-          const result = await n8nService.executeWebhook(
-            args.workflow_path,
-            args.payload || {},
-            {
-              useTestWebhook: args.use_test_webhook === true,
-              userId,
-              sessionId,
-            }
-          );
-
-          if (result.success) {
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: `n8n workflow triggered successfully (status ${result.status}).\n${JSON.stringify(result.data ?? {}, null, 2)}`,
-            } as ChatMessage);
-          } else {
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: `n8n workflow failed (status ${result.status}): ${result.error || 'Unknown error'}`,
-            } as ChatMessage);
-          }
-        } catch (error) {
-          logger.error('n8n webhook tool failed (stream)', { error: (error as Error).message });
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `n8n error: ${(error as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'suno_generate') {
-        const args = JSON.parse(toolCall.function.arguments || '{}');
-        yield { type: 'reasoning', content: `> Triggering ambient music generation (${args.count ?? 1} track(s))...\n` };
-        logger.info('suno_generate tool called (stream)', { userId, count: args.count });
-        try {
-          const gens = await sunoService.triggerBatch(userId, args.count ?? 1, args.style_override);
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Triggered ${gens.length} ambient track generation(s). Check the Factory tab in DJ Luna to monitor progress.`,
-          } as ChatMessage);
-        } catch (error) {
-          logger.error('suno_generate tool failed (stream)', { error: (error as Error).message });
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Suno generation error: ${(error as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'load_context') {
-        // Context loading tool - fetch session/intent context on demand
-        const args = JSON.parse(toolCall.function.arguments || '{}');
-        yield { type: 'reasoning', content: '> Loading additional context...\n' };
-        logger.info('Load context tool called (stream)', { userId, params: args });
-        try {
-          const result = await loadContextHandler.handleLoadContext(userId, args);
-          const formatted = loadContextHandler.formatLoadContextResult(result);
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: formatted,
-          } as ChatMessage);
-        } catch (error) {
-          logger.error('Load context tool failed (stream)', { error: (error as Error).message });
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Error loading context: ${(error as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name === 'correct_summary') {
-        // Context correction tool - fix incorrect summaries
-        const args = JSON.parse(toolCall.function.arguments || '{}');
-        yield { type: 'reasoning', content: '> Correcting context summary...\n' };
-        logger.info('Correct summary tool called (stream)', { userId, params: args });
-        try {
-          const result = await loadContextHandler.handleCorrectSummary(userId, args);
-          const formatted = loadContextHandler.formatCorrectSummaryResult(result);
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: formatted,
-          } as ChatMessage);
-        } catch (error) {
-          logger.error('Correct summary tool failed (stream)', { error: (error as Error).message });
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Error correcting summary: ${(error as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name.startsWith('system_') ||
-                 toolCall.function.name.startsWith('network_') ||
-                 toolCall.function.name.startsWith('process_') ||
-                 toolCall.function.name.startsWith('docker_') ||
-                 toolCall.function.name.startsWith('service_') ||
-                 toolCall.function.name.startsWith('logs_') ||
-                 toolCall.function.name.startsWith('maintenance_')) {
-        // System monitoring tools
-        const args = JSON.parse(toolCall.function.arguments || '{}');
-        yield { type: 'reasoning', content: `> Checking ${toolCall.function.name.replace(/_/g, ' ')}...\n` };
-        logger.info('Sysmon tool called (stream)', { tool: toolCall.function.name, args });
-        try {
-          const result = await executeSysmonTool(toolCall.function.name, args);
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: JSON.stringify(result, null, 2),
-          } as ChatMessage);
-        } catch (error) {
-          logger.error('Sysmon tool failed (stream)', { tool: toolCall.function.name, error: (error as Error).message });
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Error: ${(error as Error).message}`,
-          } as ChatMessage);
-        }
-      } else if (toolCall.function.name.startsWith('mcp_')) {
-        // MCP (Model Context Protocol) tools
-        const parsed = mcpService.parseMcpToolName(toolCall.function.name);
-        if (parsed) {
-          const args = JSON.parse(toolCall.function.arguments || '{}');
-          yield { type: 'reasoning', content: `> Calling MCP tool: ${parsed.toolName}\n` };
-          logger.info('MCP tool called (stream)', { tool: toolCall.function.name, serverId: parsed.serverId, toolName: parsed.toolName, args });
-
-          const mcpTool = mcpUserTools.find(t => t.serverId.startsWith(parsed.serverId) && t.name === parsed.toolName);
-          if (mcpTool) {
-            const result = await mcpService.executeTool(userId, mcpTool.serverId, parsed.toolName, args);
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: result.content,
-            } as ChatMessage);
-          } else {
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: 'MCP tool not found or no longer available',
-            } as ChatMessage);
-          }
-        } else {
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: 'Invalid MCP tool name format',
-          } as ChatMessage);
-        }
-      }
-    }
-  }
-
-  yield { type: 'status', status: '' };
-
-  // OPTIMIZED: Only make second LLM call if tools were used
-  // If no tools were called, reuse the initial completion content
-  let fullContent = '';
-  let tokensUsed = 0;
-  let promptTokens = initialCompletion.promptTokens || 0;
-  let completionTokens = initialCompletion.completionTokens || 0;
-
-  const toolsWereUsed = initialCompletion.toolCalls && initialCompletion.toolCalls.length > 0;
-
-  if (toolsWereUsed) {
-    // Tools were used - need to continue with tool results
-    // Use a loop to handle multi-turn tool calling (e.g., search -> email -> agent -> memory)
-    const MAX_TOOL_ROUNDS = 15;
-    let toolRound = 0;
-
-    while (toolRound < MAX_TOOL_ROUNDS) {
-      toolRound++;
-
-      // Make a non-streaming call with tools to check if more tool calls are needed
-      const followUpCompletion = await createChatCompletion({
-        messages,
-        tools: effectiveTools.length > 0 ? effectiveTools : undefined,
-        provider: modelConfig.provider,
-        model: modelConfig.model,
-        loggingContext: {
-          userId,
-          sessionId,
-          source: 'chat',
-          nodeName: 'chat_streaming_followup',
-        },
-      });
-
-      if (followUpCompletion.reasoning) {
-        yield { type: 'reasoning', content: followUpCompletion.reasoning };
-      }
-
-      // If no more tool calls, stream the final response
-      if (!followUpCompletion.toolCalls || followUpCompletion.toolCalls.length === 0) {
-        // Stream the final content
-        const finalContent = followUpCompletion.content || '';
-        tokensUsed = followUpCompletion.tokensUsed || 0;
-        promptTokens += followUpCompletion.promptTokens || 0;
-        completionTokens += followUpCompletion.completionTokens || 0;
-
-        const chunkSize = 20;
-        for (let i = 0; i < finalContent.length; i += chunkSize) {
-          fullContent += finalContent.slice(i, i + chunkSize);
-          yield { type: 'content', content: finalContent.slice(i, i + chunkSize) };
-        }
+  for await (const event of runAgentLoop(messages, agentLoopConfig, toolCtx)) {
+    switch (event.type) {
+      case 'content':
+        fullContent += event.content;
+        yield { type: 'content', content: event.content };
         break;
-      }
-
-      // More tool calls needed - execute them
-      const additionalToolNames = followUpCompletion.toolCalls.map(tc => tc.function.name);
-      toolsUsed.push(...additionalToolNames);
-      logger.info('Additional tool calls in round', { round: toolRound, count: followUpCompletion.toolCalls.length });
-
-      // Add assistant message with tool calls
-      messages.push({
-        role: 'assistant',
-        content: followUpCompletion.content || '',
-        tool_calls: followUpCompletion.toolCalls,
-      } as ChatMessage);
-
-      // Execute each tool call
-      for (const toolCall of followUpCompletion.toolCalls) {
-        if (toolCall.function.name === 'delegate_to_agent') {
-          const args = JSON.parse(toolCall.function.arguments);
-          yield { type: 'status', status: 'Invoking agent...' };
-          logger.info('Delegating to agent in follow-up', { agent: args.agent, task: args.task?.substring(0, 100) });
-
-          const result = await agents.executeAgentTask(userId, {
-            agentName: args.agent,
-            task: args.task,
-            context: args.context,
-          });
-
-          yield { type: 'status', status: `${result.agentName} agent completed` };
-          logger.info('Agent completed in follow-up', { requestedAgent: args.agent, actualAgent: result.agentName, success: result.success });
-
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: formatAgentResultForContext(result.agentName, result.result, result.success),
-          } as ChatMessage);
-        } else if (toolCall.function.name === 'summon_agent') {
-          const args = JSON.parse(toolCall.function.arguments);
-          yield { type: 'status', status: `Summoning ${args.agent_id}...` };
-          logger.info('Summoning agent in follow-up', { agentId: args.agent_id, reason: args.reason?.substring(0, 100) });
-
-          const recentContext = messages
-            .filter(m => m.role === 'user' || m.role === 'assistant')
-            .slice(-6)
-            .map(m => `${m.role}: ${typeof m.content === 'string' ? m.content.substring(0, 300) : ''}`)
-            .join('\n');
-
-          const summonResult = await summonAgent({
-            fromAgentId: mode,
-            toAgentId: args.agent_id,
-            reason: args.reason,
-            conversationContext: recentContext,
-            sessionId,
-            userId,
-          });
-
-          yield { type: 'status', status: `${summonResult.agentName} responded` };
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `[${summonResult.agentName} responds]\n${summonResult.response}`,
-          } as ChatMessage);
-        } else if (toolCall.function.name === 'web_search') {
-          const args = JSON.parse(toolCall.function.arguments);
-          yield { type: 'status', status: `Searching: ${args.query}` };
-          const results = await searxng.search(args.query);
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: results && results.length > 0 ? formatSearchResultsForContext(results) : 'No search results found.',
-          } as ChatMessage);
-        } else if (toolCall.function.name === 'browser_visual_search') {
-          const args = JSON.parse(toolCall.function.arguments);
-          const searchEngine = args.searchEngine || 'google_news';
-          const searchUrl = browserScreencast.getSearchUrl(args.query, searchEngine);
-          logger.info('Browser visual search (follow-up)', { query: args.query, searchEngine, searchUrl });
-
-          yield { type: 'status', status: `Opening browser to search: ${args.query}` };
-          yield { type: 'browser_action', action: 'open', url: searchUrl };
-
-          browserScreencast.setPendingVisualBrowse(userId, searchUrl);
-
-          const searchResults = await searxng.search(args.query);
-          const searchContext = searchResults && searchResults.length > 0
-            ? formatSearchResultsForContext(searchResults)
-            : 'No search results found.';
-
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Browser opened to ${searchUrl} for visual browsing.\n\nSearch results for context:\n${searchContext}`,
-          } as ChatMessage);
-        } else if (toolCall.function.name === 'open_url') {
-          const args = JSON.parse(toolCall.function.arguments || '{}');
-          logger.info('open_url tool (follow-up)', { userId, url: args.url });
-          let content: string;
-          try {
-            const parsed = new URL(args.url);
-            if (!['http:', 'https:'].includes(parsed.protocol)) {
-              content = `Rejected: only http and https URLs are allowed (got ${parsed.protocol})`;
-            } else {
-              const sent = sendDesktopAction(userId, 'open_url', { url: parsed.href });
-              content = sent
-                ? `Opened ${parsed.href} in Firefox on the desktop.`
-                : 'Desktop not connected - could not open URL.';
-            }
-          } catch {
-            content = `Invalid URL: ${args.url}`;
-          }
-          messages.push({ role: 'tool', tool_call_id: toolCall.id, content } as ChatMessage);
-        } else if (
-          toolCall.function.name === 'browser_navigate' ||
-          toolCall.function.name === 'browser_click' ||
-          toolCall.function.name === 'browser_type' ||
-          toolCall.function.name === 'browser_get_page_content'
-        ) {
-          const args = JSON.parse(toolCall.function.arguments || '{}');
-          const openUrl = typeof args.url === 'string' && args.url.length > 0
-            ? args.url
-            : getBrowserOpenUrl(userId);
-
-          yield { type: 'status', status: `Browser: ${getBrowserToolStatusLine(toolCall.function.name, args)}` };
-          yield { type: 'browser_action', action: 'open', url: openUrl };
-          yield { type: 'browser_action', action: toolCall.function.name, url: openUrl };
-          browserScreencast.setPendingVisualBrowse(userId, openUrl);
-
-          logger.info('Shared browser tool (follow-up)', {
-            userId,
-            tool: toolCall.function.name,
-            url: args.url,
-            selector: args.selector,
-          });
-
-          try {
-            const result = await executeSharedBrowserToolCall(userId, toolCall.function.name, args);
-            if (result.openUrl && result.openUrl !== openUrl) {
-              yield { type: 'browser_action', action: 'open', url: result.openUrl };
-            }
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: result.toolResponse,
-            } as ChatMessage);
-          } catch (error) {
-            logger.error('Shared browser tool failed (follow-up)', {
-              userId,
-              tool: toolCall.function.name,
-              error: (error as Error).message,
-            });
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: `Browser error: ${(error as Error).message}`,
-            } as ChatMessage);
-          }
-        } else if (toolCall.function.name === 'send_email') {
-          const args = JSON.parse(toolCall.function.arguments);
-          yield { type: 'status', status: `Sending email to ${args.to}...` };
-          const result = await emailService.sendLunaEmail(args.to, args.subject, args.body);
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: result.success ? `Email sent successfully. Message ID: ${result.messageId}` : `Failed: ${result.error}`,
-          } as ChatMessage);
-        } else if (toolCall.function.name === 'check_email') {
-          const args = JSON.parse(toolCall.function.arguments);
-          yield { type: 'status', status: 'Checking inbox...' };
-          const { emails, quarantinedCount } = args.unreadOnly !== false
-            ? await emailService.getLunaUnreadEmailsGated(userId)
-            : await emailService.checkLunaInboxGated(10, userId);
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: emails.length > 0 || quarantinedCount > 0
-              ? `Found ${emails.length} email(s):\n${emailService.formatGatedInboxForPrompt(emails, quarantinedCount)}`
-              : 'No emails found.',
-          } as ChatMessage);
-          } else if (toolCall.function.name === 'read_email') {
-          const args = JSON.parse(toolCall.function.arguments);
-          yield { type: 'status', status: 'Reading email...' };
-          logger.info('Luna reading email (follow-up, gated)', { uid: args.uid });
-          try {
-            const email = await emailService.fetchEmailByUidGated(args.uid, userId);
-            if (email) {
-              messages.push({
-                role: 'tool',
-                tool_call_id: toolCall.id,
-                content: emailService.formatGatedEmailForPrompt(email),
-              } as ChatMessage);
-            } else {
-              messages.push({
-                role: 'tool',
-                tool_call_id: toolCall.id,
-                content: `Email with UID ${args.uid} was quarantined for security review or not found.`,
-              } as ChatMessage);
-            }
-          } catch (error) {
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: `Failed to read email: ${(error as Error).message}`,
-            } as ChatMessage);
-          }
-          } else if (toolCall.function.name === 'reply_email') {
-          const args = JSON.parse(toolCall.function.arguments);
-          yield { type: 'status', status: 'Sending reply...' };
-          logger.info('Luna replying to email (follow-up)', { uid: args.uid });
-          try {
-            const result = await emailService.replyToEmail(args.uid, args.body);
-            if (result.success) {
-              messages.push({
-                role: 'tool',
-                tool_call_id: toolCall.id,
-                content: `Reply sent successfully. Message ID: ${result.messageId}`,
-              } as ChatMessage);
-            } else {
-              messages.push({
-                role: 'tool',
-                tool_call_id: toolCall.id,
-                content: `Failed to send reply: ${result.error}${result.blockedRecipients ? ` (blocked: ${result.blockedRecipients.join(', ')})` : ''}`,
-              } as ChatMessage);
-            }
-          } catch (error) {
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: `Failed to send reply: ${(error as Error).message}`,
-            } as ChatMessage);
-          }
-        } else if (toolCall.function.name === 'delete_email') {
-          const args = JSON.parse(toolCall.function.arguments);
-          yield { type: 'status', status: 'Deleting email...' };
-          logger.info('Luna deleting email (follow-up)', { uid: args.uid });
-          try {
-            const success = await emailService.deleteEmail(args.uid);
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: success ? `Email with UID ${args.uid} has been deleted successfully.` : `Failed to delete email with UID ${args.uid}.`,
-            } as ChatMessage);
-          } catch (error) {
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: `Failed to delete email: ${(error as Error).message}`,
-            } as ChatMessage);
-          }
-        } else if (toolCall.function.name === 'mark_email_read') {
-          const args = JSON.parse(toolCall.function.arguments);
-          yield { type: 'status', status: 'Updating email status...' };
-          logger.info('Luna marking email read status (follow-up)', { uid: args.uid, isRead: args.isRead });
-          try {
-            const success = await emailService.markEmailRead(args.uid, args.isRead);
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: success ? `Email with UID ${args.uid} has been marked as ${args.isRead ? 'read' : 'unread'}.` : `Failed to update read status for email with UID ${args.uid}.`,
-            } as ChatMessage);
-          } catch (error) {
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: `Failed to mark email: ${(error as Error).message}`,
-            } as ChatMessage);
-          }
-        } else if (toolCall.function.name === 'suggest_goal') {
-          const args = JSON.parse(toolCall.function.arguments);
-          logger.info('Luna suggesting goal (follow-up)', { title: args.title, goalType: args.goalType });
-
-          await questionsService.storePendingGoalSuggestion(userId, {
-            title: args.title,
-            description: args.description,
-            goalType: args.goalType,
-          });
-
-          await questionsService.askQuestion(userId, sessionId, {
-            question: `Would you like me to create a goal: "${args.title}"?${args.description ? ` (${args.description})` : ''}`,
-            context: `Goal type: ${args.goalType}`,
-            priority: 5,
-          });
-
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Goal suggestion "${args.title}" created. The user will see a notification to confirm or decline.`,
-          } as ChatMessage);
-        } else if (toolCall.function.name.startsWith('system_') ||
-                   toolCall.function.name.startsWith('network_') ||
-                   toolCall.function.name.startsWith('process_') ||
-                   toolCall.function.name.startsWith('docker_') ||
-                   toolCall.function.name.startsWith('service_') ||
-                   toolCall.function.name.startsWith('logs_') ||
-                   toolCall.function.name.startsWith('maintenance_')) {
-          // System monitoring tools in follow-up
-          const args = JSON.parse(toolCall.function.arguments || '{}');
-          yield { type: 'status', status: `Checking ${toolCall.function.name.replace(/_/g, ' ')}...` };
-          logger.info('Sysmon tool called (follow-up)', { tool: toolCall.function.name, args });
-          try {
-            const result = await executeSysmonTool(toolCall.function.name, args);
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: JSON.stringify(result, null, 2),
-            } as ChatMessage);
-          } catch (error) {
-            logger.error('Sysmon tool failed (follow-up)', { tool: toolCall.function.name, error: (error as Error).message });
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: `Error: ${(error as Error).message}`,
-            } as ChatMessage);
-          }
-        } else if (toolCall.function.name.startsWith('mcp_')) {
-          // MCP (Model Context Protocol) tools in follow-up
-          const parsed = mcpService.parseMcpToolName(toolCall.function.name);
-          if (parsed) {
-            const args = JSON.parse(toolCall.function.arguments || '{}');
-            yield { type: 'status', status: `Calling MCP tool ${parsed.toolName}...` };
-            logger.info('MCP tool called (follow-up)', { tool: toolCall.function.name, serverId: parsed.serverId, toolName: parsed.toolName, args });
-
-            const mcpTool = mcpUserTools.find(t => t.serverId.startsWith(parsed.serverId) && t.name === parsed.toolName);
-            if (mcpTool) {
-              const result = await mcpService.executeTool(userId, mcpTool.serverId, parsed.toolName, args);
-              messages.push({
-                role: 'tool',
-                tool_call_id: toolCall.id,
-                content: result.content,
-              } as ChatMessage);
-            } else {
-              messages.push({
-                role: 'tool',
-                tool_call_id: toolCall.id,
-                content: 'MCP tool not found or no longer available',
-              } as ChatMessage);
-            }
-          } else {
-            messages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: 'Invalid MCP tool name format',
-            } as ChatMessage);
-          }
-        } else {
-          // Generic handler for other tools
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: `Tool ${toolCall.function.name} executed.`,
-          } as ChatMessage);
-        }
-      }
-    }
-
-    if (toolRound >= MAX_TOOL_ROUNDS) {
-      logger.warn('Max tool rounds reached', { rounds: toolRound });
-    }
-  } else {
-    // No tools - reuse initial completion (simulate streaming for smooth UX)
-    fullContent = initialCompletion.content || '';
-    tokensUsed = initialCompletion.tokensUsed;
-
-    // Stream the content in chunks for smooth display
-    const chunkSize = 20;
-    for (let i = 0; i < fullContent.length; i += chunkSize) {
-      yield { type: 'content', content: fullContent.slice(i, i + chunkSize) };
+      case 'thinking':
+        yield { type: 'reasoning', content: event.content };
+        break;
+      case 'tool_start':
+        yield { type: 'reasoning', content: `> Using ${event.tool}...\n` };
+        break;
+      case 'tool_result':
+        // Tool result logged by agent loop; no extra yield needed
+        break;
+      case 'side_effect':
+        yield event.event as any;
+        break;
+      case 'limit_hit':
+        yield { type: 'status', status: `Reached ${event.reason === 'max_steps' ? 'step' : 'cost'} limit` };
+        break;
+      case 'done':
+        toolsUsed.push(...event.state.toolsUsed);
+        promptTokens = event.state.totalInputTokens;
+        completionTokens = event.state.totalOutputTokens;
+        break;
     }
   }
+
+  const tokensUsed = promptTokens + completionTokens;
 
   // Save assistant response with router decision metadata
   const assistantMessage = await sessionService.addMessage({
@@ -5466,6 +3673,12 @@ export async function* streamMessage(
 
   // Store assistant message embedding (async)
   memoryService.processMessageMemory(userId, sessionId, assistantMessage.id, fullContent, 'assistant');
+
+  // Parse onboarding data from assistant response (fire-and-forget)
+  if (mode === 'companion') {
+    onboardingService.processAssistantResponse(userId, fullContent)
+      .catch(err => logger.debug('Onboarding parse failed', { err: (err as Error).message }));
+  }
 
   // Record enriched response to MemoryCore for consolidation (async, non-blocking)
   computeEnrichment(sessionId, fullContent).then(({ enrichment }) =>

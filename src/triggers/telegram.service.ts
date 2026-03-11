@@ -9,7 +9,7 @@ import * as workspaceService from '../abilities/workspace.service.js';
 import * as documentsService from '../abilities/documents.service.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { synthesizeWithOpenAI } from '../llm/tts.service.js';
+import { synthesizeSpeech } from '../llm/tts.service.js';
 import * as voiceChatService from '../chat/voice-chat.service.js';
 import OpenAI from 'openai';
 import { config } from '../config/index.js';
@@ -18,6 +18,12 @@ import * as newsfetcherService from '../autonomous/newsfetcher.service.js';
 import * as newsAlertService from '../autonomous/news-alert.service.js';
 import * as sandbox from '../abilities/sandbox.service.js';
 import * as ceoService from '../ceo/ceo.service.js';
+import * as modelConfigService from '../llm/model-config.service.js';
+import { PROVIDERS } from '../llm/types.js';
+import type { ProviderId } from '../llm/types.js';
+import * as localMediaService from '../abilities/local-media.service.js';
+import * as factsService from '../memory/facts.service.js';
+import * as visionService from '../abilities/vision.service.js';
 
 // ============================================
 // Telegram Idle Timer System
@@ -26,6 +32,22 @@ import * as ceoService from '../ceo/ceo.service.js';
 const telegramIdleTimers: Map<string, NodeJS.Timeout> = new Map();
 const TELEGRAM_IDLE_TIMEOUT = 5 * 60 * 1000; // 5 minutes
 const TELEGRAM_TOKEN_LIMIT = 100000; // Force summarize at 100k tokens
+
+// Pending state for multi-step flows
+const pendingModelSelections: Map<number, { provider: ProviderId; models: Array<{ id: string; name: string }>; timestamp: number }> = new Map();
+const pendingMediaResults: Map<string, Array<{ id: string; name: string; path: string; type: string }>> = new Map();
+const activeTelegramSessions: Map<string, string> = new Map(); // userId -> sessionId
+const pendingSessionLists: Map<number, Array<{ id: string; title: string }>> = new Map();
+
+// TTL cleanup for pending states (10 min)
+const PENDING_TTL = 10 * 60 * 1000;
+function cleanupPendingStates(): void {
+  const now = Date.now();
+  for (const [chatId, state] of pendingModelSelections) {
+    if (now - state.timestamp > PENDING_TTL) pendingModelSelections.delete(chatId);
+  }
+}
+setInterval(cleanupPendingStates, 60 * 1000);
 
 /**
  * Reset the idle timer for a Telegram user
@@ -103,6 +125,17 @@ export function clearAllTelegramTimers(): void {
     logger.debug('Cleared Telegram idle timer', { userId });
   }
   telegramIdleTimers.clear();
+}
+
+function getMainPersistentKeyboard(): Record<string, unknown> {
+  return {
+    keyboard: [
+      [{ text: '/list' }, { text: '/model' }, { text: '/sessions' }],
+      [{ text: '/music' }, { text: '/news' }, { text: '/help' }],
+    ],
+    resize_keyboard: true,
+    is_persistent: true,
+  };
 }
 
 // ============================================
@@ -190,12 +223,15 @@ interface TelegramUpdate {
 }
 
 // Quick action categories for inline keyboard
-const QUICK_ACTIONS = {
+const QUICK_ACTIONS: Record<string, Array<{ text: string; callback: string }>> = {
   main: [
     { text: 'Tasks', callback: 'cat:tasks' },
     { text: 'Calendar', callback: 'cat:calendar' },
     { text: 'Search', callback: 'cat:search' },
     { text: 'Fun', callback: 'cat:fun' },
+    { text: 'Model', callback: 'cat:model' },
+    { text: 'Memory', callback: 'cat:memory' },
+    { text: 'Media', callback: 'cat:media' },
   ],
   tasks: [
     { text: 'Show pending', callback: 'act:tasks:pending' },
@@ -215,6 +251,23 @@ const QUICK_ACTIONS = {
   fun: [
     { text: 'Tell a joke', callback: 'act:fun:joke' },
     { text: 'Random fact', callback: 'act:fun:fact' },
+    { text: 'Back', callback: 'cat:main' },
+  ],
+  model: [
+    { text: 'Switch model', callback: 'act:model:switch' },
+    { text: 'Quick presets', callback: 'act:model:quick' },
+    { text: 'Current config', callback: 'act:model:current' },
+    { text: 'Back', callback: 'cat:main' },
+  ],
+  memory: [
+    { text: 'Recent facts', callback: 'act:mem:facts' },
+    { text: 'Graph summary', callback: 'act:mem:graph' },
+    { text: 'Consolidate', callback: 'act:mem:consolidate' },
+    { text: 'Back', callback: 'cat:main' },
+  ],
+  media: [
+    { text: 'Search music', callback: 'act:media:music' },
+    { text: 'Search video', callback: 'act:media:video' },
     { text: 'Back', callback: 'cat:main' },
   ],
 };
@@ -386,6 +439,7 @@ export async function sendTelegramMessage(
   options?: {
     parseMode?: 'HTML' | 'Markdown' | 'MarkdownV2';
     disableNotification?: boolean;
+    replyMarkup?: Record<string, unknown>;
   }
 ): Promise<boolean> {
   try {
@@ -394,6 +448,7 @@ export async function sendTelegramMessage(
       text,
       parse_mode: options?.parseMode,
       disable_notification: options?.disableNotification,
+      reply_markup: options?.replyMarkup,
     });
 
     return true;
@@ -412,6 +467,7 @@ export async function sendTelegramMessage(
           chat_id: chatId,
           text,
           disable_notification: options?.disableNotification,
+          reply_markup: options?.replyMarkup,
         });
         return true;
       } catch (retryError) {
@@ -708,6 +764,12 @@ async function getOrCreateTelegramSession(
   userId: string,
   mode: 'companion' | 'ceo_luna' = 'companion'
 ): Promise<string> {
+  // Check active session override first
+  if (mode === 'companion') {
+    const activeSessionId = activeTelegramSessions.get(userId);
+    if (activeSessionId) return activeSessionId;
+  }
+
   const title = mode === 'ceo_luna' ? 'Telegram CEO' : 'Telegram';
 
   // Check for existing Telegram session
@@ -877,8 +939,35 @@ export async function processUpdate(update: TelegramUpdate): Promise<void> {
   if (text === '/help') {
     await sendTelegramMessage(
       chatId,
-      'Luna Telegram Commands:\n\n/start - Get started\n/list - Quick actions menu\n/status - Check connection status\n/sum - Summarize conversation\n/intents - List active intents\n/news [topic] - Fetch latest interesting news\n/elpris - Run workspace elpris.py\n/unlink - Disconnect from Luna\n/help - Show this help\n\nCEO chat mode:\n/ceo <message> - Route message to CEO Luna\n\nCEO tracking commands:\nceo status | ceo daily | ceo brief | ceo audit\nexpense ... | income ... | build ... | experiment ... | lead ... | project ...\nautopost list | autopost show <id> | autopost draft ... | autopost approve ...\n\nOr just send me a message to chat!\n\nYou can also send images - I will describe them for you!'
+      'Luna Telegram Commands:\n\n/start - Get started\n/list - Quick actions menu\n/model - Switch AI model\n/quick - Quick model presets\n/sessions - Switch session\n/new - New session\n/music <query> - Search and play music\n/status - Check connection status\n/sum - Summarize conversation\n/intents - List active intents\n/news [topic] - Fetch latest interesting news\n/elpris - Run workspace elpris.py\n/unlink - Disconnect from Luna\n/help - Show this help\n\nCEO chat mode:\n/ceo <message> - Route message to CEO Luna\n\nCEO tracking commands:\nceo status | ceo daily | ceo brief | ceo audit\nexpense ... | income ... | build ... | experiment ... | lead ... | project ...\nautopost list | autopost show <id> | autopost draft ... | autopost approve ...\n\nOr just send me a message to chat!\n\nYou can also send images - I will describe them for you!',
+      { replyMarkup: getMainPersistentKeyboard() }
     );
+    return;
+  }
+
+  if (text === '/model' || text === '/model@LunaChatBot') {
+    await handleModelCommand(chatId);
+    return;
+  }
+
+  if (text === '/quick' || text === '/quick@LunaChatBot') {
+    await handleQuickModelCommand(chatId);
+    return;
+  }
+
+  if (text === '/sessions' || text === '/sessions@LunaChatBot') {
+    await handleSessionsCommand(chatId);
+    return;
+  }
+
+  if (text === '/new' || text === '/new@LunaChatBot') {
+    await handleNewSessionCommand(chatId);
+    return;
+  }
+
+  if (/^\/music(\s|$)/.test(text)) {
+    const query = text.slice('/music'.length).trim();
+    await handleMusicCommand(chatId, query || null);
     return;
   }
 
@@ -975,7 +1064,8 @@ async function handleLinkCommand(
 
   await sendTelegramMessage(
     chatId,
-    `Connected! Hi ${from.first_name}, you can now chat with me directly here.\n\nI'll also send you notifications from Luna.\n\nCommands:\n/status - Check connection\n/unlink - Disconnect\n/help - Show all commands`
+    `Connected! Hi ${from.first_name}, you can now chat with me directly here.\n\nI'll also send you notifications from Luna.\n\nCommands:\n/status - Check connection\n/unlink - Disconnect\n/help - Show all commands`,
+    { replyMarkup: getMainPersistentKeyboard() }
   );
 }
 
@@ -983,10 +1073,20 @@ async function handleStatusCommand(chatId: number): Promise<void> {
   const connection = await getConnectionByChatId(chatId);
 
   if (connection) {
-    await sendTelegramMessage(
-      chatId,
-      `Connected to Luna Chat\nLinked: ${connection.linkedAt.toLocaleDateString()}\nLast message: ${connection.lastMessageAt?.toLocaleDateString() || 'Never'}`
-    );
+    const activeSessionId = activeTelegramSessions.get(connection.userId);
+    const sessionInfo = activeSessionId ? `\nActive session: ${activeSessionId.slice(0, 8)}...` : '';
+    try {
+      const config = await modelConfigService.getUserModelConfig(connection.userId, 'main_chat');
+      await sendTelegramMessage(
+        chatId,
+        `Connected to Luna Chat\nModel: ${config.model} (${config.provider})\nLinked: ${connection.linkedAt.toLocaleDateString()}\nLast message: ${connection.lastMessageAt?.toLocaleDateString() || 'Never'}${sessionInfo}`
+      );
+    } catch {
+      await sendTelegramMessage(
+        chatId,
+        `Connected to Luna Chat\nLinked: ${connection.linkedAt.toLocaleDateString()}\nLast message: ${connection.lastMessageAt?.toLocaleDateString() || 'Never'}${sessionInfo}`
+      );
+    }
   } else {
     await sendTelegramMessage(chatId, 'Not connected to any Luna account.');
   }
@@ -1275,6 +1375,9 @@ async function handleCallbackQuery(callback: NonNullable<TelegramUpdate['callbac
         calendar: 'Calendar options:',
         search: 'Search options:',
         fun: 'Fun options:',
+        model: 'Model options:',
+        memory: 'Memory options:',
+        media: 'Media options:',
       };
 
       await editMessageButtons(
@@ -1300,8 +1403,9 @@ async function handleCallbackQuery(callback: NonNullable<TelegramUpdate['callbac
     return;
   }
 
-  // Handle actions - route through chat
+  // Handle actions - route through chat or handle directly
   if (data.startsWith('act:')) {
+    // Direct chat-routed actions
     const actionMessages: Record<string, string> = {
       'act:tasks:pending': 'Show my pending tasks',
       'act:tasks:create': 'I want to create a new task',
@@ -1311,14 +1415,206 @@ async function handleCallbackQuery(callback: NonNullable<TelegramUpdate['callbac
       'act:search:weather': 'What is the weather like?',
       'act:fun:joke': 'Tell me a joke',
       'act:fun:fact': 'Tell me an interesting random fact',
+      'act:mem:graph': 'Give me a summary of my knowledge graph - key entities and connections',
+      'act:mem:consolidate': 'Consolidate my memory now',
     };
 
     const message = actionMessages[data];
     if (message) {
       await answerCallbackQuery(callback.id, 'Processing...');
       await handleChatMessage(connection, message);
-    } else {
+      return;
+    }
+
+    // Model actions
+    if (data === 'act:model:switch') {
       await answerCallbackQuery(callback.id);
+      await handleModelCommand(chatId);
+      return;
+    }
+    if (data === 'act:model:quick') {
+      await answerCallbackQuery(callback.id);
+      await handleQuickModelCommand(chatId);
+      return;
+    }
+    if (data === 'act:model:current') {
+      await answerCallbackQuery(callback.id);
+      try {
+        const config = await modelConfigService.getUserModelConfig(connection.userId, 'main_chat');
+        await sendTelegramMessage(chatId, `Current model: ${config.model} (${config.provider})`);
+      } catch {
+        await sendTelegramMessage(chatId, 'Could not fetch current model config.');
+      }
+      return;
+    }
+
+    // Memory actions
+    if (data === 'act:mem:facts') {
+      await answerCallbackQuery(callback.id, 'Loading facts...');
+      try {
+        const facts = await factsService.getUserFacts(connection.userId, { limit: 10 });
+        if (facts.length === 0) {
+          await sendTelegramMessage(chatId, 'No facts recorded yet.');
+        } else {
+          const lines = facts.map((f, i: number) =>
+            `${i + 1}. ${f.factValue} (${Math.round(f.confidence * 100)}%)`
+          );
+          await sendTelegramMessage(chatId, `Recent facts:\n\n${lines.join('\n')}`);
+        }
+      } catch {
+        await sendTelegramMessage(chatId, 'Could not load facts.');
+      }
+      return;
+    }
+
+    // Media actions
+    if (data === 'act:media:music') {
+      await answerCallbackQuery(callback.id);
+      await sendTelegramMessage(chatId, 'Type /music <query> to search for music.');
+      return;
+    }
+    if (data === 'act:media:video') {
+      await answerCallbackQuery(callback.id);
+      await sendTelegramMessage(chatId, 'Send me a video search query and I will look it up for you.');
+      return;
+    }
+
+    await answerCallbackQuery(callback.id);
+    return;
+  }
+
+  // Model provider selection
+  if (data.startsWith('mdl:p:')) {
+    const providerId = data.slice(6) as ProviderId;
+    const provider = PROVIDERS.find(p => p.id === providerId);
+    if (!provider) {
+      await answerCallbackQuery(callback.id, 'Provider not found');
+      return;
+    }
+
+    const chatModels = provider.models.filter(m => m.capabilities.includes('chat'));
+    pendingModelSelections.set(chatId, {
+      provider: providerId,
+      models: chatModels.map(m => ({ id: m.id, name: m.name })),
+      timestamp: Date.now(),
+    });
+
+    const buttons = chatModels.map((m, i) => ({
+      text: m.name,
+      callback: `mdl:m:${i}`,
+    }));
+
+    if (messageId) {
+      await editMessageButtons(chatId, messageId, `Select a ${provider.name} model:`, buttons, 1);
+    }
+    await answerCallbackQuery(callback.id);
+    return;
+  }
+
+  // Model selection
+  if (data.startsWith('mdl:m:')) {
+    const index = parseInt(data.slice(6), 10);
+    const pending = pendingModelSelections.get(chatId);
+    if (!pending || index < 0 || index >= pending.models.length) {
+      await answerCallbackQuery(callback.id, 'Selection expired');
+      return;
+    }
+
+    const model = pending.models[index];
+    try {
+      await modelConfigService.setUserModelConfig(connection.userId, 'main_chat', pending.provider, model.id);
+      pendingModelSelections.delete(chatId);
+      await answerCallbackQuery(callback.id, `Switched to ${model.name}`);
+      if (messageId) {
+        await editMessageButtons(chatId, messageId, `Model switched to ${model.name} (${pending.provider})`, [], 1);
+      }
+    } catch (error) {
+      logger.error('Failed to switch model', { error: (error as Error).message });
+      await answerCallbackQuery(callback.id, 'Failed to switch model');
+    }
+    return;
+  }
+
+  // Quick model presets
+  if (data.startsWith('qm:')) {
+    const presetMap: Array<{ provider: ProviderId; model: string; name: string }> = [
+      { provider: 'xai', model: 'grok-4-1-fast', name: 'Grok 4.1 Fast' },
+      { provider: 'anthropic', model: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4' },
+      { provider: 'groq', model: 'llama-3.3-70b-versatile', name: 'Llama 70B (Groq)' },
+      { provider: 'google', model: 'gemini-2.0-flash', name: 'Gemini Flash' },
+      { provider: 'xai', model: 'grok-4', name: 'Grok 4' },
+    ];
+
+    const index = parseInt(data.slice(3), 10);
+    const preset = presetMap[index];
+    if (!preset) {
+      await answerCallbackQuery(callback.id, 'Invalid preset');
+      return;
+    }
+
+    try {
+      await modelConfigService.setUserModelConfig(connection.userId, 'main_chat', preset.provider, preset.model);
+      await answerCallbackQuery(callback.id, `Switched to ${preset.name}`);
+      if (messageId) {
+        await editMessageButtons(chatId, messageId, `Model switched to ${preset.name}`, [], 1);
+      }
+    } catch (error) {
+      logger.error('Failed to switch model preset', { error: (error as Error).message });
+      await answerCallbackQuery(callback.id, 'Failed to switch model');
+    }
+    return;
+  }
+
+  // Session selection
+  if (data.startsWith('sess:s:')) {
+    const index = parseInt(data.slice(7), 10);
+    const sessionList = pendingSessionLists.get(chatId);
+    if (!sessionList || index < 0 || index >= sessionList.length) {
+      await answerCallbackQuery(callback.id, 'Selection expired');
+      return;
+    }
+
+    const session = sessionList[index];
+    activeTelegramSessions.set(connection.userId, session.id);
+    pendingSessionLists.delete(chatId);
+    await answerCallbackQuery(callback.id, `Switched to: ${session.title}`);
+    if (messageId) {
+      await editMessageButtons(chatId, messageId, `Active session: ${session.title}`, [], 1);
+    }
+    return;
+  }
+
+  // Media playback
+  if (data.startsWith('med:play:')) {
+    const index = parseInt(data.slice(9), 10);
+    const mediaList = pendingMediaResults.get(connection.userId);
+    if (!mediaList || index < 0 || index >= mediaList.length) {
+      await answerCallbackQuery(callback.id, 'Results expired');
+      return;
+    }
+
+    const media = mediaList[index];
+    await answerCallbackQuery(callback.id, 'Sending audio...');
+
+    try {
+      const stat = await fs.stat(media.path);
+      if (stat.size > 50 * 1024 * 1024) {
+        await sendTelegramMessage(chatId, `File too large for Telegram (${(stat.size / 1024 / 1024).toFixed(1)}MB > 50MB limit).\nPath: ${media.path}`);
+        return;
+      }
+
+      // Send audio via multipart
+      const buffer = await fs.readFile(media.path);
+      const blob = new Blob([buffer]);
+      const formData = new FormData();
+      formData.append('chat_id', chatId.toString());
+      formData.append('audio', blob, media.name);
+      formData.append('title', media.name);
+
+      await telegramMultipartRequest('sendAudio', formData);
+    } catch (error) {
+      logger.error('Failed to send audio', { error: (error as Error).message, path: media.path });
+      await sendTelegramMessage(chatId, `Could not send audio: ${media.name}`);
     }
     return;
   }
@@ -1366,20 +1662,19 @@ async function handleVoiceMessage(
     const arrayBuffer = await response.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
     
-    // Transcribe with Whisper
-    // We need to send it as a file to OpenAI
-    // OpenAI supports: flac, mp3, mp4, mpeg, mpga, m4a, ogg, wav, webm
-    // Telegram usually sends OGG (Opus) which OpenAI supports.
+    // Transcribe with Whisper (local faster-whisper or OpenAI)
     const file = new File([buffer], 'voice.ogg', { type: 'audio/ogg' });
 
-    const openai = new OpenAI({ apiKey: config.openai.apiKey });
-    
+    const sttClient = config.stt.baseUrl
+      ? new OpenAI({ apiKey: 'not-needed', baseURL: config.stt.baseUrl })
+      : new OpenAI({ apiKey: config.openai.apiKey });
+
     let transcript = '';
     try {
-      const transcription = await openai.audio.transcriptions.create({
+      const transcription = await sttClient.audio.transcriptions.create({
         file: file,
-        model: 'whisper-1', 
-        language: 'en', // Optional: auto-detect if removed
+        model: config.stt.model,
+        language: config.stt.language || 'en',
       });
       transcript = transcription.text.trim();
     } catch (sttError) {
@@ -1399,10 +1694,9 @@ async function handleVoiceMessage(
     // This bypasses the layered agent for speed and uses voice-specific tools
     const sessionId = await voiceChatService.getOrCreateVoiceSession(connection.userId);
 
-    // Log activity
+    // Log activity (no sessionId - voice_sessions are not in the sessions table)
     await logActivityAndBroadcast({
       userId: connection.userId,
-      sessionId,
       category: 'system',
       eventType: 'telegram_voice_transcribed',
       level: 'info',
@@ -1421,14 +1715,14 @@ async function handleVoiceMessage(
     // Update last message time (for connection tracking)
     await updateLastMessageTime(connection.userId);
 
-    // Generate Audio Response (TTS) - Enforce OpenAI for speed
+    // Generate Audio Response (TTS) via ElevenLabs
     await telegramRequest('sendChatAction', {
       chat_id: chatId,
       action: 'record_voice',
     });
 
     try {
-      const audioBuffer = await synthesizeWithOpenAI(chatResponse.content, 'nova');
+      const audioBuffer = await synthesizeSpeech({ text: chatResponse.content });
       await sendTelegramVoice(chatId, audioBuffer);
     } catch (ttsError) {
       logger.error('TTS failed for Telegram response', { error: (ttsError as Error).message });
@@ -1484,13 +1778,27 @@ async function handlePhotoMessage(
     const token = process.env.TELEGRAM_BOT_TOKEN;
     const imageUrl = `https://api.telegram.org/file/bot${token}/${fileInfo.file_path}`;
 
+    const imageResponse = await fetch(imageUrl);
+    if (!imageResponse.ok) throw new Error(`Failed to download image: ${imageResponse.statusText}`);
+
+    const arrayBuffer = await imageResponse.arrayBuffer();
+    const imageBuffer = Buffer.from(arrayBuffer);
+
+    // Determine file extension from Telegram file path
+    const ext = path.extname(fileInfo.file_path || '').toLowerCase() || '.jpg';
+    const mimeType = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
+    const fileName = `telegram_${Date.now()}${ext}`;
+
+    // Save to workspace
+    try {
+      await workspaceService.writeBuffer(connection.userId, fileName, imageBuffer);
+      logger.info('Saved Telegram photo to workspace', { userId: connection.userId, fileName });
+    } catch (saveError) {
+      logger.warn('Failed to save photo to workspace', { error: (saveError as Error).message });
+    }
+
     // Get caption if any
     const caption = message.caption || '';
-
-    // Build message for Luna
-    const userMessage = caption
-      ? `[User sent an image with caption: "${caption}"]\n\nImage URL: ${imageUrl}\n\nPlease describe what you see in this image and respond to the caption.`
-      : `[User sent an image]\n\nImage URL: ${imageUrl}\n\nPlease describe what you see in this image.`;
 
     // Get or create session
     const sessionId = await getOrCreateTelegramSession(connection.userId);
@@ -1504,37 +1812,66 @@ async function handlePhotoMessage(
       level: 'info',
       title: 'Telegram photo received',
       message: `Telegram user ${connection.username || connection.chatId} sent a photo`,
-      details: { chatId, hasCaption: !!caption },
+      details: { chatId, hasCaption: !!caption, fileName },
       source: 'telegram',
     });
 
-    // Process through Luna (vision-capable model will handle the URL)
-    const response = await chatService.processMessage({
-      sessionId,
-      userId: connection.userId,
-      message: userMessage,
-      mode: 'companion',
-      source: 'telegram',
+    // Analyze image with vision model (qwen3.5:9b -> xAI fallback)
+    const visionPrompt = caption
+      ? `The user sent this image with caption: "${caption}". Describe what you see and respond to the caption.`
+      : 'Analyze this image in detail. Describe what you see, including any text, objects, people, colors, composition, and context. Be thorough and specific.';
+
+    const visionResult = await visionService.analyzeImage(imageBuffer, mimeType, {
+      prompt: visionPrompt,
+      loggingContext: {
+        userId: connection.userId,
+        sessionId,
+        nodeName: 'telegram_vision',
+      },
     });
 
-    // Update last message time
+    // Send analysis directly as the response
     await updateLastMessageTime(connection.userId);
 
-    // Send response
+    const header = caption ? '' : '';
+    const fullResponse = `${header}${visionResult.description}`.trim();
+
     const maxLength = 4000;
-    let content = response.content;
+    let content = fullResponse;
     while (content.length > 0) {
       const chunk = content.slice(0, maxLength);
       content = content.slice(maxLength);
       await sendTelegramMessage(chatId, chunk, { parseMode: 'Markdown' });
     }
 
+    // Inject the vision result into the chat session for context continuity
+    const userCtx = caption
+      ? `[User sent an image with caption: "${caption}"]`
+      : `[User sent an image]`;
+
+    await sessionService.addMessage({
+      sessionId,
+      role: 'user',
+      content: userCtx,
+      source: 'telegram',
+    });
+    await sessionService.addMessage({
+      sessionId,
+      role: 'assistant',
+      content: `[Vision analysis via ${visionResult.model}]: ${visionResult.description}`,
+      model: visionResult.model,
+      provider: visionResult.provider,
+      source: 'telegram',
+    });
+
     resetTelegramIdleTimer(connection.userId, sessionId);
 
-    logger.info('Telegram photo message processed', {
+    logger.info('Telegram photo analyzed with vision', {
       userId: connection.userId,
       sessionId,
       hasCaption: !!caption,
+      visionProvider: visionResult.provider,
+      visionModel: visionResult.model,
     });
   } catch (error) {
     logger.error('Failed to process Telegram photo', {
@@ -1667,6 +2004,143 @@ async function handleDocumentMessage(
       chatId,
       `Failed to save file: ${(error as Error).message}`
     );
+  }
+}
+
+// ============================================
+// Model Switching (Phase 3)
+// ============================================
+
+async function handleModelCommand(chatId: number): Promise<void> {
+  const connection = await getConnectionByChatId(chatId);
+  if (!connection) {
+    await sendTelegramMessage(chatId, 'Not connected to any Luna account.');
+    return;
+  }
+
+  const enabledProviders = PROVIDERS.filter(p => p.enabled);
+  const buttons = enabledProviders.map(p => ({
+    text: p.name,
+    callback: `mdl:p:${p.id}`,
+  }));
+
+  await sendMessageWithButtons(chatId, 'Select a provider:', buttons, 2);
+}
+
+async function handleQuickModelCommand(chatId: number): Promise<void> {
+  const connection = await getConnectionByChatId(chatId);
+  if (!connection) {
+    await sendTelegramMessage(chatId, 'Not connected to any Luna account.');
+    return;
+  }
+
+  const presets = [
+    { text: 'Grok 4.1 Fast', callback: 'qm:0' },
+    { text: 'Claude Sonnet 4', callback: 'qm:1' },
+    { text: 'Llama 70B (Groq)', callback: 'qm:2' },
+    { text: 'Gemini Flash', callback: 'qm:3' },
+    { text: 'Grok 4', callback: 'qm:4' },
+  ];
+
+  await sendMessageWithButtons(chatId, 'Quick model presets:', presets, 2);
+}
+
+// ============================================
+// Session Management (Phase 4)
+// ============================================
+
+async function handleSessionsCommand(chatId: number): Promise<void> {
+  const connection = await getConnectionByChatId(chatId);
+  if (!connection) {
+    await sendTelegramMessage(chatId, 'Not connected to any Luna account.');
+    return;
+  }
+
+  try {
+    const sessions = await sessionService.getUserSessions(connection.userId, { limit: 10 });
+    if (sessions.length === 0) {
+      await sendTelegramMessage(chatId, 'No sessions found. Use /new to create one.');
+      return;
+    }
+
+    const sessionList = sessions.map((s) => ({ id: s.id, title: s.title }));
+    pendingSessionLists.set(chatId, sessionList);
+
+    const activeId = activeTelegramSessions.get(connection.userId);
+    const buttons = sessionList.map((s, i) => ({
+      text: `${activeId === s.id ? '> ' : ''}${s.title || 'Untitled'}`.slice(0, 30),
+      callback: `sess:s:${i}`,
+    }));
+
+    await sendMessageWithButtons(chatId, 'Select a session:', buttons, 1);
+  } catch (error) {
+    logger.error('Failed to list sessions', { error: (error as Error).message });
+    await sendTelegramMessage(chatId, 'Failed to load sessions.');
+  }
+}
+
+async function handleNewSessionCommand(chatId: number): Promise<void> {
+  const connection = await getConnectionByChatId(chatId);
+  if (!connection) {
+    await sendTelegramMessage(chatId, 'Not connected to any Luna account.');
+    return;
+  }
+
+  try {
+    const session = await sessionService.createSession({
+      userId: connection.userId,
+      title: 'Telegram',
+      mode: 'companion',
+    });
+    activeTelegramSessions.set(connection.userId, session.id);
+    await sendTelegramMessage(chatId, `New session created and activated.`);
+  } catch (error) {
+    logger.error('Failed to create session', { error: (error as Error).message });
+    await sendTelegramMessage(chatId, 'Failed to create session.');
+  }
+}
+
+// ============================================
+// Music Search (Phase 6)
+// ============================================
+
+async function handleMusicCommand(chatId: number, query: string | null): Promise<void> {
+  const connection = await getConnectionByChatId(chatId);
+  if (!connection) {
+    await sendTelegramMessage(chatId, 'Not connected to any Luna account.');
+    return;
+  }
+
+  if (!query) {
+    await sendTelegramMessage(chatId, 'Usage: /music <search query>');
+    return;
+  }
+
+  try {
+    const results = await localMediaService.searchLocalMedia(query, 10);
+    const audioResults = results.filter(r => r.type === 'audio');
+
+    if (audioResults.length === 0) {
+      await sendTelegramMessage(chatId, `No music found for "${query}".`);
+      return;
+    }
+
+    pendingMediaResults.set(connection.userId, audioResults.map(r => ({
+      id: r.id,
+      name: r.name,
+      path: r.path,
+      type: r.type,
+    })));
+
+    const buttons = audioResults.slice(0, 10).map((r, i) => ({
+      text: r.name.slice(0, 40),
+      callback: `med:play:${i}`,
+    }));
+
+    await sendMessageWithButtons(chatId, `Music results for "${query}":`, buttons, 1);
+  } catch (error) {
+    logger.error('Failed to search music', { error: (error as Error).message });
+    await sendTelegramMessage(chatId, 'Failed to search music.');
   }
 }
 

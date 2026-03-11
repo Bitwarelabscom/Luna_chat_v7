@@ -40,3 +40,5 @@ export { classifyIntent, isConfidentClassification, CLASSIFIER_CONFIDENCE_THRESH
 export { checkFreshness, obviouslyNeedsFreshData, obviouslyStatic } from './rules/freshness-check.js';
 export { assessRisk, obviouslyHighRisk, obviouslyLowRisk } from './rules/risk-assessment.js';
 export { determineRoute, quickRoute, validateRoute } from './rules/route-decision.js';
+export { getToolHints } from './rules/tool-hints.js';
+export type { ToolHintResult } from './rules/tool-hints.js';

@@ -2,13 +2,15 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Plus, X, Star, Trash2, RefreshCw, Clock } from 'lucide-react';
-import { friendsApi, GossipTopic, FriendPersonality } from '@/lib/api';
+import { friendsApi, GossipTopic, FriendPersonality, autonomousApi } from '@/lib/api';
 
 const INTERVAL_OPTIONS = [
   { label: '5 min', value: 5 },
   { label: '15 min', value: 15 },
   { label: '30 min', value: 30 },
   { label: '60 min', value: 60 },
+  { label: '4 hrs', value: 240 },
+  { label: '8 hrs', value: 480 },
 ] as const;
 
 interface GossipQueuePanelProps {
@@ -19,14 +21,8 @@ interface GossipQueuePanelProps {
 export default function GossipQueuePanel({ friends, onStartTheater }: GossipQueuePanelProps) {
   const [topics, setTopics] = useState<GossipTopic[]>([]);
   const [loading, setLoading] = useState(true);
-  const [autoEnabled, setAutoEnabled] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    return localStorage.getItem('gossip-auto-enabled') === 'true';
-  });
-  const [interval, setInterval_] = useState<5 | 15 | 30 | 60>(() => {
-    if (typeof window === 'undefined') return 15;
-    return (parseInt(localStorage.getItem('gossip-interval') || '15') || 15) as 5 | 15 | 30 | 60;
-  });
+  const [autoEnabled, setAutoEnabled] = useState(false);
+  const [interval, setInterval_] = useState<number>(240);
   const [showAddForm, setShowAddForm] = useState(false);
   const [addForm, setAddForm] = useState({
     topicText: '',
@@ -51,16 +47,26 @@ export default function GossipQueuePanel({ friends, onStartTheater }: GossipQueu
 
   useEffect(() => {
     loadTopics();
+    // Load gossip settings from backend
+    autonomousApi.getConfig().then(res => {
+      if (res.config) {
+        setAutoEnabled(res.config.gossipEnabled);
+        setInterval_(res.config.gossipIntervalMinutes || 240);
+      }
+    }).catch(() => {});
   }, [loadTopics]);
 
-  // Persist auto-gossip settings
-  useEffect(() => {
-    localStorage.setItem('gossip-auto-enabled', String(autoEnabled));
-  }, [autoEnabled]);
-
-  useEffect(() => {
-    localStorage.setItem('gossip-interval', String(interval));
-  }, [interval]);
+  // Persist gossip settings to backend
+  const saveGossipSettings = useCallback(async (enabled: boolean, intervalMins: number) => {
+    try {
+      await autonomousApi.updateConfig({
+        gossipEnabled: enabled,
+        gossipIntervalMinutes: intervalMins,
+      });
+    } catch (err) {
+      console.error('Failed to save gossip settings:', err);
+    }
+  }, []);
 
   // Auto-gossip timer
   useEffect(() => {
@@ -169,7 +175,11 @@ export default function GossipQueuePanel({ friends, onStartTheater }: GossipQueu
         <div className="flex items-center gap-2 mb-2">
           <span className="text-gray-400 text-xs">Auto:</span>
           <button
-            onClick={() => setAutoEnabled(v => !v)}
+            onClick={() => {
+              const next = !autoEnabled;
+              setAutoEnabled(next);
+              saveGossipSettings(next, interval);
+            }}
             className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
               autoEnabled
                 ? 'bg-pink-600 text-white'
@@ -180,7 +190,11 @@ export default function GossipQueuePanel({ friends, onStartTheater }: GossipQueu
           </button>
           <select
             value={interval}
-            onChange={e => setInterval_(parseInt(e.target.value) as 5 | 15 | 30 | 60)}
+            onChange={e => {
+              const val = parseInt(e.target.value);
+              setInterval_(val);
+              saveGossipSettings(autoEnabled, val);
+            }}
             className="bg-gray-700 border border-gray-600 rounded text-xs text-gray-300 px-1 py-0.5"
           >
             {INTERVAL_OPTIONS.map(opt => (

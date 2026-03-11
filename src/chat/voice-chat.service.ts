@@ -538,18 +538,8 @@ export async function processMessage(input: VoiceChatInput): Promise<VoiceChatOu
   const { sessionId, userId, message } = input;
   const startTime = Date.now();
 
-  // Get model config (use fast model for voice)
-  let modelConfig = await getUserModelConfig(userId, 'fast_llm');
-
-  // Voice chat requires tool support - fall back to xai/grok if provider doesn't support tools
-  const providersWithToolSupport = ['anthropic', 'groq', 'xai', 'openrouter'];
-  if (!providersWithToolSupport.includes(modelConfig.provider)) {
-    logger.info('Voice chat falling back to xai/grok (configured provider does not support tools)', {
-      configuredProvider: modelConfig.provider,
-      userId,
-    });
-    modelConfig = { provider: 'xai', model: 'grok-4.1-fast' };
-  }
+  // Get model config (use primary chat model for voice)
+  const modelConfig = await getUserModelConfig(userId, 'primary');
 
   logger.info('Voice chat using model', { provider: modelConfig.provider, model: modelConfig.model, userId });
 

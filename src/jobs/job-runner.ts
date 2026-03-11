@@ -36,6 +36,7 @@ import * as ceoOrgService from '../ceo/ceo-org.service.js';
 import * as ceoProposals from '../ceo/ceo-proposals.service.js';
 import * as factsService from '../memory/facts.service.js';
 import * as behavioralPatterns from '../memory/behavioral-patterns.service.js';
+import * as friendService from '../autonomous/friend.service.js';
 
 // ============================================
 // Job Definitions
@@ -121,6 +122,13 @@ const jobs: Job[] = [
     enabled: true,
     running: false,
     handler: mineFriendTopics,
+  },
+  {
+    name: 'friendDiscussionStarter',
+    intervalMs: 30 * 60 * 1000, // Every 30 minutes - respects per-user gossip_interval_minutes
+    enabled: true,
+    running: false,
+    handler: runFriendDiscussions,
   },
   // Proactive trigger jobs
   {
@@ -694,6 +702,87 @@ async function mineFriendTopics(): Promise<void> {
     }
   } catch (error) {
     logger.error('Friend topic miner job failed', {
+      error: (error as Error).message,
+    });
+  }
+}
+
+/**
+ * Start friend discussions from approved gossip queue topics.
+ * Picks one approved topic per user and starts a discussion.
+ */
+async function runFriendDiscussions(): Promise<void> {
+  try {
+    // Get users that have gossip enabled and approved topics waiting
+    const users = await pool.query(
+      `SELECT DISTINCT ftc.user_id, ac.gossip_interval_minutes
+       FROM friend_topic_candidates ftc
+       JOIN autonomous_config ac ON ac.user_id = ftc.user_id
+       WHERE ftc.status = 'approved'
+         AND ac.gossip_enabled = true
+       LIMIT 10`
+    );
+
+    let discussionsStarted = 0;
+
+    for (const row of users.rows as Array<{ user_id: string; gossip_interval_minutes: number }>) {
+      try {
+        const userId = row.user_id;
+        const intervalMinutes = row.gossip_interval_minutes || 240;
+
+        // Check if there was a discussion within the user's configured interval
+        const recent = await pool.query(
+          `SELECT id FROM friend_conversations
+           WHERE user_id = $1 AND created_at > NOW() - ($2 || ' minutes')::interval
+           LIMIT 1`,
+          [userId, intervalMinutes]
+        );
+        if (recent.rows.length > 0) {
+          logger.debug('Skipping friend discussion - within interval', { userId, intervalMinutes });
+          continue;
+        }
+
+        // Select a topic from the approved queue
+        const topicResult = await friendService.selectDiscussionTopic(userId);
+        if (!topicResult) {
+          logger.debug('No discussion topic available', { userId });
+          continue;
+        }
+
+        // Start the discussion
+        const discussion = await friendService.startFriendDiscussion(
+          null,
+          userId,
+          topicResult.topic,
+          topicResult.context,
+          topicResult.triggerType,
+          3,
+          undefined,
+          topicResult.topicCandidateId
+        );
+
+        discussionsStarted++;
+        logger.info('Friend discussion started by scheduler', {
+          userId,
+          discussionId: discussion.id,
+          topic: topicResult.topic.substring(0, 80),
+          triggerType: topicResult.triggerType,
+        });
+      } catch (err) {
+        logger.error('Failed to start friend discussion for user', {
+          error: (err as Error).message,
+          userId: row.user_id,
+        });
+      }
+    }
+
+    if (discussionsStarted > 0) {
+      logger.info('Friend discussion starter completed', { discussionsStarted });
+    } else {
+      logger.debug('Friend discussion starter completed - no discussions started');
+    }
+  } catch (error) {
+    logger.error('Friend discussion starter job failed', {
       error: (error as Error).message,
     });
   }
