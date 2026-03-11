@@ -14,8 +14,8 @@ import logger from '../utils/logger.js';
 const ACTIVITY_PREFIX = 'session:activity:';
 const ACTIVITY_TTL = 60 * 60; // 1 hour TTL (cleanup old entries)
 
-// Session inactivity timeout in milliseconds (5 minutes)
-const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
+// Session inactivity timeout in milliseconds (configurable, default 5 minutes)
+const INACTIVITY_TIMEOUT_MS = config.sessionActivity?.inactivityTimeoutMs ?? 300_000;
 
 interface SessionActivity {
   chatSessionId: string;

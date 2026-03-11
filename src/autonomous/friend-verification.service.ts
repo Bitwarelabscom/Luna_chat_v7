@@ -40,9 +40,11 @@ export interface TopicCandidate {
   createdAt: Date;
 }
 
-const TOPIC_THRESHOLD = 0.62;
-const MIN_EVIDENCE_COUNT = 2;
-const MIN_MODEL_CONFIDENCE = 0.55;
+import { config } from '../config/index.js';
+
+const TOPIC_THRESHOLD = config.friends?.topicThreshold ?? 0.55;
+const MIN_EVIDENCE_COUNT = config.friends?.minEvidence ?? 2;
+const MIN_MODEL_CONFIDENCE = config.friends?.minConfidence ?? 0.4;
 
 export async function mineTopicCandidatesForUser(userId: string): Promise<number> {
   const context = await gatherTopicMiningContext(userId);

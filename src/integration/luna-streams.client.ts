@@ -70,7 +70,7 @@ export function emitEvent(event: StreamEvent): void {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ events: [event] }),
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(config.lunaStreams?.emitTimeoutMs ?? 5000),
     }).then(() => {
       consecutiveEmitFailures = 0;
     }).catch(err => {
@@ -196,7 +196,7 @@ export async function getStreamContext(userId?: string): Promise<string | null> 
     const response = await fetch(url, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(3000),
+      signal: AbortSignal.timeout(config.lunaStreams?.contextFetchTimeoutMs ?? 3000),
     });
 
     if (!response.ok) {

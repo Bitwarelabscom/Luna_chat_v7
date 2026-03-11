@@ -128,6 +128,18 @@ const configSchema = z.object({
   lunaStreams: z.object({
     url: z.string().default('http://luna-streams:8100'),
     enabled: z.coerce.boolean().default(false),
+    emitTimeoutMs: z.coerce.number().int().positive().default(5000),
+    contextFetchTimeoutMs: z.coerce.number().int().positive().default(3000),
+  }).optional(),
+
+  sessionActivity: z.object({
+    inactivityTimeoutMs: z.coerce.number().int().positive().default(300000),
+  }).optional(),
+
+  friends: z.object({
+    topicThreshold: z.coerce.number().default(0.55),
+    minEvidence: z.coerce.number().int().default(2),
+    minConfidence: z.coerce.number().default(0.4),
   }).optional(),
 
   neo4j: z.object({
@@ -369,6 +381,18 @@ const rawConfig = {
   lunaStreams: {
     url: process.env.LUNA_STREAMS_URL,
     enabled: process.env.LUNA_STREAMS_ENABLED,
+    emitTimeoutMs: process.env.LUNA_STREAMS_EMIT_TIMEOUT_MS,
+    contextFetchTimeoutMs: process.env.LUNA_STREAMS_CONTEXT_FETCH_TIMEOUT_MS,
+  },
+
+  sessionActivity: {
+    inactivityTimeoutMs: process.env.SESSION_INACTIVITY_TIMEOUT_MS,
+  },
+
+  friends: {
+    topicThreshold: process.env.FRIENDS_TOPIC_THRESHOLD,
+    minEvidence: process.env.FRIENDS_MIN_EVIDENCE,
+    minConfidence: process.env.FRIENDS_MIN_CONFIDENCE,
   },
 
   neo4j: {
