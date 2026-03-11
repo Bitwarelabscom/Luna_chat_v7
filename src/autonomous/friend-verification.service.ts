@@ -137,6 +137,24 @@ export async function markTopicCandidateConsumed(candidateId: string, userId: st
   );
 }
 
+export async function markTopicCandidateInProgress(candidateId: string, userId: string): Promise<void> {
+  await pool.query(
+    `UPDATE friend_topic_candidates
+     SET status = 'in_progress', considered_at = NOW()
+     WHERE id = $1 AND user_id = $2 AND status = 'approved'`,
+    [candidateId, userId]
+  );
+}
+
+export async function revertTopicCandidateToApproved(candidateId: string, userId: string): Promise<void> {
+  await pool.query(
+    `UPDATE friend_topic_candidates
+     SET status = 'approved', considered_at = NULL
+     WHERE id = $1 AND user_id = $2 AND status = 'in_progress'`,
+    [candidateId, userId]
+  );
+}
+
 export async function createClaimsAndQuestionsForDiscussion(params: {
   userId: string;
   sessionId: string | null;

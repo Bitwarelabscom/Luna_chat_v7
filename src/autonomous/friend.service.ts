@@ -318,7 +318,7 @@ export async function selectDiscussionTopic(userId: string): Promise<{
 } | null> {
   const candidate = await friendVerificationService.getApprovedTopicCandidate(userId);
   if (candidate) {
-    await friendVerificationService.markTopicCandidateConsumed(candidate.id, userId);
+    await friendVerificationService.markTopicCandidateInProgress(candidate.id, userId);
     const evidenceText = candidate.evidence.map((line) => `- ${line}`).join('\n');
     return {
       topic: candidate.topicText,

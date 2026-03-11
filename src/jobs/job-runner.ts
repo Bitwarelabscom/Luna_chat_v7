@@ -726,6 +726,7 @@ async function runFriendDiscussions(): Promise<void> {
     let discussionsStarted = 0;
 
     for (const row of users.rows as Array<{ user_id: string; gossip_interval_minutes: number }>) {
+      let topicResult: Awaited<ReturnType<typeof friendService.selectDiscussionTopic>> = null;
       try {
         const userId = row.user_id;
         const intervalMinutes = row.gossip_interval_minutes || 240;
@@ -743,7 +744,7 @@ async function runFriendDiscussions(): Promise<void> {
         }
 
         // Select a topic from the approved queue
-        const topicResult = await friendService.selectDiscussionTopic(userId);
+        topicResult = await friendService.selectDiscussionTopic(userId);
         if (!topicResult) {
           logger.debug('No discussion topic available', { userId });
           continue;
@@ -761,6 +762,11 @@ async function runFriendDiscussions(): Promise<void> {
           topicResult.topicCandidateId
         );
 
+        // Mark topic as consumed only after discussion succeeds
+        if (topicResult.topicCandidateId) {
+          await friendVerificationService.markTopicCandidateConsumed(topicResult.topicCandidateId, userId);
+        }
+
         discussionsStarted++;
         logger.info('Friend discussion started by scheduler', {
           userId,
@@ -769,6 +775,11 @@ async function runFriendDiscussions(): Promise<void> {
           triggerType: topicResult.triggerType,
         });
       } catch (err) {
+        // Revert topic to approved so it can be retried
+        if (topicResult?.topicCandidateId) {
+          await friendVerificationService.revertTopicCandidateToApproved(topicResult.topicCandidateId, row.user_id)
+            .catch(revertErr => logger.warn('Failed to revert topic candidate', { error: (revertErr as Error).message }));
+        }
         logger.error('Failed to start friend discussion for user', {
           error: (err as Error).message,
           userId: row.user_id,

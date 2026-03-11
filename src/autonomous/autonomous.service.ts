@@ -8,6 +8,7 @@ import * as questionsService from './questions.service.js';
 import * as sessionWorkspaceService from './session-workspace.service.js';
 import * as researchService from './research.service.js';
 import * as friendService from './friend.service.js';
+import * as friendVerificationService from './friend-verification.service.js';
 import * as webfetchService from '../search/webfetch.service.js';
 import * as tasksService from '../abilities/tasks.service.js';
 import * as workspaceService from '../abilities/workspace.service.js';
@@ -1850,6 +1851,11 @@ async function executeFriendDiscussionAction(
       });
     }
 
+    // Mark topic as consumed only after discussion succeeds
+    if (topicData.topicCandidateId) {
+      await friendVerificationService.markTopicCandidateConsumed(topicData.topicCandidateId, userId);
+    }
+
     broadcastToSession(sessionId, {
       type: 'friend_discussion_end',
       summary: conversation.summary,
@@ -1858,6 +1864,11 @@ async function executeFriendDiscussionAction(
 
     return `Friend discussion completed: "${topicData.topic.substring(0, 50)}..." - Extracted ${conversation.factsExtracted.length} insights`;
   } catch (error) {
+    // Revert topic to approved so it can be retried
+    if (topicData?.topicCandidateId) {
+      await friendVerificationService.revertTopicCandidateToApproved(topicData.topicCandidateId, userId)
+        .catch(revertErr => logger.warn('Failed to revert topic candidate', { error: (revertErr as Error).message }));
+    }
     logger.error('Friend discussion failed', { sessionId, error });
     return `Friend discussion failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
   }
