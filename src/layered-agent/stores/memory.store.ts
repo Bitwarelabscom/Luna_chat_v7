@@ -8,6 +8,7 @@
 import * as embeddingService from '../../memory/embedding.service.js';
 import * as factsService from '../../memory/facts.service.js';
 import * as sessionLogService from '../../chat/session-log.service.js';
+import * as memoryService from '../../memory/memory.service.js';
 import { query } from '../../db/postgres.js';
 import type { AgentView } from '../schemas/events.js';
 import logger from '../../utils/logger.js';
@@ -176,7 +177,7 @@ export async function buildMemoryContext(
   userId: string,
   userInput: string,
   sessionId: string,
-  agentView: AgentView
+  _agentView: AgentView
 ): Promise<{
   memories: string[];
   facts: string;
@@ -184,58 +185,29 @@ export async function buildMemoryContext(
   recentActions: string;
 }> {
   try {
-    // Run all queries in parallel
-    const [memories, facts, conversations, sessionLogs] = await Promise.all([
-      // Search for relevant past messages
-      searchMemories(userInput, userId, {
-        limit: 8,
-        threshold: 0.75,
-        excludeSessionId: sessionId,
-        topic: agentView.current_topic,
-      }),
-      // Get user facts
-      getUserFacts(userId, 30),
-      // Search for similar conversation summaries
-      searchConversations(userInput, userId, 3),
-      // Get recent session logs with tool actions
+    // Use the primary memory service for full retrieval (graph, NeuralSleep,
+    // emotional moments, contradictions, behavioral observations, etc.)
+    const [primaryContext, sessionLogs] = await Promise.all([
+      memoryService.buildMemoryContext(userId, userInput, sessionId),
       sessionLogService.getRecentSessionLogs(userId, 5),
     ]);
 
-    // Format memories as strings
-    const memoryStrings = memories.map(m => {
-      const role = m.role === 'user' ? 'User' : 'Luna';
-      const truncated = m.content.length > 200
-        ? m.content.slice(0, 200) + '...'
-        : m.content;
-      return `[${role}]: ${truncated}`;
-    });
+    // Map primary context into the format the layered agent expects
+    const memories: string[] = [];
 
-    // Format facts
-    let factsString = '';
-    if (facts.length > 0) {
-      // Group by category
-      const byCategory = facts.reduce((acc, f) => {
-        if (!acc[f.category]) acc[f.category] = [];
-        acc[f.category].push(`${f.key}: ${f.value}`);
-        return acc;
-      }, {} as Record<string, string[]>);
+    // Stable context sections
+    if (primaryContext.stable.graphMemory) memories.push(primaryContext.stable.graphMemory);
+    if (primaryContext.stable.localGraphMemory) memories.push(primaryContext.stable.localGraphMemory);
+    if (primaryContext.stable.consolidatedPatterns) memories.push(primaryContext.stable.consolidatedPatterns);
+    if (primaryContext.stable.consolidatedKnowledge) memories.push(primaryContext.stable.consolidatedKnowledge);
+    if (primaryContext.stable.semanticMemory) memories.push(primaryContext.stable.semanticMemory);
+    if (primaryContext.stable.emotionalMoments) memories.push(primaryContext.stable.emotionalMoments);
+    if (primaryContext.stable.behavioralObservations) memories.push(primaryContext.stable.behavioralObservations);
 
-      const categoryLines = Object.entries(byCategory)
-        .map(([cat, items]) => `${cat}: ${items.join(', ')}`);
+    // Volatile context sections
+    if (primaryContext.volatile.relevantHistory) memories.push(primaryContext.volatile.relevantHistory);
 
-      factsString = `[User Facts]\n${categoryLines.join('\n')}`;
-    }
-
-    // Format conversations
-    let conversationsString = '';
-    if (conversations.length > 0) {
-      const convLines = conversations.map(c =>
-        `- ${c.summary} (Topics: ${c.topics.join(', ')})`
-      );
-      conversationsString = `[Related Past Topics]\n${convLines.join('\n')}`;
-    }
-
-    // Format recent session actions (tool usage from legacy chat)
+    // Format recent session actions
     let recentActionsString = '';
     const sessionsWithTools = sessionLogs.filter(
       log => log.toolsUsed && log.toolsUsed.length > 0
@@ -251,9 +223,9 @@ export async function buildMemoryContext(
     }
 
     return {
-      memories: memoryStrings,
-      facts: factsString,
-      conversations: conversationsString,
+      memories,
+      facts: primaryContext.stable.facts + (primaryContext.stable.learnings ? '\n' + primaryContext.stable.learnings : ''),
+      conversations: primaryContext.volatile.conversationContext,
       recentActions: recentActionsString,
     };
   } catch (error) {
