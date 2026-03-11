@@ -1,7 +1,7 @@
 # Luna Chat - System Flows
 
 **Version**: 7.x
-**Last Updated**: February 2026
+**Last Updated**: March 2026
 
 This document traces how data flows through Luna Chat's internal systems. Use it to understand what happens behind the scenes when a user sends a message, how news is processed, how CEO and DJ Luna operate, and how memory context is built.
 
@@ -193,12 +193,13 @@ System prompt (assembled above)
 Response: "Hey! How's your day going?"
 ```
 
-If the LLM decides to use tools (search, email, code execution, etc.), a tool execution loop runs:
+If the LLM decides to use tools (search, email, code execution, etc.), a tool execution loop runs. All three message paths - `processMessage`, `streamMessage` (via `agent-loop.ts`), and `voice-chat.service` - use a unified tool executor (`src/agentic/tool-executor.ts`). This module contains all 50+ tool handlers in a single `executeTool(toolCall, context)` function, eliminating the previous duplication across services.
+
 1. LLM returns tool call request
-2. Tool is executed (e.g. `web_search`, `create_calendar_event`)
+2. `executeTool()` dispatches the call to the appropriate handler
 3. Tool result is added to messages
 4. LLM is called again with the tool result
-5. Repeat until LLM returns a text response
+5. Repeat until LLM returns a text response (default limits: maxSteps=25, maxCostUsd=$0.50)
 
 ### 12. Post-Processing (Async, Non-Blocking)
 
@@ -252,7 +253,10 @@ Per user:
     |-- Prune stale nodes (edge_count < 2, emotional_intensity < 0.3, inactive > 30d)
     |-- Purge noise nodes (stopword entities, but exempt song/album/person/place/artist types)
     |-- Anti-centrality pressure (graduated: 50+ light, 100+ moderate, 200+ heavy; exempt person/place/artist)
-    |-- Merge candidate analysis (log-only: same type, label substring, activation >= 3)
+    |-- Merge candidate analysis (same type, label substring, activation >= 3)
+    |     - Auto-merge when: cosine > 0.9, same entity type, both activation_count >= 5
+    |     - Keeps the node with more edges, redirects edges from merged node
+    |     - Lower-confidence merges still logged for review
 ```
 
 Edge creation (`createEdge`) is reinforcement-aware:
@@ -271,7 +275,7 @@ ON CONFLICT (user_id, source_node_id, target_node_id, edge_type):
 
 ## Memory Context Building
 
-When `memoryService.buildMemoryContext()` is called, it fetches 9 tiers of knowledge in parallel:
+When `memoryService.buildMemoryContext()` is called, it fetches 12 parallel queries, each wrapped in a 2-second per-query timeout (if any single query exceeds 2s, it returns a fallback value instead of blocking):
 
 ```
 buildMemoryContext(userId, "Hello", sessionId)
@@ -310,6 +314,15 @@ Promise.all([
     |
     +---> [9] Semantic Memory (from MemoryCore)
     |     High-tier consolidated patterns and knowledge
+    |
+    +---> [10] Emotional Moments (recent 5, last 7 days)
+    |     SQL: emotional_moments WHERE user_id = $1 AND created_at > NOW() - 7d
+    |
+    +---> [11] Behavioral Observations (active, limit 3)
+    |     SQL: behavioral_observations WHERE user_id = $1 AND is_active = true
+    |
+    +---> [12] Contradiction Signals (unsurfaced for user, filtered by session)
+    |     SQL: contradiction_signals WHERE user_id = $1 AND surfaced = false
 ])
     |
     v
@@ -324,10 +337,14 @@ Promise.all([
     |
     v
 Return {
-  stable: { facts, learnings, graphMemory, consciousness, consolidatedPatterns, semanticMemory },
-  volatile: { relevantHistory, conversationContext, curationReasoning }
+  stable: { facts, learnings, graphMemory, consciousness, consolidatedPatterns, semanticMemory, emotionalMoments, behavioralObservations },
+  volatile: { relevantHistory, conversationContext, curationReasoning, contradictions, contradictionIds }
 }
 ```
+
+### Mamba Stream Context (Parallel Fetch)
+
+The Mamba stream context fetch (`getStreamContext`) is started as a promise BEFORE `buildMemoryContext()` and awaited after it completes. This means the stream context request runs in parallel with all 12 memory queries instead of sequentially blocking, reducing overall latency.
 
 ### Memory Formatting for Cache Optimization
 
@@ -434,7 +451,7 @@ POST /ingest/run
 [Article Storage] (newsfetcher DB)
     |
     v
-[Enrichment Job] (enrichNewsArticles)
+[Enrichment Job] (enrichNewsArticles, bounded concurrency: 3 parallel via Promise.allSettled batches)
     |
     v
 [News Filter] (news-filter.service.ts)

@@ -132,18 +132,19 @@ Luna Streams is a separate Python service (`/opt/luna-streams/`) that runs three
 
 ### How It Works
 
-1. **Event emission** (fire-and-forget): Chat interactions and entity extractions are emitted to Luna Streams via HTTP POST. Never blocks chat.
-2. **Context injection** (delta-tracked): Before each LLM call, Luna Chat fetches the current stream context. Only updates when state has meaningfully shifted (delta > 0.01).
+1. **Event emission** (fire-and-forget with retry): Chat interactions, entity extractions, and edge classifications are emitted to Luna Streams via HTTP POST. Never blocks chat. Includes retry (max 2 attempts with 500ms/1s backoff) and a circuit breaker that stops retrying after 5 consecutive failures.
+2. **Context injection** (delta-tracked, parallelized): The mamba stream context fetch is started as a promise before `buildMemoryContext()` and awaited after, so it runs in parallel with all memory queries. Only updates when state has meaningfully shifted (delta > 0.01). Cache: 5-min TTL, max 100 entries, returns cached context on timeout.
 
 ### Key Files
 
 | File | Purpose |
 |------|---------|
-| `src/integration/luna-streams.client.ts` | HTTP client - emitEvent(), getStreamContext() |
-| `src/chat/chat.service.ts` | Emission points (alongside recordChatInteraction) |
+| `src/integration/luna-streams.client.ts` | HTTP client - emitEvent(), getStreamContext(), emitEdgeUpdate() |
+| `src/chat/chat.service.ts` | Emission points (alongside recordChatInteraction), parallelized mamba fetch |
 | `src/memory/memory.service.ts` | Entity update emission (after extractGraphEntities) |
+| `src/memory/edge-classification.service.ts` | Edge update emission (after classifyEdges) |
 | `src/persona/luna.persona.ts` | Context injection in Tier 2 (mambaStreamContext option) |
-| `src/config/index.ts` | lunaStreams config (url, enabled) |
+| `src/config/index.ts` | lunaStreams config (url, enabled, emitTimeoutMs, contextFetchTimeoutMs) |
 
 ### Environment Variables
 

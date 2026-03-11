@@ -156,9 +156,10 @@ I notice I made a mistake. Let me add this to Luna for next time.
 <!-- Document quirks, non-obvious behaviors, or things that are easy to forget -->
 
 - **CRITICAL: WireGuard-only access**: Luna is ONLY accessible via WireGuard VPN (10.0.0.x). NOTHING should be exposed to the public internet except the Telegram webhook. Never add public domains to CORS, never create public nginx configs. The only external endpoint is `/api/triggers/telegram/webhook`.
-- **Voice mode tools are separate from main chat**: Voice Luna uses `src/chat/voice-chat.service.ts` with its own tool definitions, not the main chat service. Tools added to voice mode must be defined and handled separately.
+- **All tool execution is unified**: All three code paths (processMessage, streamMessage/agent-loop, voice-chat) use `executeTool()` from `src/agentic/tool-executor.ts`. Voice mode still only DEFINES 18 tools to the LLM (limiting tool choice), but execution goes through the shared path. When adding a new tool, add it once in tool-executor.ts.
 - **Voice mode uses Luna's email account**: Email tools in voice mode use luna@bitwarelabs.com (via `emailService.sendLunaEmail`, `checkLunaInbox`, etc.), not user email connections.
 - **Calendar in voice mode uses Radicale only**: No Google/Outlook calendar integration in voice mode - uses internal CalDAV via `calendarService.createEvent`, `getTodayEvents`, etc.
+- **Shared helpers in src/agentic/shared-helpers.ts**: `convertLocalTimeToUTC` and other common helpers are extracted here. Do not duplicate in other files.
 - **System prompt token count matters**: The base prompt directly affects cost per message. Each capability should be 1-2 lines max, examples should be minimal, and mode variants should only add what's different (not repeat base rules).
 - **Anthropic tool calling now supported**: Voice mode and other tool-enabled features work with Anthropic models (Haiku 4.5, Sonnet, Opus). The `openai.client.ts` routes Anthropic requests to native `anthropic.provider.ts` which converts OpenAI tool format to Anthropic's format.
 - **Docker internal traffic needs HTTPS bypass**: The backend's HTTPS redirect (`src/index.ts`) must allow Docker internal IPs (172.x.x.x) in addition to WireGuard (10.0.0.x). Without this, container-to-container requests (frontend -> luna-api) get 301 redirected and fail with SSL errors.

@@ -205,7 +205,7 @@ For complex, multi-step projects, Luna uses a Directed Acyclic Graph (DAG) execu
 ### Approval Gates & Risk
 The `ApprovalClassifier` assigns risk levels to each step:
 - **Low/Medium**: Often auto-approved based on trust settings.
-- **High/Critical**: Requires manual user approval via the `ApprovalMessage` component.
+- **High/Critical**: Requires manual user approval. Approval UI is now handled inline in the planner flow (the standalone `ApprovalMessage.tsx` component was removed in cleanup).
 - **Irreversible Actions**: (e.g., deleting files, significant refactors) always require an approval gate.
 
 ## Database Schema
@@ -308,43 +308,11 @@ Enable debug logging:
 LOG_LEVEL=debug docker compose up luna-api
 ```
 
-## Sanhedrin Integration
+## Sanhedrin Integration (Deprecated - Removed)
 
-For complex tasks, Luna can delegate to external agents via the A2A Protocol:
+The Sanhedrin integration previously allowed Luna to delegate complex tasks to external agents via the A2A Protocol. The `sanhedrin.provider.ts` file and the luna-sanhedrin container connection have been removed as dead code. The A2A Protocol integration is no longer active.
 
-### Provider: sanhedrin.provider.ts
-
-Connects to Sanhedrin server (luna-sanhedrin container) which wraps Claude Code CLI.
-
-### Request Format
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "uuid",
-  "method": "message/send",
-  "params": {
-    "message": {
-      "role": "user",
-      "parts": [{ "text": "prompt" }]
-    }
-  }
-}
-```
-
-### Response Format
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "uuid",
-  "result": {
-    "taskId": "uuid",
-    "status": { "state": "completed" },
-    "artifacts": [
-      { "parts": [{ "text": "response" }] }
-    ]
-  }
-}
-```
+The request/response format used JSON-RPC 2.0 with `message/send` method calls to a Sanhedrin server that wrapped Claude Code CLI. This functionality may be revisited in the future if multi-agent delegation is needed again.
 
 ## Friends & Gossip System
 
@@ -374,6 +342,24 @@ The Friends window includes an auto-gossip timer (persisted in localStorage):
 - **Interval**: Configurable time between auto-triggered discussions
 - **Flow**: Timer fires -> picks highest-importance unprocessed topic -> starts theater discussion with suggested friend (or random)
 
+### Topic Safety
+
+Topics now go through an `in_progress` status before being consumed to prevent permanent topic loss on discussion failure:
+1. When `selectDiscussionTopic()` picks a topic, it is marked `in_progress` (not consumed)
+2. Only after `startFriendDiscussion()` succeeds is the topic marked `consumed`
+3. If the discussion fails, the topic reverts to `approved`
+4. A safety job reverts any `in_progress` topics older than 1 hour back to `approved`
+
+### Semantic Deduplication
+
+New topic candidates are checked against recent topics (last 7 days) using embedding cosine similarity. Topics with similarity > 0.85 are rejected to prevent near-duplicate discussions from cluttering the queue.
+
+### Council Escalation
+
+After a friend discussion completes, high-signal topics are automatically escalated to a Council session for deeper deliberation. Escalation triggers:
+- Topic importance > 0.85
+- Topic has recurred 3+ times
+
 ### Theater Discussions
 
 Friend discussions happen in "Theater Mode" -- a live-streamed deliberation visible in the UI:
@@ -402,7 +388,7 @@ Friend discussions happen in "Theater Mode" -- a live-streamed deliberation visi
 
 ## Future Enhancements
 
-- [ ] Multi-agent task decomposition
+- [x] Multi-agent task decomposition (partially done - the agentic loop in `src/agentic/agent-loop.ts` now handles multi-step tool use with automatic LLM-driven iteration)
 - [x] Persistent learning across sessions (MemoryCore integration)
 - [ ] Proactive goal reminders
 - [ ] Context-aware action suggestions

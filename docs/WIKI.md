@@ -182,6 +182,10 @@ Luna adapts her behavior based on the selected mode:
 
 ### Tool System
 
+All code paths (processMessage, streamMessage/agent-loop, voice-chat) use a single unified `executeTool()` from `src/agentic/tool-executor.ts`. The **agentic loop** (`src/agentic/agent-loop.ts`) handles LLM calls in a loop, executing tools and feeding results back until the LLM stops requesting tools. It includes context overflow management (rough token estimation, summarization of older tool results when context exceeds 80% capacity), loop breakers for repeated identical tool calls, and consecutive error detection. Default limits: maxSteps=25, maxCostUsd=0.50.
+
+Shared helpers like `convertLocalTimeToUTC` are extracted to `src/agentic/shared-helpers.ts` to avoid duplication across services.
+
 Luna has access to 50+ tools organized by capability:
 
 | Category | Tools | Use Cases |
@@ -293,6 +297,10 @@ Every message is enriched before processing:
 | **Attention** | Length, latency, continuity | Score 0-1 | ~3ms |
 | **Centroid** | Embedding + history | Rolling EMA | ~2ms |
 
+### Memory Context Building
+
+Before each LLM call, `memoryService.buildMemoryContext()` runs **12 parallel queries** (including emotional moments, behavioral observations, and contradiction signals) with a per-query 2-second timeout via `Promise.race`. Mamba stream context fetch is parallelized alongside memory context (no longer sequential). The layered agent also uses this full `buildMemoryContext()` for complete memory retrieval instead of a reduced version.
+
 ### Graph Memory
 
 **Database**: PostgreSQL (local) + MemoryCore SQL graph tables
@@ -325,7 +333,7 @@ Graph retrieval uses BFS spreading activation instead of static narrative blobs:
 **Consolidation**:
 - **Immediate**: Session end - extract nodes, create co-occurrence edges
 - **Daily**: 2 AM - EMA weight evolution (per-type tau), weak edge pruning, centrality recalc, provisional node promotion
-- **Weekly**: 3 AM Sunday - stale node pruning, noise purge (type-exempt), graduated anti-centrality, merge candidate analysis
+- **Weekly**: 3 AM Sunday - stale node pruning, noise purge (type-exempt), graduated anti-centrality, merge candidate analysis, auto-merge for high-confidence candidates (cosine > 0.9, same type, activation_count >= 5; lower-confidence still logged for review)
 
 **Key Principles**:
 1. Connection density = memory strength (not just storage)
@@ -334,6 +342,14 @@ Graph retrieval uses BFS spreading activation instead of static narrative blobs:
 4. Anti-centrality pressure prevents gravity wells
 5. Causal edges require multi-session reinforcement
 6. Spreading activation replaces static retrieval for dynamic context
+
+### Resonant Memory (March 2026)
+
+Captures emotional and behavioral signals for richer memory context:
+
+- **Emotional Moments**: Captured when |valence| > 0.5 or arousal > 0.6, generates 1-sentence moment tag via LLM. Stored in `emotional_moments` table.
+- **Behavioral Observations**: 15-min job compares 3-day vs 7-day enrichment stats, generates specific LLM observations. Stored in `behavioral_observations` table.
+- **Contradiction Signals**: Emitted from facts service on supersession of well-established facts (mention_count >= 2). User-scoped (not session-scoped) - uses `surfaced_session_ids UUID[]` column for per-session tracking. Marked globally surfaced after 3+ sessions. Stored in `contradiction_signals` table.
 
 ### Fact Extraction & Learning
 
@@ -677,7 +693,7 @@ Luna includes a full news intelligence platform for multi-source aggregation, LL
 - **Sources**: RSS feeds from NYTimes, Guardian, Financial Times, and custom sources
 - **Window**: 3-day rolling window for article retention and enrichment
 - **LLM**: Classification via Qwen 2.5 7B on local Ollama (10.0.0.30)
-- **Enrichment**: POST+polling pattern with heartbeat-based staleness detection
+- **Enrichment**: POST+polling pattern with heartbeat-based staleness detection, bounded concurrency (3 parallel via Promise.allSettled instead of sequential 500ms-delayed processing)
 
 ### Tabs
 
@@ -823,6 +839,12 @@ Topics Luna wants to discuss are managed in the `friend_topic_candidates` table:
 | `importance` | 1-5 scale (higher = more urgent) |
 | `motivation` | Why Luna wants to discuss this |
 | `suggested_friend_id` | Which friend persona is best for this topic |
+| `status` | `pending`, `in_progress`, `processed` - `in_progress` prevents topic loss on discussion failure |
+
+**Safeguards**:
+- **Semantic dedup**: New topic candidates are rejected if cosine similarity > 0.85 with an existing candidate
+- **Council escalation**: High-importance topics (> 0.85) or recurring topics (3+ occurrences) are escalated to council deliberation
+- **Config extraction**: Topic thresholds (`friends.topicThreshold`, `friends.minEvidence`, `friends.minConfidence`) are centralized in `src/config/index.ts`
 
 ### Auto-Gossip Timer
 
@@ -956,9 +978,9 @@ Both states are persisted via safetensors with 3-snapshot rotation.
 
 | File | Purpose |
 |------|---------|
-| `src/integration/luna-streams.client.ts` | Fire-and-forget event emission + delta-tracked context |
+| `src/integration/luna-streams.client.ts` | Event emission with retry/circuit breaker + delta-tracked context with cache |
 | `src/chat/chat.service.ts` | Emits chat interactions as memory_entry events |
-| `src/memory/memory.service.ts` | Emits entity_update events after graph extraction |
+| `src/memory/memory.service.ts` | Emits entity_update events after graph extraction and edge classification |
 | `src/persona/luna.persona.ts` | Injects stream context in Tier 2 (stable) |
 
 **Context injection format** (~120 tokens):
@@ -969,6 +991,12 @@ Both states are persisted via safetensors with 3-snapshot rotation.
 ```
 
 Delta tracker returns `changed: false` when state delta < 0.01, so context only regenerates on meaningful shifts.
+
+**Resilience** (March 2026):
+- **Retry with backoff**: Max 2 retries (500ms, 1000ms delay)
+- **Circuit breaker**: 5 consecutive failures stops retrying until reset
+- **Context cache**: 5-min TTL, max 100 entries, returns cached value on timeout
+- **Timeouts**: Configurable via `lunaStreams.emitTimeoutMs` and `lunaStreams.contextFetchTimeoutMs` in `src/config/index.ts`
 
 ### Configuration
 
@@ -1192,6 +1220,7 @@ Delta tracker returns `changed: false` when state delta < 0.01, so context only 
 luna-chat/
 ├── src/                          # Backend (Node.js/TypeScript)
 │   ├── abilities/               # Tools and integrations
+│   ├── agentic/                 # Agent loop, unified tool executor, cost tracker, shared helpers
 │   ├── autonomous/              # Autonomous mode
 │   ├── ceo/                     # CEO Luna backend
 │   ├── planner/                 # Projects (Execution Graph)
@@ -1203,6 +1232,7 @@ luna-chat/
 │   ├── media/                   # Jellyfin + yt-dlp media
 │   ├── memory/                  # Memory system
 │   ├── graph/                   # Graph memory integration
+│   ├── integration/             # External service clients (Luna Streams)
 │   ├── persona/                 # Personality
 │   ├── search/                  # Web search
 │   ├── security/                # Security middleware
@@ -1280,7 +1310,7 @@ docker compose up -d
 
 **Naming**: `XXX_descriptive_name.sql` (numbered sequentially)
 
-**Latest**: Migration 091 (Music trends and proposed genres)
+**Latest**: Migration 108+ (Resonant memory tables - emotional_moments, contradiction_signals, behavioral_observations)
 
 **Create Migration**:
 ```bash
@@ -1307,6 +1337,9 @@ npm run migrate
 - `proposed_genre_presets`: User-submitted genre presets
 - `music_trend_raw`: Music trend scraping results
 - `friend_topic_candidates`: Gossip queue topics
+- `emotional_moments`: Resonant memory - emotional captures
+- `contradiction_signals`: Resonant memory - fact contradictions (user-scoped)
+- `behavioral_observations`: Resonant memory - behavioral pattern changes
 
 ### Common Patterns
 
@@ -1362,6 +1395,18 @@ await projectService.writeProjectFile(sessionId, 'config.json', '{}');
 - **noUnusedParameters**: Prefix unused params with `_`
 - **Function-based API client**: `api<T>(endpoint, options)` not axios-style
 
+### Dead Code Cleanup (March 2026)
+
+The following were removed as part of codebase cleanup:
+
+**Removed functions**: `needsOrchestration()`, `detectAbilityIntentWithCache`, `executeFactCorrection`, some builtin-tools functions, `queryEpisodicMemory`, `formatMemoryWithConsciousness`, `getFullMemoryContext`, `formatFullMemoryContext`
+
+**Removed modules**: `mood-awareness.service.ts`, `backtest-validator.service.ts`, `binance.client.ts`, `test-pdf.ts`, `ApprovalMessage.tsx`
+
+**Removed dependencies**: `rate-limit-redis`, `socket.io`
+
+**Removed emissions**: `emitSessionMeta` (unused). `emitEdgeUpdate` is now wired into edge classification.
+
 ### Security Hardening
 
 The project includes comprehensive security measures:
@@ -1372,7 +1417,7 @@ The project includes comprehensive security measures:
 | **Token Encryption** | AES-256-GCM for OAuth tokens at rest |
 | **Authentication** | JWT with access/refresh token flow |
 | **WebSocket Auth** | Token-based WebSocket authentication |
-| **Rate Limiting** | Redis-backed, per-endpoint limits |
+| **Rate Limiting** | In-memory, per-endpoint limits (rate-limit-redis removed) |
 | **Fail2ban** | IP-based login tracking |
 | **SSRF Protection** | URL validation on external requests |
 | **Input Validation** | Zod schemas on all endpoints |
@@ -1456,6 +1501,7 @@ See [README.md](../README.md#api-reference) for full endpoint listing.
 **Luna Streams**:
 - `LUNA_STREAMS_URL`: Luna Streams service URL (default: http://luna-streams:8100)
 - `LUNA_STREAMS_ENABLED`: Enable Mamba Streams event emission and context injection (default: false)
+- Timeouts and thresholds configured in `src/config/index.ts`: `lunaStreams.emitTimeoutMs`, `lunaStreams.contextFetchTimeoutMs`
 
 **Memory**:
 - `MEMORYCORE_URL`: MemoryCore API URL (default: http://memorycore-api:3007)
@@ -1477,6 +1523,9 @@ See [README.md](../README.md#api-reference) for full endpoint listing.
 - `IRC_SERVER`: IRC server address (default: luna.bitwarelabs.com)
 - `IRC_PORT`: IRC server port (default: 12500)
 - `IRC_NICK`: Luna's IRC nickname (default: Luna)
+
+**Friends** (hardcoded thresholds moved to `src/config/index.ts`):
+- `friends.topicThreshold`, `friends.minEvidence`, `friends.minConfidence` - configurable in code config
 
 **Autonomous**:
 - `AUTONOMOUS_ENABLED`: Enable autonomous mode (default: true)
@@ -1608,7 +1657,7 @@ Per-user configuration in Settings panel:
 **Symptoms**: Sessions not consolidating to MemoryCore
 
 **Solutions**:
-- Check Redis activity tracking: `docker exec luna-redis redis-cli -a $REDIS_PASSWORD KEYS "session:activity:*"`
+- Check Redis activity tracking: `docker exec luna-redis redis-cli -a $REDIS_PASSWORD KEYS "session:activity:*"` (session activity uses batch `mget` to avoid N+1 queries)
 - Verify consolidation job is running: `docker logs luna-api | grep -i "consolidat"`
 - Check MemoryCore logs: `docker logs memorycore-api`
 - Review consolidation table: `SELECT * FROM consolidation_logs ORDER BY timestamp DESC LIMIT 5;`
@@ -1722,6 +1771,6 @@ docker stats luna-api luna-frontend luna-postgres luna-redis
 
 ---
 
-**Document Version**: 1.0
-**Last Updated**: February 16, 2026
+**Document Version**: 1.1
+**Last Updated**: March 11, 2026
 **Maintained By**: BitwareLabs

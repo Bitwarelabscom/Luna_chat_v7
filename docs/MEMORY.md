@@ -33,10 +33,18 @@ User Message
     |
     v
 [Build Memory Context]
-  |-- getUserFacts()           --> 30 most relevant facts
-  |-- searchSimilarMessages()  --> 5 semantically similar past messages
-  |-- searchSimilarConversations() --> 3 related past topics
-  |-- getActiveLearnings()     --> 10 active insights
+  |-- getUserFacts()              --> 30 most relevant facts
+  |-- searchSimilarMessages()     --> 5 semantically similar past messages
+  |-- searchSimilarConversations()--> 3 related past topics
+  |-- getActiveLearnings()        --> 10 active insights
+  |-- getConsciousnessMetrics()   --> Phi, temporal integration, etc.
+  |-- getConsolidatedModel()      --> Consolidated patterns + knowledge
+  |-- graphContextForMessage()    --> Spreading activation graph context
+  |-- buildLocalGraphContext()    --> Neo4j local graph context
+  |-- getSemanticMemory()         --> Long-term semantic memory
+  |-- getRecentMoments()          --> Recent emotional moments
+  |-- getActiveObservations()     --> Active behavioral patterns
+  |-- getUnsurfaced()             --> Unsurfaced contradiction signals
     |
     v
 [Inject into System Prompt]
@@ -354,8 +362,12 @@ At the start of each message, Luna retrieves relevant memories:
 
 ```typescript
 async function buildMemoryContext(userId, sessionId, currentMessage) {
-  // Run all queries in parallel for performance
-  const [facts, similarMessages, similarConvos, learnings] = await Promise.all([
+  // Run all 12 queries in parallel for performance
+  const [
+    facts, similarMessages, similarConvos, learnings,
+    consciousness, consolidated, graphContext, localGraphContext,
+    semanticMemory, recentMoments, activeObservations, unsurfaced
+  ] = await Promise.all([
     getUserFacts(userId, { limit: 30 }),
     searchSimilarMessages(userId, currentMessage, {
       limit: 5,
@@ -366,17 +378,40 @@ async function buildMemoryContext(userId, sessionId, currentMessage) {
       limit: 3,
       threshold: 0.6
     }),
-    getActiveLearnings(userId, { limit: 10 })
+    getActiveLearnings(userId, { limit: 10 }),
+    getConsciousnessMetrics(userId),
+    getConsolidatedModel(userId),
+    graphContextForMessage(userId, currentMessage),
+    buildLocalGraphContext(userId, currentMessage),  // Neo4j
+    getSemanticMemory(userId),
+    getRecentMoments(userId),           // emotional moments
+    getActiveObservations(userId),      // behavioral patterns
+    getUnsurfaced(userId, sessionId)    // contradiction signals
   ]);
+
+  // Each query above is wrapped in a 2-second timeout via Promise.race.
+  // If any single query exceeds 2s, it returns its fallback default value
+  // and logs a warning. This prevents one slow query from blocking the
+  // entire memory retrieval pipeline.
 
   return {
     stable: {
-      facts: formatFacts(facts),        // Alphabetically sorted
-      learnings: formatLearnings(learnings)
+      facts: formatFacts(facts),
+      learnings: formatLearnings(learnings),
+      graphMemory: graphContext,
+      localGraphMemory: localGraphContext,
+      consciousness: consciousness,
+      consolidatedPatterns: consolidated?.patterns,
+      consolidatedKnowledge: consolidated?.knowledge,
+      semanticMemory: semanticMemory,
+      emotionalMoments: formatMoments(recentMoments),
+      behavioralObservations: formatObservations(activeObservations)
     },
     volatile: {
       relevantHistory: formatMessages(similarMessages),
-      conversationContext: formatConvos(similarConvos)
+      conversationContext: formatConvos(similarConvos),
+      contradictions: formatContradictions(unsurfaced),
+      contradictionIds: unsurfaced.map(c => c.id)
     }
   };
 }
@@ -615,7 +650,12 @@ async function buildMemoryContext(userId, sessionId, message) {
   } catch (error) {
     logger.error('Failed to build memory context', { error });
     // Return empty context - chat continues without memory
-    return { stable: { facts: '', learnings: '' }, volatile: { relevantHistory: '', conversationContext: '' } };
+    return {
+      stable: { facts: '', learnings: '', graphMemory: null, localGraphMemory: null,
+        consciousness: null, consolidatedPatterns: null, consolidatedKnowledge: null,
+        semanticMemory: null, emotionalMoments: '', behavioralObservations: '' },
+      volatile: { relevantHistory: '', conversationContext: '', contradictions: '', contradictionIds: [] }
+    };
   }
 }
 ```
@@ -715,6 +755,28 @@ The EMA formula: `alpha = 1 - exp(-deltaT / tau)`, `targetWeight = min(1.0, 0.5 
 
 ---
 
+## Contradiction Signals (March 2026)
+
+Contradiction signals are emitted from `facts.service.ts` when a well-established fact (mention_count >= 2) is superseded by a new value. These signals help Luna acknowledge changes naturally in conversation.
+
+### User-Scoped Retrieval
+
+Contradiction signals are **user-scoped**, not session-scoped. The retrieval query uses:
+
+```sql
+SELECT * FROM contradiction_signals
+WHERE user_id = $1
+  AND surfaced = FALSE
+  AND NOT (surfaced_session_ids @> ARRAY[$2]::uuid[])
+ORDER BY created_at DESC;
+```
+
+The `surfaced_session_ids UUID[]` column tracks which sessions have already seen each signal. A signal is marked globally `surfaced = TRUE` after being shown in 3 or more sessions. This ensures that contradictions are surfaced across multiple conversations before being retired, rather than disappearing after a single session.
+
+After prompt building, surfaced contradiction IDs are tracked in `volatile.contradictionIds` and the corresponding session ID is appended to `surfaced_session_ids`.
+
+---
+
 ## Memory Lab (March 2026)
 
 The Memory Lab window (AppId: `memory-lab`, 1400x860) provides a visual interface for inspecting and managing Luna's graph memory.
@@ -727,6 +789,7 @@ The Memory Lab window (AppId: `memory-lab`, 1400x860) provides a visual interfac
 | **Facts** | CRUD interface for managing user facts with category, confidence, and source tracking |
 | **Consciousness** | Real-time consciousness metrics (Phi, temporal integration, self-reference depth, causal density) |
 | **LNN Live** | Live diagnostics dashboard polling every 5 seconds. Shows ThematicLNN stability, RelationalLNN coherence, CausalGate cross-stream flow, Spreading Activation parameters, emotional trajectory chart, and centroid drift chart. |
+| **Knowledge** | CRUD interface for managing long-term knowledge entries |
 
 ### 3D Brain View
 
@@ -741,7 +804,7 @@ The 3D brain visualization renders 4,000+ memory nodes as color-coded spheres:
 
 ## Future Improvements
 
-- [ ] Emotion-aware memory retrieval
+- [x] Emotion-aware memory retrieval (emotional moments service - getRecentMoments)
 - [x] Cross-session topic tracking (via distinct_session_count on graph edges)
 - [x] Memory consolidation (MemoryCore integration - see below)
 - [x] Forgetting curve (EMA weight decay in NeuralSleep daily consolidation)
@@ -936,11 +999,16 @@ Job: `neuralSleepWeeklyConsolidation` -- Cron: `0 3 * * 0` (Helsinki time)
    | 100-199 | 25% | person, place, artist |
    | 200+ | 40% | person, place, artist |
 
-4. **Merge Candidate Analysis** (log-only) -- Finds node pairs with:
+4. **Merge Candidate Analysis** -- Finds node pairs with:
    - Same `node_type`
    - Label substring match (both labels >= 4 chars to prevent "Pi"/"Piano" false positives)
    - `activation_count >= 3` on co-occurrence edge
-   - Logs candidates for review in Memory Lab
+
+   **Auto-merge behavior:**
+   - High-confidence merges (cosine similarity > 0.9, same entity type, both nodes have `activation_count >= 5`) are executed automatically
+   - The node with more edges is kept as the survivor; all edges from the merged node are redirected to the survivor
+   - Lower-confidence merges (below any of those thresholds) are logged for manual review in Memory Lab
+   - A merge counter is included in the weekly consolidation logs for tracking
 
 ### API Endpoints
 
