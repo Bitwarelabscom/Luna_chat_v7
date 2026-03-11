@@ -16,7 +16,6 @@ import * as coderSettings from './coder-settings.service.js';
 import { createBackgroundCompletionWithFallback } from '../llm/background-completion.service.js';
 import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
-import { intentCache } from './intent-cache.service.js';
 import { pool } from '../db/index.js';
 
 export interface AbilityContext {
@@ -956,54 +955,6 @@ export function detectAbilityIntent(message: string): AbilityIntent {
 }
 
 /**
- * Detect ability intent with semantic caching
- * Uses cached intents for similar queries to skip redundant detection
- */
-export async function detectAbilityIntentWithCache(
-  message: string
-): Promise<AbilityIntent> {
-  // Skip caching for very short messages
-  if (message.length < 20) {
-    return detectAbilityIntent(message);
-  }
-
-  try {
-    // Check cache first
-    const cached = await intentCache.getCachedIntent(message);
-
-    if (cached && cached.confidence >= 0.8) {
-      logger.debug('Using cached intent', {
-        agentType: cached.agentType,
-        confidence: cached.confidence,
-        cacheAge: Date.now() - cached.timestamp,
-      });
-
-      // Map cached agent type back to AbilityIntent
-      return {
-        type: cached.agentType as AbilityIntent['type'],
-        confidence: cached.confidence,
-      };
-    }
-
-    // Fall back to rule-based detection
-    const intent = detectAbilityIntent(message);
-
-    // Cache the result if confident enough and not 'none' or 'smalltalk'
-    if (intent.confidence >= 0.7 && intent.type !== 'none' && intent.type !== 'smalltalk') {
-      await intentCache.cacheIntent(message, intent.type, intent.confidence);
-    }
-
-    return intent;
-  } catch (error) {
-    // On cache error, fall back to rule-based detection
-    logger.warn('Intent cache error, falling back to rule-based', {
-      error: (error as Error).message,
-    });
-    return detectAbilityIntent(message);
-  }
-}
-
-/**
  * Use LLM to identify which fact the user wants to correct/delete
  */
 async function identifyFactToCorrect(
@@ -1065,45 +1016,6 @@ Only return the JSON object.`;
   } catch (error) {
     logger.error('Failed to identify fact to correct', { error: (error as Error).message });
     return { factId: null };
-  }
-}
-
-/**
- * Execute a confirmed fact correction (called after user confirms)
- */
-export async function executeFactCorrection(
-  userId: string,
-  action: 'delete' | 'update',
-  factId: string,
-  newValue?: string,
-  reason?: string
-): Promise<{ success: boolean; message: string }> {
-  try {
-    if (action === 'delete') {
-      const result = await facts.deleteFact(userId, factId, reason);
-      if (result.success && result.deletedFact) {
-        return {
-          success: true,
-          message: `Done! I've forgotten that your ${result.deletedFact.factKey} was "${result.deletedFact.factValue}".`,
-        };
-      }
-      return { success: false, message: "I couldn't find that fact to delete." };
-    } else {
-      if (!newValue) {
-        return { success: false, message: 'No new value provided for the update.' };
-      }
-      const result = await facts.updateFact(userId, factId, newValue, reason);
-      if (result.success) {
-        return {
-          success: true,
-          message: `Updated! I've changed that from "${result.oldValue}" to "${newValue}".`,
-        };
-      }
-      return { success: false, message: "I couldn't find that fact to update." };
-    }
-  } catch (error) {
-    logger.error('Failed to execute fact correction', { error: (error as Error).message });
-    return { success: false, message: 'Something went wrong while correcting that fact.' };
   }
 }
 
@@ -1848,7 +1760,6 @@ export default {
   detectCodingAgentShortcut,
   detectCodingAgentWithSettings,
   executeAbilityAction,
-  executeFactCorrection,
   getAbilitySummary,
   isSmallTalk,
   isSimpleCompanionMessage,

@@ -229,42 +229,6 @@ export async function getSemanticMemory(userId: string): Promise<MemoryContext |
   }
 }
 
-export async function queryEpisodicMemory(
-  userId: string,
-  options?: { limit?: number; timeWindow?: string }
-): Promise<Array<{ type: string; pattern: string; confidence: number }>> {
-  if (!config.memorycore.enabled) return [];
-
-  const { limit = 10, timeWindow = '7d' } = options || {};
-
-  try {
-    const params = new URLSearchParams({
-      limit: limit.toString(),
-      timeWindow,
-    });
-
-    const response = await fetch(
-      `${config.memorycore.url}/api/memory/user/${userId}/episodic?${params}`,
-      {
-        method: 'GET',
-        headers: {
-          'Accept': 'application/json',
-        },
-      }
-    );
-
-    if (!response.ok) {
-      return [];
-    }
-
-    const data = await response.json() as { patterns?: Array<{ type: string; pattern: string; confidence: number }> };
-    return data.patterns || [];
-  } catch (error) {
-    logger.warn('Failed to query episodic memory', { userId, error: (error as Error).message });
-    return [];
-  }
-}
-
 export async function healthCheck(): Promise<boolean> {
   if (!config.memorycore.enabled) return true;
 
@@ -485,48 +449,6 @@ export async function triggerConsciousnessAnalysis(userId: string): Promise<Cons
   }
 }
 
-/**
- * Format memory context with consciousness awareness for prompts
- */
-export function formatMemoryWithConsciousness(memory: MemoryContext | null): string {
-  if (!memory) return '';
-
-  const parts: string[] = [];
-
-  // Standard memory context
-  if (memory.semanticMemory?.learningStyleModel) {
-    const style = memory.semanticMemory.learningStyleModel;
-    parts.push(`User preferences: ${JSON.stringify(style)}`);
-  }
-
-  if (memory.recentPatterns && memory.recentPatterns.length > 0) {
-    const patterns = memory.recentPatterns
-      .slice(0, 3)
-      .map((p) => `- ${p.type}: ${p.pattern}`)
-      .join('\n');
-    parts.push(`Recent patterns:\n${patterns}`);
-  }
-
-  // Add consciousness context if available
-  if (memory.consciousness) {
-    const { phi, temporalIntegration, consciousnessLevel } = memory.consciousness;
-    const consciousnessContext = [
-      `Temporal coherence: ${(temporalIntegration * 100).toFixed(1)}%`,
-    ];
-    if (consciousnessLevel) {
-      consciousnessContext.push(`Memory integration level: ${consciousnessLevel}`);
-    }
-    if (phi >= config.memorycore.phiThreshold) {
-      consciousnessContext.push('(High temporal integration detected)');
-    }
-    parts.push(`Memory state:\n${consciousnessContext.join('\n')}`);
-  }
-
-  if (parts.length === 0) return '';
-
-  return `\n\n[User Context from Memory]\n${parts.join('\n')}\n`;
-}
-
 // ============================================
 // Graph Memory Methods
 // ============================================
@@ -713,66 +635,6 @@ export function formatGraphContext(graphContext: GraphMemoryContext | null): str
   return graphContext.formattedContext;
 }
 
-/**
- * Build combined memory context including graph memory
- * This is the main method for getting full memory context
- */
-export async function getFullMemoryContext(userId: string): Promise<{
-  semantic: MemoryContext | null;
-  graph: GraphMemoryContext | null;
-  consciousness: ConsciousnessMetrics | null;
-  consolidated: ConsolidatedUserModel | null;
-}> {
-  if (!config.memorycore.enabled) {
-    return { semantic: null, graph: null, consciousness: null, consolidated: null };
-  }
-
-  // Fetch all memory sources in parallel
-  const [semantic, graph, consciousness, consolidated] = await Promise.all([
-    getSemanticMemory(userId),
-    getGraphContext(userId),
-    config.memorycore.consciousnessEnabled ? getConsciousnessMetrics(userId) : Promise.resolve(null),
-    getConsolidatedModel(userId),
-  ]);
-
-  return { semantic, graph, consciousness, consolidated };
-}
-
-/**
- * Format full memory context for prompts
- * Combines semantic, graph, and consciousness context
- */
-export function formatFullMemoryContext(context: {
-  semantic: MemoryContext | null;
-  graph: GraphMemoryContext | null;
-  consciousness: ConsciousnessMetrics | null;
-}): string {
-  const parts: string[] = [];
-
-  // Graph memory (narrative format - primary)
-  if (context.graph?.formattedContext) {
-    parts.push(context.graph.formattedContext);
-  }
-
-  // Semantic memory patterns
-  if (context.semantic?.recentPatterns && context.semantic.recentPatterns.length > 0) {
-    const patterns = context.semantic.recentPatterns
-      .slice(0, 3)
-      .map((p) => `- ${p.type}: ${p.pattern}`)
-      .join('\n');
-    parts.push(`<recent_patterns>\n${patterns}\n</recent_patterns>`);
-  }
-
-  // Consciousness state (if high integration)
-  if (context.consciousness && context.consciousness.phi >= config.memorycore.phiThreshold) {
-    parts.push(`<memory_coherence>High temporal integration (${(context.consciousness.temporalIntegration * 100).toFixed(0)}%)</memory_coherence>`);
-  }
-
-  if (parts.length === 0) return '';
-
-  return parts.join('\n\n');
-}
-
 export default {
   // Session lifecycle management for chat integration
   ensureSession,
@@ -784,7 +646,6 @@ export default {
   recordInteraction,
   // Memory retrieval
   getSemanticMemory,
-  queryEpisodicMemory,
   healthCheck,
   formatMemoryForPrompt,
   // Consciousness methods
@@ -794,13 +655,10 @@ export default {
   getTemporalIntegration,
   getConsciousnessHistory,
   triggerConsciousnessAnalysis,
-  formatMemoryWithConsciousness,
   // Graph memory methods
   getGraphContext,
   getGraphStats,
   extractGraphEntities,
   formatGraphContext,
   getGraphNodeActivations,
-  getFullMemoryContext,
-  formatFullMemoryContext,
 };

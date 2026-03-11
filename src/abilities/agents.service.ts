@@ -1823,30 +1823,6 @@ function mapRowToAgent(row: Record<string, unknown>): AgentConfig {
   };
 }
 
-/**
- * Detect if a message requires multi-agent orchestration
- */
-export function needsOrchestration(message: string): boolean {
-  const orchestrationKeywords = [
-    'research and analyze',
-    'research and calculate',
-    'find and calculate',
-    'gather data and',
-    'investigate and',
-    'look up and analyze',
-    'multiple steps',
-    'complex task',
-    'orchestrate',
-    'plan and execute',
-    'find out and compute',
-    'estimate the total',
-    'calculate based on',
-  ];
-
-  const lowerMessage = message.toLowerCase();
-  return orchestrationKeywords.some(kw => lowerMessage.includes(kw));
-}
-
 export default {
   getBuiltInAgents,
   createAgent,
@@ -1856,6 +1832,5 @@ export default {
   executeSequentialAgentTasks,
   orchestrateTask,
   orchestrateTaskStream,
-  needsOrchestration,
   deleteAgent,
 };
