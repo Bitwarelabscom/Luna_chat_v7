@@ -740,7 +740,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
 
   // Mark contradiction signals as surfaced (they are now in the volatile prompt)
   if (memoryContext.volatile.contradictionIds && memoryContext.volatile.contradictionIds.length > 0) {
-    contradictionService.markSurfaced(memoryContext.volatile.contradictionIds)
+    contradictionService.markSurfaced(memoryContext.volatile.contradictionIds, sessionId)
       .catch(err => logger.debug('Failed to mark contradictions surfaced', { err: (err as Error).message }));
   }
 
@@ -3421,7 +3421,7 @@ export async function* streamMessage(
 
   // Mark contradiction signals as surfaced (they are now in the volatile prompt)
   if (memoryContext.volatile.contradictionIds && memoryContext.volatile.contradictionIds.length > 0) {
-    contradictionService.markSurfaced(memoryContext.volatile.contradictionIds)
+    contradictionService.markSurfaced(memoryContext.volatile.contradictionIds, sessionId)
       .catch(err => logger.debug('Failed to mark contradictions surfaced', { err: (err as Error).message }));
   }
 

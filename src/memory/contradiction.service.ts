@@ -3,6 +3,9 @@
  *
  * Detects and tracks when users state something that contradicts a stored fact.
  * Signals are surfaced to Luna as volatile context so she can gently flag them.
+ *
+ * Signals are user-scoped (not session-scoped) so contradictions from one session
+ * can surface in another. Per-session tracking prevents repeating the same signal.
  */
 
 import { pool } from '../db/index.js';
@@ -47,17 +50,20 @@ export async function createSignal(
 }
 
 /**
- * Get unsurfaced contradiction signals for a session.
+ * Get unsurfaced contradiction signals for a user that haven't been shown
+ * in the current session yet. User-scoped retrieval with per-session filtering.
  */
-export async function getUnsurfaced(sessionId: string): Promise<ContradictionSignal[]> {
+export async function getUnsurfaced(userId: string, sessionId: string): Promise<ContradictionSignal[]> {
   try {
     const result = await pool.query(
       `SELECT id, user_id, session_id, fact_key, user_stated, stored_value, signal_type, surfaced, created_at
        FROM contradiction_signals
-       WHERE session_id = $1 AND surfaced = FALSE
+       WHERE user_id = $1
+         AND surfaced = FALSE
+         AND NOT (surfaced_session_ids @> ARRAY[$2]::uuid[])
        ORDER BY created_at DESC
        LIMIT 3`,
-      [sessionId]
+      [userId, sessionId]
     );
 
     return result.rows.map((row: Record<string, unknown>) => ({
@@ -78,15 +84,21 @@ export async function getUnsurfaced(sessionId: string): Promise<ContradictionSig
 }
 
 /**
- * Mark contradiction signals as surfaced after they've been included in context.
+ * Mark contradiction signals as surfaced in a specific session.
+ * Appends the sessionId to surfaced_session_ids.
+ * Marks globally surfaced after being shown in 3+ sessions.
  */
-export async function markSurfaced(signalIds: string[]): Promise<void> {
+export async function markSurfaced(signalIds: string[], sessionId: string): Promise<void> {
   if (signalIds.length === 0) return;
 
   try {
     await pool.query(
-      `UPDATE contradiction_signals SET surfaced = TRUE WHERE id = ANY($1)`,
-      [signalIds]
+      `UPDATE contradiction_signals
+       SET surfaced_session_ids = array_append(surfaced_session_ids, $2::uuid),
+           surfaced = CASE WHEN array_length(surfaced_session_ids, 1) >= 2 THEN TRUE ELSE surfaced END
+       WHERE id = ANY($1)
+         AND NOT (surfaced_session_ids @> ARRAY[$2]::uuid[])`,
+      [signalIds, sessionId]
     );
   } catch (error) {
     logger.debug('Failed to mark contradictions as surfaced', { error: (error as Error).message });

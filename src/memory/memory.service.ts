@@ -167,8 +167,8 @@ export async function buildMemoryContext(
       emotionalMoments.getRecentMoments(userId, 5, 7),
       // Get active behavioral observations (resonant memory)
       behavioralPatterns.getActiveObservations(userId, 3),
-      // Get unsurfaced contradiction signals (volatile, session-scoped)
-      contradictionService.getUnsurfaced(currentSessionId),
+      // Get unsurfaced contradiction signals (user-scoped, per-session filtering)
+      contradictionService.getUnsurfaced(userId, currentSessionId),
     ]);
 
     // Score message complexity to decide whether to curate
