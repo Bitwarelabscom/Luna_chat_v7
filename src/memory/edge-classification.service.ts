@@ -1,6 +1,7 @@
 import { createBackgroundCompletionWithFallback } from '../llm/background-completion.service.js';
 import { createEdge } from './memorycore-graph.service.js';
 import { mcQuery } from '../db/memorycore-pool.js';
+import * as lunaStreamsClient from '../integration/luna-streams.client.js';
 import logger from '../utils/logger.js';
 
 // Tight 8-type taxonomy for semantic edge classification
@@ -162,6 +163,22 @@ ${pairsText}`;
         created,
         totalPairs: cappedPairs.length,
       });
+
+      // Emit edge updates to Luna Streams
+      const classifiedEdges = classifications
+        .filter(item => {
+          if (!item || typeof item.pair !== 'number') return false;
+          const idx = item.pair - 1;
+          if (idx < 0 || idx >= cappedPairs.length) return false;
+          return VALID_TYPES_SET.has(item.type) && item.type !== 'discussed';
+        })
+        .map(item => {
+          const [a, b] = cappedPairs[item.pair - 1];
+          return { source: a.label, target: b.label, edge_type: item.type, weight: 0.6 };
+        });
+      if (classifiedEdges.length > 0) {
+        lunaStreamsClient.emitEdgeUpdate(classifiedEdges);
+      }
     }
   } catch (error) {
     logger.warn('Edge classification failed', {

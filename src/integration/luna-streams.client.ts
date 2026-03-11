@@ -168,33 +168,6 @@ export function emitEdgeUpdate(
   });
 }
 
-/**
- * Emit session metadata as a conversation_meta event.
- */
-export function emitSessionMeta(meta: {
-  messageLength?: number;
-  responseTimeMs?: number;
-  sessionDurationMin?: number;
-  activePersona?: string;
-  activeModel?: string;
-  turnNumber?: number;
-}): void {
-  emitEvent({
-    timestamp: new Date().toISOString(),
-    event_type: 'conversation_meta',
-    source: 'conversation',
-    content: {},
-    conversation_meta: {
-      message_length: meta.messageLength,
-      response_time_ms: meta.responseTimeMs,
-      session_duration_min: meta.sessionDurationMin,
-      active_persona: meta.activePersona,
-      active_model: meta.activeModel,
-      turn_number: meta.turnNumber,
-    },
-  });
-}
-
 // -------------------------------------------------------------------
 // Context retrieval (with delta tracking)
 // -------------------------------------------------------------------
