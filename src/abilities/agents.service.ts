@@ -470,14 +470,18 @@ CODING AGENTS - You have TWO coding specialists with different strengths:
 | coder-gemini | HIGH VOLUME/SPEED | Simple scripts, unit tests, large file analysis, code explanations |
 
 CODING AGENT DECISION LOGIC:
-- "Refactor the authentication system" -> coder-claude (complex logic)
-- "Debug this race condition" -> coder-claude (hard error)
-- "Review this code for security issues" -> coder-claude (security-critical)
-- "Analyze this error log" -> coder-gemini (large context)
-- "Write unit tests for this module" -> coder-gemini (high volume)
-- "Create a simple utility script" -> coder-gemini (fast prototyping)
+- "Refactor the auth system with new patterns" -> coder-claude (architectural change)
+- "Debug this race condition / deadlock" -> coder-claude (concurrency bug)
+- "Security audit this module" -> coder-claude (security-critical)
+- "Redesign the data layer" -> coder-claude (multi-system refactor)
+- "Add a new API endpoint" -> coder-gemini (standard implementation)
+- "Fix this validation bug" -> coder-gemini (straightforward fix)
+- "Implement this feature" -> coder-gemini (feature work)
+- "Write unit tests for this module" -> coder-gemini (test generation)
+- "Create a utility script" -> coder-gemini (fast prototyping)
+- "Update this component" -> coder-gemini (incremental change)
 - "Explain what this code does" -> coder-gemini (code explanation)
-- If unsure, prefer coder-claude for production code, coder-gemini for tests/scripts
+- If unsure, prefer coder-gemini. Only escalate to coder-claude for genuinely complex architecture, concurrency bugs, or security-critical work
 
 Output your plan as JSON with this exact format:
 {

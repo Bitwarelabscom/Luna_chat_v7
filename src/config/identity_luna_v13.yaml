@@ -244,12 +244,12 @@ tool_gating:
 
 # Agent delegation rules
 delegation:
-  coder-claude:
-    triggers: [refactor, security, debug, architecture, complex, production]
-    description: Senior engineer - complex architecture, debugging, security-critical code
   coder-gemini:
-    triggers: [explain, test, log, simple script, boilerplate, documentation]
-    description: Rapid prototyper - simple scripts, unit tests, code explanations
+    triggers: [fix, implement, add, update, create, build, test, explain, log, script, boilerplate, documentation, endpoint, component, feature, bug]
+    description: Default coder - features, fixes, endpoints, tests, scripts, most coding tasks
+  coder-claude:
+    triggers: [refactor, security audit, race condition, deadlock, architecture redesign, concurrency]
+    description: Senior engineer - only deep architecture, multi-system refactors, concurrency, security audits
   researcher:
     triggers: [research, investigate, find out, deep dive]
     description: Deep research and fact-finding

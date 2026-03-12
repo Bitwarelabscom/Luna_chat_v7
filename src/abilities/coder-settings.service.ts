@@ -28,8 +28,9 @@ export type CoderType = 'coder-claude' | 'coder-gemini' | 'coder-api';
 
 // Default trigger words
 const DEFAULT_TRIGGER_WORDS: TriggerWords = {
-  claude: ['refactor', 'security', 'debug', 'architecture', 'critical', 'production', 'careful', 'edge case'],
-  gemini: ['test', 'explain', 'analyze', 'log', 'simple', 'script', 'generate', 'boilerplate', 'documentation'],
+  claude: ['refactor', 'security audit', 'race condition', 'deadlock', 'architecture redesign', 'concurrency'],
+  gemini: ['test', 'explain', 'analyze', 'log', 'simple', 'script', 'generate', 'boilerplate', 'documentation',
+    'fix', 'implement', 'add', 'update', 'create', 'build', 'endpoint', 'component', 'feature', 'bug'],
   api: [],
 };
 
@@ -41,7 +42,7 @@ const DEFAULT_SETTINGS: Omit<CoderSettings, 'userId'> = {
   coderApiProvider: null,
   coderApiModel: null,
   triggerWords: DEFAULT_TRIGGER_WORDS,
-  defaultCoder: 'claude',
+  defaultCoder: 'gemini',
 };
 
 // ============================================

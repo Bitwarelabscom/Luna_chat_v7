@@ -76,8 +76,8 @@ Output JSON only:
 
 Available agents:
 - researcher: Deep research, information gathering, web search
-- coder-claude: SENIOR ENGINEER - Complex architecture, refactoring, debugging hard errors, security-critical
-- coder-gemini: RAPID PROTOTYPER - Simple scripts, unit tests, large context analysis, code explanations
+- coder-gemini: DEFAULT CODER - Features, fixes, endpoints, tests, scripts, explanations, most coding tasks
+- coder-claude: SENIOR ENGINEER - Only for deep architecture, multi-system refactors, concurrency bugs, security audits
 - writer: Creative writing, content synthesis, drafting
 - analyst: Data analysis, calculations, insights
 - marketing: Go-to-market strategy, channel plans, messaging, growth experiments

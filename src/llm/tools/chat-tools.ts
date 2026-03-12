@@ -16,14 +16,20 @@ export const delegateToAgentTool: OpenAI.Chat.Completions.ChatCompletionTool = {
 CODING AGENT DECISION MATRIX:
 | Task | Agent |
 |------|-------|
-| "Refactor the auth system" | coder-claude |
-| "Debug this race condition" | coder-claude |
-| "Review for security issues" | coder-claude |
-| "Analyze this error log" | coder-gemini |
+| "Refactor the auth system with new patterns" | coder-claude |
+| "Debug this race condition / deadlock" | coder-claude |
+| "Security audit this module" | coder-claude |
+| "Redesign the data layer architecture" | coder-claude |
+| "Add a new API endpoint" | coder-gemini |
+| "Fix this validation bug" | coder-gemini |
+| "Implement this feature" | coder-gemini |
 | "Write unit tests" | coder-gemini |
-| "Create a simple utility script" | coder-gemini |
+| "Create a utility script" | coder-gemini |
+| "Update this component" | coder-gemini |
 | "Explain what this code does" | coder-gemini |
-Default: coder-claude for deep complexity, coder-gemini for high-volume generation.
+| "Analyze this error log" | coder-gemini |
+| "Build a new page/form" | coder-gemini |
+Default: coder-gemini for most coding tasks. Only use coder-claude when the task genuinely requires deep architectural reasoning, multi-system refactoring, or security expertise.
 The coding agents can execute code, create files/folders in the workspace, and persist work across sessions.`,
     parameters: {
       type: 'object',

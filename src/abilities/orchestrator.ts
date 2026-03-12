@@ -693,7 +693,7 @@ export function formatAbilityContextForPrompt(context: AbilityContext): string {
 export function detectCodingAgentShortcut(message: string): 'coder-claude' | 'coder-gemini' | null {
   const lower = message.toLowerCase();
 
-  // Keywords that strongly suggest coder-gemini (large context, high volume)
+  // Keywords that strongly suggest coder-gemini (default for most coding)
   const geminiTriggers = [
     'huge', 'large', 'massive', 'entire', 'whole',     // Large context indicators
     'log', 'logs', 'analyze log', 'error log',         // Log analysis
@@ -703,18 +703,18 @@ export function detectCodingAgentShortcut(message: string): 'coder-claude' | 'co
     'simple script', 'quick script', 'utility',        // Simple scripts
     'boilerplate', 'generate', 'scaffold',             // Code generation
     'documentation', 'document this', 'comments',      // Documentation
+    'fix', 'implement', 'add endpoint', 'add route',   // Standard implementation
+    'create component', 'build', 'update',             // Feature work
+    'bug', 'endpoint', 'feature', 'page',              // Everyday coding
   ];
 
-  // Keywords that strongly suggest coder-claude (complexity, security)
+  // Keywords that strongly suggest coder-claude (only genuinely complex work)
   const claudeTriggers = [
     'refactor', 'restructure', 'redesign',             // Architectural changes
-    'security', 'vulnerability', 'auth', 'authentication', // Security-critical
-    'debug', 'fix bug', 'race condition', 'deadlock',  // Complex debugging
-    'architecture', 'design pattern', 'system design', // Architecture
-    'optimize', 'performance', 'bottleneck',           // Performance optimization
-    'migration', 'upgrade', 'legacy',                  // Complex migrations
-    'critical', 'production', 'production-ready',      // Production code
-    'careful', 'thoroughly', 'edge case',              // Requires deep thinking
+    'security audit', 'vulnerability', 'security review', // Security-critical
+    'race condition', 'deadlock', 'concurrency',       // Concurrency bugs
+    'architecture', 'system design',                   // Architecture
+    'production outage', 'incident',                   // Critical production issues
   ];
 
   // Check for gemini triggers
