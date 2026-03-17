@@ -2,207 +2,74 @@
 
 ## Self-Learning Protocol
 
-**IMPORTANT: When any of these occur, AUTOMATICALLY update this file:**
+When any of these occur, update this file immediately:
+1. **Error then fix** -- log what went wrong and the correct approach
+2. **User correction** -- log the correct approach
+3. **Retry success** -- log what failed and what worked
+4. **Build/test failure** -- log the fix
+5. **"Remember this"** -- log it
 
-1. **Error Correction** - If I make a mistake and then fix it, log what went wrong
-2. **User Correction** - If the user corrects me, log the correct approach
-3. **Retry Success** - If something fails and I try a different approach that works, log it
-4. **Build/Test Failure** - If a build or test fails due to something I did, log the fix
-5. **"Remember this"** - If the user says to remember something, log it immediately
-
-**How to self-learn:**
+Quick-add format:
 ```
-I notice I made a mistake. Let me add this to Luna for next time.
-[Edit this file with the lesson]
-```
-
-**Quick-add format for the Auto-Learned section:**
-```
-### [Short Title]
+### [Short Title] (YYYY-MM-DD)
 - **Mistake:** What I did wrong
 - **Correct:** What I should do instead
 ```
 
----
-
-## Build & Rebuild Procedures
-
-<!-- Add your project's build commands and procedures here -->
-
-```bash
-# Example:
-# npm install
-# npm run build
-```
-
-**Pre-build checklist:**
-- [ ] Check for uncommitted changes
-- [ ] Ensure dependencies are up to date
+**Pruning:** Entries older than 90 days without reconfirmation can be moved to `luna-archive.md`. If an old lesson gets reconfirmed, update its date.
 
 ---
 
-## Common Mistakes & Fixes
+## Project Gotchas
 
-<!-- Add mistakes and their solutions as you encounter them -->
-
-### Template Entry
-**Problem:** [Describe what went wrong]
-**Cause:** [Why it happened]
-**Fix:** [How to solve it]
-**Prevention:** [How to avoid it next time]
+- **WireGuard-only access**: Luna is ONLY accessible via VPN (10.0.0.x). Only `/api/triggers/telegram/webhook` is public.
+- **Unified tool execution**: All code paths (processMessage, streamMessage/agent-loop, voice-chat) use `executeTool()` from `src/agentic/tool-executor.ts`. Add new tools once there.
+- **Voice mode email**: Uses luna@bitwarelabs.com (not user email connections)
+- **Voice mode calendar**: Radicale CalDAV only (no Google/Outlook)
+- **Shared helpers**: `src/agentic/shared-helpers.ts` has `convertLocalTimeToUTC` etc. Don't duplicate.
+- **System prompt tokens matter**: Base prompt is ~700 tokens after optimization. Keep capability descriptions to 1-2 lines max.
+- **Anthropic tool calling**: Voice mode and tool features work with Anthropic models. `openai.client.ts` routes to native `anthropic.provider.ts` which converts formats.
+- **Docker HTTPS bypass**: Backend HTTPS redirect must allow Docker IPs (172.x.x.x) alongside WireGuard (10.0.0.x).
 
 ---
 
-## Auto-Learned Lessons
-
-<!-- Claude automatically adds entries here when mistakes are detected -->
+## Learned Lessons
 
 ### CEO config table is plural: ceo_configs (2026-02-25)
-- **Mistake:** Used `FROM ceo_config` (singular) in music-trend-scraper.service.ts
-- **Correct:** Table name is `ceo_configs` (plural)
-- **Prevention:** Check table names with `\dt ceo*` before writing queries against CEO tables
+- **Mistake:** Used `FROM ceo_config` (singular)
+- **Correct:** Table name is `ceo_configs` (plural). Verify with `\dt ceo*` before writing queries.
 
-### Fetch calls need credentials: 'include' for auth cookies
-- **Mistake:** TerminalChat.tsx was using fetch() without `credentials: 'include'`, causing auth to fail
-- **Correct:** Always include `credentials: 'include'` in fetch calls that need authentication
-- **Example:**
-  ```javascript
-  // WRONG - cookies won't be sent
-  fetch('/api/trading/chat/session', { method: 'POST' });
-
-  // CORRECT - auth cookies will be sent
-  fetch('/api/trading/chat/session', {
-    method: 'POST',
-    credentials: 'include'
-  });
-  ```
-- **Note:** The main `api()` helper in api.ts already includes credentials, so use it when possible
-
+### Fetch calls need credentials: 'include' for auth cookies (2026-01-15)
+- **Mistake:** fetch() without `credentials: 'include'` causes auth to fail
+- **Correct:** Always include `credentials: 'include'`, or use the `api()` helper which does it automatically.
 
 ### Auto Trading Symbol Format Normalization (2026-01-06)
-- **Problem:** Multiple symbol format bugs caused:
-  - SL/TP not triggering (price lookups failed)
-  - Portfolio sync finding 0 orphans (BONK not matched)
-  - Cooldowns not working (symbol mismatch)
-  - "wrong instrument" errors when closing trades
-- **Root Cause:** Three different symbol formats in use:
-  - Internal/DB: `BONK_USD` (underscore, USD quote)
-  - Binance/Redis: `BONKUSDT` (no separator, USDT quote)
-  - Crypto.com API: `PONKE_USD` (underscore, USD quote - NOT USDT!)
-- **Fix:** Always normalize to BASE asset for comparisons:
-  ```typescript
-  import { getBaseQuote } from './symbol-utils.js';
-  const baseAsset = getBaseQuote(symbol).base.toUpperCase();
-  ```
-- **Prevention:** When comparing symbols across systems, extract and compare base assets, not full symbol strings
+- **Problem:** SL/TP not triggering, portfolio sync broken, cooldowns failing, "wrong instrument" errors
+- **Root Cause:** Three symbol formats: Internal `BONK_USD`, Binance `BONKUSDT`, Crypto.com `PONKE_USD`
+- **Fix:** Always normalize via `getBaseQuote(symbol).base.toUpperCase()` for cross-exchange comparison
 
 ### Crypto.com Uses USD, Not USDT (2026-01-06)
-- **Mistake:** Assumed Crypto.com uses USDT like Binance and converted `_USD` to `_USDT`
-- **Reality:** Crypto.com API uses `USD` as quote currency (e.g., `PONKE_USD`, not `PONKE_USDT`)
-- **Correct:** `toCryptoComSymbol()` should convert `_USDT` to `_USD`:
-  ```typescript
-  if (result.endsWith('_USDT')) {
-    result = result.slice(0, -5) + '_USD';
-  }
-  ```
-- **Impact:** Wrong quote currency causes API calls to fail silently (instrument not found)
+- **Mistake:** Assumed Crypto.com uses USDT like Binance
+- **Correct:** Crypto.com API uses USD (e.g., `PONKE_USD`). Converting to USDT breaks API calls silently.
 
-### Auto Trading State - trades_count Bug (2026-01-06)
-- **Problem:** Win rate showed 0.0% even with 1W/0L (100% should show)
-- **Root Cause:** `handleTradeClose()` incremented `wins_count` but NOT `trades_count`
-  - Win rate = `wins_count / trades_count` = `1 / 0` = 0.0%
-- **Fix:** In `handleTradeClose()`, increment `trades_count` on both WIN and LOSS branches:
-  ```sql
-  ON CONFLICT (user_id, date) DO UPDATE SET
-    wins_count = auto_trading_state.wins_count + 1,
-    trades_count = auto_trading_state.trades_count + 1,  -- ADD THIS
-    ...
-  ```
-- **Key Insight:** `trades_count` should be incremented on CLOSE, not on trade OPEN, for accurate win rate calculation
+### trades_count Must Increment on Close (2026-01-06)
+- **Problem:** Win rate showed 0.0% with 1W/0L
+- **Root Cause:** `handleTradeClose()` incremented wins_count but not trades_count
+- **Fix:** Increment `trades_count` on BOTH win and loss branches in the ON CONFLICT upsert
 
 ### System Prompt Optimization (2026-01-01)
-- **Before:** ~3,800 tokens base prompt + 80-400 per mode = ~4,200 tokens total
-- **After:** ~700 tokens base prompt + 30-100 per mode = ~800-1,000 tokens total
-- **Savings:** ~75% reduction
-- **Key optimizations:**
-  - Removed 36 "CRITICAL/IMPORTANT" statements (redundant emphasis)
-  - Condensed capability docs from 10+ examples each to 1-2 lines
-  - Eliminated duplicated identity rules across mode variants
-  - Removed verbose image/media examples (kept just the rule)
-  - Made ability context sections conditional (skip empty [Calendar], [Tasks], [Email])
-- **Files changed:** `src/persona/luna.persona.ts`, `src/abilities/orchestrator.ts`
-
----
+- **Before:** ~3,800 tokens base + 80-400 per mode
+- **After:** ~700 tokens base + 30-100 per mode (~75% reduction)
+- **Key:** Removed 36 redundant CRITICAL/IMPORTANT statements, condensed capability docs, made ability sections conditional
 
 ### MemoryCore noise filter must respect entity types (2026-02-27)
-- **Mistake:** `purgeNoiseNodes` initially filtered ALL nodes matching stopwords regardless of type
-- **Correct:** Nodes of type song, album, artist, person, place, brand, product, organization, project, game, movie, show, book are exempt from stopword purging. "Love" as a song is signal, "Love" as an untyped concept is noise.
-- **Prevention:** Always check `node_type` before applying stopword/noise filters to MemoryCore graph entities
+- **Mistake:** `purgeNoiseNodes` filtered ALL nodes matching stopwords regardless of type
+- **Correct:** song, album, artist, person, place, brand, product, organization, project, game, movie, show, book are exempt from stopword purging
 
 ### Anti-centrality threshold must be graduated (2026-02-27)
-- **Mistake:** Used flat `edge_count > 20` threshold for anti-centrality pressure
-- **Correct:** 20 is too low (Luna has 1,182 edges, Piano has 318). Use graduated: 50+ light, 100+ moderate, 200+ heavy. Exempt person/place/artist types entirely since they are naturally high-connectivity.
-- **Prevention:** Consider the actual data distribution before setting thresholds on graph operations
+- **Mistake:** Flat `edge_count > 20` threshold (Luna has 1,182 edges, Piano has 318)
+- **Correct:** Graduated: 50+ light, 100+ moderate, 200+ heavy. Exempt person/place/artist entirely.
 
 ### Merge candidate label length guard (2026-02-27)
-- **Mistake:** Substring matching without minimum label length allows "Pi" to match "Piano"
-- **Correct:** Require both labels >= 4 characters for substring-based merge candidate detection
-- **Prevention:** Always add length guards when doing ILIKE substring matching on graph labels
-
----
-
-## Project-Specific Gotchas
-
-<!-- Document quirks, non-obvious behaviors, or things that are easy to forget -->
-
-- **CRITICAL: WireGuard-only access**: Luna is ONLY accessible via WireGuard VPN (10.0.0.x). NOTHING should be exposed to the public internet except the Telegram webhook. Never add public domains to CORS, never create public nginx configs. The only external endpoint is `/api/triggers/telegram/webhook`.
-- **All tool execution is unified**: All three code paths (processMessage, streamMessage/agent-loop, voice-chat) use `executeTool()` from `src/agentic/tool-executor.ts`. Voice mode still only DEFINES 18 tools to the LLM (limiting tool choice), but execution goes through the shared path. When adding a new tool, add it once in tool-executor.ts.
-- **Voice mode uses Luna's email account**: Email tools in voice mode use luna@bitwarelabs.com (via `emailService.sendLunaEmail`, `checkLunaInbox`, etc.), not user email connections.
-- **Calendar in voice mode uses Radicale only**: No Google/Outlook calendar integration in voice mode - uses internal CalDAV via `calendarService.createEvent`, `getTodayEvents`, etc.
-- **Shared helpers in src/agentic/shared-helpers.ts**: `convertLocalTimeToUTC` and other common helpers are extracted here. Do not duplicate in other files.
-- **System prompt token count matters**: The base prompt directly affects cost per message. Each capability should be 1-2 lines max, examples should be minimal, and mode variants should only add what's different (not repeat base rules).
-- **Anthropic tool calling now supported**: Voice mode and other tool-enabled features work with Anthropic models (Haiku 4.5, Sonnet, Opus). The `openai.client.ts` routes Anthropic requests to native `anthropic.provider.ts` which converts OpenAI tool format to Anthropic's format.
-- **Docker internal traffic needs HTTPS bypass**: The backend's HTTPS redirect (`src/index.ts`) must allow Docker internal IPs (172.x.x.x) in addition to WireGuard (10.0.0.x). Without this, container-to-container requests (frontend -> luna-api) get 301 redirected and fail with SSL errors.
-
----
-
-## File/Folder Conventions
-
-<!-- Document important structural patterns -->
-
--
-
----
-
-## Dependencies & Environment
-
-### Database Connection
-
-Connect to PostgreSQL via Docker:
-```bash
-# Run SQL file
-docker exec -i luna-postgres psql -U luna -d luna_chat < /path/to/migration.sql
-
-# Interactive shell
-docker exec -it luna-postgres psql -U luna -d luna_chat
-
-# Run single query
-docker exec -i luna-postgres psql -U luna -d luna_chat -c "SELECT * FROM trades LIMIT 5;"
-```
-
-**Connection details:**
-- Container: `luna-postgres`
-- User: `luna`
-- Database: `luna_chat`
-- Port: `5432` (internal)
-
-**Note:** Database name is `luna_chat`, NOT `luna`
-
----
-
-## User Preferences
-
-<!-- How the user likes things done -->
-
--
-
+- **Mistake:** No minimum label length allowed "Pi" to match "Piano"
+- **Correct:** Both labels must be >= 4 characters for substring-based merge candidate detection

@@ -125,6 +125,28 @@ export default function PortfolioTab({ portfolio, prices, loading }: PortfolioTa
             </div>
           </div>
         </div>
+
+        {portfolio.allTimePnl !== undefined && portfolio.allTimePnlPct !== undefined && (
+          <div className="terminal-card">
+            <div className="terminal-card-body" style={{ padding: '1rem' }}>
+              <div style={{ fontSize: '0.7rem', color: 'var(--terminal-text-dim)', textTransform: 'uppercase', marginBottom: '0.25rem' }}>
+                All-time P&L
+              </div>
+              <div style={{
+                fontSize: '1.5rem',
+                fontFamily: 'IBM Plex Mono',
+                fontWeight: 600,
+                color: portfolio.allTimePnl >= 0 ? 'var(--terminal-positive)' : 'var(--terminal-negative)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.25rem',
+              }}>
+                {portfolio.allTimePnl >= 0 ? <TrendingUp size={20} /> : <TrendingDown size={20} />}
+                {portfolio.allTimePnl >= 0 ? '+' : ''}${portfolio.allTimePnl.toFixed(2)} ({portfolio.allTimePnlPct.toFixed(2)}%)
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Holdings Table */}

@@ -104,6 +104,10 @@ export async function* runAgentLoop(
   let consecutiveEmptyResults = 0;
   let lastToolCallSignature = '';
 
+  // Summon agent rate limiting - prevent runaway agent summoning loops
+  const MAX_SUMMON_CALLS = 3;
+  let summonCallCount = 0;
+
   while (true) {
     // --- Context overflow check ---
     const estimatedTokenCount = estimateTokens(state.messages);
@@ -116,11 +120,17 @@ export async function* runAgentLoop(
       state.messages = compressOlderToolResults(state.messages);
     }
 
+    // --- Strip summon_agent if cap reached ---
+    let activeTools = config.tools;
+    if (summonCallCount >= MAX_SUMMON_CALLS && activeTools.length > 0) {
+      activeTools = activeTools.filter(t => t.function.name !== 'summon_agent');
+    }
+
     // --- Call LLM ---
     const isFirstCall = state.stepCount === 0;
     const completion = await createChatCompletion({
       messages: state.messages,
-      tools: config.tools.length > 0 ? config.tools : undefined,
+      tools: activeTools.length > 0 ? activeTools : undefined,
       provider: config.provider,
       model: config.model,
       thinkingMode: config.thinkingMode,
@@ -204,8 +214,20 @@ export async function* runAgentLoop(
     for (const toolCall of completion.toolCalls) {
       yield { type: 'tool_start', tool: toolCall.function.name, args: toolCall.function.arguments };
 
-      // Inject recentContext for summon_agent
+      // Inject recentContext for summon_agent and track call count
       if (toolCall.function.name === 'summon_agent') {
+        summonCallCount++;
+        if (summonCallCount > MAX_SUMMON_CALLS) {
+          // Hard reject - don't execute, return a message instead
+          state.messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: 'summon_agent limit reached (max 3 per response). Synthesize your answer from the agent responses you already have.',
+          } as ChatMessage);
+          yield { type: 'tool_result', tool: toolCall.function.name, result: 'limit reached' };
+          logger.warn('summon_agent hard cap exceeded', { step: state.stepCount, count: summonCallCount });
+          continue;
+        }
         try {
           const parsed = JSON.parse(toolCall.function.arguments);
           parsed._recentContext = recentContext;

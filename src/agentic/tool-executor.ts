@@ -37,6 +37,7 @@ import * as questionsService from '../autonomous/questions.service.js';
 import * as loadContextHandler from '../context/load-context.handler.js';
 import * as browserScreencast from '../abilities/browser-screencast.service.js';
 import * as sessionLogService from '../chat/session-log.service.js';
+import * as torrentService from '../abilities/torrent.service.js';
 import { executeSysmonTool } from '../abilities/sysmon.service.js';
 import { summonAgent } from '../agents/communication.js';
 import { hasDesktopBrowser, executeRemoteBrowserCommand, sendDesktopAction } from '../desktop/desktop.websocket.js';
@@ -236,6 +237,43 @@ export async function executeTool(
         ? await ytdlp.downloadAudio(args.videoId, args.title)
         : await ytdlp.downloadVideo(args.videoId, args.title);
       return { toolResponse: `Download started (ID: ${job.id}). "${args.title}" is being downloaded as ${args.format}. It will appear in the local media library once complete.`, sideEffects };
+    }
+
+    if (toolName === 'torrent_search') {
+      logger.info('Torrent search executing', { query: args.query });
+      const results = await torrentService.searchProwlarr(args.query);
+      if (results.length === 0) {
+        return { toolResponse: `No torrent results found for "${args.query}".`, sideEffects };
+      }
+      const top = results.slice(0, 15);
+      const formatted = top.map((r, i) =>
+        `${i + 1}. **${r.title}** [${r.category}]\n   Size: ${r.sizeHuman} | Seeders: ${r.seeders} | Leechers: ${r.leechers} | Indexer: ${r.indexer}\n   guid: ${r.guid} | indexerId: ${r.indexerId}`
+      ).join('\n\n');
+      return { toolResponse: `Found ${results.length} results for "${args.query}" (showing top ${top.length}):\n\n${formatted}`, sideEffects };
+    }
+
+    if (toolName === 'torrent_download') {
+      logger.info('Torrent download executing', { guid: args.guid, indexerId: args.indexerId, title: args.title });
+      await torrentService.grabTorrent(args.guid, args.indexerId);
+      return { toolResponse: `Torrent "${args.title}" has been sent to Transmission for download.`, sideEffects };
+    }
+
+    if (toolName === 'transmission_status') {
+      logger.info('Transmission status check');
+      const torrents = await torrentService.getTransmissionTorrents();
+      if (torrents.length === 0) {
+        return { toolResponse: 'No active torrents in Transmission.', sideEffects };
+      }
+      const formatted = torrents.map(t =>
+        `- **${t.name}**\n  Status: ${t.status} | Progress: ${t.percentDone}% | DL: ${t.rateDownload} | UL: ${t.rateUpload} | ETA: ${t.eta} | Size: ${t.totalSize} | ID: ${t.id}`
+      ).join('\n');
+      return { toolResponse: `Transmission has ${torrents.length} torrent(s):\n\n${formatted}`, sideEffects };
+    }
+
+    if (toolName === 'transmission_remove') {
+      logger.info('Transmission remove torrent', { id: args.id, deleteData: args.deleteData });
+      await torrentService.removeTorrent(args.id, args.deleteData || false);
+      return { toolResponse: `Torrent ID ${args.id} removed from Transmission${args.deleteData ? ' (data deleted)' : ''}.`, sideEffects };
     }
 
     if (toolName === 'fetch_url') {

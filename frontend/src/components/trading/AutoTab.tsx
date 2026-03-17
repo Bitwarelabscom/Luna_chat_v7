@@ -16,6 +16,7 @@ import {
   Target,
   Shield,
   Flame,
+  Brain,
 } from 'lucide-react';
 import {
   tradingApi,
@@ -41,6 +42,9 @@ function AutoTab({ onRefresh }: AutoTabProps) {
   const [showSymbols, setShowSymbols] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
+  const [showEarlyTriggers, setShowEarlyTriggers] = useState(false);
+  const [lastAnalysis, setLastAnalysis] = useState<{ analyzedAt: string; marketSummary: string; decisions: unknown[] } | null>(null);
+  const [forcingAnalysis, setForcingAnalysis] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
@@ -54,12 +58,34 @@ function AutoTab({ onRefresh }: AutoTabProps) {
       // Filter to only show auto trades (source === 'bot')
       const autoTrades = tradesData.openPositions.filter(t => t.source === 'bot');
       setActiveTrades(autoTrades);
+      // Load last Luna AI analysis if luna_ai strategy
+      if (settingsData.strategy === 'luna_ai') {
+        try {
+          const analysisData = await tradingApi.getLastAnalysis();
+          setLastAnalysis(analysisData.analysis);
+        } catch (_err) {
+          // Non-critical
+        }
+      }
     } catch (err) {
       console.error('Failed to load auto trading data:', err);
     } finally {
       setLoading(false);
     }
   }, []);
+
+  const handleForceAnalysis = async () => {
+    setForcingAnalysis(true);
+    try {
+      await tradingApi.triggerLlmAnalysis();
+      const analysisData = await tradingApi.getLastAnalysis();
+      setLastAnalysis(analysisData.analysis);
+    } catch (err) {
+      console.error('Failed to trigger analysis:', err);
+    } finally {
+      setForcingAnalysis(false);
+    }
+  };
 
   useEffect(() => {
     loadData();
@@ -98,7 +124,7 @@ function AutoTab({ onRefresh }: AutoTabProps) {
     }
   };
 
-  const handleSettingChange = async (key: string, value: number | boolean | string[]) => {
+  const handleSettingChange = async (key: string, value: number | boolean | string | string[]) => {
     if (!settings) return;
     try {
       const updates = { [key]: value };
@@ -826,90 +852,366 @@ function AutoTab({ onRefresh }: AutoTabProps) {
                 <Target style={{ width: 14, height: 14 }} />
                 Strategy Settings
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
-                <div>
-                  <div style={{ fontSize: '11px', color: '#8892a0', marginBottom: '4px' }}>RSI Threshold</div>
-                  <input
-                    type="number"
-                    value={settings?.rsiThreshold || 30}
-                    onChange={(e) => handleSettingChange('rsiThreshold', parseInt(e.target.value))}
-                    style={{
-                      width: '60px',
-                      padding: '6px 8px',
-                      borderRadius: '4px',
-                      border: '1px solid #2a3545',
-                      background: '#0a0f18',
-                      color: '#fff',
-                      fontSize: '13px',
-                    }}
-                    min="10"
-                    max="50"
-                  />
-                </div>
-                <div>
-                  <div style={{ fontSize: '11px', color: '#8892a0', marginBottom: '4px' }}>Volume Multiplier</div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+
+              {/* Strategy Selector */}
+              <div style={{ marginBottom: '16px' }}>
+                <div style={{ fontSize: '11px', color: '#8892a0', marginBottom: '4px' }}>Strategy</div>
+                <select
+                  value={settings?.strategy || 'rsi_oversold'}
+                  onChange={(e) => handleSettingChange('strategy', e.target.value)}
+                  style={{
+                    padding: '6px 10px',
+                    borderRadius: '4px',
+                    border: '1px solid #2a3545',
+                    background: '#0a0f18',
+                    color: '#fff',
+                    fontSize: '13px',
+                    width: '200px',
+                  }}
+                >
+                  <option value="rsi_oversold">RSI Oversold</option>
+                  <option value="trend_following">Trend Following</option>
+                  <option value="mean_reversion">Mean Reversion</option>
+                  <option value="momentum">Momentum</option>
+                  <option value="btc_correlation">BTC Correlation</option>
+                  <option value="luna_ai">Luna AI</option>
+                </select>
+              </div>
+
+              {/* Luna AI Panel */}
+              {settings?.strategy === 'luna_ai' ? (
+                <div style={{
+                  background: 'rgba(139, 92, 246, 0.08)',
+                  border: '1px solid rgba(139, 92, 246, 0.3)',
+                  borderRadius: '8px',
+                  padding: '16px',
+                }}>
+                  {/* Luna AI Header */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+                    <Brain style={{ width: 18, height: 18, color: '#a78bfa' }} />
+                    <span style={{ fontSize: '14px', fontWeight: 600, color: '#a78bfa' }}>Luna AI Strategy</span>
+                  </div>
+
+                  {/* Risk Level */}
+                  <div style={{ marginBottom: '16px' }}>
+                    <div style={{ fontSize: '11px', color: '#8892a0', marginBottom: '8px' }}>Risk Level</div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      {(['conservative', 'moderate', 'aggressive'] as const).map((level) => (
+                        <button
+                          key={level}
+                          onClick={() => handleSettingChange('riskLevel', level)}
+                          style={{
+                            padding: '6px 14px',
+                            borderRadius: '6px',
+                            border: 'none',
+                            cursor: 'pointer',
+                            fontSize: '12px',
+                            fontWeight: 500,
+                            background: settings?.riskLevel === level
+                              ? level === 'conservative' ? 'rgba(96, 165, 250, 0.25)' : level === 'moderate' ? 'rgba(0, 255, 159, 0.2)' : 'rgba(239, 68, 68, 0.2)'
+                              : 'rgba(107, 114, 128, 0.2)',
+                            color: settings?.riskLevel === level
+                              ? level === 'conservative' ? '#60a5fa' : level === 'moderate' ? '#00ff9f' : '#ef4444'
+                              : '#8892a0',
+                          }}
+                        >
+                          {level.charAt(0).toUpperCase() + level.slice(1)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* LLM Analysis Interval */}
+                  <div style={{ marginBottom: '16px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                      <div style={{ fontSize: '11px', color: '#8892a0' }}>LLM Analysis Interval</div>
+                      <span style={{ fontSize: '12px', color: '#a78bfa', fontFamily: 'JetBrains Mono, monospace' }}>
+                        {settings?.llmAnalysisIntervalHours || 4}h
+                      </span>
+                    </div>
                     <input
-                      type="number"
-                      value={settings?.volumeMultiplier || 1.5}
-                      onChange={(e) => handleSettingChange('volumeMultiplier', parseFloat(e.target.value))}
-                      style={{
-                        width: '60px',
-                        padding: '6px 8px',
-                        borderRadius: '4px',
-                        border: '1px solid #2a3545',
-                        background: '#0a0f18',
-                        color: '#fff',
-                        fontSize: '13px',
-                      }}
-                      step="0.1"
+                      type="range"
                       min="1"
-                      max="5"
+                      max="24"
+                      step="1"
+                      value={settings?.llmAnalysisIntervalHours || 4}
+                      onChange={(e) => handleSettingChange('llmAnalysisIntervalHours', parseInt(e.target.value))}
+                      style={{ width: '100%', accentColor: '#a78bfa' }}
                     />
-                    <span style={{ fontSize: '12px', color: '#8892a0' }}>x</span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#8892a0', marginTop: '2px' }}>
+                      <span>1h</span>
+                      <span>24h</span>
+                    </div>
                   </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: '11px', color: '#8892a0', marginBottom: '4px' }}>Min Profit</div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <input
-                      type="number"
-                      value={settings?.minProfitPct || 2}
-                      onChange={(e) => handleSettingChange('minProfitPct', parseFloat(e.target.value))}
-                      style={{
-                        width: '60px',
-                        padding: '6px 8px',
-                        borderRadius: '4px',
-                        border: '1px solid #2a3545',
-                        background: '#0a0f18',
-                        color: '#fff',
-                        fontSize: '13px',
-                      }}
-                      step="0.5"
-                      min="0.5"
-                      max="10"
-                    />
-                    <span style={{ fontSize: '12px', color: '#8892a0' }}>%</span>
+
+                  {/* Data Sources */}
+                  <div style={{ marginBottom: '16px' }}>
+                    <div style={{ fontSize: '11px', color: '#8892a0', marginBottom: '8px' }}>Data Sources</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                      {[
+                        { key: 'technicals', label: 'Technicals', always: true },
+                        { key: 'news', label: 'News', always: false },
+                        { key: 'sentiment', label: 'Sentiment', always: false },
+                        { key: 'fear_greed', label: 'Fear & Greed', always: false },
+                      ].map(({ key, label, always }) => {
+                        const enabled = always || (settings?.dataSourcesEnabled || []).includes(key);
+                        return (
+                          <label
+                            key={key}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              cursor: always ? 'default' : 'pointer',
+                              fontSize: '12px',
+                              color: enabled ? '#c0c8d0' : '#8892a0',
+                              opacity: always ? 0.7 : 1,
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={enabled}
+                              disabled={always}
+                              onChange={() => {
+                                const current = settings?.dataSourcesEnabled || [];
+                                const next = enabled
+                                  ? current.filter(s => s !== key)
+                                  : [...current, key];
+                                handleSettingChange('dataSourcesEnabled', next);
+                              }}
+                              style={{ accentColor: '#a78bfa' }}
+                            />
+                            {label}
+                          </label>
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: '11px', color: '#8892a0', marginBottom: '4px' }}>Exclude Top 10</div>
+
+                  {/* Early Trigger Thresholds (collapsible) */}
+                  <div style={{ marginBottom: '16px' }}>
+                    <div
+                      onClick={() => setShowEarlyTriggers(!showEarlyTriggers)}
+                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer', marginBottom: showEarlyTriggers ? '10px' : 0 }}
+                    >
+                      <div style={{ fontSize: '11px', color: '#8892a0' }}>Early Trigger Thresholds</div>
+                      {showEarlyTriggers
+                        ? <ChevronUp style={{ width: 14, height: 14, color: '#8892a0' }} />
+                        : <ChevronDown style={{ width: 14, height: 14, color: '#8892a0' }} />
+                      }
+                    </div>
+                    {showEarlyTriggers && (
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
+                        <div>
+                          <div style={{ fontSize: '10px', color: '#8892a0', marginBottom: '4px' }}>BTC % Drop</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <input
+                              type="number"
+                              min="1"
+                              max="10"
+                              step="0.5"
+                              value={settings?.earlyTriggerBtcPct || 3}
+                              onChange={(e) => handleSettingChange('earlyTriggerBtcPct', parseFloat(e.target.value))}
+                              style={{
+                                width: '55px',
+                                padding: '5px 6px',
+                                borderRadius: '4px',
+                                border: '1px solid #2a3545',
+                                background: '#0a0f18',
+                                color: '#fff',
+                                fontSize: '12px',
+                              }}
+                            />
+                            <span style={{ fontSize: '11px', color: '#8892a0' }}>%</span>
+                          </div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: '10px', color: '#8892a0', marginBottom: '4px' }}>Coin % Drop</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <input
+                              type="number"
+                              min="2"
+                              max="20"
+                              step="1"
+                              value={settings?.earlyTriggerCoinPct || 5}
+                              onChange={(e) => handleSettingChange('earlyTriggerCoinPct', parseFloat(e.target.value))}
+                              style={{
+                                width: '55px',
+                                padding: '5px 6px',
+                                borderRadius: '4px',
+                                border: '1px solid #2a3545',
+                                background: '#0a0f18',
+                                color: '#fff',
+                                fontSize: '12px',
+                              }}
+                            />
+                            <span style={{ fontSize: '11px', color: '#8892a0' }}>%</span>
+                          </div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: '10px', color: '#8892a0', marginBottom: '4px' }}>Volume Spike</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <input
+                              type="number"
+                              min="1.5"
+                              max="10"
+                              step="0.5"
+                              value={settings?.earlyTriggerVolumeX || 2}
+                              onChange={(e) => handleSettingChange('earlyTriggerVolumeX', parseFloat(e.target.value))}
+                              style={{
+                                width: '55px',
+                                padding: '5px 6px',
+                                borderRadius: '4px',
+                                border: '1px solid #2a3545',
+                                background: '#0a0f18',
+                                color: '#fff',
+                                fontSize: '12px',
+                              }}
+                            />
+                            <span style={{ fontSize: '11px', color: '#8892a0' }}>x</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Last Analysis */}
+                  <div style={{
+                    background: '#0a0f18',
+                    borderRadius: '6px',
+                    padding: '12px',
+                    marginBottom: '12px',
+                    border: '1px solid #2a3545',
+                  }}>
+                    <div style={{ fontSize: '11px', color: '#8892a0', marginBottom: '6px' }}>Last Analysis</div>
+                    {lastAnalysis ? (
+                      <>
+                        <div style={{ fontSize: '11px', color: '#a78bfa', marginBottom: '4px', fontFamily: 'JetBrains Mono, monospace' }}>
+                          {new Date(lastAnalysis.analyzedAt).toLocaleString()}
+                        </div>
+                        <div style={{ fontSize: '12px', color: '#c0c8d0', marginBottom: '6px', lineHeight: 1.4 }}>
+                          {lastAnalysis.marketSummary
+                            ? lastAnalysis.marketSummary.slice(0, 150) + (lastAnalysis.marketSummary.length > 150 ? '...' : '')
+                            : 'No summary available'}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#8892a0' }}>
+                          {(lastAnalysis.decisions as unknown[]).length} decision{(lastAnalysis.decisions as unknown[]).length !== 1 ? 's' : ''}
+                        </div>
+                      </>
+                    ) : (
+                      <div style={{ fontSize: '12px', color: '#8892a0' }}>No analysis yet</div>
+                    )}
+                  </div>
+
+                  {/* Force Analysis Button */}
                   <button
-                    onClick={() => handleSettingChange('excludeTop10', !settings?.excludeTop10)}
+                    onClick={handleForceAnalysis}
+                    disabled={forcingAnalysis}
                     style={{
-                      padding: '6px 12px',
-                      borderRadius: '4px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '8px 16px',
+                      borderRadius: '6px',
                       border: 'none',
-                      cursor: 'pointer',
-                      fontSize: '12px',
-                      background: settings?.excludeTop10 ? 'rgba(0, 255, 159, 0.2)' : 'rgba(107, 114, 128, 0.3)',
-                      color: settings?.excludeTop10 ? '#00ff9f' : '#8892a0',
+                      cursor: forcingAnalysis ? 'not-allowed' : 'pointer',
+                      fontSize: '13px',
+                      fontWeight: 500,
+                      background: forcingAnalysis ? 'rgba(139, 92, 246, 0.1)' : 'rgba(139, 92, 246, 0.2)',
+                      color: '#a78bfa',
+                      opacity: forcingAnalysis ? 0.7 : 1,
                     }}
                   >
-                    {settings?.excludeTop10 ? 'Yes' : 'No'}
+                    <Brain style={{ width: 14, height: 14, animation: forcingAnalysis ? 'spin 1s linear infinite' : 'none' }} />
+                    {forcingAnalysis ? 'Analyzing...' : 'Force Analysis'}
                   </button>
                 </div>
-              </div>
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
+                  <div>
+                    <div style={{ fontSize: '11px', color: '#8892a0', marginBottom: '4px' }}>RSI Threshold</div>
+                    <input
+                      type="number"
+                      value={settings?.rsiThreshold || 30}
+                      onChange={(e) => handleSettingChange('rsiThreshold', parseInt(e.target.value))}
+                      style={{
+                        width: '60px',
+                        padding: '6px 8px',
+                        borderRadius: '4px',
+                        border: '1px solid #2a3545',
+                        background: '#0a0f18',
+                        color: '#fff',
+                        fontSize: '13px',
+                      }}
+                      min="10"
+                      max="50"
+                    />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '11px', color: '#8892a0', marginBottom: '4px' }}>Volume Multiplier</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <input
+                        type="number"
+                        value={settings?.volumeMultiplier || 1.5}
+                        onChange={(e) => handleSettingChange('volumeMultiplier', parseFloat(e.target.value))}
+                        style={{
+                          width: '60px',
+                          padding: '6px 8px',
+                          borderRadius: '4px',
+                          border: '1px solid #2a3545',
+                          background: '#0a0f18',
+                          color: '#fff',
+                          fontSize: '13px',
+                        }}
+                        step="0.1"
+                        min="1"
+                        max="5"
+                      />
+                      <span style={{ fontSize: '12px', color: '#8892a0' }}>x</span>
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '11px', color: '#8892a0', marginBottom: '4px' }}>Min Profit</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <input
+                        type="number"
+                        value={settings?.minProfitPct || 2}
+                        onChange={(e) => handleSettingChange('minProfitPct', parseFloat(e.target.value))}
+                        style={{
+                          width: '60px',
+                          padding: '6px 8px',
+                          borderRadius: '4px',
+                          border: '1px solid #2a3545',
+                          background: '#0a0f18',
+                          color: '#fff',
+                          fontSize: '13px',
+                        }}
+                        step="0.5"
+                        min="0.5"
+                        max="10"
+                      />
+                      <span style={{ fontSize: '12px', color: '#8892a0' }}>%</span>
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '11px', color: '#8892a0', marginBottom: '4px' }}>Exclude Top 10</div>
+                    <button
+                      onClick={() => handleSettingChange('excludeTop10', !settings?.excludeTop10)}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: '4px',
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '12px',
+                        background: settings?.excludeTop10 ? 'rgba(0, 255, 159, 0.2)' : 'rgba(107, 114, 128, 0.3)',
+                        color: settings?.excludeTop10 ? '#00ff9f' : '#8892a0',
+                      }}
+                    >
+                      {settings?.excludeTop10 ? 'Yes' : 'No'}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* BTC Filters */}

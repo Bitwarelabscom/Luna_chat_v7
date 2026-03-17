@@ -308,12 +308,23 @@ router.post('/presets/add', async (req: Request, res: Response) => {
       return;
     }
 
-    const server = await mcpService.createServer(req.user!.userId, {
-      name: preset.name,
-      url: preset.url,
-      description: preset.description,
-      headers: preset.headers,
-    });
+    const serverData: Parameters<typeof mcpService.createServer>[1] = preset.transportType === 'stdio'
+      ? {
+          name: preset.name,
+          description: preset.description,
+          transportType: 'stdio',
+          commandPath: preset.commandPath!,
+          commandArgs: preset.commandArgs,
+          envVars: preset.envVars,
+        }
+      : {
+          name: preset.name,
+          description: preset.description,
+          transportType: 'http',
+          url: preset.url,
+          headers: preset.headers,
+        };
+    const server = await mcpService.createServer(req.user!.userId, serverData);
 
     // Auto-discover tools
     try {

@@ -14,6 +14,41 @@ const CHANNELS = 1;
 const BIT_DEPTH = 16;
 const VAD_THRESHOLD_DB = config.stt.silenceThreshold || -35; // -35dB (normalized)
 const VAD_SILENCE_DURATION_MS = config.stt.silenceDuration; // 700ms
+const MIN_SPEECH_DURATION_MS = 400; // Minimum speech duration to process (ignore short blips)
+const MIN_UTTERANCE_ENERGY_DB = -30; // Minimum average energy for an utterance to be worth transcribing
+
+// Common Whisper hallucination patterns on silence/noise
+const WHISPER_HALLUCINATIONS = new Set([
+  'thank you',
+  'thank you.',
+  'thanks for watching',
+  'thanks for watching.',
+  'subscribe',
+  'like and subscribe',
+  'you',
+  'bye',
+  'bye.',
+  'the end',
+  'the end.',
+  'so',
+  'oh',
+  'hmm',
+  'ugh',
+  'ah',
+  'um',
+  'okay',
+  'i\'m sorry',
+  'i\'m sorry.',
+  'thank you for watching',
+  'thank you for watching.',
+  'please subscribe',
+  'subtitles by',
+  'translated by',
+  'copyright',
+  '...',
+  '.',
+  '',
+]);
 
 // VAD State
 interface VADState {
@@ -140,9 +175,19 @@ async function processAudioChunk(
         const audioBuffer = Buffer.concat(state.buffer);
         state.buffer = []; // Clear buffer
         
-        // Don't process extremely short blips (< 200ms)
-        if (audioBuffer.length < sampleRate * 2 * 0.2) {
-            return; 
+        // Don't process extremely short blips
+        const speechDurationMs = Date.now() - state.speechStart;
+        if (speechDurationMs < MIN_SPEECH_DURATION_MS) {
+            logger.debug('VAD: Ignoring short blip', { durationMs: speechDurationMs });
+            return;
+        }
+
+        // Check average energy of the entire utterance - reject if too quiet (likely noise)
+        const utteranceRms = calculateRMS(audioBuffer) / 32768;
+        const utteranceDb = utteranceRms > 0 ? 20 * Math.log10(utteranceRms) : -100;
+        if (utteranceDb < MIN_UTTERANCE_ENERGY_DB) {
+            logger.debug('VAD: Ignoring low-energy utterance', { utteranceDb: Math.round(utteranceDb * 10) / 10 });
+            return;
         }
 
         await processUtterance(ws, userId, audioBuffer, sessionId, sampleRate);
@@ -306,6 +351,13 @@ async function processUtterance(
 
   if (!transcript) return;
 
+  // Filter Whisper hallucinations (common phantom outputs on noise/silence)
+  const normalizedTranscript = transcript.toLowerCase().replace(/[^\w\s']/g, '').trim();
+  if (WHISPER_HALLUCINATIONS.has(normalizedTranscript) || normalizedTranscript.length < 2) {
+    logger.info('STT: Filtered likely hallucination', { transcript, normalized: normalizedTranscript });
+    return;
+  }
+
   logger.info('STT Transcript', { transcript });
   ws.send(JSON.stringify({ type: 'transcript', text: transcript }));
   ws.send(JSON.stringify({ type: 'status', status: 'thinking' }));
@@ -429,7 +481,7 @@ async function streamTTS(ws: WebSocket, text: string) {
 function clearTtsFlag(ws: WebSocket) {
     setTimeout(() => {
         (ws as any)._ttsPlaying = false;
-    }, 1500);
+    }, 2500);
 }
 
 function createWavHeader(pcmData: Buffer, sampleRate: number): Buffer {

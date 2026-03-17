@@ -8,8 +8,12 @@ export interface McpPreset {
   description: string;
   url: string;
   headers: Record<string, string>;
-  category: 'finance' | 'productivity' | 'development' | 'data' | 'other';
+  category: 'finance' | 'productivity' | 'development' | 'data' | 'media' | 'other';
   icon?: string;
+  transportType?: 'http' | 'stdio';
+  commandPath?: string;
+  commandArgs?: string[];
+  envVars?: Record<string, string>;
 }
 
 export const MCP_PRESETS: Record<string, McpPreset> = {
@@ -21,12 +25,19 @@ export const MCP_PRESETS: Record<string, McpPreset> = {
     category: 'finance',
     icon: 'bitcoin',
   },
-  // Future presets can be added here:
-  // 'coingecko': {
-  //   name: 'CoinGecko',
-  //   description: 'Cryptocurrency data from CoinGecko API',
-  //   url: 'https://...',
-  //   headers: {},
-  //   category: 'finance',
-  // },
+  'sonarr': {
+    name: 'Sonarr TV Manager',
+    description: 'Manage TV series: search, add shows, check downloads, view upcoming episodes via Sonarr',
+    url: '',
+    headers: {},
+    category: 'media',
+    icon: 'tv',
+    transportType: 'stdio',
+    commandPath: 'node',
+    commandArgs: ['/mcp-servers/sonarr/index.js'],
+    envVars: {
+      SONARR_URL: 'http://10.0.0.2:8989',
+      SONARR_API_KEY: 'dcaa7d414033421c97d71c5b08d827e1',
+    },
+  },
 };

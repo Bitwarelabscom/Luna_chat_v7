@@ -2,6 +2,7 @@ import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
 import { Readable } from 'stream';
 import { pool } from '../db/index.js';
+import { gpuOrchestrator } from '../gpu/gpu-orchestrator.service.js';
 
 const ELEVENLABS_API_URL = 'https://api.elevenlabs.io/v1';
 const OPENAI_API_URL = 'https://api.openai.com/v1';
@@ -304,7 +305,64 @@ async function synthesizeWithElevenLabs(options: TTSOptions): Promise<Buffer> {
 }
 
 /**
+ * Split text into paragraph-based chunks for streaming TTS.
+ * Prioritizes paragraph breaks, then falls back to sentence boundaries.
+ */
+function splitIntoChunks(text: string, maxChunkLen = 500): string[] {
+  // First split by paragraphs (double newline or multiple newlines)
+  const paragraphs = text.split(/\n\s*\n/).map(p => p.trim()).filter(p => p.length > 0);
+
+  const chunks: string[] = [];
+  Array.from(paragraphs).forEach(para => {
+    if (para.length <= maxChunkLen) {
+      chunks.push(para);
+    } else {
+      // Split long paragraphs by sentences
+      const sentences = para.match(/[^.!?]+[.!?]+[\s]?|[^.!?]+$/g) || [para];
+      let current = '';
+      Array.from(sentences).forEach(sentence => {
+        if (current.length + sentence.length > maxChunkLen && current.length > 0) {
+          chunks.push(current.trim());
+          current = sentence;
+        } else {
+          current += sentence;
+        }
+      });
+      if (current.trim().length > 0) {
+        chunks.push(current.trim());
+      }
+    }
+  });
+  return chunks;
+}
+
+/**
+ * Generate audio for a single text chunk via Orpheus
+ */
+async function generateOrpheusChunk(orpheusUrl: string, text: string, voice: OrpheusVoice): Promise<Buffer> {
+  const response = await fetch(`${orpheusUrl}/v1/audio/speech`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'orpheus',
+      input: text,
+      voice,
+      response_format: 'wav',
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Orpheus TTS API error: ${response.status} - ${errorText}`);
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  return Buffer.from(arrayBuffer);
+}
+
+/**
  * Synthesize speech using Orpheus TTS (local, GPU-accelerated)
+ * For short texts, returns a single buffer. For long texts, chunks internally.
  */
 async function synthesizeWithOrpheus(text: string, voice: OrpheusVoice = 'tara'): Promise<Buffer> {
   const orpheusUrl = config.orpheus?.url;
@@ -312,49 +370,136 @@ async function synthesizeWithOrpheus(text: string, voice: OrpheusVoice = 'tara')
     throw new Error('Orpheus TTS URL not configured');
   }
 
-  const maxLength = 4096;
-  const truncatedText = text.length > maxLength ? text.slice(0, maxLength) + '...' : text;
+  // Ensure GPU is in TTS mode (swaps 3080 from ollama to Orpheus)
+  await gpuOrchestrator.ensureOrpheusReady();
 
   logger.info('Synthesizing speech with Orpheus TTS', {
-    textLength: truncatedText.length,
+    textLength: text.length,
     voice,
   });
 
   try {
-    const response = await fetch(`${orpheusUrl}/v1/audio/speech`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'orpheus',
-        input: truncatedText,
-        voice,
-        response_format: 'wav',
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      logger.error('Orpheus TTS API error', { status: response.status, error: errorText });
-      throw new Error(`Orpheus TTS API error: ${response.status} - ${errorText}`);
+    // For short text, single request
+    if (text.length <= 2000) {
+      const buf = await generateOrpheusChunk(orpheusUrl, text, voice);
+      gpuOrchestrator.recordTtsActivity();
+      return buf;
     }
 
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
+    // For long text, chunk and concatenate PCM data
+    const chunks = splitIntoChunks(text);
+    logger.info('Orpheus TTS: splitting into chunks', { chunks: chunks.length, totalLength: text.length });
 
+    const audioBuffers: Buffer[] = [];
+    let wavHeader: Buffer | null = null;
+
+    for (let i = 0; i < chunks.length; i++) {
+      const buf = await generateOrpheusChunk(orpheusUrl, chunks[i], voice);
+      if (i === 0) {
+        // Keep the full first chunk (header + data)
+        wavHeader = buf.subarray(0, 44);
+        audioBuffers.push(buf.subarray(44));
+      } else {
+        // Strip WAV header (44 bytes) from subsequent chunks
+        audioBuffers.push(buf.subarray(44));
+      }
+    }
+
+    // Rebuild WAV with correct total size
+    const pcmData = Buffer.concat(audioBuffers);
+    const totalSize = 44 + pcmData.length;
+    const header = Buffer.from(wavHeader!);
+    // Update RIFF chunk size (bytes 4-7)
+    header.writeUInt32LE(totalSize - 8, 4);
+    // Update data chunk size (bytes 40-43)
+    header.writeUInt32LE(pcmData.length, 40);
+
+    const result = Buffer.concat([header, pcmData]);
+    gpuOrchestrator.recordTtsActivity();
     logger.info('Speech synthesized successfully with Orpheus', {
-      audioSize: buffer.length,
+      audioSize: result.length,
       voice,
+      chunks: chunks.length,
     });
-
-    return buffer;
+    return result;
   } catch (error) {
     logger.error('Orpheus TTS synthesis error', {
       error: (error as Error).message,
-      textLength: truncatedText.length,
+      textLength: text.length,
       voice,
     });
     throw error;
   }
+}
+
+/**
+ * Strip markdown formatting from text for cleaner TTS output
+ */
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, '')        // code blocks
+    .replace(/`([^`]+)`/g, '$1')           // inline code
+    .replace(/\*\*([^*]+)\*\*/g, '$1')     // bold
+    .replace(/\*([^*]+)\*/g, '$1')         // italic
+    .replace(/__([^_]+)__/g, '$1')         // bold alt
+    .replace(/_([^_]+)_/g, '$1')           // italic alt
+    .replace(/^#{1,6}\s+/gm, '')           // headers
+    .replace(/^\s*[-*+]\s+/gm, '')         // list items
+    .replace(/^\s*\d+\.\s+/gm, '')         // numbered lists
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // links
+    .replace(/~~([^~]+)~~/g, '$1')         // strikethrough
+    .replace(/\n{3,}/g, '\n\n')            // collapse extra newlines
+    .trim();
+}
+
+/**
+ * Stream Orpheus TTS as NDJSON events with base64 audio chunks.
+ * Each line: {"chunk": "<base64 wav>", "index": N, "total": M}
+ * Splits text by paragraphs so first paragraph plays immediately
+ * while remaining paragraphs generate in the background.
+ */
+export async function streamOrpheusChunked(text: string, voice: OrpheusVoice, res: import('express').Response): Promise<void> {
+  const orpheusUrl = config.orpheus?.url;
+  if (!orpheusUrl) {
+    throw new Error('Orpheus TTS URL not configured');
+  }
+
+  // Ensure GPU is in TTS mode (swaps 3080 from ollama to Orpheus)
+  await gpuOrchestrator.ensureOrpheusReady();
+
+  const cleanText = stripMarkdown(text);
+  const chunks = splitIntoChunks(cleanText);
+  const total = chunks.length;
+
+  logger.info('Streaming Orpheus TTS', { chunks: total, textLength: cleanText.length, voice });
+
+  res.setHeader('Content-Type', 'application/x-ndjson');
+  res.setHeader('Transfer-Encoding', 'chunked');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('X-Accel-Buffering', 'no');
+
+  for (let i = 0; i < chunks.length; i++) {
+    try {
+      const audioBuffer = await generateOrpheusChunk(orpheusUrl, chunks[i], voice);
+      gpuOrchestrator.recordTtsActivity();
+      const event = JSON.stringify({
+        chunk: audioBuffer.toString('base64'),
+        index: i,
+        total,
+      });
+      res.write(event + '\n');
+      // Flush to ensure nginx/proxy sends immediately
+      if (typeof (res as any).flush === 'function') {
+        (res as any).flush();
+      }
+    } catch (error) {
+      logger.error('Orpheus stream chunk error', { index: i, error: (error as Error).message });
+      const errorEvent = JSON.stringify({ error: (error as Error).message, index: i, total });
+      res.write(errorEvent + '\n');
+    }
+  }
+
+  res.end();
 }
 
 /**
@@ -485,6 +630,7 @@ export async function listVoices(): Promise<Array<{ voice_id: string; name: stri
 export default {
   synthesizeSpeech,
   streamSpeech,
+  streamOrpheusChunked,
   getLunaVoice,
   listVoices,
   isEnabled,

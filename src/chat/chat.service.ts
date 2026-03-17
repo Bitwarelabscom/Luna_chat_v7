@@ -2027,10 +2027,18 @@ export async function* streamMessage(
     }
   }
 
+  // Strip summon_agent from companion mode when router says no tools needed.
+  // This prevents casual conversations from triggering expensive agent summoning loops
+  // even if they get misrouted to pro tier.
+  if (mode === 'companion' && routerDecision && !routerDecision.needs_tools && !toolHints.triggered) {
+    effectiveTools = effectiveTools.filter(t => t.function.name !== 'summon_agent');
+  }
+
   logger.info('Tool availability', {
     isSmallTalk: isSmallTalkMessage,
     toolsProvided: effectiveTools.length,
     toolsStripped: isSmallOllamaModel ? availableTools.length : 0,
+    summonStripped: mode === 'companion' && routerDecision && !routerDecision.needs_tools && !toolHints.triggered,
     toolHints: toolHints.triggered ? toolHints.matchedCategories : undefined,
     toolsFocused: toolHints.triggered ? effectiveTools.map(t => t.function.name) : undefined,
     routerRoute: routerDecision?.route || 'legacy',

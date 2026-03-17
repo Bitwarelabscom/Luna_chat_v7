@@ -24,6 +24,8 @@ interface TradeInfo {
   stopLossPrice?: number;
   takeProfitPrice?: number;
   trailingStopPct?: number;
+  strategyReason?: string;
+  confidenceScore?: number;
 }
 
 /**
@@ -131,6 +133,12 @@ export async function notifyOrderPlaced(userId: string, trade: TradeInfo): Promi
     if (trade.trailingStopPct) {
       message += `\nTrailing Stop: ${trade.trailingStopPct}%`;
     }
+    if (trade.strategyReason) {
+      message += `\n\nStrategy: ${trade.strategyReason}`;
+    }
+    if (trade.confidenceScore) {
+      message += `\nConfidence: ${(trade.confidenceScore * 100).toFixed(0)}%`;
+    }
 
     // Only show close button (can't modify SL until filled)
     const buttons = [{ text: 'Cancel Order', callback: `trade:cancel:${trade.id}` }];
@@ -162,6 +170,12 @@ export async function notifyOrderFilled(userId: string, trade: TradeInfo): Promi
     }
     if (trade.trailingStopPct) {
       message += `\nTrail: ${trade.trailingStopPct}%`;
+    }
+    if (trade.strategyReason) {
+      message += `\n\nStrategy: ${trade.strategyReason}`;
+    }
+    if (trade.confidenceScore) {
+      message += `\nConfidence: ${(trade.confidenceScore * 100).toFixed(0)}%`;
     }
 
     await sendTradeNotification(userId, message, buildPositionButtons(trade.id));
@@ -521,5 +535,39 @@ export async function notifyConditionalOrderFailed(
     });
   } catch (error) {
     logger.error('Failed to send conditional order failed notification', { userId, symbol, error: (error as Error).message });
+  }
+}
+
+/**
+ * Notify when Luna AI LLM analysis completes
+ */
+export async function notifyLlmAnalysis(
+  userId: string,
+  marketSummary: string,
+  decisions: Array<{ action: string; symbol: string; side: string; size_usd: number; confidence: number; reason: string }>
+): Promise<void> {
+  try {
+    let message = `🧠 Luna AI Analysis Complete\n\n`;
+    message += `${marketSummary}\n\n`;
+
+    if (decisions.length === 0) {
+      message += `Decision: HOLD - no trades recommended`;
+    } else {
+      message += `Decisions (${decisions.length}):\n`;
+      for (const d of decisions) {
+        const emoji = d.side === 'buy' ? '🟢' : '🔴';
+        message += `${emoji} ${d.action.toUpperCase()} ${d.symbol} - $${formatPrice(d.size_usd)} (${(d.confidence * 100).toFixed(0)}%)\n`;
+        message += `  Reason: ${d.reason}\n`;
+      }
+    }
+
+    await sendTradeNotification(userId, message);
+
+    logger.info('Sent LLM analysis notification', {
+      userId,
+      decisionsCount: decisions.length,
+    });
+  } catch (error) {
+    logger.error('Failed to send LLM analysis notification', { userId, error: (error as Error).message });
   }
 }

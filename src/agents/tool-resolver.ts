@@ -59,6 +59,10 @@ import {
   loadArtifactTool,
   getArtifactDownloadLinkTool,
   sunoGenerateTool,
+  torrentSearchTool,
+  torrentDownloadTool,
+  transmissionStatusTool,
+  transmissionRemoveTool,
 } from '../llm/tools/index.js';
 import type OpenAI from 'openai';
 
@@ -78,6 +82,7 @@ function getCompanionTools(): Tool[] {
     createCalendarEventTool, listCalendarEventsTool,
     sessionNoteTool, createReminderTool, listRemindersTool, cancelReminderTool,
     openUrlTool,
+    torrentSearchTool, torrentDownloadTool, transmissionStatusTool, transmissionRemoveTool,
     generateImageTool, generateBackgroundTool, researchTool, n8nWebhookTool, delegateToAgentTool,
     loadContextTool, correctSummaryTool,
     workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool,

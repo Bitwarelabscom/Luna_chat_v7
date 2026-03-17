@@ -138,7 +138,8 @@ setInterval(() => {
 function getTradingPersistentKeyboard(): Record<string, unknown> {
   return {
     keyboard: [
-      [{ text: '/portfolio' }, { text: '/model' }, { text: '/help' }],
+      [{ text: '/portfolio' }, { text: '/refresh' }, { text: '/daily' }],
+      [{ text: '/weekly' }, { text: '/model' }, { text: '/help' }],
     ],
     resize_keyboard: true,
     is_persistent: true,
@@ -773,7 +774,7 @@ export async function processUpdate(update: TelegramUpdate): Promise<void> {
   if (text === '/help') {
     await sendMessage(
       chatId,
-      'Trader Luna Telegram Commands:\n\n/start - Get started\n/status - Check connection status\n/portfolio - View portfolio\n/model - Switch AI model\n/quick - Quick model presets\n/unlink - Disconnect from Trader Luna\n/help - Show this help\n\nOr just send me a message to chat about trading!',
+      'Trader Luna Telegram Commands:\n\n/start - Get started\n/status - Check connection status\n/portfolio - View portfolio\n/refresh - Refresh portfolio (bust cache)\n/daily - Daily trading summary\n/weekly - Weekly trading summary\n/setbaseline - Set all-time P/L baseline\n/model - Switch AI model\n/quick - Quick model presets\n/unlink - Disconnect from Trader Luna\n/help - Show this help\n\nOr just send me a message to chat about trading!',
       { replyMarkup: getTradingPersistentKeyboard() }
     );
     return;
@@ -796,6 +797,26 @@ export async function processUpdate(update: TelegramUpdate): Promise<void> {
 
   if (text === '/portfolio') {
     await handlePortfolioCommand(chatId);
+    return;
+  }
+
+  if (text === '/refresh') {
+    await handleRefreshCommand(chatId);
+    return;
+  }
+
+  if (text === '/daily') {
+    await handleDailyCommand(chatId);
+    return;
+  }
+
+  if (text === '/weekly') {
+    await handleWeeklyCommand(chatId);
+    return;
+  }
+
+  if (text === '/setbaseline') {
+    await handleSetBaselineCommand(chatId);
     return;
   }
 
@@ -868,9 +889,13 @@ async function handlePortfolioCommand(chatId: number): Promise<void> {
       let message = `*Portfolio Summary*\n\n`;
       message += `Total Value: $${portfolio.totalValueUsdt.toLocaleString()}\n`;
       message += `Available: $${portfolio.availableUsdt.toLocaleString()}\n`;
-      message += `24h P&L: ${portfolio.dailyPnl >= 0 ? '+' : ''}$${portfolio.dailyPnl.toFixed(2)} (${portfolio.dailyPnlPct.toFixed(2)}%)\n\n`;
+      message += `24h P&L: ${portfolio.dailyPnl >= 0 ? '+' : ''}$${portfolio.dailyPnl.toFixed(2)} (${portfolio.dailyPnlPct.toFixed(2)}%)\n`;
 
-      message += `*Holdings:*\n`;
+      if (portfolio.allTimePnl !== undefined && portfolio.allTimePnlPct !== undefined) {
+        message += `All-time P&L: ${portfolio.allTimePnl >= 0 ? '+' : ''}$${portfolio.allTimePnl.toFixed(2)} (${portfolio.allTimePnlPct.toFixed(2)}%)\n`;
+      }
+
+      message += `\n*Holdings:*\n`;
       for (const holding of portfolio.holdings.slice(0, 10)) {
         message += `${holding.asset}: ${holding.amount.toFixed(4)} ($${holding.valueUsdt.toFixed(2)})\n`;
       }
@@ -882,6 +907,87 @@ async function handlePortfolioCommand(chatId: number): Promise<void> {
   } catch (error) {
     logger.error('Failed to fetch portfolio for Telegram', { userId: connection.userId, error: (error as Error).message });
     await sendMessage(chatId, 'Error fetching portfolio. Please try again.');
+  }
+}
+
+async function handleRefreshCommand(chatId: number): Promise<void> {
+  const connection = await getConnectionByChatId(chatId);
+  if (!connection) {
+    await sendMessage(chatId, 'Not connected to any Luna trading account.');
+    return;
+  }
+
+  try {
+    await tradingService.invalidatePortfolioCache(connection.userId);
+    const portfolio = await tradingService.getPortfolio(connection.userId);
+
+    if (portfolio) {
+      let message = `Portfolio Refreshed\n\n`;
+      message += `Total Value: $${portfolio.totalValueUsdt.toLocaleString()}\n`;
+      message += `Available: $${portfolio.availableUsdt.toLocaleString()}\n`;
+      message += `24h P&L: ${portfolio.dailyPnl >= 0 ? '+' : ''}$${portfolio.dailyPnl.toFixed(2)} (${portfolio.dailyPnlPct.toFixed(2)}%)`;
+
+      if (portfolio.allTimePnl !== undefined && portfolio.allTimePnlPct !== undefined) {
+        message += `\nAll-time P&L: ${portfolio.allTimePnl >= 0 ? '+' : ''}$${portfolio.allTimePnl.toFixed(2)} (${portfolio.allTimePnlPct.toFixed(2)}%)`;
+      }
+
+      await sendMessage(chatId, message);
+    } else {
+      await sendMessage(chatId, 'Unable to fetch portfolio after refresh.');
+    }
+  } catch (error) {
+    logger.error('Failed to refresh portfolio for Telegram', { userId: connection.userId, error: (error as Error).message });
+    await sendMessage(chatId, 'Error refreshing portfolio. Please try again.');
+  }
+}
+
+async function handleDailyCommand(chatId: number): Promise<void> {
+  const connection = await getConnectionByChatId(chatId);
+  if (!connection) {
+    await sendMessage(chatId, 'Not connected to any Luna trading account.');
+    return;
+  }
+
+  try {
+    const { generateDailySummary } = await import('../trading/trading-reports.service.js');
+    const summary = await generateDailySummary(connection.userId);
+    await sendMessage(chatId, summary);
+  } catch (error) {
+    logger.error('Failed to generate daily summary for Telegram', { userId: connection.userId, error: (error as Error).message });
+    await sendMessage(chatId, 'Error generating daily summary.');
+  }
+}
+
+async function handleWeeklyCommand(chatId: number): Promise<void> {
+  const connection = await getConnectionByChatId(chatId);
+  if (!connection) {
+    await sendMessage(chatId, 'Not connected to any Luna trading account.');
+    return;
+  }
+
+  try {
+    const { generateWeeklySummary } = await import('../trading/trading-reports.service.js');
+    const summary = await generateWeeklySummary(connection.userId);
+    await sendMessage(chatId, summary);
+  } catch (error) {
+    logger.error('Failed to generate weekly summary for Telegram', { userId: connection.userId, error: (error as Error).message });
+    await sendMessage(chatId, 'Error generating weekly summary.');
+  }
+}
+
+async function handleSetBaselineCommand(chatId: number): Promise<void> {
+  const connection = await getConnectionByChatId(chatId);
+  if (!connection) {
+    await sendMessage(chatId, 'Not connected to any Luna trading account.');
+    return;
+  }
+
+  try {
+    const result = await tradingService.setAllTimeBaseline(connection.userId);
+    await sendMessage(chatId, `All-time P&L baseline set to $${result.baselineValue.toFixed(2)} (${result.baselineDate})`);
+  } catch (error) {
+    logger.error('Failed to set baseline for Telegram', { userId: connection.userId, error: (error as Error).message });
+    await sendMessage(chatId, 'Error setting baseline. Please try again.');
   }
 }
 

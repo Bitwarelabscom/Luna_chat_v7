@@ -26,50 +26,12 @@ export default function VideosWindow() {
   const consumePendingMediaResults = useWindowStore((state) => state.consumePendingMediaResults);
   const pendingMediaResults = useWindowStore((state) => state.pendingMediaResults);
 
-  // Consume pending results on first render
-  const initialData = useRef<{
-    youtubeVideos: VideoResult[];
-    mediaItems: MediaItem[];
-    query: string;
-    source: 'youtube' | 'jellyfin' | 'mixed';
-  } | null>(null);
-
-  if (initialData.current === null) {
-    const pendingVideo = consumePendingVideoResults();
-    const pendingMedia = consumePendingMediaResults();
-
-    if (pendingMedia) {
-      initialData.current = {
-        youtubeVideos: [],
-        mediaItems: pendingMedia.items,
-        query: pendingMedia.query,
-        source: 'youtube',
-      };
-    } else if (pendingVideo) {
-      initialData.current = {
-        youtubeVideos: pendingVideo.videos,
-        mediaItems: [],
-        query: pendingVideo.query,
-        source: 'youtube',
-      };
-    } else {
-      initialData.current = { youtubeVideos: [], mediaItems: [], query: '', source: 'youtube' };
-    }
-  }
-
-  const [youtubeVideos, setYoutubeVideos] = useState<VideoResult[]>(initialData.current.youtubeVideos);
-  const [mediaItems, setMediaItems] = useState<MediaItem[]>(initialData.current.mediaItems);
-  const [query, setQuery] = useState(initialData.current.query);
-  const [activeItem, setActiveItem] = useState<ActiveItem | null>(() => {
-    if (initialData.current!.mediaItems.length > 0) {
-      return { kind: 'media', item: initialData.current!.mediaItems[0] };
-    }
-    if (initialData.current!.youtubeVideos.length > 0) {
-      return { kind: 'youtube', video: initialData.current!.youtubeVideos[0] };
-    }
-    return null;
-  });
+  const [youtubeVideos, setYoutubeVideos] = useState<VideoResult[]>([]);
+  const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
+  const [query, setQuery] = useState('');
+  const [activeItem, setActiveItem] = useState<ActiveItem | null>(null);
   const [downloads, setDownloads] = useState<Map<string, DownloadState>>(new Map());
+  const initialConsumed = useRef(false);
 
   // UI state
   const [ytCollapsed, setYtCollapsed] = useState(false);
@@ -107,30 +69,49 @@ export default function VideosWindow() {
     setIsAudioPlaying(false);
   }, [activeItem]);
 
-  // Watch for new pending YouTube results
+  // Consume pending results on mount (runs once after first render)
   useEffect(() => {
-    if (pendingVideoResults) {
-      setYoutubeVideos(pendingVideoResults.videos);
-      setMediaItems([]);
-      setQuery(pendingVideoResults.query);
-      if (pendingVideoResults.videos.length > 0) {
-        setActiveItem({ kind: 'youtube', video: pendingVideoResults.videos[0] });
+    if (initialConsumed.current) return;
+    initialConsumed.current = true;
+    const pendingVideo = consumePendingVideoResults();
+    const pendingMedia = consumePendingMediaResults();
+    if (pendingMedia) {
+      setMediaItems(pendingMedia.items);
+      setQuery(pendingMedia.query);
+      if (pendingMedia.items.length > 0) {
+        setActiveItem({ kind: 'media', item: pendingMedia.items[0] });
       }
-      consumePendingVideoResults();
+    } else if (pendingVideo) {
+      setYoutubeVideos(pendingVideo.videos);
+      setQuery(pendingVideo.query);
+      if (pendingVideo.videos.length > 0) {
+        setActiveItem({ kind: 'youtube', video: pendingVideo.videos[0] });
+      }
     }
+  }, [consumePendingVideoResults, consumePendingMediaResults]);
+
+  // Watch for new pending YouTube results (after window is already open)
+  useEffect(() => {
+    if (!initialConsumed.current || !pendingVideoResults) return;
+    setYoutubeVideos(pendingVideoResults.videos);
+    setMediaItems([]);
+    setQuery(pendingVideoResults.query);
+    if (pendingVideoResults.videos.length > 0) {
+      setActiveItem({ kind: 'youtube', video: pendingVideoResults.videos[0] });
+    }
+    consumePendingVideoResults();
   }, [pendingVideoResults, consumePendingVideoResults]);
 
-  // Watch for new pending media results
+  // Watch for new pending media results (after window is already open)
   useEffect(() => {
-    if (pendingMediaResults) {
-      setMediaItems(pendingMediaResults.items);
-      setYoutubeVideos([]);
-      setQuery(pendingMediaResults.query);
-      if (pendingMediaResults.items.length > 0) {
-        setActiveItem({ kind: 'media', item: pendingMediaResults.items[0] });
-      }
-      consumePendingMediaResults();
+    if (!initialConsumed.current || !pendingMediaResults) return;
+    setMediaItems(pendingMediaResults.items);
+    setYoutubeVideos([]);
+    setQuery(pendingMediaResults.query);
+    if (pendingMediaResults.items.length > 0) {
+      setActiveItem({ kind: 'media', item: pendingMediaResults.items[0] });
     }
+    consumePendingMediaResults();
   }, [pendingMediaResults, consumePendingMediaResults]);
 
   // Poll download status

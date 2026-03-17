@@ -138,6 +138,8 @@ export interface Portfolio {
   holdings: PortfolioHolding[];
   dailyPnl: number;
   dailyPnlPct: number;
+  allTimePnl?: number;
+  allTimePnlPct?: number;
 }
 
 export interface PortfolioHolding {
@@ -586,12 +588,22 @@ async function getCryptoComPortfolio(userId: string): Promise<Portfolio | null> 
     let dailyPnlPct = 0;
 
     // Get first snapshot of today for baseline
-    const snapshotResult = await pool.query(
+    let snapshotResult = await pool.query(
       `SELECT total_value_usdt FROM portfolio_snapshots
        WHERE user_id = $1 AND snapshot_time >= CURRENT_DATE
        ORDER BY snapshot_time ASC LIMIT 1`,
       [userId]
     );
+
+    // Fallback to yesterday's last snapshot if no snapshot exists today
+    if (snapshotResult.rows.length === 0) {
+      snapshotResult = await pool.query(
+        `SELECT total_value_usdt FROM portfolio_snapshots
+         WHERE user_id = $1 AND snapshot_time < CURRENT_DATE
+         ORDER BY snapshot_time DESC LIMIT 1`,
+        [userId]
+      );
+    }
 
     if (snapshotResult.rows.length > 0) {
       const baselineValue = parseFloat(snapshotResult.rows[0].total_value_usdt);
@@ -628,6 +640,60 @@ async function getCryptoComPortfolio(userId: string): Promise<Portfolio | null> 
 export async function invalidatePortfolioCache(userId: string): Promise<void> {
   const cacheKey = `${PORTFOLIO_CACHE_PREFIX}${userId}`;
   await redis.del(cacheKey);
+}
+
+/**
+ * Set the all-time P/L baseline to the current portfolio value
+ */
+export async function setAllTimeBaseline(userId: string): Promise<{ baselineValue: number; baselineDate: string }> {
+  const portfolio = await getPortfolio(userId);
+  if (!portfolio) {
+    throw new Error('Cannot get portfolio to set baseline');
+  }
+
+  const today = new Date().toISOString().split('T')[0];
+  await pool.query(
+    `INSERT INTO portfolio_baselines (user_id, baseline_value_usdt, baseline_date)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (user_id) DO UPDATE SET
+       baseline_value_usdt = $2,
+       baseline_date = $3,
+       created_at = NOW()`,
+    [userId, portfolio.totalValueUsdt, today]
+  );
+
+  return { baselineValue: portfolio.totalValueUsdt, baselineDate: today };
+}
+
+/**
+ * Get the all-time P/L baseline for a user
+ */
+export async function getPortfolioBaseline(userId: string): Promise<{ baselineValue: number; baselineDate: string } | null> {
+  const result = await pool.query(
+    `SELECT baseline_value_usdt, baseline_date FROM portfolio_baselines WHERE user_id = $1`,
+    [userId]
+  );
+  if (result.rows.length === 0) return null;
+  return {
+    baselineValue: parseFloat(result.rows[0].baseline_value_usdt),
+    baselineDate: result.rows[0].baseline_date,
+  };
+}
+
+/**
+ * Enrich portfolio with all-time P/L data
+ */
+async function enrichWithAllTimePnl(userId: string, portfolio: Portfolio): Promise<Portfolio> {
+  try {
+    const baseline = await getPortfolioBaseline(userId);
+    if (baseline && baseline.baselineValue > 0) {
+      portfolio.allTimePnl = portfolio.totalValueUsdt - baseline.baselineValue;
+      portfolio.allTimePnlPct = (portfolio.allTimePnl / baseline.baselineValue) * 100;
+    }
+  } catch (err) {
+    logger.warn('Failed to enrich portfolio with all-time P/L', { userId, error: (err as Error).message });
+  }
+  return portfolio;
 }
 
 export async function getPortfolio(userId: string): Promise<Portfolio | null> {
@@ -672,8 +738,9 @@ export async function getPortfolio(userId: string): Promise<Portfolio | null> {
 
   // For Crypto.com, use the factory and simplified portfolio
   if (exchangeType === 'crypto_com') {
-    const portfolio = await getCryptoComPortfolio(userId);
+    let portfolio = await getCryptoComPortfolio(userId);
     if (portfolio) {
+      portfolio = await enrichWithAllTimePnl(userId, portfolio);
       // Cache the result
       try {
         await redis.setex(cacheKey, PORTFOLIO_CACHE_TTL, JSON.stringify(portfolio));
@@ -826,13 +893,15 @@ export async function getPortfolio(userId: string): Promise<Portfolio | null> {
       [userId, totalValueUsdt, JSON.stringify(holdings), dailyPnl, dailyPnlPct]
     );
 
-    const portfolio = {
+    let portfolio: Portfolio = {
       totalValueUsdt,
       availableUsdt,
       holdings,
       dailyPnl,
       dailyPnlPct,
     };
+
+    portfolio = await enrichWithAllTimePnl(userId, portfolio);
 
     // Cache the result
     try {

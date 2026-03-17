@@ -152,6 +152,8 @@ export interface Portfolio {
   holdings: PortfolioHolding[];
   dailyPnl: number;
   dailyPnlPct: number;
+  allTimePnl?: number;
+  allTimePnlPct?: number;
 }
 
 export interface PriceData {
@@ -362,14 +364,14 @@ export interface AutoTradingSettings {
   // Fixed USD position sizing
   minPositionUsd?: number;
   maxPositionUsd?: number;
-  strategy: 'rsi_oversold' | 'trend_following' | 'mean_reversion' | 'momentum' | 'btc_correlation';
+  strategy: 'rsi_oversold' | 'trend_following' | 'mean_reversion' | 'momentum' | 'btc_correlation' | 'luna_ai';
   strategyMode: 'manual' | 'auto';
   excludedSymbols: string[];
   excludeTop10: boolean;
   btcTrendFilter: boolean;
   btcMomentumBoost: boolean;
   btcCorrelationSkip: boolean;
-  currentStrategy?: 'rsi_oversold' | 'trend_following' | 'mean_reversion' | 'momentum' | 'btc_correlation';
+  currentStrategy?: 'rsi_oversold' | 'trend_following' | 'mean_reversion' | 'momentum' | 'btc_correlation' | 'luna_ai';
   // Dual-mode settings
   dualModeEnabled?: boolean;
   conservativeCapitalPct?: number;
@@ -382,6 +384,13 @@ export interface AutoTradingSettings {
   aggressiveSymbols?: string[];
   conservativeMinConfidence?: number;
   aggressiveMinConfidence?: number;
+  // Luna AI settings
+  riskLevel?: 'conservative' | 'moderate' | 'aggressive';
+  llmAnalysisIntervalHours?: number;
+  earlyTriggerBtcPct?: number;
+  earlyTriggerCoinPct?: number;
+  earlyTriggerVolumeX?: number;
+  dataSourcesEnabled?: string[];
 }
 
 export interface AutoTradingState {
@@ -845,6 +854,16 @@ export const tradingApi = {
 
   reconcilePortfolio: () =>
     api<ReconciliationResult>('/api/trading/auto/reconcile', { method: 'POST' }),
+
+  // Luna AI Strategy
+  triggerLlmAnalysis: () =>
+    api<{ success: boolean; analysis: unknown }>('/api/trading/auto/luna-ai/analyze', { method: 'POST' }),
+
+  getLastAnalysis: () =>
+    api<{ analysis: { id: string; decisions: unknown[]; marketSummary: string; modelUsed: string; tokensUsed: number; analyzedAt: string } | null }>('/api/trading/auto/luna-ai/last-analysis'),
+
+  setPortfolioBaseline: () =>
+    api<{ success: boolean; baselineValue: number; baselineDate: string }>('/api/trading/portfolio/set-baseline', { method: 'POST' }),
 
   // Trading Rules (Visual Builder)
   getTradingRules: () =>

@@ -1,5 +1,6 @@
 import { query, queryOne } from '../db/postgres.js';
 import type { ProviderId } from '../llm/types.js';
+import { gpuOrchestrator } from '../gpu/gpu-orchestrator.service.js';
 
 export type BackgroundLlmFeature =
   | 'mood_analysis'
@@ -17,7 +18,8 @@ export type BackgroundLlmFeature =
   | 'query_refinement'
   | 'domain_evaluation'
   | 'ceo_org_execution'
-  | 'edge_classification';
+  | 'edge_classification'
+  | 'trading_analysis';
 
 export interface FeatureModelSelection {
   provider: ProviderId;
@@ -130,72 +132,91 @@ export const BACKGROUND_LLM_FEATURES: BackgroundLlmFeatureMeta[] = [
     label: 'Edge Classification',
     description: 'Classifies graph memory edges into semantic types (interested_in, working_on, etc.).',
   },
+  {
+    id: 'trading_analysis',
+    label: 'Trading Analysis',
+    description: 'LLM analysis of crypto market intelligence for Luna AI trading strategy decisions.',
+  },
 ];
 
+// GPU orchestrator routing:
+// - Chat-triggered (groq): mood_analysis, intent_detection, edge_classification, query_refinement, domain_evaluation
+// - Low-token -> P4 (ollama_secondary): news_filter, friend_fact_extraction, knowledge_verification, music_trend_analysis
+// - High-token -> 3080 (ollama_tertiary): context_summary, memory_curation, friend_summary, research_synthesis, session_gap_analysis, supervisor_critique, ceo_org_execution
+// - Trading -> xai: trading_analysis
+// During TTS mode: all ollama tasks route to P4 via gpuOrchestrator.getBackgroundProvider()
 export const DEFAULT_BACKGROUND_LLM_SETTINGS: BackgroundLlmSettings = {
+  // Chat-triggered: always groq (fastest)
   mood_analysis: {
-    primary: { provider: 'ollama', model: 'llama3.2:3b' },
-    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
-  },
-  context_summary: {
-    primary: { provider: 'ollama', model: 'llama3.2:3b' },
-    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
-  },
-  memory_curation: {
-    primary: { provider: 'openrouter', model: 'stepfun/step-3.5-flash:free' },
-    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
-  },
-  friend_summary: {
-    primary: { provider: 'ollama', model: 'llama3.2:3b' },
-    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
-  },
-  friend_fact_extraction: {
-    primary: { provider: 'ollama', model: 'llama3.2:3b' },
-    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
+    primary: { provider: 'groq', model: 'llama-3.1-8b-instant' },
+    fallback: { provider: 'openrouter', model: 'qwen/qwen3-4b:free' },
   },
   intent_detection: {
-    primary: { provider: 'ollama', model: 'llama3.2:3b' },
-    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
+    primary: { provider: 'groq', model: 'llama-3.1-8b-instant' },
+    fallback: { provider: 'openrouter', model: 'qwen/qwen3-4b:free' },
   },
-  news_filter: {
-    primary: { provider: 'ollama_tertiary', model: 'qwen3.5:4b-q4_K_M' },
-    fallback: { provider: 'ollama', model: 'llama3.2:3b' },
-  },
-  research_synthesis: {
-    primary: { provider: 'ollama', model: 'llama3.2:3b' },
-    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
-  },
-  session_gap_analysis: {
-    primary: { provider: 'ollama', model: 'llama3.2:3b' },
-    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
-  },
-  knowledge_verification: {
-    primary: { provider: 'ollama', model: 'llama3.2:3b' },
-    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
-  },
-  supervisor_critique: {
-    primary: { provider: 'ollama_tertiary', model: 'qwen3.5:4b-q4_K_M' },
-    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
-  },
-  music_trend_analysis: {
-    primary: { provider: 'ollama_tertiary', model: 'qwen3.5:4b-q4_K_M' },
-    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
-  },
-  query_refinement: {
-    primary: { provider: 'ollama', model: 'llama3.2:3b' },
-    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
+  edge_classification: {
+    primary: { provider: 'groq', model: 'llama-3.1-8b-instant' },
+    fallback: { provider: 'openrouter', model: 'qwen/qwen3-4b:free' },
   },
   domain_evaluation: {
-    primary: { provider: 'ollama', model: 'llama3.2:3b' },
+    primary: { provider: 'groq', model: 'llama-3.1-8b-instant' },
+    fallback: { provider: 'openrouter', model: 'qwen/qwen3-4b:free' },
+  },
+  query_refinement: {
+    primary: { provider: 'groq', model: 'llama-3.1-8b-instant' },
+    fallback: { provider: 'openrouter', model: 'qwen/qwen3-4b:free' },
+  },
+  // Low-token background: P4 (ollama_secondary) with lfm2.5-instruct, 8K ctx
+  news_filter: {
+    primary: { provider: 'ollama_secondary', model: 'tomng/lfm2.5-instruct:latest' },
+    fallback: { provider: 'groq', model: 'llama-3.1-8b-instant' },
+  },
+  friend_fact_extraction: {
+    primary: { provider: 'ollama_secondary', model: 'tomng/lfm2.5-instruct:latest' },
+    fallback: { provider: 'groq', model: 'llama-3.1-8b-instant' },
+  },
+  knowledge_verification: {
+    primary: { provider: 'ollama_secondary', model: 'tomng/lfm2.5-instruct:latest' },
+    fallback: { provider: 'groq', model: 'llama-3.1-8b-instant' },
+  },
+  music_trend_analysis: {
+    primary: { provider: 'ollama_secondary', model: 'tomng/lfm2.5-instruct:latest' },
+    fallback: { provider: 'groq', model: 'llama-3.1-8b-instant' },
+  },
+  // High-token background: 3080 (ollama_tertiary) with lfm2.5-instruct, 32K ctx
+  context_summary: {
+    primary: { provider: 'ollama_tertiary', model: 'tomng/lfm2.5-instruct:latest' },
+    fallback: { provider: 'groq', model: 'llama-3.1-8b-instant' },
+  },
+  memory_curation: {
+    primary: { provider: 'ollama_tertiary', model: 'tomng/lfm2.5-instruct:latest' },
+    fallback: { provider: 'groq', model: 'llama-3.1-8b-instant' },
+  },
+  friend_summary: {
+    primary: { provider: 'ollama_tertiary', model: 'tomng/lfm2.5-instruct:latest' },
+    fallback: { provider: 'groq', model: 'llama-3.1-8b-instant' },
+  },
+  research_synthesis: {
+    primary: { provider: 'ollama_tertiary', model: 'tomng/lfm2.5-instruct:latest' },
+    fallback: { provider: 'groq', model: 'llama-3.1-8b-instant' },
+  },
+  session_gap_analysis: {
+    primary: { provider: 'ollama_tertiary', model: 'tomng/lfm2.5-instruct:latest' },
+    fallback: { provider: 'groq', model: 'llama-3.1-8b-instant' },
+  },
+  supervisor_critique: {
+    primary: { provider: 'ollama_tertiary', model: 'tomng/lfm2.5-instruct:latest' },
     fallback: { provider: 'xai', model: 'grok-4-1-fast' },
   },
   ceo_org_execution: {
-    primary: { provider: 'ollama_tertiary', model: 'qwen3.5:4b-q4_K_M' },
-    fallback: { provider: 'ollama_secondary', model: 'llama3.2:3b' },
+    primary: { provider: 'ollama_tertiary', model: 'tomng/lfm2.5-instruct:latest' },
+    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
   },
-  edge_classification: {
-    primary: { provider: 'ollama_tertiary', model: 'qwen3.5:4b-q4_K_M' },
-    fallback: { provider: 'ollama', model: 'llama3.2:3b' },
+  // Quality-critical: always xai
+  trading_analysis: {
+    primary: { provider: 'xai', model: 'grok-4-1-fast' },
+    fallback: { provider: 'openrouter', model: 'qwen/qwen3-4b:free' },
   },
 };
 
@@ -243,6 +264,7 @@ function mergeWithDefaults(raw: unknown): BackgroundLlmSettings {
     domain_evaluation: sanitizeFeatureConfig(obj.domain_evaluation, DEFAULT_BACKGROUND_LLM_SETTINGS.domain_evaluation),
     ceo_org_execution: sanitizeFeatureConfig(obj.ceo_org_execution, DEFAULT_BACKGROUND_LLM_SETTINGS.ceo_org_execution),
     edge_classification: sanitizeFeatureConfig(obj.edge_classification, DEFAULT_BACKGROUND_LLM_SETTINGS.edge_classification),
+    trading_analysis: sanitizeFeatureConfig(obj.trading_analysis, DEFAULT_BACKGROUND_LLM_SETTINGS.trading_analysis),
   };
 }
 
@@ -259,7 +281,18 @@ export async function getBackgroundFeatureModelConfig(
   feature: BackgroundLlmFeature
 ): Promise<BackgroundFeatureModelConfig> {
   const settings = await getBackgroundLlmSettings(userId);
-  return settings[feature];
+  const base = settings[feature];
+
+  // GPU orchestrator dynamic override: during TTS mode, reroute ollama_tertiary tasks to ollama_secondary
+  const override = gpuOrchestrator.getBackgroundProvider(feature);
+  if (override) {
+    return {
+      primary: { provider: override.provider, model: override.model },
+      fallback: base.fallback,
+    };
+  }
+
+  return base;
 }
 
 export async function updateBackgroundLlmSettings(
@@ -284,6 +317,7 @@ export async function updateBackgroundLlmSettings(
     domain_evaluation: updates.domain_evaluation ? sanitizeFeatureConfig(updates.domain_evaluation, current.domain_evaluation) : current.domain_evaluation,
     ceo_org_execution: updates.ceo_org_execution ? sanitizeFeatureConfig(updates.ceo_org_execution, current.ceo_org_execution) : current.ceo_org_execution,
     edge_classification: updates.edge_classification ? sanitizeFeatureConfig(updates.edge_classification, current.edge_classification) : current.edge_classification,
+    trading_analysis: updates.trading_analysis ? sanitizeFeatureConfig(updates.trading_analysis, current.trading_analysis) : current.trading_analysis,
   };
 
   await query(

@@ -425,6 +425,42 @@ const jobs: Job[] = [
     running: false,
     handler: runBehavioralPatternDetection,
   },
+  // Trading intelligence & reports jobs
+  {
+    name: 'cryptoIntelScraper',
+    intervalMs: 15 * 60 * 1000, // Every 15 minutes
+    enabled: true,
+    running: false,
+    handler: runCryptoIntelScraper,
+  },
+  {
+    name: 'tradingDailySummary',
+    intervalMs: 24 * 60 * 60 * 1000, // Daily (cron-scheduled at 23:55 Helsinki)
+    enabled: true,
+    running: false,
+    handler: sendTradingDailySummary,
+  },
+  {
+    name: 'tradingWeeklySummary',
+    intervalMs: 7 * 24 * 60 * 60 * 1000, // Weekly (cron-scheduled Sunday 20:00)
+    enabled: true,
+    running: false,
+    handler: sendTradingWeeklySummary,
+  },
+  {
+    name: 'tradingPeriodicPnl',
+    intervalMs: 4 * 60 * 60 * 1000, // Every 4 hours
+    enabled: true,
+    running: false,
+    handler: sendTradingPeriodicPnl,
+  },
+  {
+    name: 'lunaAiAnalysis',
+    intervalMs: 6 * 60 * 60 * 1000, // Every 6 hours (cron-scheduled)
+    enabled: true,
+    running: false,
+    handler: runLunaAiScheduledAnalysis,
+  },
 ];
 
 // ============================================
@@ -1814,6 +1850,109 @@ async function runNeuralSleepWeekly(): Promise<void> {
 }
 
 // ============================================
+// Trading Intelligence & Reports Job Handlers
+// ============================================
+
+async function runCryptoIntelScraper(): Promise<void> {
+  try {
+    const { runFullScrape } = await import('../trading/crypto-intelligence.service.js');
+    await runFullScrape();
+    logger.debug('Crypto intelligence scraper completed');
+  } catch (error) {
+    logger.error('Crypto intelligence scraper failed', { error: (error as Error).message });
+  }
+}
+
+async function sendTradingDailySummary(): Promise<void> {
+  try {
+    const { generateDailySummary } = await import('../trading/trading-reports.service.js');
+    const tradingTelegram = await import('../triggers/trading-telegram.service.js');
+
+    // Get all users with trading Telegram connected
+    const result = await pool.query(
+      `SELECT user_id, chat_id FROM trading_telegram_connections WHERE is_active = true`
+    );
+
+    for (const row of result.rows) {
+      try {
+        const summary = await generateDailySummary(row.user_id);
+        await tradingTelegram.sendMessage(Number(row.chat_id), summary);
+      } catch (err) {
+        logger.error('Failed to send daily summary to user', { userId: row.user_id, error: (err as Error).message });
+      }
+    }
+  } catch (error) {
+    logger.error('Trading daily summary job failed', { error: (error as Error).message });
+  }
+}
+
+async function sendTradingWeeklySummary(): Promise<void> {
+  try {
+    const { generateWeeklySummary } = await import('../trading/trading-reports.service.js');
+    const tradingTelegram = await import('../triggers/trading-telegram.service.js');
+
+    const result = await pool.query(
+      `SELECT user_id, chat_id FROM trading_telegram_connections WHERE is_active = true`
+    );
+
+    for (const row of result.rows) {
+      try {
+        const summary = await generateWeeklySummary(row.user_id);
+        await tradingTelegram.sendMessage(Number(row.chat_id), summary);
+      } catch (err) {
+        logger.error('Failed to send weekly summary to user', { userId: row.user_id, error: (err as Error).message });
+      }
+    }
+  } catch (error) {
+    logger.error('Trading weekly summary job failed', { error: (error as Error).message });
+  }
+}
+
+async function sendTradingPeriodicPnl(): Promise<void> {
+  try {
+    const { generatePeriodicPnlUpdate } = await import('../trading/trading-reports.service.js');
+    const tradingTelegram = await import('../triggers/trading-telegram.service.js');
+
+    const result = await pool.query(
+      `SELECT user_id, chat_id FROM trading_telegram_connections WHERE is_active = true`
+    );
+
+    for (const row of result.rows) {
+      try {
+        const update = await generatePeriodicPnlUpdate(row.user_id);
+        await tradingTelegram.sendMessage(Number(row.chat_id), update, { disableNotification: true });
+      } catch (err) {
+        logger.error('Failed to send periodic P/L to user', { userId: row.user_id, error: (err as Error).message });
+      }
+    }
+  } catch (error) {
+    logger.error('Trading periodic P/L job failed', { error: (error as Error).message });
+  }
+}
+
+async function runLunaAiScheduledAnalysis(): Promise<void> {
+  try {
+    const { runLlmAnalysis, storeAnalysisTimestamp } = await import('../trading/luna-ai-strategy.service.js');
+
+    // Get users with luna_ai strategy enabled
+    const result = await pool.query(
+      `SELECT user_id FROM auto_trading_settings WHERE enabled = true AND strategy = 'luna_ai'`
+    );
+
+    for (const row of result.rows) {
+      try {
+        await runLlmAnalysis(row.user_id, 'scheduled_job');
+        await storeAnalysisTimestamp(row.user_id);
+      } catch (err) {
+        logger.error('Luna AI scheduled analysis failed for user', { userId: row.user_id, error: (err as Error).message });
+      }
+    }
+  } catch (error) {
+    logger.error('Luna AI scheduled analysis job failed', { error: (error as Error).message });
+  }
+}
+
+// ============================================
 // Job Runner
 // ============================================
 
@@ -1897,6 +2036,27 @@ export function startJobs(): void {
       // Schedule at 3AM Sunday
       cron.schedule('0 3 * * 0', () => runJob(job));
       logger.info(`Scheduled job ${job.name} via cron`, { schedule: '3AM Sunday' });
+      continue;
+    }
+
+    if (job.name === 'tradingDailySummary') {
+      // Schedule at 23:55 daily (Helsinki time - server timezone)
+      cron.schedule('55 23 * * *', () => runJob(job));
+      logger.info(`Scheduled job ${job.name} via cron`, { schedule: '23:55 daily' });
+      continue;
+    }
+
+    if (job.name === 'tradingWeeklySummary') {
+      // Schedule at 20:00 Sunday
+      cron.schedule('0 20 * * 0', () => runJob(job));
+      logger.info(`Scheduled job ${job.name} via cron`, { schedule: '20:00 Sunday' });
+      continue;
+    }
+
+    if (job.name === 'lunaAiAnalysis') {
+      // Schedule every 6 hours
+      cron.schedule('0 0,6,12,18 * * *', () => runJob(job));
+      logger.info(`Scheduled job ${job.name} via cron`, { schedule: 'every 6 hours' });
       continue;
     }
 

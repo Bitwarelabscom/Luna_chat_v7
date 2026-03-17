@@ -282,6 +282,25 @@ const configSchema = z.object({
     ollamaUrl: z.string().url().default('http://10.0.0.30:11434'),
     ollamaModel: z.string().default('qwen3.5:4b-q4_K_M'),
   }),
+
+  prowlarr: z.object({
+    url: z.string().default('http://10.0.0.2:9696'),
+    apiKey: z.string().default(''),
+    downloadClientId: z.coerce.number().int().default(1),
+    enabled: z.coerce.boolean().default(true),
+  }).optional(),
+
+  transmission: z.object({
+    url: z.string().default('http://10.0.0.2:9091/transmission/rpc'),
+    enabled: z.coerce.boolean().default(true),
+  }).optional(),
+
+  gpuOrchestrator: z.object({
+    enabled: z.coerce.boolean().default(true),
+    agentUrl: z.string().default('http://10.0.0.30:9876'),
+    idleTimeoutMs: z.coerce.number().int().positive().default(300000),
+    healthCheckTimeoutMs: z.coerce.number().int().positive().default(60000),
+  }).optional(),
 });
 
 const rawConfig = {
@@ -534,6 +553,25 @@ const rawConfig = {
     apiUrl: process.env.SUNO_API_URL,
     ollamaUrl: process.env.SUNO_OLLAMA_URL,
     ollamaModel: process.env.SUNO_OLLAMA_MODEL,
+  },
+
+  prowlarr: {
+    url: process.env.PROWLARR_URL,
+    apiKey: process.env.PROWLARR_API_KEY,
+    downloadClientId: process.env.PROWLARR_DL_CLIENT_ID,
+    enabled: process.env.PROWLARR_ENABLED,
+  },
+
+  transmission: {
+    url: process.env.TRANSMISSION_URL,
+    enabled: process.env.TRANSMISSION_ENABLED,
+  },
+
+  gpuOrchestrator: {
+    enabled: process.env.GPU_ORCHESTRATOR_ENABLED ?? 'true',
+    agentUrl: process.env.GPU_ORCHESTRATOR_AGENT_URL,
+    idleTimeoutMs: process.env.GPU_ORCHESTRATOR_IDLE_TIMEOUT_MS,
+    healthCheckTimeoutMs: process.env.GPU_ORCHESTRATOR_HEALTH_CHECK_TIMEOUT_MS,
   },
 };
 

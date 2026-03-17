@@ -1663,4 +1663,47 @@ router.post('/auto/reconcile', async (req: Request, res: Response) => {
   }
 });
 
+// ============================================
+// LUNA AI STRATEGY
+// ============================================
+
+// Trigger LLM analysis manually
+router.post('/auto/luna-ai/analyze', async (req: Request, res: Response) => {
+  try {
+    const { runLlmAnalysis, storeAnalysisTimestamp } = await import('./luna-ai-strategy.service.js');
+    const userId = getUserId(req);
+    const result = await runLlmAnalysis(userId, 'manual_trigger');
+    if (result) {
+      await storeAnalysisTimestamp(userId);
+    }
+    res.json({ success: true, analysis: result });
+  } catch (error) {
+    logger.error('Failed to trigger LLM analysis', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to trigger LLM analysis' });
+  }
+});
+
+// Get last LLM analysis
+router.get('/auto/luna-ai/last-analysis', async (req: Request, res: Response) => {
+  try {
+    const { getLastAnalysis } = await import('./luna-ai-strategy.service.js');
+    const analysis = await getLastAnalysis(getUserId(req));
+    res.json({ analysis });
+  } catch (error) {
+    logger.error('Failed to get last analysis', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get last analysis' });
+  }
+});
+
+// Set all-time P/L baseline
+router.post('/portfolio/set-baseline', async (req: Request, res: Response) => {
+  try {
+    const result = await tradingService.setAllTimeBaseline(getUserId(req));
+    res.json({ success: true, ...result });
+  } catch (error) {
+    logger.error('Failed to set portfolio baseline', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to set portfolio baseline' });
+  }
+});
+
 export default router;

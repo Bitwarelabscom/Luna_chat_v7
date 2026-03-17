@@ -127,7 +127,7 @@ services:
       - GOOGLE_ENABLED=${GOOGLE_ENABLED:-true}
       - MEMORYCORE_URL=http://memorycore-api:3002
       - MEMORYCORE_ENABLED=${MEMORYCORE_ENABLED:-true}
-      - LUNA_STREAMS_URL=http://10.0.0.30:8100
+      - LUNA_STREAMS_URL=http://luna-streams:8100
       - LUNA_STREAMS_ENABLED=${LUNA_STREAMS_ENABLED:-true}
       - ORPHEUS_TTS_URL=${ORPHEUS_TTS_URL:-http://10.0.0.30:5005}
       - ORPHEUS_TTS_VOICE=${ORPHEUS_TTS_VOICE:-tara}
@@ -204,6 +204,18 @@ services:
       - SUNO_API_URL=${SUNO_API_URL:-http://10.0.0.10:3000}
       - SUNO_OLLAMA_URL=${SUNO_OLLAMA_URL:-http://10.0.0.30:11434}
       - SUNO_OLLAMA_MODEL=${SUNO_OLLAMA_MODEL:-HoseaDev/qwen2.5-7b-instruct-q4-gguf:latest}
+      # Prowlarr + Transmission (torrent search & download)
+      - PROWLARR_URL=${PROWLARR_URL:-http://10.0.0.2:9696}
+      - PROWLARR_API_KEY=${PROWLARR_API_KEY:-7e1b00399d1a40c5ad214eb1006fa703}
+      - PROWLARR_DL_CLIENT_ID=${PROWLARR_DL_CLIENT_ID:-1}
+      - PROWLARR_ENABLED=${PROWLARR_ENABLED:-true}
+      - TRANSMISSION_URL=${TRANSMISSION_URL:-http://10.0.0.2:9091/transmission/rpc}
+      - TRANSMISSION_ENABLED=${TRANSMISSION_ENABLED:-true}
+      # GPU Orchestrator - dynamic 3080/P4 resource management
+      - GPU_ORCHESTRATOR_ENABLED=${GPU_ORCHESTRATOR_ENABLED:-true}
+      - GPU_ORCHESTRATOR_AGENT_URL=${GPU_ORCHESTRATOR_AGENT_URL:-http://10.0.0.30:9876}
+      - GPU_ORCHESTRATOR_IDLE_TIMEOUT_MS=${GPU_ORCHESTRATOR_IDLE_TIMEOUT_MS:-300000}
+      - GPU_ORCHESTRATOR_HEALTH_CHECK_TIMEOUT_MS=${GPU_ORCHESTRATOR_HEALTH_CHECK_TIMEOUT_MS:-60000}
       # MemoryCore direct DB access (for Memory Lab graph queries)
       - MEMORYCORE_DB_HOST=memorycore-postgres
       - MEMORYCORE_DB_PORT=5432

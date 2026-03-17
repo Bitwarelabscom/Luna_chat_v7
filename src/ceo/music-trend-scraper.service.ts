@@ -233,7 +233,7 @@ Return JSON:
   ]
 }
 
-Only include genres with confidence >= 0.4. Only include signals that are actionable for a music production AI.`,
+Only include genres with confidence >= 0.85. Only include signals with confidence >= 0.85 that are actionable for a music production AI.`,
     },
   ];
 
@@ -253,10 +253,10 @@ Only include genres with confidence >= 0.4. Only include signals that are action
 
     // Validate and filter
     analysis.emergingGenres = (analysis.emergingGenres || []).filter(g =>
-      g.name && g.confidence >= 0.4 && g.suggestedStyleTags
+      g.name && g.confidence >= 0.85 && g.suggestedStyleTags
     );
     analysis.signals = (analysis.signals || []).filter(s =>
-      s.title && s.confidence >= 0.3
+      s.title && s.confidence >= 0.85
     );
 
     return analysis;
@@ -392,13 +392,11 @@ async function notifyNewGenreProposal(
     `Evidence: ${trend.evidence}\n` +
     `Awaiting your approval before any production begins. Proposal ID: ${proposalId}`;
 
-  // Always: CEO Luna chat message
-  if (trend.confidence >= 0.5) {
-    await enqueueCeoMessage(userId, 'music_trend_genre_proposal', message, 6);
-  }
+  // CEO Luna chat message (85%+ confidence only)
+  await enqueueCeoMessage(userId, 'music_trend_genre_proposal', message, 6);
 
   // SSE badge for autonomous notifications
-  if (trend.confidence >= 0.5) {
+  if (trend.confidence >= 0.85) {
     try {
       await triggerService.enqueueTrigger({
         userId,
@@ -414,8 +412,8 @@ async function notifyNewGenreProposal(
     }
   }
 
-  // High-confidence: also Telegram
-  if (trend.confidence >= 0.7) {
+  // High-confidence: also Telegram (85%+ only)
+  if (trend.confidence >= 0.85) {
     try {
       await triggerService.enqueueTrigger({
         userId,

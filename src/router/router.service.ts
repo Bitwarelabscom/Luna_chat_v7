@@ -226,6 +226,40 @@ export async function route(
     }
   }
 
+  // TWO-PASS GUARD: In companion mode, keyword matches on words like "history",
+  // "compare", "duration" often misclassify casual philosophical chat as factual.
+  // When keywords would escalate a companion message beyond nano, verify with the
+  // cheap LLM classifier to catch conversational tone the keywords miss.
+  if (
+    context.mode === 'companion' &&
+    classification.source !== 'classifier' &&
+    classification.class !== 'chat' &&
+    classification.class !== 'actionable'
+  ) {
+    try {
+      const verifiedIntent = await callClassifier(message, config);
+      if (verifiedIntent === 'chat') {
+        logger.info('Router: companion two-pass override', {
+          keywordClass: classification.class,
+          classifierClass: verifiedIntent,
+          patterns: classification.matchedPatterns?.slice(0, 5),
+        });
+        classification = {
+          class: 'chat',
+          confidence: 0.85,
+          source: 'classifier',
+          matchedPatterns: ['companion_two_pass_override'],
+        };
+        decisionSource = 'classifier';
+      }
+    } catch (error) {
+      // On error, keep keyword classification (safe default)
+      logger.debug('Companion two-pass classifier failed, keeping keyword result', {
+        error: (error as Error).message,
+      });
+    }
+  }
+
   if (classification.matchedPatterns) {
     matchedPatterns.push(...classification.matchedPatterns);
   }

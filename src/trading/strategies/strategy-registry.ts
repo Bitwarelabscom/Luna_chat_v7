@@ -25,7 +25,8 @@ export type StrategyId =
   | 'momentum'
   | 'btc_correlation'
   | 'confluence'
-  | 'triple_signal';
+  | 'triple_signal'
+  | 'luna_ai';
 
 /**
  * All available strategies

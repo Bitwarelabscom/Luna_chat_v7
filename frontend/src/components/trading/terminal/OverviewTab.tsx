@@ -87,7 +87,7 @@ export default function OverviewTab({ prices, portfolio, bots, trades, loading }
                 </span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--terminal-text-muted)', fontSize: '0.8rem' }}>P&L</span>
+                <span style={{ color: 'var(--terminal-text-muted)', fontSize: '0.8rem' }}>24h P&L</span>
                 <span style={{
                   fontFamily: 'IBM Plex Mono',
                   color: portfolio.dailyPnl >= 0 ? 'var(--terminal-positive)' : 'var(--terminal-negative)',
@@ -95,6 +95,17 @@ export default function OverviewTab({ prices, portfolio, bots, trades, loading }
                   {portfolio.dailyPnl >= 0 ? '+' : ''}${portfolio.dailyPnl.toFixed(2)} ({portfolio.dailyPnlPct.toFixed(2)}%)
                 </span>
               </div>
+              {portfolio.allTimePnl !== undefined && portfolio.allTimePnlPct !== undefined && (
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: 'var(--terminal-text-muted)', fontSize: '0.8rem' }}>All-time</span>
+                  <span style={{
+                    fontFamily: 'IBM Plex Mono',
+                    color: portfolio.allTimePnl >= 0 ? 'var(--terminal-positive)' : 'var(--terminal-negative)',
+                  }}>
+                    {portfolio.allTimePnl >= 0 ? '+' : ''}${portfolio.allTimePnl.toFixed(2)} ({portfolio.allTimePnlPct.toFixed(2)}%)
+                  </span>
+                </div>
+              )}
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span style={{ color: 'var(--terminal-text-muted)', fontSize: '0.8rem' }}>Positions</span>
                 <span style={{ fontFamily: 'IBM Plex Mono' }}>{portfolio.holdings.length}</span>

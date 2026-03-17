@@ -61,6 +61,7 @@ import { isWireGuardRequest, WIREGUARD_USER } from './auth/auth.middleware.js';
 import { ircService } from './abilities/irc.service.js';
 import { getAllActiveUsers } from './auth/auth.service.js';
 import { initializeRegistry } from './agents/registry.js';
+import { gpuOrchestrator } from './gpu/gpu-orchestrator.service.js';
 
 const app = express();
 
@@ -239,6 +240,7 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 async function shutdown() {
   logger.info('Shutting down...');
   stopJobs();
+  gpuOrchestrator.shutdown();
   clearAllTelegramTimers();
   shutdownTradingWebSocket();
   shutdownHocuspocusServer();
@@ -357,6 +359,11 @@ server.listen(config.port, () => {
       logger.error('Failed to fetch users for IRC initialization', { error: err.message });
     });
   }
+
+  // Initialize GPU orchestrator (detect TTS/normal mode)
+  gpuOrchestrator.initialize().catch(err => {
+    logger.error('Failed to initialize GPU orchestrator on startup', { error: err.message });
+  });
 
   // Start background jobs
   startJobs();

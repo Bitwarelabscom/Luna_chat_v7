@@ -1,169 +1,71 @@
-# Claude Code Project Instructions
+# Luna Chat - Claude Code Instructions
 
-## Self-Learning Knowledge Base
+Luna is a personal AI system built by Henke (BitwareLabs). Express.js + TypeScript backend, Next.js + Zustand frontend, PostgreSQL + Redis + Neo4j data layer. Docker-deployed on a dedicated server behind WireGuard VPN.
 
-**At the start of each session, read `.claude/skills/luna.md`** - This file contains learned lessons, common mistakes, and project-specific knowledge that improves over time. Update it when you:
-- Make a mistake and fix it
-- Learn something new about this codebase
-- Receive a correction from the user
+## Global Rules
 
-## Code Style
+- **No em dashes** (---) anywhere in code, comments, docs, or output. Use hyphens (-) or double hyphens (--)
+- **ESM imports**: Always use `.js` extension (e.g., `import { query } from '../db/postgres.js'`)
+- **TypeScript strict**: `noUnusedParameters: true` -- prefix unused params with `_`
+- **WireGuard-only**: Nothing exposed to public internet except `/api/triggers/telegram/webhook`
+- **Map iteration**: Use `Array.from(map.entries()).forEach(...)` not `for...of`
+- **Sessions table**: Named `sessions` (NOT `chat_sessions`)
+- **CEO table**: Named `ceo_configs` (plural)
+- **Database**: `luna_chat` (NOT `luna`)
 
-- Do not use em dash (—) anywhere in code, comments, or documentation. Use regular hyphens (-) or double hyphens (--) instead.
+## Self-Learning
+
+Read `.claude/skills/luna.md` at session start. Update it when you make a mistake, receive a correction, or learn something new about this codebase.
+
+## Build & Deploy
+
+```bash
+# Backend
+npm run build:prod && docker compose build luna-api && docker compose up -d luna-api
+
+# Frontend
+cd frontend && npm run build && cd .. && docker compose build luna-frontend && docker compose up -d luna-frontend
+
+# Full rebuild
+npm run build:prod && cd frontend && npm run build && cd .. && docker compose build && docker compose up -d
+```
+
+`docker restart` does NOT apply code changes -- you must `docker compose build`.
+
+## Domain Skills
+
+Claude Code auto-invokes these based on task context. Each contains file maps, code patterns, and runbooks.
+
+| Skill | Scope |
+|-------|-------|
+| `luna-backend` | Routes, services, LLM tools, streaming, jobs, webhooks (`src/`) |
+| `luna-frontend` | UI components, Zustand stores, app registry, API layer (`frontend/`) |
+| `luna-data` | PostgreSQL, Redis, Neo4j, MemoryCore pool, migrations |
+| `luna-memory` | MemoryCore, NeuralSleep, entity/knowledge graphs, Memory Lab |
+| `luna-music` | Suno pipeline, genre registry, album production, DJ Luna, trends |
+| `luna-trading` | Exchange clients, strategies, auto-trading, bots, trading terminal |
 
 ## Security
 
-This project has been hardened with the following security measures:
-- Docker secrets for sensitive configuration
-- AES-256-GCM encryption for OAuth tokens at rest
-- SSRF protection on external URL requests
-- Rate limiting on authentication endpoints
-- Helmet security headers (CSP, HSTS)
-- File upload validation (MIME type, extension whitelist)
-- Command injection prevention (execFile instead of exec)
-- Safe expression evaluation (expr-eval instead of Function())
+- Docker secrets for sensitive config (`/secrets/*.txt`)
+- AES-256-GCM encryption for OAuth tokens and exchange credentials at rest
+- SSRF protection, rate limiting, Helmet headers, MIME validation
+- Command injection prevention (execFile, expr-eval)
+- Never commit secrets to version control
 
-## Build Commands
+## Key Integration Points
 
-- `npm run dev` - Development with hot reload
-- `npm run build` - Standard build (includes source maps)
-- `npm run build:prod` - Production build (no source maps)
+### MemoryCore (3-tier memory consolidation)
+- Client: `src/memory/memorycore.client.ts`
+- Consolidation triggers: 5min inactivity timeout, browser close, session delete
+- Flow: Working Memory -> Episodic (on session end) -> Semantic (daily/weekly jobs)
+- Env: `MEMORYCORE_URL=http://memorycore-api:3007`, `MEMORYCORE_ENABLED=true`
 
-## Secrets Management
+### Luna Streams (Mamba SSM continuous cognition)
+- Client: `src/integration/luna-streams.client.ts`
+- Fire-and-forget event emission with retry (max 2, circuit breaker after 5 failures)
+- Context fetch parallelized with `buildMemoryContext()`, delta-tracked (> 0.01), 5min cache
+- Env: `LUNA_STREAMS_URL=http://luna-streams:8100`, `LUNA_STREAMS_ENABLED=false`
 
-Secrets are stored in `/secrets/*.txt` files and mounted as Docker secrets. Never commit actual secrets to version control.
-
-## Docker Deployment
-
-Both backend (luna-api) and frontend (luna-frontend) run as built Docker images with code baked in at build time (NOT volume-mounted). This affects how you deploy changes:
-
-### Backend Changes
-```bash
-npm run build:prod                    # Build backend locally
-docker compose build luna-api         # Rebuild Docker image
-docker compose up -d luna-api         # Start new container
-```
-
-### Frontend Changes
-```bash
-cd frontend && npm run build              # Build frontend locally
-cd .. && docker compose build luna-frontend  # Rebuild Docker image
-docker compose up -d luna-frontend           # Start new container
-```
-
-### Full Rebuild (Backend + Frontend)
-```bash
-npm run build:prod                      # Build backend
-cd frontend && npm run build && cd ..   # Build frontend
-docker compose build                    # Rebuild all images
-docker compose up -d                    # Restart all containers
-```
-
-**Important:** `docker restart` does NOT apply code changes - you must rebuild the Docker image with `docker compose build`.
-
-## MemoryCore Integration
-
-Luna Chat integrates with MemoryCore for three-tier memory consolidation and NeuralSleep LNN processing. This enables genuine temporal memory integration where past experiences shape present processing.
-
-### Session Lifecycle
-
-Sessions are tracked for memory consolidation via three triggers:
-
-| Trigger | When | What Happens |
-|---------|------|--------------|
-| **Inactivity Timeout** | 5 minutes of no messages | Job runs every minute, consolidates idle sessions |
-| **Browser Close** | Tab/window close | Frontend sends POST to `/api/chat/sessions/{id}/end` |
-| **Session Delete** | User deletes chat | Consolidation before deletion |
-
-### Key Files
-
-- `src/chat/session-activity.service.ts` - Tracks session activity in Redis
-- `src/memory/memorycore.client.ts` - MemoryCore API client
-- `src/jobs/job-runner.ts` - Contains `memorycoreSessionConsolidator` job
-
-### Consolidation Flow
-
-```
-Chat Message
-    |
-    v
-[Record Activity] --> Redis: session:activity:{sessionId}
-    |
-    v
-[Record Interaction] --> MemoryCore: Working Memory
-    |
-    v
-(Session ends - timeout/close/delete)
-    |
-    v
-[Trigger Consolidation] --> MemoryCore: Working -> Episodic
-    |
-    v
-[Daily/Weekly Jobs] --> MemoryCore: Episodic -> Semantic
-```
-
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `MEMORYCORE_URL` | MemoryCore API URL | http://memorycore-api:3007 |
-| `MEMORYCORE_ENABLED` | Enable MemoryCore integration | true |
-| `MEMORYCORE_CONSCIOUSNESS_ENABLED` | Enable consciousness metrics | true |
-| `MEMORYCORE_PHI_THRESHOLD` | Phi threshold for consciousness | 0.5 |
-
-### Testing Consolidation
-
-```bash
-# Check session activity in Redis
-docker exec luna-redis redis-cli -a $REDIS_PASSWORD GET "session:activity:{sessionId}"
-
-# Check consolidation logs
-docker exec memorycore-postgres psql -U memorycore -d memorycore -c \
-  "SELECT * FROM consolidation_logs ORDER BY timestamp DESC LIMIT 5;"
-
-# Check session summaries
-docker exec memorycore-postgres psql -U memorycore -d memorycore -c \
-  "SELECT * FROM session_summaries ORDER BY timestamp DESC LIMIT 5;"
-```
-
-## Luna Streams Integration
-
-Luna Streams is a separate Python service (`/opt/luna-streams/`) that runs three parallel Mamba state-space models for continuous cognition. It processes memory events in real-time and injects context (~120 tokens) into the chat system prompt.
-
-### How It Works
-
-1. **Event emission** (fire-and-forget with retry): Chat interactions, entity extractions, and edge classifications are emitted to Luna Streams via HTTP POST. Never blocks chat. Includes retry (max 2 attempts with 500ms/1s backoff) and a circuit breaker that stops retrying after 5 consecutive failures.
-2. **Context injection** (delta-tracked, parallelized): The mamba stream context fetch is started as a promise before `buildMemoryContext()` and awaited after, so it runs in parallel with all memory queries. Only updates when state has meaningfully shifted (delta > 0.01). Cache: 5-min TTL, max 100 entries, returns cached context on timeout.
-
-### Key Files
-
-| File | Purpose |
-|------|---------|
-| `src/integration/luna-streams.client.ts` | HTTP client - emitEvent(), getStreamContext(), emitEdgeUpdate() |
-| `src/chat/chat.service.ts` | Emission points (alongside recordChatInteraction), parallelized mamba fetch |
-| `src/memory/memory.service.ts` | Entity update emission (after extractGraphEntities) |
-| `src/memory/edge-classification.service.ts` | Edge update emission (after classifyEdges) |
-| `src/persona/luna.persona.ts` | Context injection in Tier 2 (mambaStreamContext option) |
-| `src/config/index.ts` | lunaStreams config (url, enabled, emitTimeoutMs, contextFetchTimeoutMs) |
-
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `LUNA_STREAMS_URL` | Luna Streams API URL | http://luna-streams:8100 |
-| `LUNA_STREAMS_ENABLED` | Enable Luna Streams integration | false |
-
-### Testing
-
-```bash
-# Check if luna-streams is reachable from luna-api
-docker exec luna-api curl -s http://luna-streams:8100/health
-
-# Post a test event
-curl -X POST http://localhost:8100/api/events -H 'Content-Type: application/json' -d '{
-  "events": [{"timestamp": "2026-03-04T00:00:00Z", "event_type": "memory_entry", "source": "conversation", "content": {"summary": "test"}}]
-}'
-
-# Check stream state
-curl http://localhost:8100/api/streams
-```
+### Docker Internal Traffic
+Backend HTTPS redirect must allow Docker IPs (172.x.x.x) alongside WireGuard (10.0.0.x). Without this, container-to-container requests get 301 redirected and fail with SSL errors.

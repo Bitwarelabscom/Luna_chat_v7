@@ -10,6 +10,9 @@ import {
   Shield,
   Flame,
   Clock,
+  Brain,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import {
   tradingApi,
@@ -26,6 +29,8 @@ export default function AutoTab() {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [lastSync, setLastSync] = useState<Date | null>(null);
+  const [showEarlyTriggers, setShowEarlyTriggers] = useState(false);
+  const [lastAnalysis, setLastAnalysis] = useState<{ analyzedAt: string; marketSummary: string; decisions: unknown[] } | null>(null);
 
   // Load data
   const loadData = useCallback(async () => {
@@ -36,6 +41,14 @@ export default function AutoTab() {
       ]);
       setSettings(settingsData);
       setState(stateResponse.state);
+      if (settingsData.strategy === 'luna_ai') {
+        try {
+          const analysisData = await tradingApi.getLastAnalysis();
+          setLastAnalysis(analysisData.analysis);
+        } catch (_err) {
+          // Non-critical
+        }
+      }
     } catch (err) {
       console.error('Failed to load auto trading data:', err);
     } finally {
@@ -101,6 +114,20 @@ export default function AutoTab() {
       setSettings(result.settings);
     } catch (err) {
       console.error('Failed to update settings:', err);
+    }
+  };
+
+  // Force Luna AI analysis
+  const handleForceAnalysis = async () => {
+    setActionLoading('force_analysis');
+    try {
+      await tradingApi.triggerLlmAnalysis();
+      const analysisData = await tradingApi.getLastAnalysis();
+      setLastAnalysis(analysisData.analysis);
+    } catch (err) {
+      console.error('Failed to trigger analysis:', err);
+    } finally {
+      setActionLoading(null);
     }
   };
 
@@ -393,6 +420,236 @@ export default function AutoTab() {
               </div>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* Strategy Selector + Luna AI Panel */}
+      <div className="terminal-card">
+        <div className="terminal-card-header">
+          <span className="terminal-card-title">STRATEGY</span>
+        </div>
+        <div className="terminal-card-body" style={{ padding: '1rem' }}>
+          <div style={{ marginBottom: settings?.strategy === 'luna_ai' ? '1rem' : 0 }}>
+            <select
+              value={settings?.strategy || 'rsi_oversold'}
+              onChange={(e) => handleSettingsUpdate({ strategy: e.target.value as AutoTradingSettings['strategy'] })}
+              className="terminal-input"
+              style={{ width: '200px', padding: '0.375rem 0.5rem' }}
+            >
+              <option value="rsi_oversold">RSI Oversold</option>
+              <option value="trend_following">Trend Following</option>
+              <option value="mean_reversion">Mean Reversion</option>
+              <option value="momentum">Momentum</option>
+              <option value="btc_correlation">BTC Correlation</option>
+              <option value="luna_ai">Luna AI</option>
+            </select>
+          </div>
+
+          {settings?.strategy === 'luna_ai' && (
+            <div style={{ borderTop: '1px solid var(--terminal-border)', paddingTop: '1rem' }}>
+              {/* Luna AI Header */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
+                <Brain size={16} style={{ color: 'var(--terminal-accent)' }} />
+                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--terminal-text)' }}>Luna AI Strategy</span>
+              </div>
+
+              {/* Risk Level */}
+              <div style={{ marginBottom: '1rem' }}>
+                <div style={{ fontSize: '0.7rem', color: 'var(--terminal-text-dim)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>
+                  Risk Level
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  {(['conservative', 'moderate', 'aggressive'] as const).map((level) => (
+                    <button
+                      key={level}
+                      onClick={() => handleSettingsUpdate({ riskLevel: level })}
+                      className={`terminal-btn ${settings?.riskLevel === level ? 'terminal-btn-primary' : 'terminal-btn-secondary'}`}
+                      style={{ padding: '0.25rem 0.75rem', fontSize: '0.75rem' }}
+                    >
+                      {level.charAt(0).toUpperCase() + level.slice(1)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* LLM Analysis Interval */}
+              <div style={{ marginBottom: '1rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.375rem' }}>
+                  <div style={{ fontSize: '0.7rem', color: 'var(--terminal-text-dim)', textTransform: 'uppercase' }}>
+                    LLM Analysis Interval
+                  </div>
+                  <span style={{ fontSize: '0.8rem', fontFamily: 'IBM Plex Mono', color: 'var(--terminal-accent)' }}>
+                    {settings?.llmAnalysisIntervalHours || 4}h
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="1"
+                  max="24"
+                  step="1"
+                  value={settings?.llmAnalysisIntervalHours || 4}
+                  onChange={(e) => handleSettingsUpdate({ llmAnalysisIntervalHours: parseInt(e.target.value) })}
+                  style={{ width: '100%', accentColor: 'var(--terminal-accent)' }}
+                />
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', color: 'var(--terminal-text-dim)', marginTop: '0.125rem' }}>
+                  <span>1h</span>
+                  <span>24h</span>
+                </div>
+              </div>
+
+              {/* Data Sources */}
+              <div style={{ marginBottom: '1rem' }}>
+                <div style={{ fontSize: '0.7rem', color: 'var(--terminal-text-dim)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>
+                  Data Sources
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+                  {[
+                    { key: 'technicals', label: 'Technicals', always: true },
+                    { key: 'news', label: 'News', always: false },
+                    { key: 'sentiment', label: 'Sentiment', always: false },
+                    { key: 'fear_greed', label: 'Fear & Greed', always: false },
+                  ].map(({ key, label, always }) => {
+                    const enabled = always || (settings?.dataSourcesEnabled || []).includes(key);
+                    return (
+                      <label
+                        key={key}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.375rem',
+                          cursor: always ? 'default' : 'pointer',
+                          fontSize: '0.8rem',
+                          color: enabled ? 'var(--terminal-text)' : 'var(--terminal-text-dim)',
+                          opacity: always ? 0.6 : 1,
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={enabled}
+                          disabled={always}
+                          onChange={() => {
+                            const current = settings?.dataSourcesEnabled || [];
+                            const next = enabled
+                              ? current.filter(s => s !== key)
+                              : [...current, key];
+                            handleSettingsUpdate({ dataSourcesEnabled: next });
+                          }}
+                          style={{ accentColor: 'var(--terminal-accent)' }}
+                        />
+                        {label}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Early Trigger Thresholds (collapsible) */}
+              <div style={{ marginBottom: '1rem' }}>
+                <div
+                  onClick={() => setShowEarlyTriggers(!showEarlyTriggers)}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer', marginBottom: showEarlyTriggers ? '0.5rem' : 0 }}
+                >
+                  <div style={{ fontSize: '0.7rem', color: 'var(--terminal-text-dim)', textTransform: 'uppercase' }}>
+                    Early Trigger Thresholds
+                  </div>
+                  {showEarlyTriggers
+                    ? <ChevronUp size={14} style={{ color: 'var(--terminal-text-dim)' }} />
+                    : <ChevronDown size={14} style={{ color: 'var(--terminal-text-dim)' }} />
+                  }
+                </div>
+                {showEarlyTriggers && (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem' }}>
+                    <div>
+                      <label style={{ fontSize: '0.7rem', color: 'var(--terminal-text-muted)', display: 'block', marginBottom: '0.25rem' }}>
+                        BTC % Drop
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="10"
+                        step="0.5"
+                        value={settings?.earlyTriggerBtcPct || 3}
+                        onChange={(e) => handleSettingsUpdate({ earlyTriggerBtcPct: parseFloat(e.target.value) })}
+                        className="terminal-input"
+                        style={{ width: '100%', padding: '0.375rem 0.5rem' }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.7rem', color: 'var(--terminal-text-muted)', display: 'block', marginBottom: '0.25rem' }}>
+                        Coin % Drop
+                      </label>
+                      <input
+                        type="number"
+                        min="2"
+                        max="20"
+                        step="1"
+                        value={settings?.earlyTriggerCoinPct || 5}
+                        onChange={(e) => handleSettingsUpdate({ earlyTriggerCoinPct: parseFloat(e.target.value) })}
+                        className="terminal-input"
+                        style={{ width: '100%', padding: '0.375rem 0.5rem' }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.7rem', color: 'var(--terminal-text-muted)', display: 'block', marginBottom: '0.25rem' }}>
+                        Volume Spike
+                      </label>
+                      <input
+                        type="number"
+                        min="1.5"
+                        max="10"
+                        step="0.5"
+                        value={settings?.earlyTriggerVolumeX || 2}
+                        onChange={(e) => handleSettingsUpdate({ earlyTriggerVolumeX: parseFloat(e.target.value) })}
+                        className="terminal-input"
+                        style={{ width: '100%', padding: '0.375rem 0.5rem' }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Last Analysis */}
+              <div style={{
+                background: 'var(--terminal-surface)',
+                borderRadius: '4px',
+                padding: '0.75rem',
+                marginBottom: '0.75rem',
+                border: '1px solid var(--terminal-border)',
+              }}>
+                <div style={{ fontSize: '0.7rem', color: 'var(--terminal-text-dim)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>
+                  Last Analysis
+                </div>
+                {lastAnalysis ? (
+                  <>
+                    <div style={{ fontSize: '0.75rem', fontFamily: 'IBM Plex Mono', color: 'var(--terminal-accent)', marginBottom: '0.25rem' }}>
+                      {new Date(lastAnalysis.analyzedAt).toLocaleString()}
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--terminal-text)', marginBottom: '0.375rem', lineHeight: 1.4 }}>
+                      {lastAnalysis.marketSummary
+                        ? lastAnalysis.marketSummary.slice(0, 150) + (lastAnalysis.marketSummary.length > 150 ? '...' : '')
+                        : 'No summary available'}
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--terminal-text-dim)' }}>
+                      {(lastAnalysis.decisions as unknown[]).length} decision{(lastAnalysis.decisions as unknown[]).length !== 1 ? 's' : ''}
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ fontSize: '0.8rem', color: 'var(--terminal-text-dim)' }}>No analysis yet</div>
+                )}
+              </div>
+
+              {/* Force Analysis Button */}
+              <button
+                onClick={handleForceAnalysis}
+                disabled={actionLoading === 'force_analysis'}
+                className="terminal-btn terminal-btn-primary"
+                style={{ padding: '0.375rem 0.75rem' }}
+              >
+                <Brain size={14} className={actionLoading === 'force_analysis' ? 'animate-spin' : ''} />
+                <span>{actionLoading === 'force_analysis' ? 'Analyzing...' : 'Force Analysis'}</span>
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

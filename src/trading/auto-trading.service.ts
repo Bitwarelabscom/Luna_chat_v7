@@ -10,6 +10,7 @@
  */
 
 import { pool } from '../db/postgres';
+import redis from '../db/redis.js';
 import logger from '../utils/logger';
 import * as redisTradingService from './redis-trading.service';
 import * as tradingService from './trading.service';
@@ -88,6 +89,14 @@ export interface AutoTradingSettings {
   shortEnabled: boolean;            // Enable short selling
   shortRsiThreshold: number;        // RSI threshold for shorts (default 70)
   shortVolumeMultiplier: number;    // Volume multiplier for shorts (default 1.5)
+
+  // Luna AI strategy settings
+  riskLevel: 'conservative' | 'moderate' | 'aggressive';
+  llmAnalysisIntervalHours: number;
+  earlyTriggerBtcPct: number;
+  earlyTriggerCoinPct: number;
+  earlyTriggerVolumeX: number;
+  dataSourcesEnabled: string[];
 }
 
 // Top 10 coins by market cap (excluded by default)
@@ -223,6 +232,14 @@ const DEFAULT_SETTINGS: AutoTradingSettings = {
   shortEnabled: false,
   shortRsiThreshold: 70,
   shortVolumeMultiplier: 1.5,
+
+  // Luna AI defaults
+  riskLevel: 'moderate',
+  llmAnalysisIntervalHours: 6,
+  earlyTriggerBtcPct: 3.0,
+  earlyTriggerCoinPct: 5.0,
+  earlyTriggerVolumeX: 3.0,
+  dataSourcesEnabled: ['technicals', 'news', 'sentiment', 'fear_greed'],
 };
 
 /**
@@ -281,6 +298,13 @@ export async function getSettings(userId: string): Promise<AutoTradingSettings> 
     shortEnabled: row.short_enabled ?? DEFAULT_SETTINGS.shortEnabled,
     shortRsiThreshold: row.short_rsi_threshold ? parseFloat(row.short_rsi_threshold) : DEFAULT_SETTINGS.shortRsiThreshold,
     shortVolumeMultiplier: row.short_volume_multiplier ? parseFloat(row.short_volume_multiplier) : DEFAULT_SETTINGS.shortVolumeMultiplier,
+    // Luna AI fields
+    riskLevel: (row.risk_level || DEFAULT_SETTINGS.riskLevel) as 'conservative' | 'moderate' | 'aggressive',
+    llmAnalysisIntervalHours: row.llm_analysis_interval_hours ?? DEFAULT_SETTINGS.llmAnalysisIntervalHours,
+    earlyTriggerBtcPct: row.early_trigger_btc_pct ? parseFloat(row.early_trigger_btc_pct) : DEFAULT_SETTINGS.earlyTriggerBtcPct,
+    earlyTriggerCoinPct: row.early_trigger_coin_pct ? parseFloat(row.early_trigger_coin_pct) : DEFAULT_SETTINGS.earlyTriggerCoinPct,
+    earlyTriggerVolumeX: row.early_trigger_volume_x ? parseFloat(row.early_trigger_volume_x) : DEFAULT_SETTINGS.earlyTriggerVolumeX,
+    dataSourcesEnabled: row.data_sources_enabled || DEFAULT_SETTINGS.dataSourcesEnabled,
   };
 }
 
@@ -1773,6 +1797,36 @@ async function processUserAutoTrading(userId: string): Promise<void> {
   // DUAL-MODE: Use separate logic for dual-mode trading
   if (settings.dualModeEnabled) {
     await processDualModeTrading(userId, settings, state, portfolio, regimeData, availableUsd, isPaused);
+    return;
+  }
+
+  // LUNA AI: Use LLM-driven strategy with early triggers
+  if (settings.strategy === 'luna_ai') {
+    try {
+      const { checkEarlyTriggers, runLlmAnalysis, storeAnalysisTimestamp } = await import('./luna-ai-strategy.service.js');
+      const triggerResult = await checkEarlyTriggers(userId);
+
+      // Check if enough time has passed since last analysis
+      const lastAnalysisStr = await redis.get(`trading:last_analysis:${userId}`);
+      const lastAnalysisMs = lastAnalysisStr ? parseInt(lastAnalysisStr, 10) : 0;
+      const intervalHours = settings.llmAnalysisIntervalHours || 6;
+      const intervalMs = intervalHours * 60 * 60 * 1000;
+      const timeSinceAnalysis = Date.now() - lastAnalysisMs;
+      const intervalElapsed = timeSinceAnalysis > intervalMs;
+
+      if (triggerResult.triggered || intervalElapsed) {
+        const reason = triggerResult.triggered ? triggerResult.reason : 'scheduled_interval';
+        logger.info('Luna AI analysis triggered', { userId, reason, timeSinceAnalysis });
+
+        if (!isPaused) {
+          await runLlmAnalysis(userId, reason);
+          await storeAnalysisTimestamp(userId);
+        }
+      }
+    } catch (err) {
+      logger.error('Luna AI strategy error', { userId, error: (err as Error).message });
+    }
+    // Luna AI still allows fallback signal scanning below
     return;
   }
 

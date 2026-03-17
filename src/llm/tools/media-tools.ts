@@ -90,6 +90,88 @@ export const generateImageTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   },
 };
 
+// Prowlarr torrent search tool
+export const torrentSearchTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'torrent_search',
+    description: 'Search for torrents via Prowlarr (movies, series, audio, etc). Use when the user wants to find and download movies, TV shows, or other content via torrent. Returns a list of results with title, size, seeders, and category.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Search query (e.g., "The Bear S03", "Dune 2024 2160p")',
+        },
+      },
+      required: ['query'],
+    },
+  },
+};
+
+// Prowlarr torrent grab/download tool
+export const torrentDownloadTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'torrent_download',
+    description: 'Start downloading a torrent found via torrent_search. Sends the release to Transmission via Prowlarr. You must use torrent_search first to get the guid and indexerId.',
+    parameters: {
+      type: 'object',
+      properties: {
+        guid: {
+          type: 'string',
+          description: 'The guid of the torrent result from torrent_search',
+        },
+        indexerId: {
+          type: 'number',
+          description: 'The indexerId of the torrent result from torrent_search',
+        },
+        title: {
+          type: 'string',
+          description: 'The title of the torrent (for logging)',
+        },
+      },
+      required: ['guid', 'indexerId', 'title'],
+    },
+  },
+};
+
+// Transmission status tool
+export const transmissionStatusTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'transmission_status',
+    description: 'Get the current status of all torrents in Transmission. Shows download progress, speed, ETA, and status for each torrent. Use when the user asks about downloads, what is downloading, or transfer status.',
+    parameters: {
+      type: 'object',
+      properties: {},
+    },
+  },
+};
+
+// Transmission remove torrent tool
+export const transmissionRemoveTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'transmission_remove',
+    description: 'Remove a torrent from Transmission. Use transmission_status first to get the torrent ID.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'number',
+          description: 'The Transmission torrent ID to remove',
+        },
+        deleteData: {
+          type: 'boolean',
+          description: 'Whether to also delete the downloaded data files. Default false.',
+        },
+      },
+      required: ['id'],
+    },
+  },
+};
+
 // Desktop background generation tool
 export const generateBackgroundTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: 'function',

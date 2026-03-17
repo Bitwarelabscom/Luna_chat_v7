@@ -450,8 +450,15 @@ router.post('/tts', ttsRateLimit, async (req: Request, res: Response) => {
 
     const data = ttsSchema.parse(req.body);
 
+    // Always stream Orpheus - split into paragraphs, play first while rest generates
+    const settings = await ttsService.getTtsSettings();
+    if (settings.engine === 'orpheus') {
+      await ttsService.streamOrpheusChunked(data.text, settings.orpheusVoice, res);
+      return;
+    }
+
     if (data.stream) {
-      // Streaming response
+      // Streaming response (ElevenLabs)
       res.setHeader('Content-Type', 'audio/mpeg');
       res.setHeader('Transfer-Encoding', 'chunked');
       res.setHeader('Cache-Control', 'no-cache');
@@ -462,7 +469,6 @@ router.post('/tts', ttsRateLimit, async (req: Request, res: Response) => {
         voiceSettings: data.voiceSettings,
       });
 
-      // Pipe the audio stream to the response
       audioStream.pipe(res);
 
       audioStream.on('error', (error) => {

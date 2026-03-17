@@ -21,6 +21,7 @@ import * as ceoService from '../ceo/ceo.service.js';
 import * as modelConfigService from '../llm/model-config.service.js';
 import { PROVIDERS } from '../llm/types.js';
 import type { ProviderId } from '../llm/types.js';
+import { getCachedModels } from '../llm/model-fetcher.service.js';
 import * as localMediaService from '../abilities/local-media.service.js';
 import * as factsService from '../memory/facts.service.js';
 import * as visionService from '../abilities/vision.service.js';
@@ -34,7 +35,8 @@ const TELEGRAM_IDLE_TIMEOUT = 5 * 60 * 1000; // 5 minutes
 const TELEGRAM_TOKEN_LIMIT = 100000; // Force summarize at 100k tokens
 
 // Pending state for multi-step flows
-const pendingModelSelections: Map<number, { provider: ProviderId; models: Array<{ id: string; name: string }>; timestamp: number }> = new Map();
+const pendingModelSelections: Map<number, { provider: ProviderId; models: Array<{ id: string; name: string }>; page: number; timestamp: number }> = new Map();
+const MODELS_PER_PAGE = 20;
 const pendingMediaResults: Map<string, Array<{ id: string; name: string; path: string; type: string }>> = new Map();
 const activeTelegramSessions: Map<string, string> = new Map(); // userId -> sessionId
 const pendingSessionLists: Map<number, Array<{ id: string; title: string }>> = new Map();
@@ -1486,7 +1488,16 @@ async function handleCallbackQuery(callback: NonNullable<TelegramUpdate['callbac
   // Model provider selection
   if (data.startsWith('mdl:p:')) {
     const providerId = data.slice(6) as ProviderId;
-    const provider = PROVIDERS.find(p => p.id === providerId);
+
+    // Use dynamic models, fall back to static
+    let provider;
+    try {
+      const dynamicProviders = await getCachedModels();
+      provider = dynamicProviders.find(p => p.id === providerId);
+    } catch { /* fall through */ }
+    if (!provider) {
+      provider = PROVIDERS.find(p => p.id === providerId);
+    }
     if (!provider) {
       await answerCallbackQuery(callback.id, 'Provider not found');
       return;
@@ -1496,16 +1507,61 @@ async function handleCallbackQuery(callback: NonNullable<TelegramUpdate['callbac
     pendingModelSelections.set(chatId, {
       provider: providerId,
       models: chatModels.map(m => ({ id: m.id, name: m.name })),
+      page: 0,
       timestamp: Date.now(),
     });
 
-    const buttons = chatModels.map((m, i) => ({
+    const totalPages = Math.ceil(chatModels.length / MODELS_PER_PAGE);
+    const pageModels = chatModels.slice(0, MODELS_PER_PAGE);
+    const buttons: Array<{ text: string; callback: string }> = pageModels.map((m, i) => ({
       text: m.name,
       callback: `mdl:m:${i}`,
     }));
 
+    // Add pagination if needed
+    if (totalPages > 1) {
+      buttons.push({ text: `Next (2/${totalPages}) >>`, callback: 'mdl:pg:1' });
+    }
+
+    const header = `Select a ${provider.name} model (${chatModels.length} available):`;
     if (messageId) {
-      await editMessageButtons(chatId, messageId, `Select a ${provider.name} model:`, buttons, 1);
+      await editMessageButtons(chatId, messageId, header, buttons, 1);
+    }
+    await answerCallbackQuery(callback.id);
+    return;
+  }
+
+  // Model page navigation
+  if (data.startsWith('mdl:pg:')) {
+    const page = parseInt(data.slice(7), 10);
+    const pending = pendingModelSelections.get(chatId);
+    if (!pending) {
+      await answerCallbackQuery(callback.id, 'Selection expired');
+      return;
+    }
+
+    pending.page = page;
+    const totalPages = Math.ceil(pending.models.length / MODELS_PER_PAGE);
+    const start = page * MODELS_PER_PAGE;
+    const pageModels = pending.models.slice(start, start + MODELS_PER_PAGE);
+
+    const buttons: Array<{ text: string; callback: string }> = pageModels.map((m, i) => ({
+      text: m.name,
+      callback: `mdl:m:${start + i}`,
+    }));
+
+    // Add pagination buttons
+    const navButtons: Array<{ text: string; callback: string }> = [];
+    if (page > 0) {
+      navButtons.push({ text: `<< Prev (${page}/${totalPages})`, callback: `mdl:pg:${page - 1}` });
+    }
+    if (page < totalPages - 1) {
+      navButtons.push({ text: `Next (${page + 2}/${totalPages}) >>`, callback: `mdl:pg:${page + 1}` });
+    }
+    buttons.push(...navButtons);
+
+    if (messageId) {
+      await editMessageButtons(chatId, messageId, `Page ${page + 1}/${totalPages} (${pending.models.length} models):`, buttons, 1);
     }
     await answerCallbackQuery(callback.id);
     return;
@@ -2018,9 +2074,19 @@ async function handleModelCommand(chatId: number): Promise<void> {
     return;
   }
 
-  const enabledProviders = PROVIDERS.filter(p => p.enabled);
-  const buttons = enabledProviders.map(p => ({
-    text: p.name,
+  // Use dynamic models from APIs, fall back to static PROVIDERS
+  let providers;
+  try {
+    providers = await getCachedModels();
+    if (providers.length === 0) {
+      providers = PROVIDERS.filter(p => p.enabled);
+    }
+  } catch {
+    providers = PROVIDERS.filter(p => p.enabled);
+  }
+
+  const buttons = providers.filter(p => p.enabled).map(p => ({
+    text: `${p.name} (${p.models.length})`,
     callback: `mdl:p:${p.id}`,
   }));
 
