@@ -23,8 +23,8 @@ const MIME_TYPES: Record<string, string> = {
 const AUDIO_EXTS = new Set(['.mp3', '.flac', '.wav', '.m4a', '.ogg']);
 const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.webm', '.avi']);
 
-// Media root for path validation
-const MEDIA_ROOT = '/mnt/data/media';
+// Allowed media roots for path validation
+const MEDIA_ROOTS = ['/mnt/data/media', '/mnt/downloads/complete'];
 
 // All routes require authentication
 router.use(authenticate);
@@ -44,10 +44,17 @@ router.use((_req: Request, res: Response, next) => {
 router.get('/browse', (req: Request, res: Response): void => {
   try {
     const relPath = (req.query.path as string) || '';
+    const root = (req.query.root as string) || MEDIA_ROOTS[0];
 
-    // Resolve and validate path is under media root
-    const resolved = path.resolve(MEDIA_ROOT, relPath);
-    if (!resolved.startsWith(MEDIA_ROOT)) {
+    // Validate requested root is allowed
+    if (!MEDIA_ROOTS.includes(root)) {
+      res.status(403).json({ error: 'Access denied' });
+      return;
+    }
+
+    // Resolve and validate path is under the chosen root
+    const resolved = path.resolve(root, relPath);
+    if (!resolved.startsWith(root)) {
       res.status(403).json({ error: 'Access denied' });
       return;
     }
@@ -122,9 +129,10 @@ router.get('/stream/:id', (req: Request, res: Response): void => {
     // Decode base64url ID to file path
     const filePath = Buffer.from(req.params.id, 'base64url').toString();
 
-    // Validate path is under media root (prevent path traversal)
+    // Validate path is under an allowed media root (prevent path traversal)
     const resolved = path.resolve(filePath);
-    if (!resolved.startsWith(MEDIA_ROOT)) {
+    const allowed = MEDIA_ROOTS.some(root => resolved.startsWith(root));
+    if (!allowed) {
       res.status(403).json({ error: 'Access denied' });
       return;
     }

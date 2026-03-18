@@ -2,8 +2,8 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import logger from '../utils/logger.js';
 
-// Configuration for local media
-const MEDIA_ROOT = '/mnt/data/media';
+// Configuration for local media - search all roots
+const MEDIA_ROOTS = ['/mnt/data/media', '/mnt/downloads/complete'];
 // Use relative path - frontend will prepend the correct API base URL
 const API_BASE = '';
 
@@ -86,8 +86,16 @@ async function findFiles(dir: string, query: string = ''): Promise<string[]> {
  */
 export async function searchLocalMedia(query: string, limit: number = 10): Promise<LocalMediaItem[]> {
   try {
-    const files = await findFiles(MEDIA_ROOT, query);
-    return files.slice(0, limit).map(filePath => {
+    const allFiles: string[] = [];
+    for (const root of MEDIA_ROOTS) {
+      try {
+        const files = await findFiles(root, query);
+        allFiles.push(...files);
+      } catch (_err) {
+        logger.warn('Media root search failed, skipping', { root });
+      }
+    }
+    return allFiles.slice(0, limit).map(filePath => {
       const ext = path.extname(filePath).toLowerCase();
       const type = ['.mp3', '.flac', '.wav', '.m4a'].includes(ext) ? 'audio' : 'video';
       const fileId = Buffer.from(filePath).toString('base64url');
@@ -117,7 +125,7 @@ export function formatForPrompt(items: LocalMediaItem[], query: string): string 
     return `No local files found for "${query}".`;
   }
 
-  const lines = [`Found ${items.length} file(s) in /mnt/data/media for "${query}":\n`];
+  const lines = [`Found ${items.length} file(s) for "${query}":\n`];
 
   items.forEach((item, index) => {
     lines.push(`${index + 1}. **${item.name}** (ID: ${item.id})`);

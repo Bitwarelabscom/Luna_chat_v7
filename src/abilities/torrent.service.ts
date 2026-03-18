@@ -113,6 +113,15 @@ interface TransmissionTorrent {
   status: number;
   totalSize: number;
   sizeWhenDone: number;
+  downloadDir: string;
+  files: Array<{ name: string; length: number; bytesCompleted: number }>;
+}
+
+interface TransmissionFile {
+  name: string;
+  size: string;
+  fileId: string;
+  type: 'video' | 'audio' | 'other';
 }
 
 async function transmissionRPC(method: string, args: Record<string, unknown> = {}): Promise<any> {
@@ -160,6 +169,16 @@ const STATUS_LABELS: Record<number, string> = {
   6: 'seeding',
 };
 
+const MEDIA_EXTENSIONS = ['.mp4', '.mkv', '.avi', '.mov', '.mp3', '.flac', '.wav', '.m4a', '.ogg', '.webm', '.wmv'];
+const AUDIO_EXTENSIONS = ['.mp3', '.flac', '.wav', '.m4a', '.ogg'];
+
+function classifyFile(name: string): 'video' | 'audio' | 'other' {
+  const ext = name.substring(name.lastIndexOf('.')).toLowerCase();
+  if (AUDIO_EXTENSIONS.includes(ext)) return 'audio';
+  if (MEDIA_EXTENSIONS.includes(ext)) return 'video';
+  return 'other';
+}
+
 export async function getTransmissionTorrents(): Promise<Array<{
   id: number;
   name: string;
@@ -169,23 +188,47 @@ export async function getTransmissionTorrents(): Promise<Array<{
   eta: string;
   status: string;
   totalSize: string;
+  downloadDir: string;
+  mediaFiles: TransmissionFile[];
 }>> {
   const result = await transmissionRPC('torrent-get', {
-    fields: ['id', 'name', 'percentDone', 'rateDownload', 'rateUpload', 'eta', 'status', 'totalSize', 'sizeWhenDone'],
+    fields: ['id', 'name', 'percentDone', 'rateDownload', 'rateUpload', 'eta', 'status', 'totalSize', 'sizeWhenDone', 'downloadDir', 'files'],
   });
 
   const torrents: TransmissionTorrent[] = result.torrents || [];
 
-  return torrents.map(t => ({
-    id: t.id,
-    name: t.name,
-    percentDone: Math.round(t.percentDone * 100 * 10) / 10,
-    rateDownload: formatSpeed(t.rateDownload),
-    rateUpload: formatSpeed(t.rateUpload),
-    eta: t.eta > 0 ? formatEta(t.eta) : t.eta === 0 ? 'done' : '-',
-    status: STATUS_LABELS[t.status] || `unknown(${t.status})`,
-    totalSize: formatSize(t.sizeWhenDone || t.totalSize),
-  }));
+  return torrents.map(t => {
+    const mediaFiles: TransmissionFile[] = [];
+    const isComplete = t.percentDone >= 1;
+
+    if (isComplete && t.files) {
+      Array.from(t.files).forEach((f: { name: string; length: number }) => {
+        const type = classifyFile(f.name);
+        if (type !== 'other') {
+          const fullPath = `${t.downloadDir}/${f.name}`;
+          mediaFiles.push({
+            name: f.name,
+            size: formatSize(f.length),
+            fileId: Buffer.from(fullPath).toString('base64url'),
+            type,
+          });
+        }
+      });
+    }
+
+    return {
+      id: t.id,
+      name: t.name,
+      percentDone: Math.round(t.percentDone * 100 * 10) / 10,
+      rateDownload: formatSpeed(t.rateDownload),
+      rateUpload: formatSpeed(t.rateUpload),
+      eta: t.eta > 0 ? formatEta(t.eta) : t.eta === 0 ? 'done' : '-',
+      status: STATUS_LABELS[t.status] || `unknown(${t.status})`,
+      totalSize: formatSize(t.sizeWhenDone || t.totalSize),
+      downloadDir: t.downloadDir || '',
+      mediaFiles,
+    };
+  });
 }
 
 export async function removeTorrent(id: number, deleteData: boolean): Promise<void> {

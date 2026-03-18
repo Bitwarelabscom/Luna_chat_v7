@@ -24,10 +24,12 @@ import { determineRoute, quickRoute } from './rules/route-decision.js';
 import { createCompletion as anthropicCompletion } from '../llm/providers/anthropic.provider.js';
 import { createCompletion as groqCompletion } from '../llm/providers/groq.provider.js';
 import { createCompletion as googleCompletion } from '../llm/providers/google.provider.js';
+import { createCompletion as ollamaMicroCompletion } from '../llm/providers/ollama-micro.provider.js';
 import logger from '../utils/logger.js';
 
 // Provider completion functions
 const providerCompletions = {
+  ollama_micro: ollamaMicroCompletion,
   anthropic: anthropicCompletion,
   groq: groqCompletion,
   google: googleCompletion,

@@ -40,6 +40,7 @@
     "react-force-graph-3d": "^1.29.1",
     "react-markdown": "^9.0.1",
     "react-resizable-panels": "^4.6.3",
+    "recharts": "^3.8.0",
     "three": "^0.183.1",
     "y-websocket": "^2.0.4",
     "yjs": "^13.6.21",

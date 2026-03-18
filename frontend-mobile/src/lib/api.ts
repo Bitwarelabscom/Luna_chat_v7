@@ -550,7 +550,7 @@ export interface TtsSettings {
 }
 
 // Coder Settings Types
-export type ProviderId = 'openai' | 'groq' | 'anthropic' | 'xai' | 'openrouter' | 'ollama' | 'ollama_secondary' | 'ollama_tertiary' | 'google' | 'sanhedrin' | 'moonshot';
+export type ProviderId = 'openai' | 'groq' | 'anthropic' | 'xai' | 'openrouter' | 'ollama' | 'ollama_secondary' | 'ollama_tertiary' | 'ollama_micro' | 'google' | 'sanhedrin' | 'moonshot';
 
 export interface TriggerWords {
   claude: string[];

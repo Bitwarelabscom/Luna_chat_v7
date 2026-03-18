@@ -4,7 +4,7 @@ export const localMediaSearchTool: OpenAI.Chat.Completions.ChatCompletionTool = 
   type: 'function',
   function: {
     name: 'local_media_search',
-    description: 'Search for local media files (movies, shows, music) in the server /mnt/data/media directory. Use this when the user asks for local files. IMPORTANT: Search for broad terms like just the show name (e.g., "Shantaram") instead of specific episode numbers if a specific search fails.',
+    description: 'Search for local media files (movies, shows, music) in the media library and torrent downloads directory. Use this when the user asks for local files or wants to play downloaded torrents. IMPORTANT: Search for broad terms like just the show name (e.g., "Shantaram") instead of specific episode numbers if a specific search fails.',
     parameters: {
       type: 'object',
       properties: {
@@ -26,7 +26,7 @@ export const localMediaPlayTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: 'function',
   function: {
     name: 'local_media_play',
-    description: 'Stream a local media file by its ID (base64 path). This opens the integrated media player and starts playback.',
+    description: 'Stream a local media file by its ID (base64 path). This opens the integrated media player and starts playback. Works with any file in /mnt/data/media including torrent downloads - use transmission_status to get fileId for completed torrents, or local_media_search to find files by name.',
     parameters: {
       type: 'object',
       properties: {
@@ -114,7 +114,7 @@ export const torrentDownloadTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: 'function',
   function: {
     name: 'torrent_download',
-    description: 'Start downloading a torrent found via torrent_search. Sends the release to Transmission via Prowlarr. You must use torrent_search first to get the guid and indexerId.',
+    description: 'Start downloading a torrent found via torrent_search. Sends the release to Transmission via Prowlarr. You must use torrent_search first to get the guid and indexerId. Once downloaded, use transmission_status to get the file IDs, then local_media_play to play.',
     parameters: {
       type: 'object',
       properties: {
@@ -141,7 +141,7 @@ export const transmissionStatusTool: OpenAI.Chat.Completions.ChatCompletionTool 
   type: 'function',
   function: {
     name: 'transmission_status',
-    description: 'Get the current status of all torrents in Transmission. Shows download progress, speed, ETA, and status for each torrent. Use when the user asks about downloads, what is downloading, or transfer status.',
+    description: 'Get the current status of all torrents in Transmission. Shows download progress, speed, ETA, and status for each torrent. For completed torrents, also returns playable media files with fileId values that can be passed to local_media_play. Use when the user asks about downloads, wants to play a completed download, or check transfer status.',
     parameters: {
       type: 'object',
       properties: {},

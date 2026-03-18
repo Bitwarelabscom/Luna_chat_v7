@@ -1,6 +1,6 @@
 // LLM Provider Types
 
-export type ProviderId = 'groq' | 'anthropic' | 'xai' | 'openrouter' | 'ollama' | 'ollama_secondary' | 'ollama_tertiary' | 'google' | 'moonshot';
+export type ProviderId = 'groq' | 'anthropic' | 'xai' | 'openrouter' | 'ollama' | 'ollama_secondary' | 'ollama_tertiary' | 'ollama_micro' | 'google' | 'moonshot';
 
 export interface LLMProvider {
   id: ProviderId;
@@ -660,6 +660,40 @@ export const PROVIDERS: LLMProvider[] = [
         id: 'phi3:mini',
         name: 'Phi-3 Mini',
         contextWindow: 128000,
+        maxOutputTokens: 4096,
+        capabilities: ['chat', 'code', 'fast'],
+        costPer1kInput: 0,
+        costPer1kOutput: 0,
+      },
+    ],
+  },
+  {
+    id: 'ollama_micro',
+    name: 'Ollama Micro (10.0.0.3)',
+    enabled: true,
+    models: [
+      {
+        id: 'tomng/lfm2.5-instruct:1.2b-q8_0',
+        name: 'LFM 2.5 1.2B',
+        contextWindow: 4096,
+        maxOutputTokens: 512,
+        capabilities: ['chat', 'fast'],
+        costPer1kInput: 0,
+        costPer1kOutput: 0,
+      },
+      {
+        id: 'qwen3.5:0.8b-bf16',
+        name: 'Qwen 3.5 0.8B',
+        contextWindow: 8192,
+        maxOutputTokens: 1024,
+        capabilities: ['chat', 'fast'],
+        costPer1kInput: 0,
+        costPer1kOutput: 0,
+      },
+      {
+        id: 'qwen3.5:4b-q4_K_M',
+        name: 'Qwen 3.5 4B',
+        contextWindow: 32768,
         maxOutputTokens: 4096,
         capabilities: ['chat', 'code', 'fast'],
         costPer1kInput: 0,

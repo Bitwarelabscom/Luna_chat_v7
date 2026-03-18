@@ -12,12 +12,16 @@ import {
   LogOut,
   Cpu,
   Coins,
+  Zap,
 } from 'lucide-react';
 import { useAuthStore } from '@/lib/store';
 import { useNotificationStore } from '@/lib/notification-store';
 import { useNotificationStream } from '@/hooks/useNotificationStream';
 import { NotificationDropdown } from './NotificationDropdown';
-import { settingsApi, spotifyApi, type SystemMetrics, type SpotifyPlaybackState, type DailyTokenStats } from '@/lib/api';
+import { ElprisDropdown } from './ElprisDropdown';
+import { TokenUsageDropdown } from './TokenUsageDropdown';
+import { CalendarDropdown } from './CalendarDropdown';
+import { settingsApi, spotifyApi, type SystemMetrics, type SpotifyPlaybackState, type DailyTokenStats, type ElprisPrice } from '@/lib/api';
 import { useWindowStore } from '@/lib/window-store';
 import { appConfig, type AppId } from './app-registry';
 import { taskbarIconVariants, taskbarIconTransition } from '@/lib/animations';
@@ -120,6 +124,10 @@ export function FooterBar({ onSettingsOpen }: FooterBarProps) {
   const [playbackState, setPlaybackState] = useState<SpotifyPlaybackState | null>(null);
   const [controlLoading, setControlLoading] = useState(false);
   const [dailyTokens, setDailyTokens] = useState<DailyTokenStats | null>(null);
+  const [elprisPrice, setElprisPrice] = useState<ElprisPrice | null>(null);
+  const [showElprisDropdown, setShowElprisDropdown] = useState(false);
+  const [showTokensDropdown, setShowTokensDropdown] = useState(false);
+  const [showCalendarDropdown, setShowCalendarDropdown] = useState(false);
 
   // Window taskbar state
   const windows = useWindowStore((s) => s.windows);
@@ -183,6 +191,30 @@ export function FooterBar({ onSettingsOpen }: FooterBarProps) {
     const interval = setInterval(loadTokens, 30000);
     return () => clearInterval(interval);
   }, []);
+
+  // Electricity price
+  useEffect(() => {
+    const loadElpris = async () => {
+      try {
+        const data = await settingsApi.getElpris();
+        setElprisPrice(data);
+      } catch {
+        // Not available
+      }
+    };
+    loadElpris();
+    const interval = setInterval(loadElpris, 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Helper: electricity price color
+  const getElprisColor = (price: number) => {
+    if (price < 0.5) return 'text-green-400';
+    if (price <= 1.5) return 'text-yellow-400';
+    return 'text-red-400';
+  };
+
+  const currentPrice = elprisPrice?.current;
 
   // Helper: metric color
   const getMetricColor = (percent: number) => {
@@ -353,11 +385,59 @@ export function FooterBar({ onSettingsOpen }: FooterBarProps) {
 
         {/* Token Display */}
         {dailyTokens && (
-          <div className="hidden md:flex items-center gap-1.5 px-2 py-0.5 rounded bg-white/5" title="Today's token usage">
-            <Coins className="w-3 h-3 text-amber-400" />
-            <span className="text-[11px]">
-              {formatTokens(dailyTokens.totalTokens)} ({formatCost(dailyTokens.estimatedCost)})
-            </span>
+          <div className="relative">
+            <button
+              onClick={() => {
+                setShowTokensDropdown(!showTokensDropdown);
+                setShowElprisDropdown(false);
+                setShowCalendarDropdown(false);
+                setShowUserMenu(false);
+                setDropdownOpen(false);
+              }}
+              className="hidden md:flex items-center gap-1.5 px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 transition-colors"
+              title="Today's token usage"
+            >
+              <Coins className="w-3 h-3 text-amber-400" />
+              <span className="text-[11px]">
+                {formatTokens(dailyTokens.totalTokens)} ({formatCost(dailyTokens.estimatedCost)})
+              </span>
+            </button>
+
+            {showTokensDropdown && (
+              <TokenUsageDropdown
+                data={dailyTokens}
+                onClose={() => setShowTokensDropdown(false)}
+              />
+            )}
+          </div>
+        )}
+
+        {/* Electricity Price */}
+        {currentPrice && (
+          <div className="relative">
+            <button
+              onClick={() => {
+                setShowElprisDropdown(!showElprisDropdown);
+                setShowTokensDropdown(false);
+                setShowCalendarDropdown(false);
+                setShowUserMenu(false);
+                setDropdownOpen(false);
+              }}
+              className="hidden md:flex items-center gap-1.5 px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 transition-colors"
+              title={`${currentPrice.timeStart}–${currentPrice.timeEnd} (${currentPrice.date})`}
+            >
+              <Zap className={`w-3 h-3 ${getElprisColor(currentPrice.price)}`} />
+              <span className={`text-[11px] ${getElprisColor(currentPrice.price)}`}>
+                {currentPrice.price.toFixed(2)} SEK/kWh
+              </span>
+            </button>
+
+            {showElprisDropdown && elprisPrice && (
+              <ElprisDropdown
+                data={elprisPrice}
+                onClose={() => setShowElprisDropdown(false)}
+              />
+            )}
           </div>
         )}
 
@@ -372,7 +452,13 @@ export function FooterBar({ onSettingsOpen }: FooterBarProps) {
         {/* Notifications */}
         <div className="relative">
           <button
-            onClick={() => setDropdownOpen(!isDropdownOpen)}
+            onClick={() => {
+              setDropdownOpen(!isDropdownOpen);
+              setShowTokensDropdown(false);
+              setShowElprisDropdown(false);
+              setShowCalendarDropdown(false);
+              setShowUserMenu(false);
+            }}
             className={`relative p-1 hover:bg-white/10 rounded transition-colors ${
               hasUrgentUnread ? 'animate-pulse' : ''
             }`}
@@ -399,15 +485,42 @@ export function FooterBar({ onSettingsOpen }: FooterBarProps) {
           )}
         </div>
 
-        {/* Date/Time + User Menu */}
+        {/* Date/Time → Calendar dropdown */}
         <div className="relative">
           <button
-            onClick={() => setShowUserMenu(!showUserMenu)}
+            onClick={() => {
+              setShowCalendarDropdown(!showCalendarDropdown);
+              setShowTokensDropdown(false);
+              setShowElprisDropdown(false);
+              setShowUserMenu(false);
+              setDropdownOpen(false);
+            }}
             className="flex items-center gap-2 pl-2 border-l hover:text-white transition-colors"
             style={{ borderColor: 'rgba(255, 255, 255, 0.1)' }}
           >
             <span>{time.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</span>
             <span className="font-medium">{time.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false })}</span>
+          </button>
+
+          {showCalendarDropdown && (
+            <CalendarDropdown onClose={() => setShowCalendarDropdown(false)} />
+          )}
+        </div>
+
+        {/* User Menu */}
+        <div className="relative">
+          <button
+            onClick={() => {
+              setShowUserMenu(!showUserMenu);
+              setShowTokensDropdown(false);
+              setShowElprisDropdown(false);
+              setShowCalendarDropdown(false);
+              setDropdownOpen(false);
+            }}
+            className="p-1 hover:bg-white/10 rounded transition-colors"
+            title={user?.email || 'User'}
+          >
+            <LogOut className="w-3.5 h-3.5" />
           </button>
 
           {showUserMenu && (

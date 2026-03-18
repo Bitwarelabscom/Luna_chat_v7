@@ -184,7 +184,7 @@ export interface TtsSettings {
 }
 
 // Coder Settings Types
-export type ProviderId = 'groq' | 'anthropic' | 'xai' | 'openrouter' | 'ollama' | 'ollama_secondary' | 'ollama_tertiary' | 'google' | 'moonshot';
+export type ProviderId = 'groq' | 'anthropic' | 'xai' | 'openrouter' | 'ollama' | 'ollama_secondary' | 'ollama_tertiary' | 'ollama_micro' | 'google' | 'moonshot';
 
 export interface TriggerWords {
   claude: string[];
@@ -319,7 +319,32 @@ export interface ToolOption {
   includedInSets: ToolSetId[];
 }
 
+export interface ElprisDailyEntry {
+  time: string;
+  price: number;
+}
+
+export interface ElprisPrice {
+  current: {
+    price: number;
+    unit: string;
+    timeStart: string;
+    timeEnd: string;
+    date: string;
+  };
+  daily: {
+    high: number;
+    low: number;
+    average: number;
+    entries: ElprisDailyEntry[];
+  };
+}
+
 export const settingsApi = {
+  // Electricity Price
+  getElpris: () =>
+    api<ElprisPrice>('/api/settings/elpris'),
+
   // System Metrics
   getSystemMetrics: () =>
     api<SystemMetrics>('/api/settings/system'),

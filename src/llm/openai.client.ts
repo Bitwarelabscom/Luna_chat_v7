@@ -64,6 +64,13 @@ function getClient(provider: ProviderId = 'xai'): OpenAI {
           baseURL: `${config.ollamaTertiary.url}/v1`,
         });
         break;
+      case 'ollama_micro':
+        if (!config.ollamaMicro?.url) throw new Error('Ollama Micro URL not configured');
+        clients.ollama_micro = new OpenAI({
+          apiKey: 'ollama',
+          baseURL: `${config.ollamaMicro.url}/v1`,
+        });
+        break;
       case 'anthropic':
         // Anthropic tool calling is handled separately via native provider
         // This error only triggers if someone tries to use the OpenAI client directly
@@ -258,13 +265,15 @@ export async function createChatCompletion(
   // When tools ARE present, fall through to the OpenAI SDK path below --
   // Ollama exposes an OpenAI-compatible API that supports tool calling for
   // models like llama3.1, llama3.2, mistral-nemo, etc.
-  if ((provider === 'ollama' || provider === 'ollama_secondary' || provider === 'ollama_tertiary') && (!tools || tools.length === 0)) {
+  if ((provider === 'ollama' || provider === 'ollama_secondary' || provider === 'ollama_tertiary' || provider === 'ollama_micro') && (!tools || tools.length === 0)) {
     try {
       let ollamaProvider;
       if (provider === 'ollama') {
         ollamaProvider = await import('./providers/ollama.provider.js');
       } else if (provider === 'ollama_secondary') {
         ollamaProvider = await import('./providers/ollama-secondary.provider.js');
+      } else if (provider === 'ollama_micro') {
+        ollamaProvider = await import('./providers/ollama-micro.provider.js');
       } else {
         ollamaProvider = await import('./providers/ollama-tertiary.provider.js');
       }
