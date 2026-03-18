@@ -633,6 +633,93 @@ router.delete('/coder', async (req: Request, res: Response) => {
   }
 });
 
+// === ELECTRICITY PRICE (Nord Pool SE4) ===
+
+let elprisCache: { data: unknown; fetchedAt: number } | null = null;
+const ELPRIS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+router.get('/elpris', async (_req: Request, res: Response) => {
+  try {
+    const now = Date.now();
+    if (elprisCache && (now - elprisCache.fetchedAt) < ELPRIS_CACHE_TTL) {
+      res.json(elprisCache.data);
+      return;
+    }
+
+    const today = new Date().toLocaleDateString('sv-SE'); // YYYY-MM-DD in Swedish timezone
+    const url = new URL('https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices');
+    url.searchParams.set('date', today);
+    url.searchParams.set('market', 'DayAhead');
+    url.searchParams.set('deliveryArea', 'SE4');
+    url.searchParams.set('currency', 'SEK');
+
+    const response = await fetch(url.toString(), { signal: AbortSignal.timeout(10000) });
+    if (!response.ok) {
+      throw new Error(`Nord Pool API returned ${response.status}`);
+    }
+
+    const data = await response.json() as { multiAreaEntries?: Array<{ deliveryStart: string; deliveryEnd: string; entryPerArea?: Record<string, number> }> };
+    const entries = data.multiAreaEntries || [];
+    const nowDate = new Date();
+
+    let matched: { price: number; unit: string; timeStart: string; timeEnd: string; date: string } | null = null;
+    const allPrices: number[] = [];
+    const dailyEntries: Array<{ time: string; price: number }> = [];
+
+    for (const entry of entries) {
+      const start = new Date(entry.deliveryStart);
+      const end = new Date(entry.deliveryEnd);
+      const priceMwh = entry.entryPerArea?.SE4;
+      if (priceMwh == null) continue;
+
+      const priceKwh = Math.round((priceMwh / 1000) * 10000) / 10000;
+      allPrices.push(priceKwh);
+      dailyEntries.push({
+        time: start.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Stockholm' }),
+        price: priceKwh,
+      });
+
+      if (!matched && nowDate >= start && nowDate < end) {
+        matched = {
+          price: priceKwh,
+          unit: 'SEK/kWh',
+          timeStart: start.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Stockholm' }),
+          timeEnd: end.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Stockholm' }),
+          date: today,
+        };
+      }
+    }
+
+    if (!matched) {
+      res.status(404).json({ error: 'No price found for current time interval' });
+      return;
+    }
+
+    const result = {
+      current: matched,
+      daily: {
+        high: allPrices.length > 0 ? Math.max(...allPrices) : 0,
+        low: allPrices.length > 0 ? Math.min(...allPrices) : 0,
+        average: allPrices.length > 0
+          ? Math.round((allPrices.reduce((a, b) => a + b, 0) / allPrices.length) * 10000) / 10000
+          : 0,
+        entries: dailyEntries,
+      },
+    };
+
+    elprisCache = { data: result, fetchedAt: now };
+    res.json(result);
+  } catch (error) {
+    logger.error('Failed to fetch electricity price', { error: (error as Error).message });
+    // Return stale cache if available
+    if (elprisCache) {
+      res.json(elprisCache.data);
+      return;
+    }
+    res.status(500).json({ error: 'Failed to fetch electricity price' });
+  }
+});
+
 // === TTS SETTINGS ===
 
 // Get TTS settings
@@ -669,6 +756,49 @@ router.put('/tts', async (req: Request, res: Response) => {
     }
     logger.error('Failed to update TTS settings', { error: (error as Error).message });
     res.status(500).json({ error: 'Failed to update TTS settings' });
+  }
+});
+
+// ============================================
+// Luna Style Parameters (self-modification)
+// ============================================
+
+router.get('/style-parameters', async (req: Request, res: Response) => {
+  try {
+    const { getActiveParameters } = await import('../memory/self-modification.service.js');
+    const params = await getActiveParameters(req.user!.userId);
+    res.json({ parameters: params });
+  } catch (error) {
+    logger.error('Failed to get style parameters', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get style parameters' });
+  }
+});
+
+router.put('/style-parameters/:paramName', async (req: Request, res: Response) => {
+  try {
+    const { overrideParameter } = await import('../memory/self-modification.service.js');
+    const { paramName } = req.params;
+    const { value } = req.body;
+    if (typeof value !== 'number') {
+      res.status(400).json({ error: 'value must be a number' });
+      return;
+    }
+    await overrideParameter(req.user!.userId, paramName as any, value);
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Failed to update style parameter', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to update style parameter' });
+  }
+});
+
+router.get('/self-adjustments', async (req: Request, res: Response) => {
+  try {
+    const { getRecentAdjustments } = await import('../memory/self-modification.service.js');
+    const adjustments = await getRecentAdjustments(req.user!.userId, 20);
+    res.json({ adjustments });
+  } catch (error) {
+    logger.error('Failed to get self-adjustments', { error: (error as Error).message });
+    res.status(500).json({ error: 'Failed to get self-adjustments' });
   }
 });
 

@@ -15,6 +15,8 @@ import * as lunaStreamsClient from '../integration/luna-streams.client.js';
 import * as emotionalMoments from './emotional-moments.service.js';
 import * as contradictionService from './contradiction.service.js';
 import * as behavioralPatterns from './behavioral-patterns.service.js';
+import * as lunaAffect from './luna-affect.service.js';
+import * as metaCognition from './meta-cognition.service.js';
 
 /**
  * Memory context split into stable (cacheable) and volatile (per-query) parts
@@ -37,6 +39,7 @@ export interface MemoryContext {
     semanticMemory?: string;  // MemoryCore high-tier semantic knowledge
     emotionalMoments?: string;  // Recent raw emotional moments
     behavioralObservations?: string;  // Specific behavioral pattern observations
+    lunaAffectContext?: string;  // Luna's own internal mood state
   };
   // Volatile (not cached) - changes per query, goes in Tier 4
   volatile: {
@@ -45,6 +48,7 @@ export interface MemoryContext {
     curationReasoning?: string;   // Debug: why curation selected these memories
     contradictions?: string;      // Unsurfaced contradiction signals
     contradictionIds?: string[];  // IDs for marking as surfaced post-response
+    metaCognition?: string;       // Luna's self-awareness report (conditional)
   };
 }
 
@@ -92,7 +96,10 @@ export function formatStableMemory(context: MemoryContext): string {
   if (context.stable.behavioralObservations) {
     parts.push(context.stable.behavioralObservations);
   }
-  // Note: consciousness metrics intentionally excluded from prompt - diagnostic only
+  // Luna's own internal mood state
+  if (context.stable.lunaAffectContext) {
+    parts.push(context.stable.lunaAffectContext);
+  }
   return parts.join('\n\n');
 }
 
@@ -110,6 +117,10 @@ export function formatVolatileMemory(context: MemoryContext): string {
   }
   if (context.volatile.contradictions) {
     parts.push(context.volatile.contradictions);
+  }
+  // Meta-cognition self-report (conditional - only when meaningful)
+  if (context.volatile.metaCognition) {
+    parts.push(context.volatile.metaCognition);
   }
   return parts.join('\n\n');
 }
@@ -145,7 +156,7 @@ export async function buildMemoryContext(
         }, QUERY_TIMEOUT_MS)),
       ]);
 
-    // Run all 12 sources in parallel - each independently fault-isolated
+    // Run all 14 sources in parallel - each independently fault-isolated
     const results = await Promise.allSettled([
       safeQuery(factsService.getUserFacts(userId, { limit: 30, intentId }), [], 'facts'),
       safeQuery(embeddingService.searchSimilarMessages(
@@ -164,6 +175,8 @@ export async function buildMemoryContext(
       safeQuery(emotionalMoments.getRecentMoments(userId, 5, 7), [], 'emotionalMoments'),
       safeQuery(behavioralPatterns.getActiveObservations(userId, 3), [], 'behavioralObservations'),
       safeQuery(contradictionService.getUnsurfaced(userId, currentSessionId), [], 'contradictions'),
+      safeQuery(lunaAffect.getCurrentAffect(userId), null, 'lunaAffect'),
+      safeQuery(metaCognition.generateSelfReport(userId, currentSessionId), null, 'metaCognition'),
     ]);
 
     // Extract values - allSettled always fulfills since safeQuery never rejects
@@ -182,6 +195,8 @@ export async function buildMemoryContext(
     const recentEmotionalMoments = val(results[9] as PromiseSettledResult<Awaited<ReturnType<typeof emotionalMoments.getRecentMoments>>>, []);
     const activeObservations = val(results[10] as PromiseSettledResult<Awaited<ReturnType<typeof behavioralPatterns.getActiveObservations>>>, []);
     const unsurfacedContradictions = val(results[11] as PromiseSettledResult<Awaited<ReturnType<typeof contradictionService.getUnsurfaced>>>, []);
+    const currentAffect = val(results[12] as PromiseSettledResult<Awaited<ReturnType<typeof lunaAffect.getCurrentAffect>>>, null);
+    const selfReport = val(results[13] as PromiseSettledResult<Awaited<ReturnType<typeof metaCognition.generateSelfReport>>>, null);
 
     // Score message complexity to decide whether to curate
     const complexity = scoreMessageComplexity(currentMessage);
@@ -295,6 +310,12 @@ export async function buildMemoryContext(
     const contradictionsFormatted = contradictionService.formatForContext(unsurfacedContradictions);
     const contradictionIds = unsurfacedContradictions.map(s => s.id);
 
+    // Format Luna affect context
+    const lunaAffectFormatted = currentAffect ? lunaAffect.formatAffectForPrompt(currentAffect) : '';
+
+    // Format meta-cognition self-report (conditional)
+    const metaCognitionFormatted = metaCognition.formatSelfReportForPrompt(selfReport);
+
     // Diagnostic: log per-source sizes so we can see what responded
     const sourceSizes = {
       facts: factsPrompt.length, learnings: learnings.length,
@@ -303,13 +324,14 @@ export async function buildMemoryContext(
       consolidatedPatterns: consolidatedPatterns.length, consolidatedKnowledge: consolidatedKnowledge.length,
       semanticMemory: semanticMemory.length, emotionalMoments: emotionalMomentsFormatted.length,
       behavioralObservations: behavioralObsFormatted.length, contradictions: contradictionsFormatted.length,
+      lunaAffect: lunaAffectFormatted.length, metaCognition: metaCognitionFormatted.length,
     };
     const totalChars = Object.values(sourceSizes).reduce((a, b) => a + b, 0);
     const responded = Object.values(sourceSizes).filter(v => v > 0).length;
     logger.info('Memory context built', {
       userId, sourceSizes, totalChars,
       approxTokens: Math.round(totalChars / 4),
-      sourcesResponded: `${responded}/12`,
+      sourcesResponded: `${responded}/14`,
     });
 
     return {
@@ -324,12 +346,14 @@ export async function buildMemoryContext(
         semanticMemory,
         emotionalMoments: emotionalMomentsFormatted,
         behavioralObservations: behavioralObsFormatted,
+        lunaAffectContext: lunaAffectFormatted,
       },
       volatile: {
         relevantHistory,
         conversationContext,
         curationReasoning,
         contradictions: contradictionsFormatted,
+        metaCognition: metaCognitionFormatted,
         contradictionIds,
       },
     };
@@ -376,6 +400,7 @@ export async function buildStableMemoryOnly(userId: string): Promise<MemoryConte
       safeQuery(memorycoreClient.getSemanticMemory(userId), null, 'semanticMemory'),
       safeQuery(emotionalMoments.getRecentMoments(userId, 5, 7), [], 'emotionalMoments'),
       safeQuery(behavioralPatterns.getActiveObservations(userId, 3), [], 'behavioralObservations'),
+      safeQuery(lunaAffect.getCurrentAffect(userId), null, 'lunaAffect'),
     ]);
 
     const sval = <T>(r: PromiseSettledResult<T>, fallback: T): T =>
@@ -390,6 +415,7 @@ export async function buildStableMemoryOnly(userId: string): Promise<MemoryConte
     const semanticMemoryData = sval(stableResults[6] as PromiseSettledResult<Awaited<ReturnType<typeof memorycoreClient.getSemanticMemory>>>, null);
     const recentEmotionalMoments = sval(stableResults[7] as PromiseSettledResult<Awaited<ReturnType<typeof emotionalMoments.getRecentMoments>>>, []);
     const activeObservations = sval(stableResults[8] as PromiseSettledResult<Awaited<ReturnType<typeof behavioralPatterns.getActiveObservations>>>, []);
+    const stableAffect = sval(stableResults[9] as PromiseSettledResult<Awaited<ReturnType<typeof lunaAffect.getCurrentAffect>>>, null);
 
     // Use timestamps in stable-only mode (learnings already have timestamps from insights service)
     const factsPrompt = factsService.formatFactsForPrompt(facts, true);
@@ -475,6 +501,7 @@ export async function buildStableMemoryOnly(userId: string): Promise<MemoryConte
           return em;
         })(),
         behavioralObservations: behavioralPatterns.formatForContext(activeObservations),
+        lunaAffectContext: stableAffect ? lunaAffect.formatAffectForPrompt(stableAffect) : '',
       },
       volatile: {
         relevantHistory: '',
@@ -536,7 +563,9 @@ export function formatMemoryForPrompt(context: MemoryContext): string {
   if (context.stable.behavioralObservations) {
     parts.push(context.stable.behavioralObservations);
   }
-  // Note: consciousness metrics intentionally excluded - diagnostic only
+  if (context.stable.lunaAffectContext) {
+    parts.push(context.stable.lunaAffectContext);
+  }
 
   // Volatile parts
   if (context.volatile.relevantHistory) {

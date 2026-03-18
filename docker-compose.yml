@@ -129,6 +129,7 @@ services:
       - MEMORYCORE_ENABLED=${MEMORYCORE_ENABLED:-true}
       - LUNA_STREAMS_URL=http://luna-streams:8100
       - LUNA_STREAMS_ENABLED=${LUNA_STREAMS_ENABLED:-true}
+      - LUNA_AFFECT_ENABLED=true
       - ORPHEUS_TTS_URL=${ORPHEUS_TTS_URL:-http://10.0.0.30:5005}
       - ORPHEUS_TTS_VOICE=${ORPHEUS_TTS_VOICE:-tara}
       - ORPHEUS_TTS_ENABLED=${ORPHEUS_TTS_ENABLED:-true}
@@ -166,6 +167,9 @@ services:
       - OLLAMA_TERTIARY_URL=${OLLAMA_TERTIARY_URL:-http://10.0.0.30:11434}
       - OLLAMA_TERTIARY_ENABLED=${OLLAMA_TERTIARY_ENABLED:-true}
       - OLLAMA_TERTIARY_NUM_CTX=${OLLAMA_TERTIARY_NUM_CTX:-65536}
+      - OLLAMA_MICRO_URL=${OLLAMA_MICRO_URL:-http://10.0.0.3:11434}
+      - OLLAMA_MICRO_ENABLED=${OLLAMA_MICRO_ENABLED:-true}
+      - OLLAMA_MICRO_NUM_CTX=${OLLAMA_MICRO_NUM_CTX:-4096}
       - OLLAMA_EMBEDDING_MODEL=${OLLAMA_EMBEDDING_MODEL:-bge-m3}
       - RADICALE_URL=http://luna-radicale:5232
       # ElevenLabs TTS - using turbo model for speed and cost efficiency
@@ -257,6 +261,8 @@ services:
       - ./secrets/youtube_cookies.txt:/app/secrets/youtube_cookies.txt:ro
       # Local media library (shows, videos, music)
       - /mnt/data/media:/mnt/data/media:rw
+      # Torrent downloads (Transmission complete folder)
+      - /mnt/downloads/complete:/mnt/downloads/complete:ro
     depends_on:
       luna-postgres:
         condition: service_healthy

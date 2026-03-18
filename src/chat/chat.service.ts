@@ -48,6 +48,9 @@ import * as contradictionService from '../memory/contradiction.service.js';
 import type { InteractionEnrichment } from '../memory/memorycore.client.js';
 import * as onboardingService from '../onboarding/onboarding.service.js';
 import { getUserFacts } from '../memory/facts.service.js';
+import * as lunaAffectService from '../memory/luna-affect.service.js';
+import * as selfModificationService from '../memory/self-modification.service.js';
+import * as ambientPerception from '../sensory/ambient-perception.service.js';
 
 // Per-session tracking for enrichment pipeline
 const sessionLastEmbedding = new Map<string, number[]>();
@@ -383,6 +386,9 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
 
   // Start Mamba stream context fetch early so it runs in parallel with all context loading
   const mambaStreamPromise = lunaStreamsClient.getStreamContext(userId).catch(() => null);
+  // Start ambient + style params fetch in parallel (lightweight, cached)
+  const ambientPromise = ambientPerception.buildAmbientContext(userId).catch(() => '');
+  const styleParamsPromise = selfModificationService.getActiveParameters(userId).catch(() => []);
 
   // OPTIMIZED: Run context loading in parallel, but skip heavy loads for smalltalk
   const [
@@ -534,8 +540,11 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   const stableContext = [stableMemoryPrompt, abilityPrompt, prefPrompt, canvasStylePrompt].filter(Boolean).join('\n\n');
   const volatileContext = [volatileMemoryPrompt, intentPrompt, abilityActionResult, canvasSessionPrompt].filter(Boolean).join('\n\n');
 
-  // Resolve Mamba stream context (started earlier in parallel with context loading)
+  // Resolve parallel context fetches (started earlier)
   const mambaStreamContext = await mambaStreamPromise;
+  const resolvedAmbientContext = await ambientPromise;
+  const resolvedStyleParams = await styleParamsPromise;
+  const resolvedSelfCalibratedStyle = selfModificationService.formatStyleForPrompt(resolvedStyleParams);
 
   // Build messages array with MCP tool info and compressed context
   const mcpToolsForPrompt = mcpUserTools.map(t => ({
@@ -562,6 +571,8 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
         desktopContext: getDesktopContext(userId),
         mambaStreamContext: mambaStreamContext || undefined,
         onboardingContext,
+        ambientContext: resolvedAmbientContext || undefined,
+        selfCalibratedStyle: resolvedSelfCalibratedStyle || undefined,
       }),
     },
   ];
@@ -722,6 +733,19 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   if (mode === 'companion') {
     onboardingService.processAssistantResponse(userId, completion.content)
       .catch(err => logger.debug('Onboarding parse failed', { err: (err as Error).message }));
+  }
+
+  // Update Luna's internal affect state (fire-and-forget)
+  lunaAffectService.updateAffect(userId, sessionId, {
+    lunaResponse: completion.content,
+    userMessage: message,
+    userSentimentValence: pmEnrichment?.emotionalValence,
+  }).catch(err => logger.debug('Luna affect update failed', { err: (err as Error).message }));
+
+  // Check self-modification revert conditions (fire-and-forget)
+  if (pmEnrichment?.emotionalValence !== undefined) {
+    selfModificationService.checkRevertCondition(userId, pmEnrichment.emotionalValence)
+      .catch(err => logger.debug('Self-modification revert check failed', { err: (err as Error).message }));
   }
 
   // Record enriched response to MemoryCore for consolidation (async, non-blocking)
@@ -1763,6 +1787,9 @@ export async function* streamMessage(
 
   // Start Mamba stream context fetch early so it runs in parallel with all context loading
   const mambaStreamPromise = lunaStreamsClient.getStreamContext(userId).catch(() => null);
+  // Start ambient + style params fetch in parallel (lightweight, cached)
+  const ambientPromise = ambientPerception.buildAmbientContext(userId).catch(() => '');
+  const styleParamsPromise = selfModificationService.getActiveParameters(userId).catch(() => []);
 
   // OPTIMIZED: Run context loading in parallel, but skip heavy loads for smalltalk
   const [
@@ -1924,8 +1951,11 @@ export async function* streamMessage(
   const stableContext = [stableMemoryPrompt, abilityPrompt, prefPrompt, canvasStylePrompt].filter(Boolean).join('\n\n');
   const volatileContext = [volatileMemoryPrompt, intentPrompt, abilityActionResult, canvasSessionPrompt].filter(Boolean).join('\n\n');
 
-  // Resolve Mamba stream context (started earlier in parallel with context loading)
+  // Resolve parallel context fetches (started earlier)
   const mambaStreamContext = await mambaStreamPromise;
+  const resolvedAmbientContext = await ambientPromise;
+  const resolvedStyleParams = await styleParamsPromise;
+  const resolvedSelfCalibratedStyle = selfModificationService.formatStyleForPrompt(resolvedStyleParams);
 
   // Build messages array with MCP tool info and compressed context
   const mcpToolsForPrompt = mcpUserTools.map(t => ({
@@ -1952,6 +1982,8 @@ export async function* streamMessage(
         desktopContext: getDesktopContext(userId),
         mambaStreamContext: mambaStreamContext || undefined,
         onboardingContext,
+        ambientContext: resolvedAmbientContext || undefined,
+        selfCalibratedStyle: resolvedSelfCalibratedStyle || undefined,
       }),
     },
   ];
@@ -2127,6 +2159,19 @@ export async function* streamMessage(
   if (mode === 'companion') {
     onboardingService.processAssistantResponse(userId, fullContent)
       .catch(err => logger.debug('Onboarding parse failed', { err: (err as Error).message }));
+  }
+
+  // Update Luna's internal affect state (fire-and-forget)
+  lunaAffectService.updateAffect(userId, sessionId, {
+    lunaResponse: fullContent,
+    userMessage: message,
+    userSentimentValence: smEnrichment?.emotionalValence,
+  }).catch(err => logger.debug('Luna affect update failed', { err: (err as Error).message }));
+
+  // Check self-modification revert conditions (fire-and-forget)
+  if (smEnrichment?.emotionalValence !== undefined) {
+    selfModificationService.checkRevertCondition(userId, smEnrichment.emotionalValence)
+      .catch(err => logger.debug('Self-modification revert check failed', { err: (err as Error).message }));
   }
 
   // Record enriched response to MemoryCore for consolidation (async, non-blocking)

@@ -230,6 +230,12 @@ const configSchema = z.object({
     numCtx: z.coerce.number().int().positive().default(65536),
   }).optional(),
 
+  ollamaMicro: z.object({
+    url: z.string().url().default('http://10.0.0.3:11434'),
+    enabled: z.coerce.boolean().default(true),
+    numCtx: z.coerce.number().int().positive().default(4096),
+  }).optional(),
+
   orchestration: z.object({
     maxConcurrency: z.coerce.number().min(1).max(10).default(3),
     maxRetries: z.coerce.number().min(0).max(10).default(3),
@@ -300,6 +306,10 @@ const configSchema = z.object({
     agentUrl: z.string().default('http://10.0.0.30:9876'),
     idleTimeoutMs: z.coerce.number().int().positive().default(300000),
     healthCheckTimeoutMs: z.coerce.number().int().positive().default(60000),
+  }).optional(),
+
+  lunaAffect: z.object({
+    enabled: z.coerce.boolean().default(false),
   }).optional(),
 });
 
@@ -502,6 +512,12 @@ const rawConfig = {
     numCtx: process.env.OLLAMA_TERTIARY_NUM_CTX,
   },
 
+  ollamaMicro: {
+    url: process.env.OLLAMA_MICRO_URL,
+    enabled: process.env.OLLAMA_MICRO_ENABLED,
+    numCtx: process.env.OLLAMA_MICRO_NUM_CTX,
+  },
+
   orchestration: process.env.ORCHESTRATION_MAX_CONCURRENCY ? {
     maxConcurrency: process.env.ORCHESTRATION_MAX_CONCURRENCY,
     maxRetries: process.env.ORCHESTRATION_MAX_RETRIES,
@@ -572,6 +588,10 @@ const rawConfig = {
     agentUrl: process.env.GPU_ORCHESTRATOR_AGENT_URL,
     idleTimeoutMs: process.env.GPU_ORCHESTRATOR_IDLE_TIMEOUT_MS,
     healthCheckTimeoutMs: process.env.GPU_ORCHESTRATOR_HEALTH_CHECK_TIMEOUT_MS,
+  },
+
+  lunaAffect: {
+    enabled: process.env.LUNA_AFFECT_ENABLED,
   },
 };
 

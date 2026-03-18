@@ -264,9 +264,17 @@ export async function executeTool(
       if (torrents.length === 0) {
         return { toolResponse: 'No active torrents in Transmission.', sideEffects };
       }
-      const formatted = torrents.map(t =>
-        `- **${t.name}**\n  Status: ${t.status} | Progress: ${t.percentDone}% | DL: ${t.rateDownload} | UL: ${t.rateUpload} | ETA: ${t.eta} | Size: ${t.totalSize} | ID: ${t.id}`
-      ).join('\n');
+      const formatted = torrents.map(t => {
+        let line = `- **${t.name}**\n  Status: ${t.status} | Progress: ${t.percentDone}% | DL: ${t.rateDownload} | UL: ${t.rateUpload} | ETA: ${t.eta} | Size: ${t.totalSize} | ID: ${t.id}`;
+        if (t.mediaFiles.length > 0) {
+          line += `\n  Playable files:`;
+          t.mediaFiles.forEach(f => {
+            line += `\n    - ${f.name} (${f.size}, ${f.type}) | fileId: ${f.fileId}`;
+          });
+          line += `\n  Use local_media_play with the fileId above to play.`;
+        }
+        return line;
+      }).join('\n');
       return { toolResponse: `Transmission has ${torrents.length} torrent(s):\n\n${formatted}`, sideEffects };
     }
 
@@ -749,6 +757,14 @@ export async function executeTool(
       logger.info('Cancelling reminder', { reminderId: args.reminder_id });
       const cancelled = await reminderService.cancelReminder(userId, args.reminder_id);
       return { toolResponse: cancelled ? 'Reminder cancelled.' : 'Reminder not found or already delivered.', sideEffects };
+    }
+
+    // --- Introspection ---
+    if (toolName === 'introspect') {
+      logger.info('Luna introspecting', { userId, sessionId });
+      const { buildIntrospectionResponse } = await import('../memory/meta-cognition.service.js');
+      const report = await buildIntrospectionResponse(userId, sessionId);
+      return { toolResponse: report, sideEffects };
     }
 
     // --- Session / Notes ---

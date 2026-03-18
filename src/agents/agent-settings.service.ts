@@ -448,6 +448,7 @@ const INDIVIDUAL_TOOLS: ToolOption[] = [
   { name: 'workspace_list', description: 'List workspace files', includedInSets: ['companion', 'assistant', 'ceo_luna', 'workspace', 'code_execution'] },
   { name: 'workspace_execute', description: 'Execute workspace script', includedInSets: ['companion', 'assistant', 'ceo_luna', 'workspace', 'code_execution'] },
   { name: 'session_note', description: 'Note session insight', includedInSets: ['companion', 'assistant', 'ceo_luna'] },
+  { name: 'introspect', description: 'Luna self-awareness report', includedInSets: ['companion', 'assistant'] },
   { name: 'generate_image', description: 'Generate AI image', includedInSets: ['companion', 'assistant', 'ceo_luna'] },
   { name: 'open_url', description: 'Open URL in browser', includedInSets: ['companion', 'assistant', 'ceo_luna'] },
   { name: 'delegate_to_agent', description: 'Delegate task to specialist', includedInSets: ['companion', 'assistant', 'ceo_luna'] },

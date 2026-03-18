@@ -71,6 +71,19 @@ export const sessionNoteTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   },
 };
 
+export const introspectTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'introspect',
+    description: 'Look inward and report on Luna\'s current internal state - mood, processing metrics, and self-observations. Use when the user asks "how are you feeling?", "what\'s going on inside?", or similar introspective questions.',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+};
+
 export const ceoNoteBuildTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: 'function',
   function: {

@@ -168,6 +168,63 @@ export function emitEdgeUpdate(
   });
 }
 
+/**
+ * Emit conversation meta data as a conversation_meta event.
+ */
+export function emitConversationMeta(
+  metadata: {
+    messageLength: number;
+    responseTimeMs?: number;
+    sessionDurationMin?: number;
+    activePersona?: string;
+    activeModel?: string;
+    turnNumber?: number;
+    sentiment?: number;
+    topicTags?: string[];
+  },
+): void {
+  emitEvent({
+    timestamp: new Date().toISOString(),
+    event_type: 'conversation_meta',
+    source: 'conversation',
+    content: {
+      sentiment: metadata.sentiment ?? 0.0,
+      topic_tags: metadata.topicTags || [],
+      summary: `Turn ${metadata.turnNumber || 0}, ${metadata.messageLength} chars`,
+    },
+    conversation_meta: {
+      message_length: metadata.messageLength,
+      response_time_ms: metadata.responseTimeMs,
+      session_duration_min: metadata.sessionDurationMin,
+      active_persona: metadata.activePersona,
+      active_model: metadata.activeModel,
+      turn_number: metadata.turnNumber,
+    },
+  });
+}
+
+/**
+ * Emit an ambient signal for sensory grounding.
+ */
+export function emitAmbientSignal(
+  signals: {
+    timeOfDay?: string;
+    systemLoad?: string;
+    activityPattern?: string;
+    desktopContext?: string;
+  },
+): void {
+  emitEvent({
+    timestamp: new Date().toISOString(),
+    event_type: 'conversation_meta',  // Reuse conversation_meta for ambient data
+    source: 'system',
+    content: {
+      summary: [signals.timeOfDay, signals.systemLoad, signals.activityPattern].filter(Boolean).join(', '),
+      topic_tags: ['ambient', 'sensory'],
+    },
+  });
+}
+
 // -------------------------------------------------------------------
 // Context retrieval (with delta tracking)
 // -------------------------------------------------------------------

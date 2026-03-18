@@ -19,7 +19,8 @@ export type BackgroundLlmFeature =
   | 'domain_evaluation'
   | 'ceo_org_execution'
   | 'edge_classification'
-  | 'trading_analysis';
+  | 'trading_analysis'
+  | 'luna_affect_analysis';
 
 export interface FeatureModelSelection {
   provider: ProviderId;
@@ -47,6 +48,7 @@ const VALID_PROVIDERS: ProviderId[] = [
   'ollama',
   'ollama_secondary',
   'ollama_tertiary',
+  'ollama_micro',
   'google',
   'moonshot',
 ];
@@ -137,6 +139,11 @@ export const BACKGROUND_LLM_FEATURES: BackgroundLlmFeatureMeta[] = [
     label: 'Trading Analysis',
     description: 'LLM analysis of crypto market intelligence for Luna AI trading strategy decisions.',
   },
+  {
+    id: 'luna_affect_analysis',
+    label: 'Luna Affect Analysis',
+    description: 'Analyzes Luna\'s own responses for internal mood/affect state and style calibration.',
+  },
 ];
 
 // GPU orchestrator routing:
@@ -218,6 +225,11 @@ export const DEFAULT_BACKGROUND_LLM_SETTINGS: BackgroundLlmSettings = {
     primary: { provider: 'xai', model: 'grok-4-1-fast' },
     fallback: { provider: 'openrouter', model: 'qwen/qwen3-4b:free' },
   },
+  // Luna cognitive: low-token affect analysis
+  luna_affect_analysis: {
+    primary: { provider: 'groq', model: 'llama-3.1-8b-instant' },
+    fallback: { provider: 'openrouter', model: 'qwen/qwen3-4b:free' },
+  },
 };
 
 interface DbSettingsRow {
@@ -265,6 +277,7 @@ function mergeWithDefaults(raw: unknown): BackgroundLlmSettings {
     ceo_org_execution: sanitizeFeatureConfig(obj.ceo_org_execution, DEFAULT_BACKGROUND_LLM_SETTINGS.ceo_org_execution),
     edge_classification: sanitizeFeatureConfig(obj.edge_classification, DEFAULT_BACKGROUND_LLM_SETTINGS.edge_classification),
     trading_analysis: sanitizeFeatureConfig(obj.trading_analysis, DEFAULT_BACKGROUND_LLM_SETTINGS.trading_analysis),
+    luna_affect_analysis: sanitizeFeatureConfig(obj.luna_affect_analysis, DEFAULT_BACKGROUND_LLM_SETTINGS.luna_affect_analysis),
   };
 }
 
@@ -318,6 +331,7 @@ export async function updateBackgroundLlmSettings(
     ceo_org_execution: updates.ceo_org_execution ? sanitizeFeatureConfig(updates.ceo_org_execution, current.ceo_org_execution) : current.ceo_org_execution,
     edge_classification: updates.edge_classification ? sanitizeFeatureConfig(updates.edge_classification, current.edge_classification) : current.edge_classification,
     trading_analysis: updates.trading_analysis ? sanitizeFeatureConfig(updates.trading_analysis, current.trading_analysis) : current.trading_analysis,
+    luna_affect_analysis: updates.luna_affect_analysis ? sanitizeFeatureConfig(updates.luna_affect_analysis, current.luna_affect_analysis) : current.luna_affect_analysis,
   };
 
   await query(

@@ -461,6 +461,14 @@ const jobs: Job[] = [
     running: false,
     handler: runLunaAiScheduledAnalysis,
   },
+  // Luna cognitive: self-modification style detection
+  {
+    name: 'lunaSelfModificationDetector',
+    intervalMs: 30 * 60 * 1000, // Every 30 minutes
+    enabled: true,
+    running: false,
+    handler: runSelfModificationDetection,
+  },
 ];
 
 // ============================================
@@ -2160,6 +2168,24 @@ async function runBehavioralPatternDetection(): Promise<void> {
     await behavioralPatterns.runDetection();
   } catch (error) {
     logger.error('Behavioral pattern detection failed', { error: (error as Error).message });
+  }
+}
+
+async function runSelfModificationDetection(): Promise<void> {
+  try {
+    const { detectAdjustmentOpportunity } = await import('../memory/self-modification.service.js');
+    // Run for all active users (users with recent sessions)
+    const { query: dbQuery } = await import('../db/postgres.js');
+    const recentUsers = await dbQuery(
+      `SELECT DISTINCT user_id FROM sessions WHERE updated_at > NOW() - INTERVAL '2 hours'`
+    ) as Array<{ user_id: string }>;
+    for (const { user_id } of recentUsers) {
+      await detectAdjustmentOpportunity(user_id, null).catch(err =>
+        logger.debug('Self-modification detection failed for user', { userId: user_id, err: (err as Error).message })
+      );
+    }
+  } catch (error) {
+    logger.error('Self-modification detection job failed', { error: (error as Error).message });
   }
 }
 

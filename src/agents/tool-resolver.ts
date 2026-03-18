@@ -63,6 +63,7 @@ import {
   torrentDownloadTool,
   transmissionStatusTool,
   transmissionRemoveTool,
+  introspectTool,
 } from '../llm/tools/index.js';
 import type OpenAI from 'openai';
 
@@ -88,6 +89,7 @@ function getCompanionTools(): Tool[] {
     workspaceWriteTool, workspaceExecuteTool, workspaceListTool, workspaceReadTool,
     generateArtifactTool, rewriteArtifactTool, updateHighlightedTool, saveArtifactFileTool,
     listArtifactsTool, loadArtifactTool, getArtifactDownloadLinkTool,
+    introspectTool,
   ];
 }
 
