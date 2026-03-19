@@ -195,7 +195,7 @@ function StandardChatArea() {
 
   const [localSystemBubbles, setLocalSystemBubbles] = useState<{ id: string; text: string }[]>([]);
   const [input, setInput] = useState('');
-  const [thinkingMode, setThinkingMode] = useState(false);
+  const [thinkingMode, setThinkingMode] = useState(true);
   const [zipMode, setZipMode] = useState(false);
   const [verificationQuestion, setVerificationQuestion] = useState<AutonomousQuestion | null>(null);
   const [verificationAnswer, setVerificationAnswer] = useState('');
