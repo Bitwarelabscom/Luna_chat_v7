@@ -4,7 +4,8 @@ import { useState, useRef, useEffect, useMemo, ChangeEvent } from 'react';
 import { useChatStore } from '@/lib/store';
 import { useActivityStore } from '@/lib/activity-store';
 import { streamMessage, streamMessageWithFiles, regenerateMessage, chatApi, autonomousApi, backgroundApi, type AutonomousQuestion } from '@/lib/api';
-import { Send, Moon, Loader2, Mic, Sparkles, Paperclip, Bot, Brain } from 'lucide-react';
+import { Send, Moon, Loader2, Mic, Sparkles, Paperclip, Bot, Brain, Smile } from 'lucide-react';
+import EmojiPicker, { Theme, EmojiClickData } from 'emoji-picker-react';
 import ReactMarkdown from 'react-markdown';
 import clsx from 'clsx';
 import MessageActions from './MessageActions';
@@ -202,6 +203,8 @@ function StandardChatArea() {
   const [verificationBusy, setVerificationBusy] = useState(false);
   const [verificationError, setVerificationError] = useState<string | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const emojiPickerRef = useRef<HTMLDivElement>(null);
   const autoAppliedGeneratedFilenamesRef = useRef<Set<string>>(new Set());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -365,6 +368,23 @@ function StandardChatArea() {
       autoAppliedGeneratedFilenamesRef.current.delete(filenameToApply);
       console.warn('Auto-apply generated image as background failed:', error);
     }
+  };
+
+  // Close emoji picker on click outside
+  useEffect(() => {
+    if (!showEmojiPicker) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (emojiPickerRef.current && !emojiPickerRef.current.contains(e.target as Node)) {
+        setShowEmojiPicker(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showEmojiPicker]);
+
+  const handleEmojiSelect = (emojiData: EmojiClickData) => {
+    setInput(prev => prev + emojiData.emoji);
+    textareaRef.current?.focus();
   };
 
   const handleSend = async () => {
@@ -912,6 +932,28 @@ function StandardChatArea() {
                 >
                   <Mic className="w-5 h-5" />
                 </button>
+                <div className="relative" ref={emojiPickerRef}>
+                  <button
+                    onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                    className="p-2 text-gray-500 hover:text-gray-300 transition-colors rounded-lg"
+                    title="Emoji"
+                    disabled={isSending}
+                  >
+                    <Smile className="w-5 h-5" />
+                  </button>
+                  {showEmojiPicker && (
+                    <div className="absolute bottom-12 right-0 z-50">
+                      <EmojiPicker
+                        theme={Theme.DARK}
+                        onEmojiClick={handleEmojiSelect}
+                        width={320}
+                        height={400}
+                        searchPlaceHolder="Search emoji..."
+                        lazyLoadEmojis
+                      />
+                    </div>
+                  )}
+                </div>
                 <button
                   onClick={handleSend}
                   disabled={(!input.trim() && attachedFiles.length === 0) || isSending}
