@@ -121,6 +121,8 @@ function hasActionKeywords(message: string): boolean {
     'code', 'script', 'run', 'execute', 'calculate',
     // Spotify/Music keywords
     'play', 'pause', 'music', 'song', 'spotify', 'track', 'artist', 'album', 'playlist', 'skip', 'next', 'previous', 'volume', 'queue',
+    // Torrent/media grab keywords
+    'torrent', 'movie', 'show', 'series', 'transmission',
   ];
 
   return actionKeywords.some(k => message.includes(k));

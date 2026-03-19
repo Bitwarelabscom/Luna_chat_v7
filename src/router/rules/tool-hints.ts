@@ -92,10 +92,16 @@ const HINT_RULES: HintRule[] = [
     tools: ['generate_desktop_background'],
     category: 'background',
   },
+  // Torrent / movie grab
+  {
+    pattern: /\b(grab\s+(a\s+)?(movie|show|series|film|torrent)|torrent|transmission)\b/i,
+    tools: ['movie_grab', 'torrent_search', 'torrent_download', 'transmission_status'],
+    category: 'torrent',
+  },
   // Media download
   {
-    pattern: /\b(download|save)\s+(this|that|the)?\s*(video|song|music|media|file)\b/i,
-    tools: ['media_download'],
+    pattern: /\b(download|save)\s+(this|that|the)?\s*(video|song|music|media|file|movie|show|series)\b/i,
+    tools: ['media_download', 'movie_grab'],
     category: 'download',
   },
   // Suno music generation

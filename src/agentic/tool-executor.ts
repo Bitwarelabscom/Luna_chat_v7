@@ -38,6 +38,7 @@ import * as loadContextHandler from '../context/load-context.handler.js';
 import * as browserScreencast from '../abilities/browser-screencast.service.js';
 import * as sessionLogService from '../chat/session-log.service.js';
 import * as torrentService from '../abilities/torrent.service.js';
+import * as movieGrabber from '../abilities/movie-grabber.service.js';
 import { executeSysmonTool } from '../abilities/sysmon.service.js';
 import { summonAgent } from '../agents/communication.js';
 import { hasDesktopBrowser, executeRemoteBrowserCommand, sendDesktopAction } from '../desktop/desktop.websocket.js';
@@ -282,6 +283,12 @@ export async function executeTool(
       logger.info('Transmission remove torrent', { id: args.id, deleteData: args.deleteData });
       await torrentService.removeTorrent(args.id, args.deleteData || false);
       return { toolResponse: `Torrent ID ${args.id} removed from Transmission${args.deleteData ? ' (data deleted)' : ''}.`, sideEffects };
+    }
+
+    if (toolName === 'movie_grab') {
+      logger.info('Movie grab starting', { name: args.name, preferences: args.preferences });
+      const result = await movieGrabber.grabMovie(args.name, args.preferences);
+      return { toolResponse: result.ok ? `OK - ${result.message}` : `FAILED - ${result.message}`, sideEffects };
     }
 
     if (toolName === 'fetch_url') {

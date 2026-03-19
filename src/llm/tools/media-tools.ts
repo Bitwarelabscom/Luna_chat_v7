@@ -95,7 +95,7 @@ export const torrentSearchTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: 'function',
   function: {
     name: 'torrent_search',
-    description: 'Search for torrents via Prowlarr (movies, series, audio, etc). Use when the user wants to find and download movies, TV shows, or other content via torrent. Returns a list of results with title, size, seeders, and category.',
+    description: 'Low-level torrent search via Prowlarr. Returns raw results with guid/indexerId for manual selection. Only use this when the user wants to BROWSE torrent results or pick a specific release themselves. For simply downloading a movie or show, use movie_grab instead - it handles search + selection + download automatically.',
     parameters: {
       type: 'object',
       properties: {
@@ -114,7 +114,7 @@ export const torrentDownloadTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: 'function',
   function: {
     name: 'torrent_download',
-    description: 'Start downloading a torrent found via torrent_search. Sends the release to Transmission via Prowlarr. You must use torrent_search first to get the guid and indexerId. Once downloaded, use transmission_status to get the file IDs, then local_media_play to play.',
+    description: 'Low-level: send a specific torrent to Transmission by guid and indexerId (from torrent_search). Only use after torrent_search when the user picked a specific release. For simply downloading a movie or show by name, use movie_grab instead.',
     parameters: {
       type: 'object',
       properties: {
@@ -168,6 +168,29 @@ export const transmissionRemoveTool: OpenAI.Chat.Completions.ChatCompletionTool 
         },
       },
       required: ['id'],
+    },
+  },
+};
+
+// Movie grab tool - autonomous search + download via local 9b model
+export const movieGrabTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'movie_grab',
+    description: 'Autonomously find and download a movie or TV show torrent. Just provide the name and it handles searching and downloading automatically. Use when the user wants to download a movie, show, or series. Reports back with ok/failed status.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'The movie or show name (e.g., "Dune Part Two", "The Bear Season 3", "Interstellar")',
+        },
+        preferences: {
+          type: 'string',
+          description: 'Optional quality/format preferences (e.g., "4K", "1080p", "with subtitles")',
+        },
+      },
+      required: ['name'],
     },
   },
 };
