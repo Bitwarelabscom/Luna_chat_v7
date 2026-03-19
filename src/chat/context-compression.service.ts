@@ -118,6 +118,10 @@ function collapseFormatting(content: string): string {
 export function compressMessage(message: Message, maxLength: number = DEFAULT_CONFIG.maxMessageLength): string {
   let content = message.content;
 
+  // Strip any previously-baked-in ISO timestamp prefixes to prevent accumulation.
+  // Models sometimes echo timestamps from context, and each reload prepends another.
+  content = content.replace(/^(\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\]\s*)+/, '');
+
   // For assistant messages, strip tool verbosity and collapse formatting
   if (message.role === 'assistant') {
     content = stripToolVerbosity(content);
