@@ -71,6 +71,77 @@ export const sessionNoteTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   },
 };
 
+export const saveFactTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'save_fact',
+    description: `Save or update a fact about the user. Use proactively when you notice something worth remembering:
+- Schedule changes: "I'm on day shift now", "working evenings this week"
+- Status observations: "user has coffee", "user sounds tired", "user is at the gym"
+- Life updates: "got a new car", "moved to a new apartment", "started a diet"
+- Preference changes: "switched to tea", "trying Linux now"
+
+If a fact with the same key already exists, it will be updated automatically (old value is preserved in history).
+For temporary states (shift changes, visiting somewhere), set fact_type to "temporary".
+For corrections to known facts, set is_correction to true.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        category: {
+          type: 'string',
+          enum: ['personal', 'work', 'preference', 'hobby', 'relationship', 'goal', 'context'],
+          description: 'Fact category. Use "context" for transient observations (coffee in hand, current mood), "work" for job/schedule, etc.',
+        },
+        fact_key: {
+          type: 'string',
+          description: 'Normalized key for this fact. Use consistent keys so updates work: "work_schedule", "current_drink", "location", "mood", "pet_name", etc.',
+        },
+        fact_value: {
+          type: 'string',
+          description: 'The fact value. Keep it concise and normalized: "day shift", "has coffee", "evening shift until Friday"',
+        },
+        fact_type: {
+          type: 'string',
+          enum: ['permanent', 'default', 'temporary'],
+          description: 'Permanence: "permanent" for lasting facts, "default" for baseline values ("usually works day shift"), "temporary" for current states that will change. Default: permanent',
+        },
+        is_correction: {
+          type: 'boolean',
+          description: 'True if this corrects/updates a previously known fact. Default: false',
+        },
+      },
+      required: ['category', 'fact_key', 'fact_value'],
+    },
+  },
+};
+
+export const removeFactTool: OpenAI.Chat.Completions.ChatCompletionTool = {
+  type: 'function',
+  function: {
+    name: 'remove_fact',
+    description: `Remove a fact that is no longer true. Use when the user explicitly says something is no longer the case: "I quit my job", "sold my car", "don't do that anymore". Looks up the fact by key and soft-deletes it.`,
+    parameters: {
+      type: 'object',
+      properties: {
+        fact_key: {
+          type: 'string',
+          description: 'The key of the fact to remove (e.g., "job_title", "car", "hobby_guitar")',
+        },
+        category: {
+          type: 'string',
+          enum: ['personal', 'work', 'preference', 'hobby', 'relationship', 'goal', 'context'],
+          description: 'Optional category to narrow down which fact to remove',
+        },
+        reason: {
+          type: 'string',
+          description: 'Brief reason for removal (e.g., "user quit job", "no longer applicable")',
+        },
+      },
+      required: ['fact_key'],
+    },
+  },
+};
+
 export const introspectTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: 'function',
   function: {

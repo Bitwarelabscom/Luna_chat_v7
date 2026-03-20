@@ -39,6 +39,8 @@ import * as browserScreencast from '../abilities/browser-screencast.service.js';
 import * as sessionLogService from '../chat/session-log.service.js';
 import * as torrentService from '../abilities/torrent.service.js';
 import * as movieGrabber from '../abilities/movie-grabber.service.js';
+import * as sessionService from '../chat/session.service.js';
+import { broadcastToUser } from '../triggers/delivery.service.js';
 import { executeSysmonTool } from '../abilities/sysmon.service.js';
 import { summonAgent } from '../agents/communication.js';
 import { hasDesktopBrowser, executeRemoteBrowserCommand, sendDesktopAction } from '../desktop/desktop.websocket.js';
@@ -774,6 +776,40 @@ export async function executeTool(
       return { toolResponse: report, sideEffects };
     }
 
+    // --- Fact Management ---
+    if (toolName === 'save_fact') {
+      logger.info('Luna saving fact', { userId, category: args.category, key: args.fact_key });
+      const factsService = await import('../memory/facts.service.js');
+      await factsService.storeFact(
+        userId,
+        {
+          category: args.category,
+          factKey: args.fact_key,
+          factValue: args.fact_value,
+          confidence: 1.0,
+          factType: args.fact_type || 'permanent',
+          isCorrection: args.is_correction || false,
+        },
+        undefined,
+        sessionId,
+      );
+      return { toolResponse: `Fact saved: ${args.category}/${args.fact_key} = "${args.fact_value}"${args.fact_type === 'temporary' ? ' (temporary)' : ''}`, sideEffects };
+    }
+
+    if (toolName === 'remove_fact') {
+      logger.info('Luna removing fact', { userId, key: args.fact_key, category: args.category });
+      const factsService = await import('../memory/facts.service.js');
+      const fact = await factsService.getFactByKey(userId, args.fact_key, args.category);
+      if (!fact) {
+        return { toolResponse: `No active fact found with key "${args.fact_key}".`, sideEffects };
+      }
+      const result = await factsService.deleteFact(userId, fact.id, args.reason);
+      if (result.success) {
+        return { toolResponse: `Removed fact: ${fact.category}/${fact.factKey} (was "${fact.factValue}")`, sideEffects };
+      }
+      return { toolResponse: `Failed to remove fact "${args.fact_key}".`, sideEffects };
+    }
+
     // --- Session / Notes ---
     if (toolName === 'session_note') {
       logger.info('Adding session note', { sessionId, note: args.note });
@@ -844,40 +880,46 @@ export async function executeTool(
       return { toolResponse: `Goal suggestion "${args.title}" created. The user will see a notification to confirm or decline.`, sideEffects };
     }
 
-    // --- Image generation ---
+    // --- Image generation (fire-and-forget) ---
     if (toolName === 'generate_image') {
-      logger.info('Generate image', { userId, promptLength: args.prompt?.length });
-      const result = await imageGeneration.generateImage(userId, args.prompt);
-      if (result.success && result.imageUrl) {
-        const connection = await telegramService.getTelegramConnection(userId);
-        if (connection && connection.isActive && result.filePath) {
-          telegramService.sendTelegramPhoto(
-            connection.chatId, result.filePath,
-            `Generated image: ${args.prompt.substring(0, 100)}`
-          ).catch(err => logger.error('Failed to send generated image to Telegram', { error: (err as Error).message }));
-        }
-        const imageBlock = imageGeneration.formatImageForChat(
-          result.imageUrl,
-          `Generated image: ${args.prompt.substring(0, 100)}${args.prompt.length > 100 ? '...' : ''}`
-        );
-        return { toolResponse: `Image generated successfully.\n\n${imageBlock}`, sideEffects };
-      }
-      return { toolResponse: `Failed to generate image: ${result.error || 'Unknown error'}`, sideEffects };
+      logger.info('Generate image (fire-and-forget)', { userId, sessionId, promptLength: args.prompt?.length });
+      imageGeneration.generateImageAsync(userId, sessionId, args.prompt).catch(err =>
+        logger.error('Background image generation failed', { userId, error: (err as Error).message })
+      );
+      return { toolResponse: 'Image generation started. The image will appear when ready.', sideEffects };
     }
 
     if (toolName === 'generate_desktop_background') {
-      logger.info('Generate desktop background', { userId, promptLength: args.prompt?.length, style: args.style });
-      const result = await backgroundService.generateBackground(userId, args.prompt, args.style || 'custom');
-      if (result.success && result.background) {
-        const setActive = args.setActive !== false;
-        if (setActive) {
-          await backgroundService.setActiveBackground(userId, result.background.id);
-          sideEffects.push({ type: 'background_refresh' });
+      logger.info('Generate desktop background (fire-and-forget)', { userId, sessionId, promptLength: args.prompt?.length, style: args.style });
+      const setActive = args.setActive !== false;
+      // Fire-and-forget: generate, set active, broadcast
+      (async () => {
+        try {
+          const result = await backgroundService.generateBackground(userId, args.prompt, args.style || 'custom');
+          if (result.success && result.background) {
+            if (setActive) {
+              await backgroundService.setActiveBackground(userId, result.background.id);
+            }
+            const imageBlock = imageGeneration.formatImageForChat(result.background.imageUrl, `Desktop background: ${result.background.name}`);
+            const content = `Desktop background generated!${setActive ? ' It is now set as your active background.' : ''}\n\n${imageBlock}`;
+            await sessionService.addMessage({ sessionId, role: 'assistant', content, source: 'web' });
+            broadcastToUser(userId, {
+              type: 'new_message',
+              sessionId,
+              message: content,
+              timestamp: new Date(),
+              ...(setActive ? { notification: { category: 'autonomous' as const, title: 'Background Ready', message: 'Your new desktop background is ready', priority: 3, eventType: 'background_refresh' } } : {}),
+            });
+          } else {
+            const errorContent = `Background generation failed: ${result.error || 'Unknown error'}`;
+            await sessionService.addMessage({ sessionId, role: 'assistant', content: errorContent, source: 'web' });
+            broadcastToUser(userId, { type: 'new_message', sessionId, message: errorContent, timestamp: new Date() });
+          }
+        } catch (err) {
+          logger.error('Background generation async failed', { userId, error: (err as Error).message });
         }
-        const imageBlock = imageGeneration.formatImageForChat(result.background.imageUrl, `Desktop background: ${result.background.name}`);
-        return { toolResponse: `Desktop background generated successfully!${setActive ? ' It is now set as your active background.' : ' You can set it as active in Settings > Background.'}\n\n${imageBlock}`, sideEffects };
-      }
-      return { toolResponse: `Failed to generate background: ${result.error || 'Unknown error'}`, sideEffects };
+      })();
+      return { toolResponse: 'Desktop background generation started. It will appear when ready.', sideEffects };
     }
 
     // --- Research ---

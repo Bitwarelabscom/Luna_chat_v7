@@ -64,6 +64,8 @@ import {
   transmissionStatusTool,
   transmissionRemoveTool,
   introspectTool,
+  saveFactTool,
+  removeFactTool,
   movieGrabTool,
 } from '../llm/tools/index.js';
 import type OpenAI from 'openai';
@@ -91,6 +93,8 @@ function getCompanionTools(): Tool[] {
     generateArtifactTool, rewriteArtifactTool, updateHighlightedTool, saveArtifactFileTool,
     listArtifactsTool, loadArtifactTool, getArtifactDownloadLinkTool,
     introspectTool,
+    saveFactTool,
+    removeFactTool,
   ];
 }
 
