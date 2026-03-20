@@ -5,6 +5,7 @@
 
 import * as neo4jClient from './neo4j.client.js';
 import type { UserFact } from '../memory/facts.service.js';
+import { FACT_KEY_SEMANTICS } from '../memory/fact-semantics.js';
 
 // ============================================
 // Types
@@ -56,7 +57,7 @@ export async function syncFactToGraph(userId: string, fact: UserFact): Promise<b
     RETURN f
   `;
 
-  return neo4jClient.writeQueryVoid(cypher, {
+  const result = await neo4jClient.writeQueryVoid(cypher, {
     id: fact.id,
     userId,
     category: fact.category,
@@ -68,6 +69,23 @@ export async function syncFactToGraph(userId: string, fact: UserFact): Promise<b
     factStatus: fact.factStatus || 'active',
     factType: fact.factType || 'permanent',
   });
+
+  // Also update linked Entity node with semantic type if applicable
+  const semantics = FACT_KEY_SEMANTICS[fact.factKey];
+  if (semantics && fact.factValue) {
+    neo4jClient.writeQueryVoid(
+      `MATCH (e:Entity {userId: $userId, label: $factValue})
+       SET e.semanticType = $semanticType, e.subType = $subType`,
+      {
+        userId,
+        factValue: fact.factValue,
+        semanticType: semantics.semanticType,
+        subType: semantics.subType || null,
+      }
+    ).catch(() => { /* fire-and-forget */ });
+  }
+
+  return result;
 }
 
 /**

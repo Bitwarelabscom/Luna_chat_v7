@@ -1,7 +1,9 @@
 import { pool } from '../db/index.js';
 import { createBackgroundCompletionWithFallback } from '../llm/background-completion.service.js';
 import * as knowledgeGraphService from '../graph/knowledge-graph.service.js';
+import { enrichNodeMetadata } from './memorycore-graph.service.js';
 import * as contradictionService from './contradiction.service.js';
+import { FACT_KEY_SEMANTICS } from './fact-semantics.js';
 import logger from '../utils/logger.js';
 import { formatRelativeTime } from './time-utils.js';
 
@@ -300,6 +302,17 @@ export async function storeFact(
         });
       }
     }).catch(e => logger.debug('Fact ID lookup for Neo4j sync failed', { err: (e as Error).message }));
+
+    // Enrich graph node with semantic metadata (non-blocking)
+    const semantics = FACT_KEY_SEMANTICS[fact.factKey];
+    if (semantics && fact.factValue && /^[A-Z]/.test(fact.factValue)) {
+      enrichNodeMetadata(userId, fact.factValue, {
+        semanticType: semantics.semanticType,
+        subType: semantics.subType,
+        factCategory: fact.category,
+        factKey: fact.factKey,
+      }).catch(_e => logger.debug('Graph metadata enrichment failed', { factKey: fact.factKey }));
+    }
   } catch (error) {
     await client.query('ROLLBACK');
     logger.error('Failed to store fact', {

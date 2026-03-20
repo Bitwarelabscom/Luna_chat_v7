@@ -203,6 +203,10 @@ export async function buildMemoryContext(
       r.status === 'fulfilled' ? r.value : fallback;
 
     const facts = val(results[0] as PromiseSettledResult<factsService.UserFact[]>, []);
+
+    // Inline contradiction detection: synchronous scan, zero I/O
+    const inlineContradictions = contradictionService.detectInlineContradictions(currentMessage, facts);
+
     const similarMessages = val(results[1] as PromiseSettledResult<embeddingService.SimilarMessage[]>, []);
     const similarConversations = val(results[2] as PromiseSettledResult<Array<{ sessionId: string; summary: string; topics: string[]; similarity: number; updatedAt: Date }>>, []);
     const learningsContext = val(results[3] as PromiseSettledResult<string>, '');
@@ -328,8 +332,33 @@ export async function buildMemoryContext(
       emotionalMomentsFormatted = emotionalMomentsFormatted.slice(0, 500).replace(/\n[^\n]*$/, '');
     }
     const behavioralObsFormatted = behavioralPatterns.formatForContext(activeObservations);
-    const contradictionsFormatted = contradictionService.formatForContext(unsurfacedContradictions);
+    let contradictionsFormatted = contradictionService.formatForContext(unsurfacedContradictions);
     const contradictionIds = unsurfacedContradictions.map(s => s.id);
+
+    // Merge inline contradictions (deduplicate against DB-sourced ones)
+    if (inlineContradictions.length > 0) {
+      const dbFactKeys = new Set(unsurfacedContradictions.map(s => s.factKey));
+      const newInline = inlineContradictions.filter(ic => !dbFactKeys.has(ic.factKey));
+
+      if (newInline.length > 0) {
+        // Fire-and-forget: persist for future sessions
+        for (const ic of newInline) {
+          contradictionService.createSignal(
+            userId, currentSessionId, ic.factKey,
+            ic.suspectedValue, ic.storedValue, 'misremember'
+          ).catch(_e => { /* swallow */ });
+        }
+
+        const inlineFormatted = contradictionService.formatInlineContradictions(newInline);
+        if (contradictionsFormatted) {
+          // Append inline lines to existing block (skip duplicate header)
+          const inlineLines = inlineFormatted.split('\n').slice(1).join('\n');
+          contradictionsFormatted += '\n' + inlineLines;
+        } else {
+          contradictionsFormatted = inlineFormatted;
+        }
+      }
+    }
 
     // Format Luna affect context
     const lunaAffectFormatted = currentAffect ? lunaAffect.formatAffectForPrompt(currentAffect) : '';

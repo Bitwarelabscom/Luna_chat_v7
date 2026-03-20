@@ -9,6 +9,7 @@
  */
 
 import { pool } from '../db/index.js';
+import { getConceptTokens } from './fact-semantics.js';
 import logger from '../utils/logger.js';
 
 export interface ContradictionSignal {
@@ -121,4 +122,101 @@ export function formatForContext(signals: ContradictionSignal[]): string {
   return `[Gentle Memory Check]\n${lines.join('\n')}`;
 }
 
-export default { createSignal, getUnsurfaced, markSurfaced, formatForContext };
+// ============================================
+// Inline Contradiction Detection (real-time)
+// ============================================
+
+export interface InlineContradiction {
+  factKey: string;
+  factCategory: string;
+  storedValue: string;
+  suspectedValue: string;
+}
+
+// Common words that start with uppercase but aren't entity names
+const INLINE_STOPWORDS = new Set([
+  'I', 'My', 'The', 'This', 'That', 'These', 'Those', 'Here', 'There',
+  'What', 'When', 'Where', 'Who', 'How', 'Why', 'Which',
+  'And', 'But', 'Or', 'So', 'Yet', 'Not', 'No', 'Yes',
+  'Can', 'Could', 'Would', 'Should', 'Will', 'Did', 'Does', 'Do',
+  'Is', 'Are', 'Was', 'Were', 'Am', 'Been', 'Being',
+  'Has', 'Have', 'Had', 'Just', 'Also', 'Very', 'Really',
+  'Hey', 'Hi', 'Hello', 'Ok', 'Okay', 'Well', 'Yeah', 'Yep',
+  'Maybe', 'Actually', 'Basically', 'Today', 'Now', 'Still',
+  'Luna', 'Thanks', 'Please', 'Sure', 'Right', 'Like',
+]);
+
+const RELEVANT_CATEGORIES = new Set(['relationship', 'personal', 'context']);
+
+/**
+ * Detect contradictions in the current message against stored facts.
+ * Pure synchronous, zero I/O, no LLM call.
+ * Checks if the user mentions a concept token for a well-established fact
+ * but uses a different value than what's stored.
+ */
+export function detectInlineContradictions(
+  message: string,
+  facts: Array<{ category: string; factKey: string; factValue: string; mentionCount: number }>
+): InlineContradiction[] {
+  const contradictions: InlineContradiction[] = [];
+  const messageLower = message.toLowerCase();
+  const messageWords = messageLower.split(/\s+/);
+
+  // Extract capitalized words from original message as candidate contradicting values
+  const capitalizedWords = message
+    .split(/\s+/)
+    .map(w => w.replace(/[.,!?;:'"()]/g, ''))
+    .filter(w => /^[A-Z][a-z]/.test(w) && !INLINE_STOPWORDS.has(w) && w.length >= 2);
+
+  if (capitalizedWords.length === 0) return [];
+
+  for (const fact of facts) {
+    if (!RELEVANT_CATEGORIES.has(fact.category)) continue;
+    if (fact.mentionCount < 2) continue;
+
+    const conceptTokens = getConceptTokens(fact.factKey);
+
+    // Check if any concept token appears in the message
+    const conceptMatch = conceptTokens.some(token => messageWords.includes(token.toLowerCase()));
+    if (!conceptMatch) continue;
+
+    // Check that stored value does NOT appear in message (if it does, no contradiction)
+    if (messageLower.includes(fact.factValue.toLowerCase())) continue;
+
+    // Look for a contradicting capitalized word
+    for (const candidate of capitalizedWords) {
+      if (candidate.toLowerCase() === fact.factValue.toLowerCase()) continue;
+
+      contradictions.push({
+        factKey: fact.factKey,
+        factCategory: fact.category,
+        storedValue: fact.factValue,
+        suspectedValue: candidate,
+      });
+      break; // one contradiction per fact
+    }
+  }
+
+  return contradictions;
+}
+
+/**
+ * Format inline contradictions for the volatile prompt context.
+ * Same tone as formatForContext - gentle memory check.
+ */
+export function formatInlineContradictions(contradictions: InlineContradiction[]): string {
+  if (contradictions.length === 0) return '';
+
+  const lines = contradictions.map(c =>
+    `- You remember "${c.factKey}" as "${c.storedValue}", but they just said "${c.suspectedValue}". ` +
+    `If it comes up naturally, gently mention what you recall - not as a correction, but as genuine memory. ` +
+    `Example: "Wait, I thought that was ${c.storedValue} - did it change?"`
+  );
+
+  return `[Gentle Memory Check]\n${lines.join('\n')}`;
+}
+
+export default {
+  createSignal, getUnsurfaced, markSurfaced, formatForContext,
+  detectInlineContradictions, formatInlineContradictions,
+};

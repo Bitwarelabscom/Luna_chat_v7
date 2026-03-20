@@ -1246,6 +1246,7 @@ export interface SeedEntity {
   emotionalIntensity: number;
   lastActivated: string;
   activation: number; // 1.0 for seeds
+  semanticType?: string;
 }
 
 export interface ActivatedNode {
@@ -1261,6 +1262,7 @@ export interface ActivatedNode {
   edgeWeight: number;
   edgeType: string;
   path: string[]; // provenance: seed label > hop1 label > ...
+  semanticType?: string;
 }
 
 export interface ActivationTrace {
@@ -1339,7 +1341,7 @@ async function matchMessageEntities(userId: string, message: string): Promise<Se
   // Phase 1: Exact match on lowercased node labels
   const rows = await mcQuery<Record<string, unknown>>(
     `SELECT id, node_type, node_label, edge_count, centrality_score,
-            emotional_intensity, last_activated
+            emotional_intensity, last_activated, metadata
      FROM memory_nodes
      WHERE user_id = $1 AND is_active = true
        AND LOWER(node_label) = ANY($2::text[])
@@ -1358,6 +1360,7 @@ async function matchMessageEntities(userId: string, message: string): Promise<Se
     emotionalIntensity: parseFloat((row.emotional_intensity as string) ?? '0'),
     lastActivated: (row.last_activated as Date)?.toISOString() || '',
     activation: 1.0,
+    semanticType: (row.metadata as Record<string, unknown>)?.semanticType as string | undefined,
   });
 
   const seeds = rows.map(mapRow);
@@ -1380,7 +1383,7 @@ async function matchMessageEntities(userId: string, message: string): Promise<Se
 
       const fuzzyRows = await mcQuery<Record<string, unknown>>(
         `SELECT id, node_type, node_label, edge_count, centrality_score,
-                emotional_intensity, last_activated
+                emotional_intensity, last_activated, metadata
          FROM memory_nodes
          WHERE user_id = $1 AND is_active = true
            AND (${likeClauses.join(' OR ')})
@@ -1424,6 +1427,7 @@ async function spreadActivation(
         e.edge_type, e.weight, e.recency, e.activation_count, e.distinct_session_count,
         n.id as neighbor_id, n.node_type, n.node_label, n.edge_count as neighbor_edge_count,
         n.centrality_score as neighbor_centrality, n.emotional_intensity as neighbor_emotional,
+        n.metadata as neighbor_metadata,
         CASE WHEN e.source_node_id = ANY($2::uuid[]) THEN e.source_node_id ELSE e.target_node_id END as seed_id,
         ROW_NUMBER() OVER (
           PARTITION BY CASE WHEN e.source_node_id = ANY($2::uuid[]) THEN e.source_node_id ELSE e.target_node_id END
@@ -1479,6 +1483,7 @@ async function spreadActivation(
         edgeWeight,
         edgeType,
         path: [seed.nodeLabel, row.node_label as string],
+        semanticType: (row.neighbor_metadata as Record<string, unknown>)?.semanticType as string | undefined,
       });
     }
   }
@@ -1502,6 +1507,7 @@ async function spreadActivation(
         e.edge_type, e.weight, e.recency, e.activation_count, e.distinct_session_count,
         n.id as neighbor_id, n.node_type, n.node_label, n.edge_count as neighbor_edge_count,
         n.centrality_score as neighbor_centrality, n.emotional_intensity as neighbor_emotional,
+        n.metadata as neighbor_metadata,
         CASE WHEN e.source_node_id = ANY($2::uuid[]) THEN e.source_node_id ELSE e.target_node_id END as parent_id,
         ROW_NUMBER() OVER (
           PARTITION BY CASE WHEN e.source_node_id = ANY($2::uuid[]) THEN e.source_node_id ELSE e.target_node_id END
@@ -1558,6 +1564,7 @@ async function spreadActivation(
         edgeWeight,
         edgeType,
         path: [...parent.path, row.node_label as string],
+        semanticType: (row.neighbor_metadata as Record<string, unknown>)?.semanticType as string | undefined,
       });
     }
   }
@@ -1634,7 +1641,8 @@ function formatActivationContext(seeds: SeedEntity[], activated: ActivatedNode[]
     const sessionInfo = node.sessionCount >= 2 ? `${node.sessionCount} sessions, ` : '';
     const typeLabel = formatEdgeTypeLabel(node.edgeType);
     const typePart = typeLabel ? ` [${typeLabel}]` : '';
-    return `- ${node.nodeLabel} (${node.nodeType})${typePart} -- via ${pathStr} [${sessionInfo}weight: ${node.edgeWeight.toFixed(2)}]`;
+    const semanticSuffix = node.semanticType ? `: ${node.semanticType}` : '';
+    return `- ${node.nodeLabel} (${node.nodeType}${semanticSuffix})${typePart} -- via ${pathStr} [${sessionInfo}weight: ${node.edgeWeight.toFixed(2)}]`;
   };
 
   if (direct.length > 0) {
@@ -1669,7 +1677,7 @@ function formatActivationContext(seeds: SeedEntity[], activated: ActivatedNode[]
 export async function graphContextFallback(userId: string): Promise<string> {
   try {
     const rows = await mcQuery<Record<string, unknown>>(
-      `SELECT node_label, node_type, centrality_score, edge_count, last_activated
+      `SELECT node_label, node_type, centrality_score, edge_count, last_activated, metadata
        FROM memory_nodes
        WHERE user_id = $1 AND is_active = true AND edge_count >= 5
        ORDER BY centrality_score * (1.0 / (1.0 + EXTRACT(EPOCH FROM (NOW() - last_activated)) / 86400.0)) DESC
@@ -1683,9 +1691,11 @@ export async function graphContextFallback(userId: string): Promise<string> {
     for (const row of rows) {
       const label = row.node_label as string;
       const type = row.node_type as string;
+      const semanticType = (row.metadata as Record<string, unknown>)?.semanticType as string | undefined;
+      const semanticSuffix = semanticType ? `: ${semanticType}` : '';
       const centrality = parseFloat((row.centrality_score as string) ?? '0');
       const edgeCount = parseInt((row.edge_count as string) ?? '0');
-      lines.push(`- ${label} (${type}) -- centrality: ${centrality.toFixed(2)}, ${edgeCount} connections`);
+      lines.push(`- ${label} (${type}${semanticSuffix}) -- centrality: ${centrality.toFixed(2)}, ${edgeCount} connections`);
     }
 
     return lines.join('\n');
@@ -1740,6 +1750,33 @@ export async function graphContextForMessage(
   }
 }
 
+/**
+ * Enrich a graph node's metadata with semantic type info from facts.
+ * JSONB merge - preserves existing metadata, adds/overwrites semantic fields.
+ */
+export async function enrichNodeMetadata(
+  userId: string,
+  nodeLabel: string,
+  semanticMetadata: Record<string, string | undefined>
+): Promise<void> {
+  try {
+    // Filter out undefined values for clean JSONB
+    const cleanMeta: Record<string, string> = {};
+    Array.from(Object.entries(semanticMetadata)).forEach(([k, v]) => {
+      if (v !== undefined) cleanMeta[k] = v;
+    });
+
+    await mcQuery(
+      `UPDATE memory_nodes
+       SET metadata = COALESCE(metadata, '{}'::jsonb) || $3::jsonb
+       WHERE user_id = $1 AND LOWER(node_label) = LOWER($2) AND is_active = true`,
+      [userId, nodeLabel, JSON.stringify(cleanMeta)]
+    );
+  } catch (error) {
+    logger.warn('Failed to enrich node metadata', { error: (error as Error).message, nodeLabel });
+  }
+}
+
 export default {
   getGraphNodes,
   getGraphEdges,
@@ -1760,4 +1797,5 @@ export default {
   analyzeMergeCandidates,
   graphContextForMessage,
   graphContextFallback,
+  enrichNodeMetadata,
 };
