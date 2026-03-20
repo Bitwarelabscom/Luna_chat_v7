@@ -2,6 +2,7 @@ import { pool } from '../db/index.js';
 import logger from '../utils/logger.js';
 import * as checkinsService from '../abilities/checkins.service.js';
 import * as insightsService from '../autonomous/insights.service.js';
+import * as selfModificationService from '../memory/self-modification.service.js';
 
 // ============================================
 // Types
@@ -118,6 +119,94 @@ const patternDetectors: PatternDetector[] = [
       const count = parseInt(result.rows[0]?.count || '0', 10);
       if (count >= 5) {
         return { triggered: true, data: { tasksCompleted: count } };
+      }
+      return { triggered: false };
+    },
+  },
+  // Learned-pattern detectors (gated by proactivity level)
+  {
+    name: 'routine_match',
+    async check(userId: string) {
+      const now = new Date();
+      const hour = now.getHours();
+      const dow = now.getDay();
+
+      const result = await pool.query(
+        `SELECT description FROM user_routines
+         WHERE user_id = $1 AND is_active = true AND confidence > 0.5
+           AND time_window_start IS NOT NULL AND time_window_end IS NOT NULL
+           AND $2::time BETWEEN time_window_start AND time_window_end
+           AND (day_of_week IS NULL OR $3 = ANY(day_of_week))
+         ORDER BY confidence DESC LIMIT 1`,
+        [userId, `${hour}:00`, dow]
+      );
+
+      if (result.rows.length > 0) {
+        // Check if user has recent activity matching this routine
+        const recent = await pool.query(
+          `SELECT COUNT(*) as count FROM messages m
+           JOIN sessions s ON m.session_id = s.id
+           WHERE s.user_id = $1 AND m.role = 'user'
+             AND m.created_at > NOW() - INTERVAL '30 minutes'`,
+          [userId]
+        );
+        const recentCount = parseInt(recent.rows[0]?.count || '0', 10);
+        if (recentCount === 0) {
+          return { triggered: true, data: { routine: result.rows[0].description } };
+        }
+      }
+      return { triggered: false };
+    },
+  },
+  {
+    name: 'stale_focus_reminder',
+    async check(userId: string) {
+      const result = await pool.query(
+        `SELECT focus_label, focus_type,
+                EXTRACT(DAY FROM NOW() - last_seen_at) AS days_inactive
+         FROM user_active_focuses
+         WHERE user_id = $1 AND status = 'active'
+           AND last_seen_at < NOW() - INTERVAL '5 days'
+           AND last_seen_at > NOW() - INTERVAL '7 days'
+         ORDER BY confidence DESC LIMIT 1`,
+        [userId]
+      );
+
+      if (result.rows.length > 0) {
+        return {
+          triggered: true,
+          data: {
+            focusLabel: result.rows[0].focus_label,
+            focusType: result.rows[0].focus_type,
+            daysInactive: Math.floor(result.rows[0].days_inactive),
+          },
+        };
+      }
+      return { triggered: false };
+    },
+  },
+  {
+    name: 'task_followup',
+    async check(userId: string) {
+      const result = await pool.query(
+        `SELECT th.title as completed_title, t.title as pending_title, t.id as pending_id
+         FROM task_history th
+         JOIN todos t ON t.user_id = th.user_id AND t.completed_at IS NULL
+         WHERE th.user_id = $1
+           AND th.completed_at IS NOT NULL
+           AND th.completed_at > NOW() - INTERVAL '2 hours'
+         LIMIT 1`,
+        [userId]
+      );
+
+      if (result.rows.length > 0) {
+        return {
+          triggered: true,
+          data: {
+            completedTask: result.rows[0].completed_title,
+            pendingTask: result.rows[0].pending_title,
+          },
+        };
       }
       return { triggered: false };
     },
@@ -323,6 +412,20 @@ export async function processPatternTriggers(): Promise<number> {
 
     const detector = patternDetectors.find((d) => d.name === patternName);
     if (!detector) continue;
+
+    // Proactivity gating: learned-pattern detectors require higher proactivity
+    const learnedPatterns = ['routine_match', 'stale_focus_reminder', 'task_followup'];
+    if (learnedPatterns.includes(patternName)) {
+      try {
+        const params = await selfModificationService.getActiveParameters(row.user_id);
+        const proactivity = params.find(p => p.paramName === 'proactivity');
+        const proactivityLevel = proactivity?.currentValue ?? 0.4;
+
+        if (proactivityLevel <= 0.5) continue; // Only fire learned detectors above 0.5
+      } catch {
+        continue; // Skip if we can't check proactivity
+      }
+    }
 
     try {
       const { triggered, data } = await detector.check(row.user_id);

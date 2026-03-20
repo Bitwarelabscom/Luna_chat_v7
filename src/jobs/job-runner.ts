@@ -37,6 +37,8 @@ import * as ceoProposals from '../ceo/ceo-proposals.service.js';
 import * as factsService from '../memory/facts.service.js';
 import * as behavioralPatterns from '../memory/behavioral-patterns.service.js';
 import * as friendService from '../autonomous/friend.service.js';
+import * as routineLearning from '../memory/routine-learning.service.js';
+import * as activeFocusService from '../memory/active-focus.service.js';
 
 // ============================================
 // Job Definitions
@@ -424,6 +426,14 @@ const jobs: Job[] = [
     enabled: true,
     running: false,
     handler: runBehavioralPatternDetection,
+  },
+  // Behavioral upgrades: routine analysis + focus staleness
+  {
+    name: 'routineAnalysis',
+    intervalMs: 24 * 60 * 60 * 1000, // Daily
+    enabled: true,
+    running: false,
+    handler: runRoutineAnalysis,
   },
   // Trading intelligence & reports jobs
   {
@@ -2186,6 +2196,31 @@ async function runSelfModificationDetection(): Promise<void> {
     }
   } catch (error) {
     logger.error('Self-modification detection job failed', { error: (error as Error).message });
+  }
+}
+
+async function runRoutineAnalysis(): Promise<void> {
+  try {
+    // Get users with recent activity (last 7 days)
+    const recentUsers = await pool.query(
+      `SELECT DISTINCT user_id FROM sessions WHERE updated_at > NOW() - INTERVAL '7 days'`
+    );
+
+    for (const { user_id } of recentUsers.rows) {
+      await routineLearning.analyzeRoutines(user_id).catch(err =>
+        logger.debug('Routine analysis failed for user', { userId: user_id, err: (err as Error).message })
+      );
+    }
+
+    // Also run stale routine expiry and focus checks
+    await routineLearning.expireStaleRoutines().catch(err =>
+      logger.debug('Routine expiry failed', { err: (err as Error).message })
+    );
+    await activeFocusService.staleFocusCheck().catch(err =>
+      logger.debug('Focus stale check failed', { err: (err as Error).message })
+    );
+  } catch (error) {
+    logger.error('Routine analysis job failed', { error: (error as Error).message });
   }
 }
 

@@ -51,6 +51,7 @@ import { getUserFacts } from '../memory/facts.service.js';
 import * as lunaAffectService from '../memory/luna-affect.service.js';
 import * as selfModificationService from '../memory/self-modification.service.js';
 import * as ambientPerception from '../sensory/ambient-perception.service.js';
+import * as conversationRhythm from '../memory/conversation-rhythm.service.js';
 
 // Per-session tracking for enrichment pipeline
 const sessionLastEmbedding = new Map<string, number[]>();
@@ -605,6 +606,9 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
 
   // Add current message (full, not compressed)
   messages.push({ role: 'user', content: pmEffectiveMessage });
+
+  // Track message rhythm for conversation pace awareness
+  conversationRhythm.trackMessage(sessionId, 'user', message.length);
 
   // Save user message with optional attachments (raw message, no doc prefix)
   const userMessage = await sessionService.addMessage({
@@ -2016,6 +2020,9 @@ export async function* streamMessage(
 
   // Add current message (full, not compressed)
   messages.push({ role: 'user', content: smEffectiveMessage });
+
+  // Track message rhythm for conversation pace awareness
+  conversationRhythm.trackMessage(sessionId, 'user', message.length);
 
   // Save user message with optional attachments (raw message, no doc prefix)
   const userMessage = await sessionService.addMessage({

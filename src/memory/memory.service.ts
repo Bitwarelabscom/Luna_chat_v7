@@ -17,6 +17,9 @@ import * as contradictionService from './contradiction.service.js';
 import * as behavioralPatterns from './behavioral-patterns.service.js';
 import * as lunaAffect from './luna-affect.service.js';
 import * as metaCognition from './meta-cognition.service.js';
+import * as routineLearning from './routine-learning.service.js';
+import * as activeFocus from './active-focus.service.js';
+import * as conversationRhythm from './conversation-rhythm.service.js';
 
 /**
  * Memory context split into stable (cacheable) and volatile (per-query) parts
@@ -40,6 +43,7 @@ export interface MemoryContext {
     emotionalMoments?: string;  // Recent raw emotional moments
     behavioralObservations?: string;  // Specific behavioral pattern observations
     lunaAffectContext?: string;  // Luna's own internal mood state
+    anticipationContext?: string;  // Routines + active focuses
   };
   // Volatile (not cached) - changes per query, goes in Tier 4
   volatile: {
@@ -49,6 +53,7 @@ export interface MemoryContext {
     contradictions?: string;      // Unsurfaced contradiction signals
     contradictionIds?: string[];  // IDs for marking as surfaced post-response
     metaCognition?: string;       // Luna's self-awareness report (conditional)
+    rhythmHint?: string;           // Conversation rhythm hint (brief/detailed)
   };
 }
 
@@ -100,6 +105,10 @@ export function formatStableMemory(context: MemoryContext): string {
   if (context.stable.lunaAffectContext) {
     parts.push(context.stable.lunaAffectContext);
   }
+  // Anticipation context (routines + active focuses)
+  if (context.stable.anticipationContext) {
+    parts.push(context.stable.anticipationContext);
+  }
   return parts.join('\n\n');
 }
 
@@ -121,6 +130,10 @@ export function formatVolatileMemory(context: MemoryContext): string {
   // Meta-cognition self-report (conditional - only when meaningful)
   if (context.volatile.metaCognition) {
     parts.push(context.volatile.metaCognition);
+  }
+  // Conversation rhythm hint (brief/detailed)
+  if (context.volatile.rhythmHint) {
+    parts.push(context.volatile.rhythmHint);
   }
   return parts.join('\n\n');
 }
@@ -177,6 +190,12 @@ export async function buildMemoryContext(
       safeQuery(contradictionService.getUnsurfaced(userId, currentSessionId), [], 'contradictions'),
       safeQuery(lunaAffect.getCurrentAffect(userId), null, 'lunaAffect'),
       safeQuery(metaCognition.generateSelfReport(userId, currentSessionId), null, 'metaCognition'),
+      // Behavioral upgrades: routine patterns + active focuses
+      safeQuery((() => {
+        const now = new Date();
+        return routineLearning.getRoutineContext(userId, now.getHours(), now.getDay());
+      })(), '', 'routines'),
+      safeQuery(activeFocus.getActiveFocusContext(userId), '', 'activeFocuses'),
     ]);
 
     // Extract values - allSettled always fulfills since safeQuery never rejects
@@ -197,6 +216,8 @@ export async function buildMemoryContext(
     const unsurfacedContradictions = val(results[11] as PromiseSettledResult<Awaited<ReturnType<typeof contradictionService.getUnsurfaced>>>, []);
     const currentAffect = val(results[12] as PromiseSettledResult<Awaited<ReturnType<typeof lunaAffect.getCurrentAffect>>>, null);
     const selfReport = val(results[13] as PromiseSettledResult<Awaited<ReturnType<typeof metaCognition.generateSelfReport>>>, null);
+    const routineContext = val(results[14] as PromiseSettledResult<string>, '');
+    const activeFocusContext = val(results[15] as PromiseSettledResult<string>, '');
 
     // Score message complexity to decide whether to curate
     const complexity = scoreMessageComplexity(currentMessage);
@@ -316,6 +337,21 @@ export async function buildMemoryContext(
     // Format meta-cognition self-report (conditional)
     const metaCognitionFormatted = metaCognition.formatSelfReportForPrompt(selfReport);
 
+    // Format anticipation context (routines + active focuses)
+    const anticipationParts: string[] = [];
+    if (routineContext) anticipationParts.push(routineContext);
+    if (activeFocusContext) anticipationParts.push(activeFocusContext);
+    const anticipationFormatted = anticipationParts.length > 0
+      ? `[Anticipation Context]\n${anticipationParts.join('\n')}` : '';
+
+    // Get conversation rhythm hint
+    const rhythmHint = conversationRhythm.getRhythmHint(currentSessionId);
+    const rhythmFormatted = rhythmHint === 'brief'
+      ? '[Rhythm] User is being brief - match their energy.'
+      : rhythmHint === 'detailed'
+        ? '[Rhythm] User is writing in detail - give thorough responses.'
+        : '';
+
     // Diagnostic: log per-source sizes so we can see what responded
     const sourceSizes = {
       facts: factsPrompt.length, learnings: learnings.length,
@@ -325,13 +361,14 @@ export async function buildMemoryContext(
       semanticMemory: semanticMemory.length, emotionalMoments: emotionalMomentsFormatted.length,
       behavioralObservations: behavioralObsFormatted.length, contradictions: contradictionsFormatted.length,
       lunaAffect: lunaAffectFormatted.length, metaCognition: metaCognitionFormatted.length,
+      anticipation: anticipationFormatted.length, rhythm: rhythmFormatted.length,
     };
     const totalChars = Object.values(sourceSizes).reduce((a, b) => a + b, 0);
     const responded = Object.values(sourceSizes).filter(v => v > 0).length;
     logger.info('Memory context built', {
       userId, sourceSizes, totalChars,
       approxTokens: Math.round(totalChars / 4),
-      sourcesResponded: `${responded}/14`,
+      sourcesResponded: `${responded}/16`,
     });
 
     return {
@@ -347,6 +384,7 @@ export async function buildMemoryContext(
         emotionalMoments: emotionalMomentsFormatted,
         behavioralObservations: behavioralObsFormatted,
         lunaAffectContext: lunaAffectFormatted,
+        anticipationContext: anticipationFormatted,
       },
       volatile: {
         relevantHistory,
@@ -355,6 +393,7 @@ export async function buildMemoryContext(
         contradictions: contradictionsFormatted,
         metaCognition: metaCognitionFormatted,
         contradictionIds,
+        rhythmHint: rhythmFormatted,
       },
     };
   } catch (error) {
@@ -722,6 +761,10 @@ export async function processConversationMemory(
           summaryData.sentiment,
           intentId
         );
+
+        // Fire-and-forget: extract active focuses from the summary
+        activeFocus.extractFocuses(userId, sessionId, summaryData.summary, summaryData.topics)
+          .catch(err => logger.debug('Focus extraction fire-and-forget failed', { error: (err as Error).message }));
       }
     }
   } catch (error) {

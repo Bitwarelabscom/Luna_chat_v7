@@ -111,7 +111,7 @@ export function formatStyleForPrompt(params: StyleParameter[]): string {
     formality: (v) => v > 0.5 ? 'slightly more formal' : v < 0.2 ? 'very casual' : '',
     humor_frequency: (v) => v > 0.5 ? 'lean into humor' : v < 0.2 ? 'less humor' : '',
     emotional_depth: (v) => v > 0.6 ? 'go deeper emotionally' : v < 0.3 ? 'keep it light' : '',
-    proactivity: (v) => v > 0.5 ? 'offer suggestions proactively' : v < 0.3 ? 'wait to be asked' : '',
+    proactivity: (v) => v > 0.5 ? 'proactively suggest next steps and surface past plans' : v < 0.3 ? 'wait to be asked, don\'t volunteer suggestions' : '',
     topic_persistence: (v) => v > 0.6 ? 'follow threads deeply' : v < 0.3 ? 'move on quickly' : '',
   };
 
