@@ -383,13 +383,29 @@ Friend discussions happen in "Theater Mode" -- a live-streamed deliberation visi
 | `src/autonomous/friend-verification.service.ts` | Topic candidates CRUD, personality verification |
 | `src/autonomous/autonomous.routes.ts` | POST/PATCH/DELETE `/friends/topics` routes |
 | `src/db/migrations/088_gossip_queue_fields.sql` | importance, motivation, suggested_friend_id columns |
+| `src/db/migrations/112_topic_in_progress_status.sql` | in_progress status to prevent topic loss on failure |
 
 ---
 
+## Cognitive Architecture (March 2026)
+
+Luna's cognitive upgrades (migrations 115-117, config: `LUNA_AFFECT_ENABLED=true`) add:
+
+- **Affect State** (`luna-affect.service.ts`): Internal emotional state with valence/arousal/mood tracking, updated on each interaction
+- **Meta-Cognition** (`meta-cognition.service.ts`): Self-awareness reporting via the `introspect` LLM tool
+- **Self-Modification** (`self-modification.service.ts`): 6 tunable parameters (verbosity, formality, etc.) with safety guardrails and limits
+- **Routine Learning** (`routine-learning.service.ts`): Learns daily/weekly behavioral patterns from user behavior
+- **Active Focus** (`active-focus.service.ts`): Tracks what the user is currently focused on
+- **Conversation Rhythm** (`conversation-rhythm.service.ts`): Detects brief vs detailed response preference
+
+These are injected as 4 additional memory context sources (bringing total from 12 to 16).
+
 ## Future Enhancements
 
-- [x] Multi-agent task decomposition (partially done - the agentic loop in `src/agentic/agent-loop.ts` now handles multi-step tool use with automatic LLM-driven iteration)
+- [x] Multi-agent task decomposition (the agentic loop in `src/agentic/agent-loop.ts` handles multi-step tool use with cost tracking and context overflow management)
 - [x] Persistent learning across sessions (MemoryCore integration)
+- [x] Cognitive architecture - affect state, meta-cognition, self-modification (March 2026)
+- [x] Anti-parroting and response discipline (March 2026)
 - [ ] Proactive goal reminders
 - [ ] Context-aware action suggestions
 - [ ] External trigger integration

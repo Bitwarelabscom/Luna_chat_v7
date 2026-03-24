@@ -219,8 +219,12 @@ MEMORYCORE_ENABLED=true
 TRADECORE_ENABLED=false
 TRADECORE_MOCK_MODE=true
 
-# Sanhedrin A2A (optional - requires Claude Code CLI credentials)
-SANHEDRIN_ENABLED=false
+# Cognitive Architecture (emotional state, meta-cognition, self-modification)
+LUNA_AFFECT_ENABLED=true
+
+# Luna Streams (Mamba SSM - requires separate deployment on GPU machine)
+LUNA_STREAMS_ENABLED=false
+# LUNA_STREAMS_URL=http://10.0.0.30:8100
 EOF
 ```
 
@@ -483,14 +487,14 @@ server {
 Edit `docker-compose.yml` to comment out services you don't need:
 
 - **tradecore** - Trading engine (disable unless you use trading features)
-- **luna-sanhedrin** - A2A multi-agent coordination (requires Claude CLI credentials)
 - **luna-mobile** - Mobile frontend variant
 - **luna-sandbox** - Code execution sandbox
 
 Also set corresponding env vars to `false`:
 ```bash
 TRADECORE_ENABLED=false
-SANHEDRIN_ENABLED=false
+LUNA_AFFECT_ENABLED=false  # Disable cognitive features
+LUNA_STREAMS_ENABLED=false  # Disable Mamba SSM (requires GPU)
 ```
 
 ### MemoryCore Database Credentials

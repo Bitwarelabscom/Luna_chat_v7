@@ -437,6 +437,7 @@ async function synthesizeWithOrpheus(text: string, voice: OrpheusVoice = 'tara')
  */
 function stripMarkdown(text: string): string {
   return text
+    .replace(/\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\]\s*/g, '')  // ISO timestamps
     .replace(/```[\s\S]*?```/g, '')        // code blocks
     .replace(/`([^`]+)`/g, '$1')           // inline code
     .replace(/\*\*([^*]+)\*\*/g, '$1')     // bold

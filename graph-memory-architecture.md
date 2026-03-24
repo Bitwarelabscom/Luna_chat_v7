@@ -1,5 +1,7 @@
 # Graph-Based Memory Architecture for LunaOS
 
+> **Note (March 2026):** This is the original design specification. The implemented system has evolved significantly - see `docs/MEMORY.md` for the current architecture, which includes 16 memory context sources, NeuralSleep daily/weekly consolidation with EMA weight evolution, cognitive architecture (affect state, meta-cognition, self-modification), and 3-tier memory consolidation (Working -> Episodic -> Semantic) via MemoryCore.
+
 ## Executive Summary
 
 This document specifies a biologically-inspired memory system where **memory strength is determined by connection density, not storage**. Nodes represent concepts (entities, topics, preferences, emotions). Edges represent relationships. Memory persists through reinforcement, fades through isolation.

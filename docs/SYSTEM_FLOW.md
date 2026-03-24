@@ -193,7 +193,9 @@ System prompt (assembled above)
 Response: "Hey! How's your day going?"
 ```
 
-If the LLM decides to use tools (search, email, code execution, etc.), a tool execution loop runs. All three message paths - `processMessage`, `streamMessage` (via `agent-loop.ts`), and `voice-chat.service` - use a unified tool executor (`src/agentic/tool-executor.ts`). This module contains all 50+ tool handlers in a single `executeTool(toolCall, context)` function, eliminating the previous duplication across services.
+If the LLM decides to use tools (search, email, code execution, etc.), a tool execution loop runs. All three message paths - `processMessage`, `streamMessage` (via `agent-loop.ts`), and `voice-chat.service` - use a unified tool executor (`src/agentic/tool-executor.ts`). This module contains all 56+ tool handlers in a single `executeTool(toolCall, context)` function, eliminating the previous duplication across services.
+
+The agentic loop (`src/agentic/agent-loop.ts`) includes context overflow management: token usage is estimated each iteration, and if the context approaches the model's window limit (80% threshold), the conversation history is summarized automatically before continuing. Loop breakers detect repeated tool calls or error spirals to prevent runaway loops. Budget limits are enforced via `src/agentic/cost-tracker.ts`, which tracks per-model USD costs using a pricing table and the `estimateCost()` function.
 
 1. LLM returns tool call request
 2. `executeTool()` dispatches the call to the appropriate handler
@@ -275,7 +277,7 @@ ON CONFLICT (user_id, source_node_id, target_node_id, edge_type):
 
 ## Memory Context Building
 
-When `memoryService.buildMemoryContext()` is called, it fetches 12 parallel queries, each wrapped in a 2-second per-query timeout (if any single query exceeds 2s, it returns a fallback value instead of blocking):
+When `memoryService.buildMemoryContext()` is called, it fetches 16 parallel queries, each wrapped in a 2-second per-query timeout (if any single query exceeds 2s, it returns a fallback value instead of blocking):
 
 ```
 buildMemoryContext(userId, "Hello", sessionId)
@@ -323,6 +325,18 @@ Promise.all([
     |
     +---> [12] Contradiction Signals (unsurfaced for user, filtered by session)
     |     SQL: contradiction_signals WHERE user_id = $1 AND surfaced = false
+    |
+    +---> [13] Luna Affect Context (current emotional/affect state)
+    |     GET affect state from affectState service (if LUNA_AFFECT_ENABLED)
+    |
+    +---> [14] Anticipation Context (predicted upcoming topics/needs)
+    |     Derived from recent patterns + upcoming calendar/reminders
+    |
+    +---> [15] Meta-Cognition (self-awareness snapshot)
+    |     Introspection report from meta-cognition service
+    |
+    +---> [16] Rhythm Hint (conversation pacing/rhythm signal)
+          Derived from interMessageMs + session rhythm patterns
 ])
     |
     v
@@ -337,14 +351,14 @@ Promise.all([
     |
     v
 Return {
-  stable: { facts, learnings, graphMemory, consciousness, consolidatedPatterns, semanticMemory, emotionalMoments, behavioralObservations },
-  volatile: { relevantHistory, conversationContext, curationReasoning, contradictions, contradictionIds }
+  stable: { facts, learnings, graphMemory, localGraphMemory, consciousness, consolidatedPatterns, consolidatedKnowledge, semanticMemory, emotionalMoments, behavioralObservations, lunaAffectContext, anticipationContext },
+  volatile: { relevantHistory, conversationContext, curationReasoning, contradictions, contradictionIds, metaCognition, rhythmHint }
 }
 ```
 
 ### Mamba Stream Context (Parallel Fetch)
 
-The Mamba stream context fetch (`getStreamContext`) is started as a promise BEFORE `buildMemoryContext()` and awaited after it completes. This means the stream context request runs in parallel with all 12 memory queries instead of sequentially blocking, reducing overall latency.
+The Mamba stream context fetch (`getStreamContext`) is started as a promise BEFORE `buildMemoryContext()` and awaited after it completes. This means the stream context request runs in parallel with all 16 memory queries instead of sequentially blocking, reducing overall latency.
 
 ### Memory Formatting for Cache Optimization
 

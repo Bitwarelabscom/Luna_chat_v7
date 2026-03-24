@@ -11,20 +11,21 @@
 2. [System Architecture](#system-architecture)
 3. [Core Systems](#core-systems)
 4. [Memory & Intelligence](#memory--intelligence)
-5. [Autonomous Mode](#autonomous-mode)
-6. [CEO Luna](#ceo-luna)
-7. [DJ Luna](#dj-luna)
-8. [Music Pipeline](#music-pipeline)
-9. [News Intelligence](#news-intelligence)
-10. [Trading System](#trading-system)
-11. [Friends System](#friends-system)
-12. [VR Luna](#vr-luna)
-13. [Luna Streams](#luna-streams)
-14. [Integrations](#integrations)
-14. [Developer Guide](#developer-guide)
-15. [API Reference](#api-reference)
-16. [Configuration](#configuration)
-17. [Troubleshooting](#troubleshooting)
+5. [Cognitive Architecture](#cognitive-architecture)
+6. [Autonomous Mode](#autonomous-mode)
+7. [CEO Luna](#ceo-luna)
+8. [DJ Luna](#dj-luna)
+9. [Music Pipeline](#music-pipeline)
+10. [News Intelligence](#news-intelligence)
+11. [Trading System](#trading-system)
+12. [Friends System](#friends-system)
+13. [VR Luna](#vr-luna)
+14. [Luna Streams](#luna-streams)
+15. [Integrations](#integrations)
+16. [Developer Guide](#developer-guide)
+17. [API Reference](#api-reference)
+18. [Configuration](#configuration)
+19. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -69,7 +70,7 @@ Luna Chat is a local-first, privacy-focused AI companion with advanced memory, a
 │  └───────────────┴─────────────────┴───────────────────┘ │
 │                                                             │
 │  ┌──────────────┬────────────────┬────────────────────┐  │
-│  │  MemoryCore  │  NeuralSleep   │    Sanhedrin       │  │
+│  │  MemoryCore  │  NeuralSleep   │  Sanhedrin (dep.)  │  │
 │  │ (3-tier mem) │  (Dual-LNN)    │  (Agent coord)     │  │
 │  └──────────────┴────────────────┴────────────────────┘  │
 │                                                             │
@@ -88,7 +89,7 @@ Luna Chat is a local-first, privacy-focused AI companion with advanced memory, a
 | **Memory** | MemoryCore + NeuralSleep | 3-tier memory consolidation |
 | **Trading** | TradeCore (Go) | High-performance trading engine |
 | **Cognition** | Luna Streams (Mamba SSM, llama.cpp) | Continuous state-space inference |
-| **Coordination** | Sanhedrin (A2A Protocol) | Multi-agent task delegation |
+| **Coordination** | Sanhedrin (A2A Protocol) | Multi-agent task delegation (deprecated) |
 
 ### Data Flow
 
@@ -155,7 +156,7 @@ Luna adapts her behavior based on the selected mode:
 
 - WebSocket streaming (< 2s latency)
 - Server-side Voice Activity Detection
-- Expressive TTS with emotion tags
+- Expressive TTS with emotion tags (Orpheus TTS: angle-bracket format, e.g., `<laugh>`, `<sigh>`)
 - Short, conversational responses
 - Hands-free experience
 - Telegram voice note support
@@ -186,7 +187,7 @@ All code paths (processMessage, streamMessage/agent-loop, voice-chat) use a sing
 
 Shared helpers like `convertLocalTimeToUTC` are extracted to `src/agentic/shared-helpers.ts` to avoid duplication across services.
 
-Luna has access to 50+ tools organized by capability:
+Luna has access to 56+ tools organized by capability:
 
 | Category | Tools | Use Cases |
 |----------|-------|-----------|
@@ -299,7 +300,27 @@ Every message is enriched before processing:
 
 ### Memory Context Building
 
-Before each LLM call, `memoryService.buildMemoryContext()` runs **12 parallel queries** (including emotional moments, behavioral observations, and contradiction signals) with a per-query 2-second timeout via `Promise.race`. Mamba stream context fetch is parallelized alongside memory context (no longer sequential). The layered agent also uses this full `buildMemoryContext()` for complete memory retrieval instead of a reduced version.
+Before each LLM call, `memoryService.buildMemoryContext()` runs **16 parallel queries** with a per-query 2-second timeout via `Promise.race`. All sources are independently fault-isolated using `Promise.allSettled()` so no single failure cascades. Mamba stream context fetch is parallelized alongside memory context (no longer sequential). The layered agent also uses this full `buildMemoryContext()` for complete memory retrieval instead of a reduced version.
+
+**16 memory context sources**:
+1. `facts` -- extracted user facts
+2. `learnings` -- insights/learnings
+3. `graphMemory` -- entity graph (PostgreSQL)
+4. `localGraphMemory` -- Neo4j graph
+5. `consciousness` -- MemoryCore consciousness metrics
+6. `consolidatedPatterns` -- MemoryCore behavioral patterns
+7. `consolidatedKnowledge` -- MemoryCore semantic knowledge
+8. `semanticMemory` -- MemoryCore semantic memory
+9. `emotionalMoments` -- resonant emotional captures
+10. `behavioralObservations` -- behavioral pattern changes
+11. `lunaAffectContext` -- current affect state (valence/arousal/mood)
+12. `anticipationContext` -- routines and active focus tracking
+13. `relevantHistory` -- relevant past messages
+14. `conversationContext` -- recent conversation summary
+15. `contradictions` -- active contradiction signals
+16. `metaCognition` + `rhythmHint` -- self-awareness and conversation rhythm
+
+A diagnostic log (`Memory context built`) emits per-source character sizes and `sourcesResponded: "N/16"` on each call.
 
 ### Graph Memory
 
@@ -371,6 +392,67 @@ Captures emotional and behavioral signals for richer memory context:
 - Gap detection: Identify missing knowledge
 - Source trust: Credibility scoring for information sources
 - Fact verification: Cross-reference across multiple sessions
+
+### Proactive Fact Management
+
+Luna can proactively save and remove facts from chat using two LLM tools:
+- `save_fact`: Saves a new fact to the user's fact store mid-conversation
+- `remove_fact`: Marks a fact as inactive when it becomes stale or contradicted
+
+---
+
+## Cognitive Architecture
+
+Luna includes a layered cognitive system (enabled via `LUNA_AFFECT_ENABLED=true`) that goes beyond memory retrieval into active self-awareness and adaptive behavior. Migrations 115-117.
+
+### Affect State
+
+Luna maintains a real-time internal affect state updated after each message:
+
+| Dimension | Range | Description |
+|-----------|-------|-------------|
+| `valence` | -1.0 to 1.0 | Positive/negative emotional tone |
+| `arousal` | 0.0 to 1.0 | Activation level (calm vs. excited) |
+| `mood` | string | Derived label (e.g., "curious", "reflective") |
+
+The affect state is injected as `lunaAffectContext` into the memory context and influences response tone.
+
+### Meta-Cognition
+
+Luna can introspect on her own reasoning and internal state using the `introspect` LLM tool. This returns a structured self-report covering:
+- Current affect state
+- Active focus areas
+- Recent behavioral observations
+- Contradiction signals being tracked
+
+### Routine Learning
+
+Luna observes and learns the user's recurring patterns (time-of-day activity, preferred topics, interaction cadence). Learned routines feed into the `anticipationContext` memory source so Luna can proactively anticipate needs.
+
+### Conversation Rhythm
+
+A `rhythmHint` is derived from interaction timing and conversational pace. It nudges Luna toward matching the user's current communication style (e.g., brief exchanges vs. deep dives).
+
+### Self-Modification
+
+Luna has 6 tunable behavioral parameters with safety limits that can be adjusted based on observed user preferences:
+
+| Parameter | Description | Safety Limit |
+|-----------|-------------|-------------|
+| `verbosity` | Response length target | 0.1 - 1.0 |
+| `technicality` | Technical depth | 0.0 - 1.0 |
+| `warmth` | Emotional warmth | 0.0 - 1.0 |
+| `directness` | Directness vs. hedging | 0.0 - 1.0 |
+| `encouragement` | Positive reinforcement | 0.0 - 1.0 |
+| `proactivity` | Unsolicited suggestions | 0.0 - 0.8 |
+
+All changes are gradual (small deltas per session) and fully reversible.
+
+### Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LUNA_AFFECT_ENABLED` | `false` | Enable all cognitive features (affect, meta-cognition, routines, rhythm) |
 
 ---
 
@@ -555,6 +637,22 @@ Keywords are auto-mapped to expense categories (infrastructure, software, market
 - Album Creator: Autonomous music production pipeline -- genre selection, lyric generation, Suno submission, progress tracking
 - Automated social posting to X, LinkedIn, Telegram, Reddit, Blog
 - Scheduled reports: daily morning brief, evening review, weekly P&L, biweekly audit
+
+### Proposals & Approval Flow
+
+CEO Luna uses a structured proposal system before executing significant actions. Migrations 101+.
+
+- **Proposal types**: `weekly_plan`, `department_task`, and custom action proposals
+- **Priority levels**: P1 (critical), P2 (important), P3 (standard)
+- **Workflow**: CEO Luna creates a proposal -> P1/P2 proposals sent to Telegram with Approve/Reject buttons -> approved proposals are executed
+- **Batch operations**: Approve/reject multiple proposals at once from the OrgPanel
+- **Expiry**: Proposals older than 7 days are automatically expired by the `ceoProposalExpiry` daily job
+- **Staff Chat**: Department-level AI staff chat (Economy, Marketing, Development, Research) plus meeting orchestration -- parallel department calls synthesized into a unified output
+- **OrgPanel**: "Pending Proposals" section at top with badge count showing unreviewed proposals
+
+**Key tables**: `ceo_proposals`, `ceo_staff_sessions`, `ceo_staff_messages`
+
+**Backend**: `src/ceo/ceo-proposals.service.ts`, `src/ceo/staff-chat.service.ts`
 
 ### CEO Modes
 
@@ -1164,24 +1262,18 @@ Delta tracker returns `changed: false` when state delta < 0.01, so context only 
 
 **Implementation**: `src/mcp/mcp.service.ts`, `src/mcp/transports.ts`
 
-### Sanhedrin (A2A Protocol)
+### Sanhedrin (A2A Protocol) -- DEPRECATED
 
-**Multi-agent task delegation**:
+**Multi-agent task delegation** (deprecated -- no longer active functionality):
 
-**Features**:
+**Features** (historical):
 - Delegate complex tasks to external agents
 - JSON-RPC 2.0 protocol
 - Claude Code CLI integration
 - Structured task artifacts
 - Timeout configuration
 
-**Use Cases**:
-- Complex coding tasks
-- System administration
-- Infrastructure management
-- Multi-step workflows
-
-**Configuration**: Settings > Autonomous or environment variables
+**Configuration**: `SANHEDRIN_ENABLED`, `SANHEDRIN_BASE_URL`, `SANHEDRIN_TIMEOUT`
 
 **Implementation**: `src/llm/providers/sanhedrin.provider.ts`
 
@@ -1310,7 +1402,7 @@ docker compose up -d
 
 **Naming**: `XXX_descriptive_name.sql` (numbered sequentially)
 
-**Latest**: Migration 108+ (Resonant memory tables - emotional_moments, contradiction_signals, behavioral_observations)
+**Latest**: Migration 117+ (Cognitive architecture -- affect state, meta-cognition, routine learning)
 
 **Create Migration**:
 ```bash
@@ -1538,15 +1630,20 @@ See [README.md](../README.md#api-reference) for full endpoint listing.
 
 ### Supported LLM Providers
 
+10 providers are supported:
+
 | Provider | Tool/Function Calling | Notes |
 |----------|----------------------|-------|
-| **OpenAI** | Yes | GPT-4o, GPT-5.1, o-series reasoning models |
-| **Anthropic** | Yes | Claude Sonnet 4, Claude Opus 4 |
-| **Google Gemini** | Yes (March 2026) | Full tool/function calling support via `generateContent` API |
-| **Groq** | Yes | Llama 3.3, fast inference |
-| **xAI** | Yes | Grok models |
-| **OpenRouter** | Yes | Multi-model gateway |
-| **Ollama** | Limited | Local models (BGE-M3, Qwen 2.5, Llama) |
+| **anthropic** | Yes | Claude Sonnet 4, Claude Opus 4 |
+| **google** | Yes (March 2026) | Full tool/function calling support via `generateContent` API |
+| **groq** | Yes | Llama 3.3, fast inference |
+| **moonshot** | Yes | Moonshot (Kimi) models |
+| **ollama** | Limited | Primary local LLM (BGE-M3, Qwen 2.5, Llama) |
+| **ollama-micro** | Limited | Small/fast local model for lightweight tasks |
+| **ollama-secondary** | Limited | Fallback local model |
+| **ollama-tertiary** | Limited | Analysis tasks (e.g., Qwen 2.5 7B for classification) |
+| **openrouter** | Yes | Multi-model gateway |
+| **xai** | Yes | Grok models |
 
 ### Model Configuration
 
@@ -1771,6 +1868,6 @@ docker stats luna-api luna-frontend luna-postgres luna-redis
 
 ---
 
-**Document Version**: 1.1
-**Last Updated**: March 11, 2026
+**Document Version**: 1.2
+**Last Updated**: March 24, 2026
 **Maintained By**: BitwareLabs

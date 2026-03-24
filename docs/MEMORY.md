@@ -362,12 +362,15 @@ At the start of each message, Luna retrieves relevant memories:
 
 ```typescript
 async function buildMemoryContext(userId, sessionId, currentMessage) {
-  // Run all 12 queries in parallel for performance
+  // Run all 16 queries in parallel via Promise.allSettled()
+  // Each source has independent try-catch + 2-second timeout via safeQuery()
+  // Diagnostic log: sourcesResponded: "N/16"
   const [
     facts, similarMessages, similarConvos, learnings,
     consciousness, consolidated, graphContext, localGraphContext,
-    semanticMemory, recentMoments, activeObservations, unsurfaced
-  ] = await Promise.all([
+    semanticMemory, recentMoments, activeObservations, unsurfaced,
+    lunaAffect, metaCognition, anticipation, rhythm
+  ] = await Promise.allSettled([
     getUserFacts(userId, { limit: 30 }),
     searchSimilarMessages(userId, currentMessage, {
       limit: 5,
@@ -386,13 +389,17 @@ async function buildMemoryContext(userId, sessionId, currentMessage) {
     getSemanticMemory(userId),
     getRecentMoments(userId),           // emotional moments
     getActiveObservations(userId),      // behavioral patterns
-    getUnsurfaced(userId, sessionId)    // contradiction signals
+    getUnsurfaced(userId, sessionId),   // contradiction signals
+    getLunaAffectState(userId),         // internal emotional state (valence/arousal/mood)
+    getMetaCognitionReport(userId),     // self-awareness report
+    getAnticipationContext(userId),     // routine patterns + active focuses
+    getConversationRhythm(userId)       // brief vs detailed preference
   ]);
 
-  // Each query above is wrapped in a 2-second timeout via Promise.race.
+  // Each query is wrapped in safeQuery() - a 2-second timeout via Promise.race.
   // If any single query exceeds 2s, it returns its fallback default value
-  // and logs a warning. This prevents one slow query from blocking the
-  // entire memory retrieval pipeline.
+  // and logs a warning at WARN level with source name. No source failure
+  // cascades to others thanks to Promise.allSettled().
 
   return {
     stable: {
@@ -405,13 +412,17 @@ async function buildMemoryContext(userId, sessionId, currentMessage) {
       consolidatedKnowledge: consolidated?.knowledge,
       semanticMemory: semanticMemory,
       emotionalMoments: formatMoments(recentMoments),
-      behavioralObservations: formatObservations(activeObservations)
+      behavioralObservations: formatObservations(activeObservations),
+      lunaAffectContext: lunaAffect,            // internal emotional state
+      anticipationContext: anticipation           // routines + focuses
     },
     volatile: {
       relevantHistory: formatMessages(similarMessages),
       conversationContext: formatConvos(similarConvos),
       contradictions: formatContradictions(unsurfaced),
-      contradictionIds: unsurfaced.map(c => c.id)
+      contradictionIds: unsurfaced.map(c => c.id),
+      metaCognition: metaCognition,              // self-report
+      rhythmHint: rhythm                         // brief vs detailed
     }
   };
 }

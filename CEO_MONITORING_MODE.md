@@ -56,16 +56,37 @@ Job runner now includes:
 
 - `ceoMonitoring` (every minute, timezone slot aware)
 - `ceoAutopostWorker` (every 5 minutes)
+- `ceoBuildCheckin` (every 5 minutes)
 - `ceoMaintenance` (daily retention cleanup)
+- `ceoOrgWeeklyPlanner` (hourly, gated once/week)
+- `ceoOrgDailyDepartmentCheck` (hourly, gated once/day)
+- `ceoProposalExpiry` (daily, expires proposals older than 7 days)
 
-## Database migration
+## Proposal Protocol (March 2026)
 
-Run migrations to create CEO tables:
+CEO Luna now **proposes before acting**. Weekly planning and daily department checks create proposals instead of auto-executing.
 
-- `src/db/migrations/084_ceo_monitoring_mode.sql`
+- P1/P2 proposals sent to Telegram with Approve/Reject inline buttons
+- Batch approve/reject available in the OrgPanel frontend
+- Proposals expire after 7 days via `ceoProposalExpiry` job
+- Staff chat with 5 departments (Economy/Marketing/Development/Research/Meeting)
+- Meeting orchestration: pick departments -> parallel dept calls -> synthesis
 
-Use:
+API routes for proposals:
 
-```bash
-npm run migrate
-```
+- `GET /api/ceo/proposals`, `POST /api/ceo/proposals`
+- `POST /api/ceo/proposals/:id/approve`, `POST /api/ceo/proposals/:id/reject`
+- `POST /api/ceo/proposals/batch/approve`
+- `GET/POST /api/ceo/staff/sessions`, `GET/POST /api/ceo/staff/messages/:sessionId`
+
+## Database migrations
+
+CEO tables are created by multiple migrations:
+
+- `src/db/migrations/084_ceo_monitoring_mode.sql` (base tables)
+- `src/db/migrations/086_ceo_builds.sql` (build tracker)
+- `src/db/migrations/101_currency_support.sql` (proposals, staff chat)
+- `src/db/migrations/102_ceo_office_memos.sql` (memos)
+- `src/db/migrations/103_ceo_telegram.sql` (telegram integration)
+
+Migrations run automatically on API startup.

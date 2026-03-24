@@ -61,7 +61,12 @@ Luna has a "job" even when you aren't chatting. She can research news, track you
 *   🥽 **VR Luna:** An Unreal Engine 5.5 companion app for Steam Index VR with MetaHuman avatar, spatial voice chat, and three themed rooms (Music, CEO Office, Relax).
 *   🖥️ **KDE Integration:** Desktop integration via WebSocket for seamless Linux desktop notifications and control.
 *   🧬 **Luna Streams (Mamba SSM):** Continuous cognition layer -- three parallel Mamba state-space models running 24/7 on CPU via llama.cpp GGUF inference (97ms/step). Persistent hidden states encode compressed understanding with EMA dual-state buffers and drift detection.
-*   🤖 **Multi-Provider LLM:** Supports OpenAI, Anthropic, Google Gemini (with tool/function calling), Groq, xAI, OpenRouter, and local Ollama models.
+*   🤖 **Multi-Provider LLM:** Supports OpenAI, Anthropic, Google Gemini (with tool/function calling), Groq, xAI, Moonshot, OpenRouter, and local Ollama models (with micro, secondary, and tertiary tiers for specialized tasks).
+*   🧠 **Cognitive Architecture:** Luna has internal emotional states (valence/arousal/mood), meta-cognition via the `introspect` tool, self-modification with safety guardrails, routine learning, and conversation rhythm adaptation. Enable with `LUNA_AFFECT_ENABLED=true`.
+*   🔁 **Agentic Loop:** Unified tool execution via `src/agentic/tool-executor.ts` -- single source of truth for 56+ tool handlers with cost tracking, context overflow management, and loop breakers. Default limits: 25 steps, $0.50.
+*   🗣️ **Orpheus TTS:** Voice responses use the Orpheus model with angle-bracket emotion tags like `<laugh>`, `<sigh>`, `<whisper>` for natural-sounding speech.
+*   📝 **PKM System:** Obsidian-like personal knowledge management with wikilinks, backlinks, hybrid search (keyword + semantic via pgvector), daily notes, and knowledge CRUD.
+*   📈 **Trading Intelligence:** Crypto market intelligence scraping every 15 minutes, AI-powered strategy analysis every 6 hours, and regime detection for market conditions.
 
 ---
 
@@ -84,6 +89,8 @@ Key capabilities:
 - **Autopost**: Schedule automated social posts to X, LinkedIn, Telegram, Reddit, and Blog.
 - **Video Downloads**: Download videos directly from the CEO workspace for content creation and research.
 - **Scheduled Reports**: Daily morning brief, evening review, weekly P&L report, and biweekly audit -- delivered via Telegram.
+
+**Approval Flow**: CEO Luna now proposes before acting. Proposals are sent to Telegram with Approve/Reject buttons for P1/P2 priority items. Weekly planning and daily department checks create proposals instead of auto-executing. Includes staff chat with 5 departments (Economy, Marketing, Development, Research, and Meeting orchestration) for parallel department deliberation and synthesis.
 
 *👉 [CEO Luna Documentation](docs/CEO_LUNA.md)*
 
@@ -163,6 +170,8 @@ Sessions automatically consolidate through tiers over time. NeuralSleep's Dual-L
 - **Semantic Edge Typing**: Graph edges are now classified into typed categories (co_occurrence, semantic, temporal, causal) with per-type decay rates during NeuralSleep consolidation.
 - **3D Brain View**: Memory Lab includes a 3D force-directed graph visualization (react-force-graph) with 4,000+ nodes rendered as spheres, color-coded by entity type.
 - **Full-Screen Explorer**: Graph explorer supports full-screen mode with force spread controls and a min-edges threshold slider for filtering low-connectivity nodes.
+- **Cognitive Architecture**: Internal emotional state tracking (valence/arousal/mood), meta-cognition self-reports via the `introspect` tool, and 6 tunable self-modification parameters with safety guardrails.
+- **16 Memory Context Sources**: Each independently fault-isolated with 2-second timeouts via `Promise.allSettled()`. Sources include facts, graph memory, consciousness, emotional moments, behavioral observations, contradiction signals, Luna affect state, routine patterns, and more.
 
 *👉 [Memory System Details](docs/MEMORY.md)*
 

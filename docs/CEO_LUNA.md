@@ -362,6 +362,34 @@ CEO config is stored per-user and editable via Settings or the Settings tab:
 | POST | `/api/ceo/albums/create` | Start album production |
 | GET | `/api/ceo/albums` | List album productions |
 | GET | `/api/ceo/albums/:id` | Get album production details |
+| GET | `/api/ceo/proposals` | List pending proposals |
+| POST | `/api/ceo/proposals` | Create a proposal |
+| POST | `/api/ceo/proposals/:id/approve` | Approve a proposal |
+| POST | `/api/ceo/proposals/:id/reject` | Reject a proposal |
+| POST | `/api/ceo/proposals/batch/approve` | Batch approve proposals |
+| GET | `/api/ceo/staff/sessions` | List staff chat sessions |
+| POST | `/api/ceo/staff/sessions` | Create staff dept chat session |
+| GET | `/api/ceo/staff/messages/:sessionId` | Get staff chat messages |
+| POST | `/api/ceo/staff/messages/:sessionId` | Send staff chat message |
+
+---
+
+## Approval Flow (Proposal Protocol)
+
+CEO Luna now operates under a **proposal protocol** - she must propose before acting on any significant decision. This prevents unintended autonomous actions.
+
+**How it works:**
+- Weekly planning and daily department checks create proposals instead of auto-executing
+- P1/P2 proposals are sent to Telegram with Approve/Reject inline buttons (`ceo:` callback prefix)
+- Proposals expire after 7 days if not acted on (`ceoProposalExpiry` daily job)
+- Batch approve/reject available in the frontend OrgPanel
+
+**Proposal types:** `weekly_plan`, `department_task`, `market_action`, `content_schedule`
+
+**Staff Chat:**
+- 5 departments: Economy, Marketing, Development, Research, Meeting
+- Meeting mode: orchestration call (pick departments) -> parallel dept calls -> synthesis call
+- Frontend: StaffPanel with sub-tabs per department, plus MeetingChat for cross-dept discussions
 
 ---
 

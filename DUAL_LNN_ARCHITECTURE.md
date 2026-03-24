@@ -1,8 +1,10 @@
 # Dual-LNN Architecture
 
-**Status**: Production (Feb 2026)
-**Version**: 1.0
-**Integration**: Luna Chat ↔ MemoryCore ↔ NeuralSleep
+**Status**: Production (Feb 2026, extended March 2026 with cognitive upgrades)
+**Version**: 1.1
+**Integration**: Luna Chat ↔ MemoryCore ↔ NeuralSleep ↔ Luna Streams (Mamba SSM)
+
+> **March 2026 additions:** Cognitive architecture (affect state, meta-cognition, self-modification via migrations 115-117), 16 memory context sources (was 12), real-time contradiction detection, behavioral observation capture, routine learning, and conversation rhythm adaptation. Luna Streams adds continuous cognition via Mamba 2.8B on GPU (10.0.0.30).
 
 ## Overview
 

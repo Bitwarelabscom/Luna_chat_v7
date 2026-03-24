@@ -30,6 +30,10 @@ Quick-add format:
 - **System prompt tokens matter**: Base prompt is ~700 tokens after optimization. Keep capability descriptions to 1-2 lines max.
 - **Anthropic tool calling**: Voice mode and tool features work with Anthropic models. `openai.client.ts` routes to native `anthropic.provider.ts` which converts formats.
 - **Docker HTTPS bypass**: Backend HTTPS redirect must allow Docker IPs (172.x.x.x) alongside WireGuard (10.0.0.x).
+- **Memory context**: 16 sources via `buildMemoryContext()`, each with independent try-catch + 2s timeout. `sourcesResponded: "N/16"`.
+- **Cognitive features**: Affect state, meta-cognition, self-modification, routine learning. Config: `LUNA_AFFECT_ENABLED=true`.
+- **Migrations**: Currently at 119. Always `ls src/db/migrations/ | tail -5` before creating new ones.
+- **LLM providers**: 10 providers in `src/llm/providers/` (anthropic, google, groq, moonshot, ollama, ollama-micro, ollama-secondary, ollama-tertiary, openrouter, xai).
 
 ---
 

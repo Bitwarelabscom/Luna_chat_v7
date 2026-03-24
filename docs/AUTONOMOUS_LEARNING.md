@@ -55,7 +55,7 @@ Luna utilizes a "Router-First" architecture to balance cost, speed, and reasonin
 | **Session Analysis** | Llama-3.3-70b (Groq) | Pro | Identifying complex knowledge gaps |
 | **Verification** | Qwen-2.5-7b (Ollama) | Local | Private, local fact-checking |
 | **Council** | Claude-3.5-Sonnet / GPT-4o | Pro | High-level reasoning and deliberation |
-| **Complex Tasks** | Claude Code (Sanhedrin) | Agent | Multi-agent coordination and execution |
+| **Complex Tasks** | Agentic Loop (tool-executor.ts) | Agent | Unified tool execution with cost tracking |
 
 ---
 
