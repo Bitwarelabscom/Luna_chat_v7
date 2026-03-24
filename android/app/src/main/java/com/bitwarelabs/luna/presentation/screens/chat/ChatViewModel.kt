@@ -28,12 +28,15 @@ data class ChatUiState(
     val isLoadingMessages: Boolean = false,
     val isSending: Boolean = false,
     val streamingContent: String = "",
+    val reasoningContent: String = "",
     val statusMessage: String = "",
     val inputText: String = "",
     val error: String? = null,
     val editingSessionId: String? = null,
     val editingTitle: String = "",
-    val expandedMessageIds: Set<String> = emptySet()
+    val expandedMessageIds: Set<String> = emptySet(),
+    val selectedMode: ChatMode = ChatMode.ASSISTANT,
+    val thinkingMode: Boolean = true
 ) {
     val currentMode: ChatMode?
         get() = sessions.find { it.id == currentSessionId }?.mode
@@ -49,6 +52,10 @@ class ChatViewModel @Inject constructor(
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
 
     private var streamingJob: Job? = null
+
+    // Use StringBuilder to avoid O(n^2) string concatenation during streaming
+    private val streamingBuilder = StringBuilder()
+    private val reasoningBuilder = StringBuilder()
 
     init {
         loadSessions()
@@ -81,6 +88,7 @@ class ChatViewModel @Inject constructor(
                     isLoadingMessages = true,
                     messages = emptyList(),
                     streamingContent = "",
+                    reasoningContent = "",
                     statusMessage = "",
                     error = null
                 )
@@ -108,7 +116,8 @@ class ChatViewModel @Inject constructor(
 
     fun createSession() {
         viewModelScope.launch {
-            chatRepository.createSession()
+            val mode = _uiState.value.selectedMode
+            chatRepository.createSession(mode = mode)
                 .onSuccess { session ->
                     _uiState.update {
                         it.copy(
@@ -116,6 +125,7 @@ class ChatViewModel @Inject constructor(
                             currentSessionId = session.id,
                             messages = emptyList(),
                             streamingContent = "",
+                            reasoningContent = "",
                             statusMessage = ""
                         )
                     }
@@ -143,7 +153,6 @@ class ChatViewModel @Inject constructor(
                             messages = if (it.currentSessionId == sessionId) emptyList() else it.messages
                         )
                     }
-                    // Load new current session if needed
                     _uiState.value.currentSessionId?.let { loadSession(it) }
                 }
                 .onFailure { e ->
@@ -197,6 +206,14 @@ class ChatViewModel @Inject constructor(
         _uiState.update { it.copy(inputText = text) }
     }
 
+    fun setSelectedMode(mode: ChatMode) {
+        _uiState.update { it.copy(selectedMode = mode) }
+    }
+
+    fun toggleThinkingMode() {
+        _uiState.update { it.copy(thinkingMode = !it.thinkingMode) }
+    }
+
     fun sendMessage() {
         val state = _uiState.value
         val message = state.inputText.trim()
@@ -206,7 +223,15 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             // Create session if needed
             val sessionId = state.currentSessionId ?: run {
-                val result = chatRepository.createSession()
+                val result = chatRepository.createSession(mode = state.selectedMode)
+                result.onFailure { e ->
+                    _uiState.update {
+                        it.copy(
+                            isSending = false,
+                            error = "Failed to create session: ${e.message}"
+                        )
+                    }
+                }
                 result.getOrNull()?.let { session ->
                     _uiState.update {
                         it.copy(
@@ -229,12 +254,17 @@ class ChatViewModel @Inject constructor(
                 createdAt = System.currentTimeMillis().toString()
             )
 
+            // Reset streaming builders
+            streamingBuilder.clear()
+            reasoningBuilder.clear()
+
             _uiState.update {
                 it.copy(
                     isSending = true,
                     inputText = "",
                     messages = it.messages + userMessage,
                     streamingContent = "",
+                    reasoningContent = "",
                     statusMessage = "",
                     error = null
                 )
@@ -242,8 +272,9 @@ class ChatViewModel @Inject constructor(
 
             // Stream the response
             streamingJob?.cancel()
+            var receivedDone = false
             streamingJob = launch {
-                chatRepository.streamMessage(sessionId, message)
+                chatRepository.streamMessage(sessionId, message, state.thinkingMode)
                     .catch { e ->
                         _uiState.update {
                             it.copy(
@@ -258,49 +289,46 @@ class ChatViewModel @Inject constructor(
                                 _uiState.update { it.copy(statusMessage = event.status) }
                             }
                             is StreamEvent.Content -> {
+                                streamingBuilder.append(event.content)
                                 _uiState.update {
                                     it.copy(
                                         statusMessage = "",
-                                        streamingContent = it.streamingContent + event.content
+                                        streamingContent = streamingBuilder.toString()
                                     )
                                 }
                             }
                             is StreamEvent.Reasoning -> {
-                                // Show reasoning in status or handle as needed
-                                _uiState.update { it.copy(statusMessage = event.content) }
+                                reasoningBuilder.append(event.content)
+                                _uiState.update {
+                                    it.copy(reasoningContent = reasoningBuilder.toString())
+                                }
                             }
-                            is StreamEvent.BrowserAction -> {
-                                // Log browser activity (future: open browser window)
-                                // Currently just log the action
-                            }
-                            is StreamEvent.VideoAction -> {
-                                // Log video results (future: open video player)
-                                // Currently just log the action
-                            }
-                            is StreamEvent.MediaAction -> {
-                                // Log media results (future: open media player)
-                                // Currently just log the action
-                            }
+                            is StreamEvent.BrowserAction -> { }
+                            is StreamEvent.VideoAction -> { }
+                            is StreamEvent.MediaAction -> { }
                             is StreamEvent.Done -> {
+                                receivedDone = true
                                 val assistantMessage = Message(
                                     id = event.messageId,
                                     sessionId = sessionId,
                                     role = MessageRole.ASSISTANT,
-                                    content = _uiState.value.streamingContent,
+                                    content = streamingBuilder.toString(),
                                     tokensUsed = event.tokensUsed,
                                     model = event.metrics?.model,
                                     createdAt = System.currentTimeMillis().toString(),
                                     metrics = event.metrics
                                 )
+                                streamingBuilder.clear()
+                                reasoningBuilder.clear()
                                 _uiState.update {
                                     it.copy(
                                         isSending = false,
                                         messages = it.messages + assistantMessage,
                                         streamingContent = "",
+                                        reasoningContent = "",
                                         statusMessage = ""
                                     )
                                 }
-                                // Refresh sessions to update title
                                 loadSessions()
                             }
                             is StreamEvent.Error -> {
@@ -313,6 +341,37 @@ class ChatViewModel @Inject constructor(
                             }
                         }
                     }
+
+                // Safety net: if stream ended without a Done event, finalize anyway
+                if (!receivedDone && streamingBuilder.isNotEmpty()) {
+                    val content = streamingBuilder.toString()
+                    streamingBuilder.clear()
+                    reasoningBuilder.clear()
+                    val assistantMessage = Message(
+                        id = "stream-${UUID.randomUUID()}",
+                        sessionId = sessionId,
+                        role = MessageRole.ASSISTANT,
+                        content = content,
+                        tokensUsed = null,
+                        model = null,
+                        createdAt = System.currentTimeMillis().toString()
+                    )
+                    _uiState.update {
+                        it.copy(
+                            isSending = false,
+                            messages = it.messages + assistantMessage,
+                            streamingContent = "",
+                            reasoningContent = "",
+                            statusMessage = ""
+                        )
+                    }
+                    loadSessions()
+                } else if (!receivedDone) {
+                    // Stream ended with no content and no done - just reset
+                    _uiState.update {
+                        it.copy(isSending = false, statusMessage = "")
+                    }
+                }
             }
         }
     }

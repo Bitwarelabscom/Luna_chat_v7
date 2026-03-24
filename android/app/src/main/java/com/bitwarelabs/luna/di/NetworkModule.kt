@@ -8,10 +8,12 @@ import com.bitwarelabs.luna.data.api.ActivityApi
 import com.bitwarelabs.luna.data.api.SettingsApi
 import com.bitwarelabs.luna.data.api.TradingApi
 import com.bitwarelabs.luna.data.api.TriggersApi
+import com.bitwarelabs.luna.data.api.VoiceApi
 import com.bitwarelabs.luna.data.local.TokenStorage
 import com.bitwarelabs.luna.data.network.AuthInterceptor
 import com.bitwarelabs.luna.data.network.SSEClient
 import com.bitwarelabs.luna.data.network.TokenRefreshAuthenticator
+import com.bitwarelabs.luna.data.network.VoiceWebSocketClient
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import dagger.Module
 import dagger.Provides
@@ -36,6 +38,7 @@ object NetworkModule {
         ignoreUnknownKeys = true
         isLenient = true
         encodeDefaults = true
+        explicitNulls = false  // Don't send "field": null - Zod .optional() rejects explicit nulls
     }
 
     @Provides
@@ -140,5 +143,20 @@ object NetworkModule {
         json: Json
     ): SSEClient {
         return SSEClient(okHttpClient, tokenStorage, json)
+    }
+
+    @Provides
+    @Singleton
+    fun provideVoiceApi(retrofit: Retrofit): VoiceApi {
+        return retrofit.create(VoiceApi::class.java)
+    }
+
+    @Provides
+    @Singleton
+    fun provideVoiceWebSocketClient(
+        okHttpClient: OkHttpClient,
+        json: Json
+    ): VoiceWebSocketClient {
+        return VoiceWebSocketClient(okHttpClient, json)
     }
 }

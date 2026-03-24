@@ -5,7 +5,7 @@
 
 import * as neo4jClient from './neo4j.client.js';
 import type { UserFact } from '../memory/facts.service.js';
-import { FACT_KEY_SEMANTICS } from '../memory/fact-semantics.js';
+import { getSemantics } from '../memory/fact-semantics.js';
 
 // ============================================
 // Types
@@ -71,7 +71,7 @@ export async function syncFactToGraph(userId: string, fact: UserFact): Promise<b
   });
 
   // Also update linked Entity node with semantic type if applicable
-  const semantics = FACT_KEY_SEMANTICS[fact.factKey];
+  const semantics = getSemantics(fact.factKey);
   if (semantics && fact.factValue) {
     neo4jClient.writeQueryVoid(
       `MATCH (e:Entity {userId: $userId, label: $factValue})

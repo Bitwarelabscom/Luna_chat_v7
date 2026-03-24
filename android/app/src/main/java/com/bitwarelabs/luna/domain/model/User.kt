@@ -26,5 +26,6 @@ enum class ChatMode {
     ASSISTANT,
     COMPANION,
     VOICE,
-    DJ_LUNA
+    DJ_LUNA,
+    CEO_LUNA
 }

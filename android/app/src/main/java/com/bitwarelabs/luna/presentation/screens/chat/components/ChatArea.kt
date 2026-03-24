@@ -28,9 +28,10 @@ import com.bitwarelabs.luna.presentation.theme.LunaTheme
 fun ChatArea(
     messages: List<Message>,
     streamingContent: String,
+    reasoningContent: String,
     statusMessage: String,
     isLoading: Boolean,
-    isSending: Boolean,
+    @Suppress("unused") isSending: Boolean,
     hasSession: Boolean,
     expandedMessageIds: Set<String> = emptySet(),
     onMessageClick: (String) -> Unit = {},
@@ -38,12 +39,20 @@ fun ChatArea(
 ) {
     val listState = rememberLazyListState()
 
-    // Auto-scroll to bottom when new messages arrive or streaming content changes
-    LaunchedEffect(messages.size, streamingContent) {
-        if (messages.isNotEmpty() || streamingContent.isNotEmpty()) {
-            listState.animateScrollToItem(
-                index = maxOf(0, messages.size - 1 + if (streamingContent.isNotEmpty() || statusMessage.isNotEmpty()) 1 else 0)
-            )
+    // Auto-scroll on new messages (animated) or streaming content changes (instant to avoid jank)
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) {
+            listState.animateScrollToItem(maxOf(0, messages.size - 1))
+        }
+    }
+    // Use instant scroll during streaming to avoid 30/sec animation cancellations
+    LaunchedEffect(streamingContent.isNotEmpty(), reasoningContent.isNotEmpty()) {
+        if (streamingContent.isNotEmpty() || reasoningContent.isNotEmpty()) {
+            val extraItems = listOfNotNull(
+                if (reasoningContent.isNotEmpty()) 1 else null,
+                if (streamingContent.isNotEmpty() || statusMessage.isNotEmpty()) 1 else null
+            ).sum()
+            listState.scrollToItem(maxOf(0, messages.size - 1 + extraItems))
         }
     }
 
@@ -103,12 +112,19 @@ fun ChatArea(
                         )
                     }
 
+                    // Reasoning content (collapsible thinking)
+                    if (reasoningContent.isNotEmpty()) {
+                        item(key = "reasoning") {
+                            ReasoningBubble(content = reasoningContent)
+                        }
+                    }
+
                     // Streaming content or status
                     if (streamingContent.isNotEmpty() || statusMessage.isNotEmpty()) {
-                        item {
-                            if (statusMessage.isNotEmpty()) {
+                        item(key = "streaming") {
+                            if (statusMessage.isNotEmpty() && streamingContent.isEmpty()) {
                                 StreamingIndicator(status = statusMessage)
-                            } else {
+                            } else if (streamingContent.isNotEmpty()) {
                                 StreamingBubble(content = streamingContent)
                             }
                         }

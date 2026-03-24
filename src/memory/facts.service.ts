@@ -3,7 +3,7 @@ import { createBackgroundCompletionWithFallback } from '../llm/background-comple
 import * as knowledgeGraphService from '../graph/knowledge-graph.service.js';
 import { enrichNodeMetadata } from './memorycore-graph.service.js';
 import * as contradictionService from './contradiction.service.js';
-import { FACT_KEY_SEMANTICS } from './fact-semantics.js';
+import { getSemantics } from './fact-semantics.js';
 import logger from '../utils/logger.js';
 import { formatRelativeTime } from './time-utils.js';
 
@@ -35,6 +35,16 @@ export interface ExtractedFact {
   isCorrection?: boolean;
 }
 
+const SPECULATION_PATTERNS = [
+  /\b(suggests?|implies?|may reflect|might indicate|could mean|deeper desire|self-identification)\b/i,
+  /\b(hypothesis|assumption|potentially|arguably|seems to)\b/i,
+  /\b(further validation|require[sd]? validation|based on assumptions)\b/i,
+];
+
+export function isSpeculativeFact(value: string): boolean {
+  return SPECULATION_PATTERNS.some(p => p.test(value));
+}
+
 const FACT_CATEGORIES = [
   'personal',      // name, age, birthday, location
   'work',          // job, company, profession
@@ -52,8 +62,11 @@ Rules:
 - Only extract facts the user explicitly states about themselves
 - Do not infer or assume facts
 - Use simple, normalized values (e.g., "software developer" not "I work as a software developer")
-- Confidence: 1.0 for explicit statements, 0.8 for strongly implied, 0.6 for somewhat implied
+- Confidence: 1.0 for explicit statements, 0.8 for strongly implied, 0.6 for somewhat implied (use sparingly - only with clear contextual evidence)
 - Categories: personal, work, preference, hobby, relationship, goal, context
+- Facts must be concrete and verifiable: names, dates, schedules, preferences, events
+- NEVER store interpretations, analyses, or psychological observations about the user
+- If a fact contains words like "suggests", "implies", "may reflect", "deeper desire" - it is NOT a fact, discard it
 
 Lifecycle detection:
 - If the user corrects or updates a previously known fact, set "isCorrection": true
@@ -153,12 +166,16 @@ export async function extractFactsFromMessages(
     const facts = JSON.parse(jsonMatch[0]) as ExtractedFact[];
 
     // Validate facts
-    return facts.filter(f =>
-      FACT_CATEGORIES.includes(f.category) &&
-      f.factKey &&
-      f.factValue &&
-      typeof f.confidence === 'number'
-    );
+    return facts.filter(f => {
+      if (!FACT_CATEGORIES.includes(f.category) || !f.factKey || !f.factValue || typeof f.confidence !== 'number') {
+        return false;
+      }
+      if (isSpeculativeFact(f.factValue)) {
+        logger.warn('Rejected speculative fact', { key: f.factKey, value: f.factValue });
+        return false;
+      }
+      return true;
+    });
   } catch (error) {
     logger.error('Failed to extract facts', { error: (error as Error).message });
     return [];
@@ -304,7 +321,7 @@ export async function storeFact(
     }).catch(e => logger.debug('Fact ID lookup for Neo4j sync failed', { err: (e as Error).message }));
 
     // Enrich graph node with semantic metadata (non-blocking)
-    const semantics = FACT_KEY_SEMANTICS[fact.factKey];
+    const semantics = getSemantics(fact.factKey);
     if (semantics && fact.factValue && /^[A-Z]/.test(fact.factValue)) {
       enrichNodeMetadata(userId, fact.factValue, {
         semanticType: semantics.semanticType,

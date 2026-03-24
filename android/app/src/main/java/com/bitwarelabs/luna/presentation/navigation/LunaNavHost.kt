@@ -19,6 +19,7 @@ import com.bitwarelabs.luna.presentation.screens.settings.SettingsScreen
 import com.bitwarelabs.luna.presentation.screens.trading.TradingScreen
 import com.bitwarelabs.luna.presentation.screens.notifications.NotificationsScreen
 import com.bitwarelabs.luna.presentation.screens.activity.ActivityScreen
+import com.bitwarelabs.luna.presentation.screens.voice.VoiceScreen
 
 @Composable
 fun LunaNavHost(
@@ -59,6 +60,9 @@ fun LunaNavHost(
                 onNavigateToActivity = {
                     navController.navigate(NavRoutes.Activity.route)
                 },
+                onNavigateToVoice = {
+                    navController.navigate(NavRoutes.Voice.route)
+                },
                 onLogout = {
                     navController.navigate(NavRoutes.Login.route) {
                         popUpTo(0) { inclusive = true }
@@ -90,6 +94,9 @@ fun LunaNavHost(
                 },
                 onNavigateToActivity = {
                     navController.navigate(NavRoutes.Activity.route)
+                },
+                onNavigateToVoice = {
+                    navController.navigate(NavRoutes.Voice.route)
                 },
                 onLogout = {
                     navController.navigate(NavRoutes.Login.route) {
@@ -133,6 +140,14 @@ fun LunaNavHost(
 
         composable(NavRoutes.Activity.route) {
             ActivityScreen(
+                onNavigateBack = {
+                    navController.popBackStack()
+                }
+            )
+        }
+
+        composable(NavRoutes.Voice.route) {
+            VoiceScreen(
                 onNavigateBack = {
                     navController.popBackStack()
                 }

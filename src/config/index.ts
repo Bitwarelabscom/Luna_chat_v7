@@ -42,7 +42,7 @@ const configSchema = z.object({
     classifierProvider: z.enum(['anthropic', 'google', 'groq']).default('groq'),
     classifierTimeoutMs: z.coerce.number().default(200),
     rulesTimeoutMs: z.coerce.number().default(50),
-    fallbackRoute: z.enum(['nano', 'pro', 'pro+tools']).default('pro+tools'),
+    fallbackRoute: z.enum(['pro', 'pro+tools']).default('pro+tools'),
   }).optional(),
 
   postgres: z.object({
@@ -114,7 +114,7 @@ const configSchema = z.object({
 
   orpheus: z.object({
     url: z.string().default('http://10.0.0.30:5005'),
-    voice: z.string().default('tara'),
+    voice: z.string().default('zoe'),
     enabled: z.coerce.boolean().default(true),
   }).optional(),
 
@@ -299,6 +299,16 @@ const configSchema = z.object({
   transmission: z.object({
     url: z.string().default('http://10.0.0.2:9091/transmission/rpc'),
     enabled: z.coerce.boolean().default(true),
+  }).optional(),
+
+  comfyui: z.object({
+    url: z.string().default('http://10.0.0.30:8188'),
+    enabled: z.coerce.boolean().default(true),
+    defaultSteps: z.coerce.number().int().positive().default(20),
+    defaultGuidance: z.coerce.number().default(3.5),
+    pollIntervalMs: z.coerce.number().int().positive().default(5000),
+    pollMaxAttempts: z.coerce.number().int().positive().default(60),
+    timeoutMs: z.coerce.number().int().positive().default(30000),
   }).optional(),
 
   gpuOrchestrator: z.object({
@@ -581,6 +591,16 @@ const rawConfig = {
   transmission: {
     url: process.env.TRANSMISSION_URL,
     enabled: process.env.TRANSMISSION_ENABLED,
+  },
+
+  comfyui: {
+    url: process.env.COMFYUI_URL,
+    enabled: process.env.COMFYUI_ENABLED,
+    defaultSteps: process.env.COMFYUI_DEFAULT_STEPS,
+    defaultGuidance: process.env.COMFYUI_DEFAULT_GUIDANCE,
+    pollIntervalMs: process.env.COMFYUI_POLL_INTERVAL_MS,
+    pollMaxAttempts: process.env.COMFYUI_POLL_MAX_ATTEMPTS,
+    timeoutMs: process.env.COMFYUI_TIMEOUT_MS,
   },
 
   gpuOrchestrator: {

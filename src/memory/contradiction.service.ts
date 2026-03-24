@@ -9,7 +9,7 @@
  */
 
 import { pool } from '../db/index.js';
-import { getConceptTokens } from './fact-semantics.js';
+import { getConceptTokens, getSemantics } from './fact-semantics.js';
 import logger from '../utils/logger.js';
 
 export interface ContradictionSignal {
@@ -56,13 +56,15 @@ export async function createSignal(
  */
 export async function getUnsurfaced(userId: string, sessionId: string): Promise<ContradictionSignal[]> {
   try {
+    // Deduplicate per fact_key - only return the most recent signal for each field
     const result = await pool.query(
-      `SELECT id, user_id, session_id, fact_key, user_stated, stored_value, signal_type, surfaced, created_at
+      `SELECT DISTINCT ON (fact_key)
+         id, user_id, session_id, fact_key, user_stated, stored_value, signal_type, surfaced, created_at
        FROM contradiction_signals
        WHERE user_id = $1
          AND surfaced = FALSE
          AND NOT (surfaced_session_ids @> ARRAY[$2]::uuid[])
-       ORDER BY created_at DESC
+       ORDER BY fact_key, created_at DESC
        LIMIT 3`,
       [userId, sessionId]
     );
@@ -172,7 +174,11 @@ export function detectInlineContradictions(
 
   for (const fact of facts) {
     if (!RELEVANT_CATEGORIES.has(fact.category)) continue;
-    if (fact.mentionCount < 2) continue;
+
+    // Name-type facts (pet_name, catName, etc.) are worth checking even at mentionCount 1.
+    // Other facts need mentionCount >= 2 to avoid false positives on weak extractions.
+    const hasSemantic = !!getSemantics(fact.factKey);
+    if (!hasSemantic && fact.mentionCount < 2) continue;
 
     const conceptTokens = getConceptTokens(fact.factKey);
 

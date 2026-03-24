@@ -95,6 +95,7 @@ interface ChatState {
   streamingContent: string;
   reasoningContent: string;  // For xAI Grok thinking output
   statusMessage: string;
+  activeTool: string | null;
   // Startup state
   startupSuggestions: string[];
   isLoadingStartup: boolean;
@@ -124,6 +125,7 @@ interface ChatState {
   appendReasoningContent: (content: string) => void;
   setIsSending: (isSending: boolean) => void;
   setStatusMessage: (status: string) => void;
+  setActiveTool: (tool: string | null) => void;
   clearCurrentSession: () => void;
   removeMessagesFrom: (messageId: string) => void;
   // Startup actions
@@ -151,6 +153,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   streamingContent: '',
   reasoningContent: '',
   statusMessage: '',
+  activeTool: null,
   startupSuggestions: [],
   isLoadingStartup: false,
   browserAction: null,
@@ -307,7 +310,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((state) => ({ reasoningContent: state.reasoningContent + content })),
   setIsSending: (isSending) => set({ isSending }),
   setStatusMessage: (status) => set({ statusMessage: status }),
-  clearCurrentSession: () => set({ currentSession: null, streamingContent: '', reasoningContent: '', statusMessage: '', startupSuggestions: [] }),
+  setActiveTool: (tool) => set({ activeTool: tool }),
+  clearCurrentSession: () => set({ currentSession: null, streamingContent: '', reasoningContent: '', statusMessage: '', activeTool: null, startupSuggestions: [] }),
   // Startup actions
   setStartupSuggestions: (suggestions) => set({ startupSuggestions: suggestions }),
   clearStartupSuggestions: () => set({ startupSuggestions: [] }),

@@ -38,5 +38,5 @@ interface ChatRepository {
         fileUris: List<Uri>
     ): Result<Unit>
 
-    fun streamMessage(sessionId: String, message: String): Flow<StreamEvent>
+    fun streamMessage(sessionId: String, message: String, thinkingMode: Boolean = true): Flow<StreamEvent>
 }

@@ -8,6 +8,7 @@ sealed class NavRoutes(val route: String) {
     data object Trading : NavRoutes("trading")
     data object Notifications : NavRoutes("notifications")
     data object Activity : NavRoutes("activity")
+    data object Voice : NavRoutes("voice")
 
     // Chat with optional session ID
     data object ChatWithSession : NavRoutes("chat/{sessionId}") {

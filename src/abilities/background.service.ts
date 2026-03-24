@@ -2,13 +2,10 @@ import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import OpenAI from 'openai';
 import { fileTypeFromBuffer } from 'file-type';
 import { pool } from '../db/index.js';
-import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
-import { getUserModelConfig } from '../llm/model-config.service.js';
-import * as xaiProvider from '../llm/providers/xai.provider.js';
+import { generateImage as comfyuiGenerate } from '../integration/comfyui.client.js';
 
 // Paths
 const IMAGES_DIR = path.join(process.cwd(), 'images');
@@ -196,65 +193,25 @@ export async function generateBackground(
       return { success: false, error: `Maximum backgrounds reached (${MAX_BACKGROUNDS_PER_USER}). Delete some first.` };
     }
 
-    const modelConfig = await getUserModelConfig(userId, 'image_generation');
-
     // Build the full prompt
     const stylePrefix = STYLE_PROMPTS[style] || STYLE_PROMPTS.custom;
     const fullPrompt = `${stylePrefix}${prompt}. ${BASE_PROMPT_SUFFIX}`;
 
-    logger.info('Generating desktop background', { userId, style, provider: modelConfig.provider, model: modelConfig.model });
+    logger.info('Generating desktop background via ComfyUI', { userId, style });
 
-    let imageBuffer: Buffer;
-
-    if (modelConfig.provider === 'xai') {
-      const result = await xaiProvider.generateImage(fullPrompt, {
-        model: modelConfig.model,
-        aspect_ratio: '16:9',
-      });
-
-      if (result.url) {
-        const imageResponse = await fetch(result.url);
-        if (!imageResponse.ok) throw new Error(`Failed to download image: ${imageResponse.status}`);
-        imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
-      } else if (result.b64_json) {
-        imageBuffer = Buffer.from(result.b64_json, 'base64');
-      } else {
-        throw new Error('No image data returned from xAI');
-      }
-    } else {
-      // Default to OpenAI
-      const openai = new OpenAI({ apiKey: config.openai.apiKey });
-      const response = await openai.images.generate({
-        model: modelConfig.model || 'gpt-image-1-mini',
-        prompt: fullPrompt,
-        n: 1,
-        size: '1792x1024', // Best wide format for DALL-E/GPT-Image
-        quality: 'standard',
-      });
-
-      if (!response.data || !response.data[0]) {
-        return { success: false, error: 'No image data returned from OpenAI' };
-      }
-
-      const imageData = response.data[0];
-      if (imageData.url) {
-        const imageResponse = await fetch(imageData.url);
-        if (!imageResponse.ok) throw new Error(`Failed to download image: ${imageResponse.status}`);
-        imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
-      } else if (imageData.b64_json) {
-        imageBuffer = Buffer.from(imageData.b64_json, 'base64');
-      } else {
-        return { success: false, error: 'No image URL or base64 data in response' };
-      }
-    }
+    const comfyResult = await comfyuiGenerate({
+      prompt: fullPrompt,
+      width: 1920,
+      height: 1080,
+    });
 
     // Detect image type and save
-    const imageType = detectImageType(imageBuffer);
+    const imageType = detectImageType(comfyResult.buffer);
     const extension = getExtensionForType(imageType);
     const filename = generateFilename(userId, 'bg', extension);
     const outputPath = path.join(GENERATED_DIR, filename);
 
-    await fs.writeFile(outputPath, imageBuffer, { mode: 0o644 });
+    await fs.writeFile(outputPath, comfyResult.buffer, { mode: 0o644 });
 
     const imageUrl = `/api/images/backgrounds/generated/${filename}`;
 

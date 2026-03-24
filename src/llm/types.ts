@@ -673,8 +673,8 @@ export const PROVIDERS: LLMProvider[] = [
     enabled: true,
     models: [
       {
-        id: 'tomng/lfm2.5-instruct:1.2b-q8_0',
-        name: 'LFM 2.5 1.2B',
+        id: 'liquid/lfm2-1.2b-thinking:free',
+        name: 'LFM 2.5 1.2B Thinking',
         contextWindow: 4096,
         maxOutputTokens: 512,
         capabilities: ['chat', 'fast'],

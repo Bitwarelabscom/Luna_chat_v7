@@ -205,7 +205,7 @@ export const INTENT_DEFAULTS = {
   RECOVERY_MEDIUM_MAX_AGE_HOURS: 48,
 
   // Decay
-  DECAY_DAYS: 7,
+  DECAY_DAYS: 3,
   AUTO_SUSPEND_MESSAGES: 10,  // Suspend if not referenced in N messages
 
   // Cache

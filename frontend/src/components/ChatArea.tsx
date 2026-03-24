@@ -129,6 +129,7 @@ function StandardChatArea() {
     setStreamingContent,
     setReasoningContent,
     setStatusMessage,
+    setActiveTool,
     setIsLoadingStartup,
     fetchSuggestions,
     clearStartupSuggestions,
@@ -138,7 +139,8 @@ function StandardChatArea() {
     setCanvasAction,
   } = useChatStore();
 
-  const thinkingPhrase = useThinkingMessage(isSending && !streamingContent, currentSession?.mode);
+  const activeTool = useChatStore((s) => s.activeTool);
+  const thinkingPhrase = useThinkingMessage(isSending && !streamingContent, currentSession?.mode, activeTool);
 
   const onboardingState = useOnboardingStore((s) => s.state);
   const reviewOpen = useOnboardingStore((s) => s.reviewOpen);
@@ -420,6 +422,7 @@ function StandardChatArea() {
     setStreamingContent('');
     setReasoningContent('');  // Clear previous reasoning
     setStatusMessage('');
+    setActiveTool(null);
 
     try {
       // Stream the response - accumulate content locally to avoid stale closure
@@ -433,8 +436,12 @@ function StandardChatArea() {
         if (chunk.type === 'status' && chunk.status) {
           setStatusMessage(chunk.status);
         } else if (chunk.type === 'reasoning' && chunk.content) {
-          // xAI Grok thinking output - accumulate separately
           appendReasoningContent(chunk.content);
+          // Extract tool name for context-aware thinking quotes
+          const toolMatch = chunk.content.match(/^> Using (\w+)\.\.\./);
+          if (toolMatch) {
+            setActiveTool(toolMatch[1]);
+          }
         } else if (chunk.type === 'content' && chunk.content) {
           setStatusMessage(''); // Clear status when content starts
           accumulatedContent += chunk.content;
@@ -476,6 +483,7 @@ function StandardChatArea() {
       );
     } finally {
       setIsSending(false);
+      setActiveTool(null);
     }
   };
 
@@ -499,6 +507,7 @@ function StandardChatArea() {
     setIsSending(true);
     setStreamingContent('');
     setStatusMessage('');
+    setActiveTool(null);
 
     // Remove messages from this point (the regenerate endpoint handles deletion)
     removeMessagesFrom(messageId);
@@ -508,6 +517,11 @@ function StandardChatArea() {
       for await (const chunk of regenerateMessage(currentSession.id, messageId)) {
         if (chunk.type === 'status' && chunk.status) {
           setStatusMessage(chunk.status);
+        } else if (chunk.type === 'reasoning' && chunk.content) {
+          const toolMatch = chunk.content.match(/^> Using (\w+)\.\.\./);
+          if (toolMatch) {
+            setActiveTool(toolMatch[1]);
+          }
         } else if (chunk.type === 'content' && chunk.content) {
           setStatusMessage('');
           accumulatedContent += chunk.content;
@@ -532,6 +546,7 @@ function StandardChatArea() {
       );
     } finally {
       setIsSending(false);
+      setActiveTool(null);
     }
   };
 

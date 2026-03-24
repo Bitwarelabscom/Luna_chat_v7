@@ -332,7 +332,7 @@ export async function getResponseGuidelines(userId: string): Promise<ResponseGui
     const level = pref.level;
     switch (pref.dimension) {
       case 'verbosity':
-        guidelines.verbosity = level < 0.35 ? 'concise' : level > 0.65 ? 'detailed' : 'moderate';
+        guidelines.verbosity = level < 0.45 ? 'concise' : level > 0.75 ? 'detailed' : 'moderate';
         break;
       case 'technicality':
         guidelines.technicality = level < 0.35 ? 'simple' : level > 0.65 ? 'technical' : 'moderate';
@@ -362,7 +362,7 @@ export function formatGuidelinesForPrompt(guidelines: ResponseGuidelines): strin
   parts.push(`Response Style:`);
   parts.push(`  - Length: ${guidelines.verbosity} (${
     guidelines.verbosity === 'concise' ? 'keep responses brief and to the point' :
-    guidelines.verbosity === 'detailed' ? 'provide thorough explanations with context' :
+    guidelines.verbosity === 'detailed' ? 'include context when it adds value, but stay focused' :
     'balance brevity with clarity'
   })`);
   parts.push(`  - Technical Level: ${guidelines.technicality} (${

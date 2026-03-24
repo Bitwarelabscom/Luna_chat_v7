@@ -24,26 +24,7 @@ const XAI_FEATURES: BackgroundLlmFeature[] = [
   'trading_analysis',
 ];
 
-// Low-token features -> P4 (ollama_secondary) in normal mode
-const LOW_TOKEN_FEATURES: BackgroundLlmFeature[] = [
-  'news_filter',
-  'friend_fact_extraction',
-  'knowledge_verification',
-  'music_trend_analysis',
-];
-
-// High-token features -> 3080 (ollama_tertiary) in normal mode
-const HIGH_TOKEN_FEATURES: BackgroundLlmFeature[] = [
-  'context_summary',
-  'memory_curation',
-  'friend_summary',
-  'research_synthesis',
-  'session_gap_analysis',
-  'supervisor_critique',
-  'ceo_org_execution',
-];
-
-const LFM_MODEL = 'tomng/lfm2.5-instruct:latest';
+// Background features now use groq defaults - no GPU routing needed
 
 class GpuOrchestrator {
   private mode: GpuMode = 'normal';
@@ -117,22 +98,7 @@ class GpuOrchestrator {
     // Trading always uses xai defaults
     if (XAI_FEATURES.includes(feature)) return null;
 
-    if (this.mode === 'normal') {
-      if (LOW_TOKEN_FEATURES.includes(feature)) {
-        return { provider: 'ollama_secondary', model: LFM_MODEL };
-      }
-      if (HIGH_TOKEN_FEATURES.includes(feature)) {
-        return { provider: 'ollama_tertiary', model: LFM_MODEL };
-      }
-    }
-
-    if (this.mode === 'tts' || this.mode === 'transitioning') {
-      // During TTS, all background tasks go to P4
-      if (LOW_TOKEN_FEATURES.includes(feature) || HIGH_TOKEN_FEATURES.includes(feature)) {
-        return { provider: 'ollama_secondary', model: LFM_MODEL };
-      }
-    }
-
+    // Background features use groq defaults - no GPU dependency, no override needed
     return null;
   }
 
@@ -181,12 +147,7 @@ class GpuOrchestrator {
     this.mode = 'transitioning';
 
     try {
-      // 1. Unload ollama model on 3080
-      logger.info('GPU orchestrator: unloading lfm2.5-instruct from 3080...');
-      await this.fetchJson('http://10.0.0.30:11434/api/generate', {
-        method: 'POST',
-        body: JSON.stringify({ model: LFM_MODEL, keep_alive: '0s', prompt: '' }),
-      });
+      // 1. LFM now on OpenRouter - no local model to unload
 
       // 2. Start Orpheus containers
       logger.info('GPU orchestrator: starting Orpheus containers...');

@@ -1,7 +1,6 @@
 package com.bitwarelabs.luna.presentation.screens.chat
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -9,7 +8,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
@@ -37,6 +35,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.bitwarelabs.luna.presentation.screens.chat.components.ChatArea
 import com.bitwarelabs.luna.presentation.screens.chat.components.ChatInput
 import com.bitwarelabs.luna.presentation.screens.chat.components.ModeIcon
+import com.bitwarelabs.luna.presentation.screens.chat.components.ModeSelector
 import com.bitwarelabs.luna.presentation.screens.chat.components.Sidebar
 import com.bitwarelabs.luna.presentation.theme.LunaTheme
 import kotlinx.coroutines.launch
@@ -50,6 +49,7 @@ fun ChatScreen(
     onNavigateToTrading: () -> Unit = {},
     onNavigateToNotifications: () -> Unit = {},
     onNavigateToActivity: () -> Unit = {},
+    onNavigateToVoice: () -> Unit = {},
     onLogout: () -> Unit,
     viewModel: ChatViewModel = hiltViewModel()
 ) {
@@ -162,10 +162,19 @@ fun ChatScreen(
                     .fillMaxSize()
                     .padding(paddingValues)
             ) {
+                // Mode selector (shown when no active session)
+                if (uiState.currentSessionId == null) {
+                    ModeSelector(
+                        selectedMode = uiState.selectedMode,
+                        onModeSelected = viewModel::setSelectedMode
+                    )
+                }
+
                 // Messages area
                 ChatArea(
                     messages = uiState.messages,
                     streamingContent = uiState.streamingContent,
+                    reasoningContent = uiState.reasoningContent,
                     statusMessage = uiState.statusMessage,
                     isLoading = uiState.isLoadingMessages,
                     isSending = uiState.isSending,
@@ -182,6 +191,7 @@ fun ChatScreen(
                     value = uiState.inputText,
                     onValueChange = viewModel::updateInputText,
                     onSend = viewModel::sendMessage,
+                    onVoiceClick = onNavigateToVoice,
                     isSending = uiState.isSending,
                     modifier = Modifier
                         .fillMaxWidth()

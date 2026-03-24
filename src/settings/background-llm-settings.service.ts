@@ -146,89 +146,87 @@ export const BACKGROUND_LLM_FEATURES: BackgroundLlmFeatureMeta[] = [
   },
 ];
 
-// GPU orchestrator routing:
+// Background model routing:
 // - Chat-triggered (groq): mood_analysis, intent_detection, edge_classification, query_refinement, domain_evaluation
-// - Low-token -> P4 (ollama_secondary): news_filter, friend_fact_extraction, knowledge_verification, music_trend_analysis
-// - High-token -> 3080 (ollama_tertiary): context_summary, memory_curation, friend_summary, research_synthesis, session_gap_analysis, supervisor_critique, ceo_org_execution
+// - Background (openrouter free): news_filter, friend_fact_extraction, knowledge_verification, music_trend_analysis,
+//   context_summary, memory_curation, friend_summary, research_synthesis, session_gap_analysis, supervisor_critique, ceo_org_execution
 // - Trading -> xai: trading_analysis
-// During TTS mode: all ollama tasks route to P4 via gpuOrchestrator.getBackgroundProvider()
 export const DEFAULT_BACKGROUND_LLM_SETTINGS: BackgroundLlmSettings = {
   // Chat-triggered: always groq (fastest)
   mood_analysis: {
     primary: { provider: 'groq', model: 'llama-3.1-8b-instant' },
-    fallback: { provider: 'openrouter', model: 'qwen/qwen3-4b:free' },
+    fallback: { provider: 'openrouter', model: 'qwen/qwen3-4b' },
   },
   intent_detection: {
     primary: { provider: 'groq', model: 'llama-3.1-8b-instant' },
-    fallback: { provider: 'openrouter', model: 'qwen/qwen3-4b:free' },
+    fallback: { provider: 'openrouter', model: 'qwen/qwen3-4b' },
   },
   edge_classification: {
     primary: { provider: 'groq', model: 'llama-3.1-8b-instant' },
-    fallback: { provider: 'openrouter', model: 'qwen/qwen3-4b:free' },
+    fallback: { provider: 'openrouter', model: 'qwen/qwen3-4b' },
   },
   domain_evaluation: {
     primary: { provider: 'groq', model: 'llama-3.1-8b-instant' },
-    fallback: { provider: 'openrouter', model: 'qwen/qwen3-4b:free' },
+    fallback: { provider: 'openrouter', model: 'qwen/qwen3-4b' },
   },
   query_refinement: {
     primary: { provider: 'groq', model: 'llama-3.1-8b-instant' },
-    fallback: { provider: 'openrouter', model: 'qwen/qwen3-4b:free' },
+    fallback: { provider: 'openrouter', model: 'qwen/qwen3-4b' },
   },
-  // Low-token background: P4 (ollama_secondary) with lfm2.5-instruct, 8K ctx
+  // Background features: openrouter primary (paid, no TPM issues), groq fallback
   news_filter: {
-    primary: { provider: 'ollama_secondary', model: 'tomng/lfm2.5-instruct:latest' },
+    primary: { provider: 'openrouter', model: 'qwen/qwen3-4b:free' },
     fallback: { provider: 'groq', model: 'llama-3.1-8b-instant' },
   },
   friend_fact_extraction: {
-    primary: { provider: 'ollama_secondary', model: 'tomng/lfm2.5-instruct:latest' },
+    primary: { provider: 'openrouter', model: 'qwen/qwen3-4b:free' },
     fallback: { provider: 'groq', model: 'llama-3.1-8b-instant' },
   },
   knowledge_verification: {
-    primary: { provider: 'ollama_secondary', model: 'tomng/lfm2.5-instruct:latest' },
+    primary: { provider: 'openrouter', model: 'qwen/qwen3-4b:free' },
     fallback: { provider: 'groq', model: 'llama-3.1-8b-instant' },
   },
   music_trend_analysis: {
-    primary: { provider: 'ollama_secondary', model: 'tomng/lfm2.5-instruct:latest' },
+    primary: { provider: 'openrouter', model: 'qwen/qwen3-4b:free' },
     fallback: { provider: 'groq', model: 'llama-3.1-8b-instant' },
   },
-  // High-token background: 3080 (ollama_tertiary) with lfm2.5-instruct, 32K ctx
   context_summary: {
-    primary: { provider: 'ollama_tertiary', model: 'tomng/lfm2.5-instruct:latest' },
+    primary: { provider: 'openrouter', model: 'qwen/qwen3-4b:free' },
     fallback: { provider: 'groq', model: 'llama-3.1-8b-instant' },
   },
   memory_curation: {
-    primary: { provider: 'ollama_tertiary', model: 'tomng/lfm2.5-instruct:latest' },
+    primary: { provider: 'openrouter', model: 'qwen/qwen3-4b:free' },
     fallback: { provider: 'groq', model: 'llama-3.1-8b-instant' },
   },
   friend_summary: {
-    primary: { provider: 'ollama_tertiary', model: 'tomng/lfm2.5-instruct:latest' },
+    primary: { provider: 'openrouter', model: 'qwen/qwen3-4b:free' },
     fallback: { provider: 'groq', model: 'llama-3.1-8b-instant' },
   },
   research_synthesis: {
-    primary: { provider: 'ollama_tertiary', model: 'tomng/lfm2.5-instruct:latest' },
+    primary: { provider: 'openrouter', model: 'qwen/qwen3-4b:free' },
     fallback: { provider: 'groq', model: 'llama-3.1-8b-instant' },
   },
   session_gap_analysis: {
-    primary: { provider: 'ollama_tertiary', model: 'tomng/lfm2.5-instruct:latest' },
+    primary: { provider: 'openrouter', model: 'qwen/qwen3-4b:free' },
     fallback: { provider: 'groq', model: 'llama-3.1-8b-instant' },
   },
   supervisor_critique: {
-    primary: { provider: 'ollama_tertiary', model: 'tomng/lfm2.5-instruct:latest' },
-    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
+    primary: { provider: 'openrouter', model: 'qwen/qwen3-4b:free' },
+    fallback: { provider: 'groq', model: 'llama-3.1-8b-instant' },
   },
   ceo_org_execution: {
-    primary: { provider: 'ollama_tertiary', model: 'tomng/lfm2.5-instruct:latest' },
-    fallback: { provider: 'xai', model: 'grok-4-1-fast' },
+    primary: { provider: 'openrouter', model: 'qwen/qwen3-4b:free' },
+    fallback: { provider: 'groq', model: 'llama-3.1-8b-instant' },
   },
   // Quality-critical: always xai
   trading_analysis: {
     primary: { provider: 'xai', model: 'grok-4-1-fast' },
-    fallback: { provider: 'openrouter', model: 'qwen/qwen3-4b:free' },
+    fallback: { provider: 'openrouter', model: 'qwen/qwen3-4b' },
   },
   // Luna cognitive: low-token affect analysis
   luna_affect_analysis: {
     primary: { provider: 'groq', model: 'llama-3.1-8b-instant' },
-    fallback: { provider: 'openrouter', model: 'qwen/qwen3-4b:free' },
+    fallback: { provider: 'openrouter', model: 'qwen/qwen3-4b' },
   },
 };
 

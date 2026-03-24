@@ -3,7 +3,8 @@ package com.bitwarelabs.luna.presentation.screens.chat.components
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
-import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Business
+import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material3.Icon
@@ -31,7 +32,7 @@ fun ModeIcon(
             modifier = modifier.size(size)
         )
         ChatMode.COMPANION -> Icon(
-            imageVector = Icons.Default.Favorite,
+            imageVector = Icons.Default.SmartToy,
             contentDescription = "Companion mode",
             tint = CompanionPink,
             modifier = modifier.size(size)
@@ -46,6 +47,12 @@ fun ModeIcon(
             imageVector = Icons.Default.MusicNote,
             contentDescription = "DJ Luna mode",
             tint = Color(0xFFFF6B6B),
+            modifier = modifier.size(size)
+        )
+        ChatMode.CEO_LUNA -> Icon(
+            imageVector = Icons.Default.Business,
+            contentDescription = "CEO Luna mode",
+            tint = Color(0xFFF59E0B),
             modifier = modifier.size(size)
         )
     }

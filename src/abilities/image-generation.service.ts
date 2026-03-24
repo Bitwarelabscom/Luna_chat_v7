@@ -1,11 +1,11 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import OpenAI from 'openai';
-import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
-import { getUserModelConfig } from '../llm/model-config.service.js';
-import * as xaiProvider from '../llm/providers/xai.provider.js';
+import { generateImage as comfyuiGenerate } from '../integration/comfyui.client.js';
+import * as sessionService from '../chat/session.service.js';
+import { broadcastToUser } from '../triggers/delivery.service.js';
+import * as telegramService from '../triggers/telegram.service.js';
 
 // Paths
 const IMAGES_DIR = path.join(process.cwd(), 'images');
@@ -29,7 +29,6 @@ export interface ImageResult {
  * Detect image type from buffer magic bytes
  */
 function detectImageType(buffer: Buffer): 'png' | 'jpeg' | 'gif' | 'webp' {
-  // Check magic bytes
   if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
     return 'png';
   }
@@ -40,12 +39,10 @@ function detectImageType(buffer: Buffer): 'png' | 'jpeg' | 'gif' | 'webp' {
     return 'gif';
   }
   if (buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46) {
-    // RIFF header - check for WEBP
     if (buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50) {
       return 'webp';
     }
   }
-  // Default to png if unknown
   return 'png';
 }
 
@@ -66,66 +63,32 @@ function generateFilename(userId: string, prefix: string = 'img', extension: str
 }
 
 /**
- * Generate an image using the configured provider (OpenAI or xAI)
+ * Generate an image using local ComfyUI (Flux 2 Klein 4B GGUF)
  */
 export async function generateImage(
   userId: string,
-  prompt: string
+  prompt: string,
+  options?: { width?: number; height?: number }
 ): Promise<ImageResult> {
   const startTime = Date.now();
 
   try {
-    const modelConfig = await getUserModelConfig(userId, 'image_generation');
-    logger.info('Generating image', { userId, promptLength: prompt.length, provider: modelConfig.provider, model: modelConfig.model });
+    logger.info('Generating image via ComfyUI', { userId, promptLength: prompt.length });
 
-    let imageBuffer: Buffer;
+    const result = await comfyuiGenerate({
+      prompt,
+      width: options?.width ?? 1024,
+      height: options?.height ?? 1024,
+    });
 
-    if (modelConfig.provider === 'xai') {
-      const result = await xaiProvider.generateImage(prompt, { model: modelConfig.model });
-      if (result.url) {
-        const imageResponse = await fetch(result.url);
-        if (!imageResponse.ok) throw new Error(`Failed to download image: ${imageResponse.status}`);
-        imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
-      } else if (result.b64_json) {
-        imageBuffer = Buffer.from(result.b64_json, 'base64');
-      } else {
-        throw new Error('No image data returned from xAI');
-      }
-    } else {
-      // Default to OpenAI
-      const openai = new OpenAI({ apiKey: config.openai.apiKey });
-      const response = await openai.images.generate({
-        model: modelConfig.model || 'gpt-image-1-mini', // Fallback if config is somehow empty
-        prompt,
-        n: 1,
-        size: '1536x1024',
-        quality: 'low',
-      });
-
-      if (!response.data || !response.data[0]) throw new Error('No image data returned from OpenAI');
-      const imageData = response.data[0];
-
-      if (imageData.url) {
-        const imageResponse = await fetch(imageData.url);
-        if (!imageResponse.ok) throw new Error(`Failed to download image: ${imageResponse.status}`);
-        imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
-      } else if (imageData.b64_json) {
-        imageBuffer = Buffer.from(imageData.b64_json, 'base64');
-      } else {
-        throw new Error('No image URL or base64 data in response');
-      }
-    }
-
-    // Detect actual image type from content and use correct extension
-    const imageType = detectImageType(imageBuffer);
+    const imageType = detectImageType(result.buffer);
     const extension = getExtensionForType(imageType);
-
     const filename = generateFilename(userId, 'gen', extension);
     const outputPath = path.join(GENERATED_DIR, filename);
-    fs.writeFileSync(outputPath, imageBuffer);
+    fs.writeFileSync(outputPath, result.buffer);
 
     const imageUrl = `/api/images/generated/${filename}`;
-    logger.info('Image generated successfully', { userId, filename, imageUrl });
+    logger.info('Image generated successfully', { userId, filename, imageUrl, durationMs: Date.now() - startTime });
 
     return {
       success: true,
@@ -147,6 +110,76 @@ export async function generateImage(
 }
 
 /**
+ * Fire-and-forget image generation.
+ * Generates the image, persists it as an assistant message, broadcasts via SSE,
+ * and forwards to Telegram if connected.
+ */
+export async function generateImageAsync(
+  userId: string,
+  sessionId: string,
+  prompt: string,
+  options?: { width?: number; height?: number }
+): Promise<void> {
+  try {
+    const result = await generateImage(userId, prompt, options);
+
+    if (!result.success || !result.imageUrl) {
+      const errorContent = `Image generation failed: ${result.error || 'Unknown error'}`;
+      await sessionService.addMessage({ sessionId, role: 'assistant', content: errorContent, source: 'web' }).catch(err =>
+        logger.warn('Failed to persist image error message', { sessionId, error: (err as Error).message })
+      );
+      broadcastToUser(userId, {
+        type: 'new_message',
+        sessionId,
+        message: errorContent,
+        timestamp: new Date(),
+      });
+      return;
+    }
+
+    const caption = `Generated image: ${prompt.substring(0, 100)}${prompt.length > 100 ? '...' : ''}`;
+    const content = formatImageForChat(result.imageUrl, caption);
+
+    // Persist as assistant message
+    await sessionService.addMessage({ sessionId, role: 'assistant', content, source: 'web' });
+
+    // Broadcast to frontend
+    broadcastToUser(userId, {
+      type: 'new_message',
+      sessionId,
+      message: content,
+      timestamp: new Date(),
+    });
+
+    // Forward to Telegram if connected
+    if (result.filePath) {
+      const connection = await telegramService.getTelegramConnection(userId);
+      if (connection && connection.isActive) {
+        telegramService.sendTelegramPhoto(connection.chatId, result.filePath, caption).catch(err =>
+          logger.error('Failed to send generated image to Telegram', { error: (err as Error).message })
+        );
+      }
+    }
+
+    logger.info('Async image generation complete', { userId, sessionId, imageUrl: result.imageUrl });
+  } catch (error) {
+    logger.error('Async image generation failed', { userId, sessionId, error: (error as Error).message });
+
+    // Try to inject error message into session
+    const errorContent = `Image generation failed: ${(error as Error).message}`;
+    await sessionService.addMessage({ sessionId, role: 'assistant', content: errorContent, source: 'web' }).catch(err =>
+      logger.warn('Failed to persist image error message', { sessionId, error: (err as Error).message })
+    );
+    broadcastToUser(userId, {
+      type: 'new_message',
+      sessionId,
+      message: errorContent,
+      timestamp: new Date(),
+    });
+  }
+}
+
+/**
  * Save a base64-encoded screenshot to disk
  */
 export async function saveScreenshot(
@@ -157,12 +190,9 @@ export async function saveScreenshot(
   const startTime = Date.now();
 
   try {
-    // Remove data URL prefix if present
     const base64Clean = base64Data.replace(/^data:image\/\w+;base64,/, '');
-
     const imageBuffer = Buffer.from(base64Clean, 'base64');
 
-    // Detect actual image type from content and use correct extension
     const imageType = detectImageType(imageBuffer);
     const extension = getExtensionForType(imageType);
 
@@ -193,7 +223,6 @@ export async function saveScreenshot(
 
 /**
  * Format image result for chat display
- * Returns the special image block format that frontend will parse
  */
 export function formatImageForChat(imageUrl: string, caption: string): string {
   return `:::image[${imageUrl}]\n${caption}\n:::`;
@@ -203,7 +232,6 @@ export function formatImageForChat(imageUrl: string, caption: string): string {
  * Get the full filesystem path for a generated image
  */
 export function getImagePath(filename: string): string | null {
-  // Security: prevent path traversal
   const sanitizedFilename = path.basename(filename);
   const imagePath = path.join(GENERATED_DIR, sanitizedFilename);
 
@@ -256,66 +284,25 @@ export async function generateProjectImage(
   const startTime = Date.now();
 
   try {
-    const modelConfig = await getUserModelConfig(userId, 'image_generation');
-    logger.info('Generating project image', { userId, projectDir, promptLength: prompt.length, provider: modelConfig.provider, model: modelConfig.model });
+    logger.info('Generating project image via ComfyUI', { userId, projectDir, promptLength: prompt.length });
 
-    let imageBuffer: Buffer;
+    const result = await comfyuiGenerate({ prompt });
 
-    if (modelConfig.provider === 'xai') {
-      const result = await xaiProvider.generateImage(prompt, { model: modelConfig.model });
-      if (result.url) {
-        const imageResponse = await fetch(result.url);
-        if (!imageResponse.ok) throw new Error(`Failed to download image: ${imageResponse.status}`);
-        imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
-      } else if (result.b64_json) {
-        imageBuffer = Buffer.from(result.b64_json, 'base64');
-      } else {
-        throw new Error('No image data returned from xAI');
-      }
-    } else {
-      const openai = new OpenAI({ apiKey: config.openai.apiKey });
-      const response = await openai.images.generate({
-        model: modelConfig.model || 'gpt-image-1-mini',
-        prompt,
-        n: 1,
-        size: '1536x1024',
-        quality: 'low',
-      });
-
-      if (!response.data || !response.data[0]) throw new Error('No image data returned from OpenAI');
-      const imageData = response.data[0];
-
-      if (imageData.url) {
-        const imageResponse = await fetch(imageData.url);
-        if (!imageResponse.ok) throw new Error(`Failed to download image: ${imageResponse.status}`);
-        imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
-      } else if (imageData.b64_json) {
-        imageBuffer = Buffer.from(imageData.b64_json, 'base64');
-      } else {
-        throw new Error('No image URL or base64 data in response');
-      }
-    }
-
-    // Detect actual image type from content
-    const imageType = detectImageType(imageBuffer);
+    const imageType = detectImageType(result.buffer);
     const extension = getExtensionForType(imageType);
 
-    // Use provided filename or generate one
     const finalFilename = filename || generateFilename(userId, 'img', extension);
     const filenameWithExt = finalFilename.includes('.') ? finalFilename : `${finalFilename}.${extension}`;
 
-    // Save to project's images directory
     const imagesDir = path.join(projectDir, 'images');
     if (!fs.existsSync(imagesDir)) {
       fs.mkdirSync(imagesDir, { recursive: true });
     }
 
     const outputPath = path.join(imagesDir, filenameWithExt);
-    fs.writeFileSync(outputPath, imageBuffer);
+    fs.writeFileSync(outputPath, result.buffer);
 
-    // Relative path for use in HTML
     const relativePath = `images/${filenameWithExt}`;
-
     logger.info('Project image generated', { userId, filename: filenameWithExt, projectDir });
 
     return {
@@ -339,6 +326,7 @@ export async function generateProjectImage(
 
 export default {
   generateImage,
+  generateImageAsync,
   generateProjectImage,
   saveScreenshot,
   formatImageForChat,

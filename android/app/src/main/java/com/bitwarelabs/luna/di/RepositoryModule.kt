@@ -7,6 +7,7 @@ import com.bitwarelabs.luna.data.repository.ChatRepositoryImpl
 import com.bitwarelabs.luna.data.repository.SettingsRepositoryImpl
 import com.bitwarelabs.luna.data.repository.TradingRepositoryImpl
 import com.bitwarelabs.luna.data.repository.TriggersRepositoryImpl
+import com.bitwarelabs.luna.data.repository.VoiceRepositoryImpl
 import com.bitwarelabs.luna.domain.repository.AbilitiesRepository
 import com.bitwarelabs.luna.domain.repository.ActivityRepository
 import com.bitwarelabs.luna.domain.repository.AuthRepository
@@ -14,6 +15,7 @@ import com.bitwarelabs.luna.domain.repository.ChatRepository
 import com.bitwarelabs.luna.domain.repository.SettingsRepository
 import com.bitwarelabs.luna.domain.repository.TradingRepository
 import com.bitwarelabs.luna.domain.repository.TriggersRepository
+import com.bitwarelabs.luna.domain.repository.VoiceRepository
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -65,4 +67,10 @@ abstract class RepositoryModule {
     abstract fun bindActivityRepository(
         activityRepositoryImpl: ActivityRepositoryImpl
     ): ActivityRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindVoiceRepository(
+        voiceRepositoryImpl: VoiceRepositoryImpl
+    ): VoiceRepository
 }

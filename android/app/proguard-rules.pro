@@ -35,8 +35,16 @@
 # OkHttp
 -dontwarn okhttp3.**
 -dontwarn okio.**
--dontwarn javax.annotation.**
 -keepnames class okhttp3.internal.publicsuffix.PublicSuffixDatabase
 
-# Markwon
--keep class io.noties.markwon.** { *; }
+# Markwon - only keep public API, allow shrinking of internals
+-keep class io.noties.markwon.Markwon { *; }
+-keep class io.noties.markwon.Markwon$Builder { *; }
+-keep class io.noties.markwon.ext.strikethrough.StrikethroughPlugin { *; }
+-keep class io.noties.markwon.ext.tables.TablePlugin { *; }
+-dontwarn io.noties.markwon.**
+
+# Strip BuildConfig fields from release (obfuscation handles the rest)
+-assumenosideeffects class com.bitwarelabs.luna.BuildConfig {
+    public static final boolean DEBUG;
+}

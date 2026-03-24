@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useCallback } from 'react';
 import { useNotificationStore, type NotificationCategory, getPriorityLevel } from '@/lib/notification-store';
+import { useChatStore } from '@/lib/store';
 import { type AppId } from '@/components/os/app-registry';
 
 // API URL for SSE connections
@@ -125,6 +126,17 @@ export function useNotificationStream() {
 
           case 'new_message':
           case 'trigger_delivered': {
+            // Inject message into active chat if session matches (fire-and-forget image gen etc.)
+            if (data.sessionId && data.message) {
+              const chatState = useChatStore.getState();
+              if (chatState.currentSession?.id === data.sessionId) {
+                chatState.addAssistantMessage(
+                  data.message,
+                  data.triggerId || `async-${Date.now()}`
+                );
+              }
+            }
+
             // Convert legacy events to notifications
             const eventType = data.notification?.eventType || 'autonomous.message';
             const category = data.notification?.category || inferCategory(eventType);

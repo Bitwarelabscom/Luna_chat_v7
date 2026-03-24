@@ -12,7 +12,7 @@ export const OPENAI_VOICES = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer
 export type OpenAIVoice = typeof OPENAI_VOICES[number];
 
 // Orpheus TTS voices
-export const ORPHEUS_VOICES = ['tara', 'leah', 'jess', 'leo', 'dan', 'mia', 'zac', 'naomi'] as const;
+export const ORPHEUS_VOICES = ['tara', 'leah', 'jess', 'leo', 'dan', 'mia', 'zac', 'zoe', 'naomi'] as const;
 export type OrpheusVoice = typeof ORPHEUS_VOICES[number];
 
 // TTS Settings interface
@@ -26,7 +26,7 @@ export interface TTSSettings {
 const DEFAULT_TTS_SETTINGS: TTSSettings = {
   engine: 'elevenlabs',
   openaiVoice: 'nova',
-  orpheusVoice: 'tara',
+  orpheusVoice: 'zoe',
 };
 
 // Voice settings for Luna - optimized for v3 emotional expression

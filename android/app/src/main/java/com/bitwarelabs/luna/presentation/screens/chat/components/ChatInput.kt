@@ -9,22 +9,24 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.bitwarelabs.luna.presentation.theme.LunaTheme
@@ -34,6 +36,7 @@ fun ChatInput(
     value: String,
     onValueChange: (String) -> Unit,
     onSend: () -> Unit,
+    onVoiceClick: () -> Unit,
     isSending: Boolean,
     modifier: Modifier = Modifier
 ) {
@@ -42,36 +45,63 @@ fun ChatInput(
             .fillMaxWidth()
             .clip(RoundedCornerShape(24.dp))
             .background(LunaTheme.colors.bgSecondary)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(start = 4.dp, end = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        BasicTextField(
+        TextField(
             value = value,
             onValueChange = onValueChange,
             modifier = Modifier
                 .weight(1f)
-                .heightIn(min = 40.dp, max = 200.dp),
-            textStyle = MaterialTheme.typography.bodyLarge.copy(
-                color = LunaTheme.colors.textPrimary
-            ),
-            cursorBrush = SolidColor(LunaTheme.colors.accentPrimary),
+                .heightIn(min = 48.dp, max = 200.dp),
+            textStyle = MaterialTheme.typography.bodyLarge,
+            placeholder = {
+                Text(
+                    text = "Type a message...",
+                    style = MaterialTheme.typography.bodyLarge
+                )
+            },
             keyboardOptions = KeyboardOptions(
-                imeAction = ImeAction.Default
+                imeAction = ImeAction.Send
             ),
-            decorationBox = { innerTextField ->
-                if (value.isEmpty()) {
-                    Text(
-                        text = "Type a message...",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = LunaTheme.colors.textMuted
-                    )
-                }
-                innerTextField()
-            }
+            keyboardActions = KeyboardActions(
+                onSend = { if (value.isNotBlank()) onSend() }
+            ),
+            colors = TextFieldDefaults.colors(
+                focusedTextColor = LunaTheme.colors.textPrimary,
+                unfocusedTextColor = LunaTheme.colors.textPrimary,
+                focusedPlaceholderColor = LunaTheme.colors.textMuted,
+                unfocusedPlaceholderColor = LunaTheme.colors.textMuted,
+                cursorColor = LunaTheme.colors.accentPrimary,
+                focusedContainerColor = Color.Transparent,
+                unfocusedContainerColor = Color.Transparent,
+                focusedIndicatorColor = Color.Transparent,
+                unfocusedIndicatorColor = Color.Transparent
+            ),
+            singleLine = false,
+            maxLines = 5
         )
 
-        Spacer(modifier = Modifier.width(8.dp))
+        // Voice button
+        IconButton(
+            onClick = onVoiceClick,
+            enabled = !isSending,
+            colors = IconButtonDefaults.iconButtonColors(
+                containerColor = LunaTheme.colors.bgTertiary,
+                contentColor = LunaTheme.colors.textMuted
+            ),
+            modifier = Modifier.size(40.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Mic,
+                contentDescription = "Voice",
+                modifier = Modifier.size(20.dp)
+            )
+        }
 
+        Spacer(modifier = Modifier.width(4.dp))
+
+        // Send button
         IconButton(
             onClick = onSend,
             enabled = value.isNotBlank() && !isSending,

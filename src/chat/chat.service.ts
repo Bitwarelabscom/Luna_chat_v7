@@ -183,7 +183,7 @@ export interface ChatOutput {
 }
 
 export async function processMessage(input: ChatInput): Promise<ChatOutput> {
-  const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode, zipMode: inputZipMode, novaMode: inputNovaMode, documentIds, djStyleContext, djGenreContext, ceoSystemLog, skillContext } = input;
+  const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode: _thinkingMode, zipMode: inputZipMode, novaMode: inputNovaMode, documentIds, djStyleContext, djGenreContext, ceoSystemLog, skillContext } = input;
   const zipMode = inputZipMode || inputNovaMode;  // Support both names during transition
 
   // Initialize MemoryCore session for consolidation tracking
@@ -233,7 +233,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
         classifierProvider: config.router.classifierProvider as 'anthropic' | 'google' | 'groq',
         classifierTimeoutMs: config.router.classifierTimeoutMs,
         rulesTimeoutMs: config.router.rulesTimeoutMs,
-        fallbackRoute: config.router.fallbackRoute as 'nano' | 'pro' | 'pro+tools',
+        fallbackRoute: config.router.fallbackRoute as 'pro' | 'pro+tools',
       };
 
       routerDecision = await router.route(message, { userId, sessionId, mode, source }, routerConfig);
@@ -253,49 +253,8 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     }
   }
 
-  // THINKING MODE: Override router decision to force 'pro' tier minimum
-  // NOVA MODE: Override router decision to force 'nano' tier (fast responses)
-  // Note: Thinking and Nova modes are mutually exclusive (enforced in frontend)
-  if (thinkingMode && !zipMode && routerDecision) {
-    // If router chose 'nano', upgrade to 'pro'
-    if (routerDecision.route === 'nano') {
-      logger.info('Thinking mode enabled - upgrading route from nano to pro', {
-        userId,
-        sessionId,
-        originalRoute: routerDecision.route,
-      });
-      routerDecision = {
-        ...routerDecision,
-        route: 'pro',
-      };
-    }
-    // If 'pro' or 'pro+tools', keep as-is (already sufficient for thinking mode)
-  } else if (zipMode && !thinkingMode && routerDecision) {
-    // Nova mode: force fast 'nano' route for quick, energetic responses
-    logger.info('Zip mode enabled - forcing nano route for fast responses', {
-      userId,
-      sessionId,
-      originalRoute: routerDecision.route,
-    });
-    routerDecision = {
-      ...routerDecision,
-      route: 'nano',
-    };
-  }
-
-  // CEO Luna / DJ Luna: never use nano route - always upgrade to pro minimum
-  if ((mode === 'ceo_luna' || mode === 'dj_luna') && routerDecision?.route === 'nano') {
-    logger.info('CEO/DJ Luna mode - upgrading route from nano to pro', {
-      userId,
-      sessionId,
-      mode,
-      originalRoute: routerDecision.route,
-    });
-    routerDecision = {
-      ...routerDecision,
-      route: 'pro',
-    };
-  }
+  // Zip mode uses fast model but same route (no nano tier)
+  // Thinking mode and zip mode are mutually exclusive (enforced in frontend)
 
   // Feature flag: Use layered agent architecture if enabled
   // EXCEPTIONS that fall through to legacy (faster) path:
@@ -542,7 +501,10 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
   const volatileContext = [volatileMemoryPrompt, intentPrompt, abilityActionResult, canvasSessionPrompt].filter(Boolean).join('\n\n');
 
   // Resolve parallel context fetches (started earlier)
-  const mambaStreamContext = await mambaStreamPromise;
+  const rawMambaContext = await mambaStreamPromise;
+  // Skip flatlined/contradictory Mamba context - saves ~120 tokens when stream is inactive
+  const mambaStreamContext = rawMambaContext && !rawMambaContext.includes('zero drift') && !rawMambaContext.includes('disengagement')
+    ? rawMambaContext : undefined;
   const resolvedAmbientContext = await ambientPromise;
   const resolvedStyleParams = await styleParamsPromise;
   const resolvedSelfCalibratedStyle = selfModificationService.formatStyleForPrompt(resolvedStyleParams);
@@ -570,7 +532,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
         ceoSystemLog,
         skillContext,
         desktopContext: getDesktopContext(userId),
-        mambaStreamContext: mambaStreamContext || undefined,
+        mambaStreamContext,
         onboardingContext,
         ambientContext: resolvedAmbientContext || undefined,
         selfCalibratedStyle: resolvedSelfCalibratedStyle || undefined,
@@ -1459,7 +1421,7 @@ export interface StreamMetrics {
   totalCost?: number;
   // Router-First Architecture provenance
   routeInfo?: {
-    route: 'nano' | 'pro' | 'pro+tools';
+    route: 'pro' | 'pro+tools';
     confidence: 'estimate' | 'verified';
     class: 'chat' | 'transform' | 'factual' | 'actionable';
   };
@@ -1468,7 +1430,7 @@ export interface StreamMetrics {
 export async function* streamMessage(
   input: ChatInput
 ): AsyncGenerator<{ type: 'content' | 'done' | 'status' | 'browser_action' | 'background_refresh' | 'reasoning' | 'video_action' | 'media_action' | 'canvas_artifact'; content?: string | any; status?: string; messageId?: string; tokensUsed?: number; metrics?: StreamMetrics; action?: string; url?: string; videos?: any[]; query?: string; items?: any[]; source?: string; artifactId?: string }> {
-  const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode, zipMode: inputZipMode, novaMode: inputNovaMode, documentIds, djStyleContext, djGenreContext, ceoSystemLog, skillContext } = input;
+  const { sessionId, userId, message, mode, source = 'web', projectMode, thinkingMode: _thinkingMode, zipMode: inputZipMode, novaMode: inputNovaMode, documentIds, djStyleContext, djGenreContext, ceoSystemLog, skillContext } = input;
   const zipMode = inputZipMode || inputNovaMode;  // Support both names during transition
 
   // Initialize MemoryCore session for consolidation tracking
@@ -1517,7 +1479,7 @@ export async function* streamMessage(
         classifierProvider: config.router.classifierProvider as 'anthropic' | 'google' | 'groq',
         classifierTimeoutMs: config.router.classifierTimeoutMs,
         rulesTimeoutMs: config.router.rulesTimeoutMs,
-        fallbackRoute: config.router.fallbackRoute as 'nano' | 'pro' | 'pro+tools',
+        fallbackRoute: config.router.fallbackRoute as 'pro' | 'pro+tools',
       };
 
       routerDecision = await router.route(message, { userId, sessionId, mode }, routerConfig);
@@ -1536,49 +1498,7 @@ export async function* streamMessage(
     }
   }
 
-  // THINKING MODE: Override router decision to force 'pro' tier minimum
-  // NOVA MODE: Override router decision to force 'nano' tier (fast responses)
-  // Note: Thinking and Nova modes are mutually exclusive (enforced in frontend)
-  if (thinkingMode && !zipMode && routerDecision) {
-    // If router chose 'nano', upgrade to 'pro'
-    if (routerDecision.route === 'nano') {
-      logger.info('Thinking mode enabled - upgrading route from nano to pro (streaming)', {
-        userId,
-        sessionId,
-        originalRoute: routerDecision.route,
-      });
-      routerDecision = {
-        ...routerDecision,
-        route: 'pro',
-      };
-    }
-    // If 'pro' or 'pro+tools', keep as-is (already sufficient for thinking mode)
-  } else if (zipMode && !thinkingMode && routerDecision) {
-    // Nova mode: force fast 'nano' route for quick, energetic responses
-    logger.info('Zip mode enabled - forcing nano route for fast responses (streaming)', {
-      userId,
-      sessionId,
-      originalRoute: routerDecision.route,
-    });
-    routerDecision = {
-      ...routerDecision,
-      route: 'nano',
-    };
-  }
-
-  // CEO Luna / DJ Luna: never use nano route - always upgrade to pro minimum
-  if ((mode === 'ceo_luna' || mode === 'dj_luna') && routerDecision?.route === 'nano') {
-    logger.info('CEO/DJ Luna mode - upgrading route from nano to pro (streaming)', {
-      userId,
-      sessionId,
-      mode,
-      originalRoute: routerDecision.route,
-    });
-    routerDecision = {
-      ...routerDecision,
-      route: 'pro',
-    };
-  }
+  // Zip mode uses fast model but same route (no nano tier)
 
   // Feature flag: Use layered agent architecture if enabled
   // EXCEPTIONS that fall through to legacy (faster) path:
@@ -1687,11 +1607,8 @@ export async function* streamMessage(
   const startTime = Date.now();
   const toolsUsed: string[] = [];
 
-  // INTENT GATING: Use router decision (from above) or fall back to isSmallTalk detection
-  // Router's nano route is equivalent to smalltalk (no tools, fast model)
-  let isSmallTalkMessage = routerDecision
-    ? routerDecision.route === 'nano'
-    : abilities.isSmallTalk(message);
+  // INTENT GATING: Use isSmallTalk heuristic for tool stripping (router no longer has nano tier)
+  let isSmallTalkMessage = abilities.isSmallTalk(message);
   const contextOptions = abilities.getContextOptions(message);
 
   // TOOL HINTS: Regex-based tool detection runs before classifier.
@@ -1956,7 +1873,10 @@ export async function* streamMessage(
   const volatileContext = [volatileMemoryPrompt, intentPrompt, abilityActionResult, canvasSessionPrompt].filter(Boolean).join('\n\n');
 
   // Resolve parallel context fetches (started earlier)
-  const mambaStreamContext = await mambaStreamPromise;
+  const rawMambaContext = await mambaStreamPromise;
+  // Skip flatlined/contradictory Mamba context - saves ~120 tokens when stream is inactive
+  const mambaStreamContext = rawMambaContext && !rawMambaContext.includes('zero drift') && !rawMambaContext.includes('disengagement')
+    ? rawMambaContext : undefined;
   const resolvedAmbientContext = await ambientPromise;
   const resolvedStyleParams = await styleParamsPromise;
   const resolvedSelfCalibratedStyle = selfModificationService.formatStyleForPrompt(resolvedStyleParams);
@@ -1984,7 +1904,7 @@ export async function* streamMessage(
         ceoSystemLog,
         skillContext,
         desktopContext: getDesktopContext(userId),
-        mambaStreamContext: mambaStreamContext || undefined,
+        mambaStreamContext,
         onboardingContext,
         ambientContext: resolvedAmbientContext || undefined,
         selfCalibratedStyle: resolvedSelfCalibratedStyle || undefined,
@@ -2105,7 +2025,7 @@ export async function* streamMessage(
     tools: effectiveTools,
     provider: modelConfig.provider,
     model: modelConfig.model,
-    thinkingMode,
+    thinkingMode: _thinkingMode,
     loggingContext: {
       userId,
       sessionId,

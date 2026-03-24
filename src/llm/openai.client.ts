@@ -496,9 +496,9 @@ export async function createChatCompletion(
 
     if (shouldFallbackFromOpenRouter) {
       logErrorActivity(errorMessage);
-      const fallbackProvider = 'ollama_tertiary' as ProviderId;
-      const fallbackModel = 'qwen3:8b';
-      logger.warn('OpenRouter free model failed, falling back to ollama_tertiary', {
+      const fallbackProvider = 'openrouter' as ProviderId;
+      const fallbackModel = 'qwen/qwen3-4b:free';
+      logger.warn('OpenRouter free model failed, falling back to smaller OpenRouter model', {
         fromProvider: provider,
         fromModel: modelToUse,
         toProvider: fallbackProvider,

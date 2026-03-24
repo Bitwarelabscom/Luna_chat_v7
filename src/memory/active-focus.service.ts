@@ -61,6 +61,9 @@ Output JSON:
   "new": [{"label": "short description", "type": "project|plan|interest|goal"}],
   "progress": [{"label": "existing focus label (exact match)", "note": "what progress was made"}]
 }
+- Only extract focuses the user EXPLICITLY mentioned or worked on
+- Do not generate goals or aspirations the user did not state
+- If unsure whether something is a real goal vs casual mention, skip it
 - Only extract genuine multi-session goals/projects, not one-off topics
 - "new" should NOT duplicate existing focuses
 - Max 3 new, max 3 progress updates

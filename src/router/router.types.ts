@@ -12,7 +12,7 @@
 export type IntentClass = 'chat' | 'transform' | 'factual' | 'actionable';
 export type RiskLevel = 'low' | 'medium' | 'high';
 export type ConfidenceLevel = 'estimate' | 'verified';
-export type Route = 'nano' | 'pro' | 'pro+tools';
+export type Route = 'pro' | 'pro+tools';
 export type DecisionSource = 'hard_rule' | 'regex' | 'keyword' | 'classifier';
 
 /**

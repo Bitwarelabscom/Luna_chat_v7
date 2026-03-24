@@ -107,7 +107,7 @@ export function formatStyleForPrompt(params: StyleParameter[]): string {
   if (deviations.length === 0) return '';
 
   const labels: Record<string, (v: number) => string> = {
-    verbosity: (v) => v > 0.6 ? 'more detailed' : v < 0.4 ? 'more concise' : '',
+    verbosity: (v) => v > 0.7 ? 'expand when it adds value' : v < 0.4 ? 'keep it tight' : '',
     formality: (v) => v > 0.5 ? 'slightly more formal' : v < 0.2 ? 'very casual' : '',
     humor_frequency: (v) => v > 0.5 ? 'lean into humor' : v < 0.2 ? 'less humor' : '',
     emotional_depth: (v) => v > 0.6 ? 'go deeper emotionally' : v < 0.3 ? 'keep it light' : '',

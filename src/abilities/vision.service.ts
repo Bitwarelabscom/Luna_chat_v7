@@ -5,11 +5,27 @@ import { activityHelpers } from '../activity/activity.service.js';
 
 // Vision-capable models by provider
 const VISION_MODELS = {
-  ollama: 'qwen3.5:9b',
+  openrouter: 'nvidia/nemotron-nano-12b-v2-vl:free',
   xai: 'grok-4.1-fast',
 };
 
+let openrouterClient: OpenAI | null = null;
 let xaiClient: OpenAI | null = null;
+
+function getOpenRouterClient(): OpenAI | null {
+  if (!config.openrouter?.apiKey) return null;
+  if (!openrouterClient) {
+    openrouterClient = new OpenAI({
+      apiKey: config.openrouter.apiKey,
+      baseURL: 'https://openrouter.ai/api/v1',
+      defaultHeaders: {
+        'HTTP-Referer': 'https://luna-chat.bitwarelabs.com',
+        'X-Title': 'Luna Chat',
+      },
+    });
+  }
+  return openrouterClient;
+}
 
 function getXaiClient(): OpenAI | null {
   if (!config.xai?.apiKey) return null;
@@ -43,7 +59,7 @@ interface VisionLoggingContext {
 
 function logVisionActivity(
   loggingContext: VisionLoggingContext | undefined,
-  provider: 'ollama' | 'xai',
+  provider: 'openrouter' | 'xai',
   model: string,
   durationMs: number,
   prompt: string,
@@ -87,7 +103,7 @@ function logVisionActivity(
 }
 
 /**
- * Analyze an image using Ollama (qwen3.5:4b-q4_K_M) with Grok (xAI) as fallback
+ * Analyze an image using OpenRouter Nemotron VL with xAI Grok as fallback
  */
 export async function analyzeImage(
   imageBuffer: Buffer,
@@ -102,43 +118,45 @@ export async function analyzeImage(
     loggingContext,
   } = options;
 
-  // Convert buffer to base64
   const base64Image = imageBuffer.toString('base64');
+  const dataUrl = `data:${mimeType};base64,${base64Image}`;
 
-  // Try Ollama first (local vision model)
-  const ollamaUrl = config.ollamaTertiary?.url || 'http://10.0.0.30:11434';
-  const ollamaStart = Date.now();
-  try {
-    const result = await analyzeWithOllama(ollamaUrl, base64Image, prompt);
-    logVisionActivity(
-      loggingContext,
-      'ollama',
-      VISION_MODELS.ollama,
-      Date.now() - ollamaStart,
-      prompt,
-      mimeType,
-      result
-    );
-    logger.info('Image analyzed with Ollama', { model: VISION_MODELS.ollama, url: ollamaUrl });
-    return {
-      description: result.description,
-      provider: 'ollama',
-      model: VISION_MODELS.ollama,
-    };
-  } catch (ollamaError) {
-    logVisionActivity(
-      loggingContext,
-      'ollama',
-      VISION_MODELS.ollama,
-      Date.now() - ollamaStart,
-      prompt,
-      mimeType,
-      undefined,
-      (ollamaError as Error).message
-    );
-    logger.warn('Ollama vision failed, falling back to xAI Grok', {
-      error: (ollamaError as Error).message,
-    });
+  // Try OpenRouter Nemotron VL first (free)
+  const orClient = getOpenRouterClient();
+  if (orClient) {
+    const orStart = Date.now();
+    try {
+      const result = await analyzeWithClient(orClient, VISION_MODELS.openrouter, dataUrl, prompt);
+      logVisionActivity(
+        loggingContext,
+        'openrouter',
+        VISION_MODELS.openrouter,
+        Date.now() - orStart,
+        prompt,
+        mimeType,
+        result
+      );
+      logger.info('Image analyzed with OpenRouter', { model: VISION_MODELS.openrouter });
+      return {
+        description: result.description,
+        provider: 'openrouter',
+        model: VISION_MODELS.openrouter,
+      };
+    } catch (orError) {
+      logVisionActivity(
+        loggingContext,
+        'openrouter',
+        VISION_MODELS.openrouter,
+        Date.now() - orStart,
+        prompt,
+        mimeType,
+        undefined,
+        (orError as Error).message
+      );
+      logger.warn('OpenRouter vision failed, falling back to xAI Grok', {
+        error: (orError as Error).message,
+      });
+    }
   }
 
   // Fallback to xAI Grok
@@ -146,7 +164,6 @@ export async function analyzeImage(
   if (xai) {
     const xaiStart = Date.now();
     try {
-      const dataUrl = `data:${mimeType};base64,${base64Image}`;
       const result = await analyzeWithClient(xai, VISION_MODELS.xai, dataUrl, prompt);
       logVisionActivity(
         loggingContext,
@@ -179,66 +196,7 @@ export async function analyzeImage(
     }
   }
 
-  throw new Error('No vision-capable provider available. Ollama failed and xAI API key not configured.');
-}
-
-/**
- * Analyze image using Ollama API format (images as raw base64 in messages)
- */
-async function analyzeWithOllama(
-  baseUrl: string,
-  base64Image: string,
-  prompt: string
-): Promise<VisionProviderResult> {
-  const response = await fetch(`${baseUrl}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: VISION_MODELS.ollama,
-      stream: false,
-      messages: [
-        {
-          role: 'user',
-          content: prompt,
-          images: [base64Image],
-        },
-      ],
-    }),
-    signal: AbortSignal.timeout(180000),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Ollama vision request failed: ${response.status} ${text}`);
-  }
-
-  const data = await response.json() as {
-    message?: { content?: string };
-    error?: string;
-    prompt_eval_count?: number;
-    eval_count?: number;
-    prompt_tokens?: number;
-    completion_tokens?: number;
-    usage?: {
-      prompt_tokens?: number;
-      completion_tokens?: number;
-    };
-  };
-
-  if (data.error) {
-    throw new Error(`Ollama error: ${data.error}`);
-  }
-
-  const content = data.message?.content;
-  if (!content) {
-    throw new Error('No description generated from Ollama vision model');
-  }
-
-  return {
-    description: content,
-    promptTokens: data.prompt_eval_count ?? data.prompt_tokens ?? data.usage?.prompt_tokens ?? 0,
-    completionTokens: data.eval_count ?? data.completion_tokens ?? data.usage?.completion_tokens ?? 0,
-  };
+  throw new Error('No vision-capable provider available. OpenRouter failed and xAI API key not configured.');
 }
 
 async function analyzeWithClient(

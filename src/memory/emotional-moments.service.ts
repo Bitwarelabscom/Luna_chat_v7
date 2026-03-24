@@ -73,7 +73,7 @@ async function generateMomentTag(
       messages: [
         {
           role: 'system',
-          content: `Crystallize this message into a single vivid sentence that captures the emotional moment. Keep the specific details - names, tools, events. Tone: ${emotionHint}. Output ONLY the sentence, nothing else.`,
+          content: `Summarize this message in one sentence. Keep ONLY details that appear in the original text - do not add names, events, or details that aren't explicitly mentioned. Be specific but never embellish. Tone: ${emotionHint}. Output ONLY the sentence, nothing else.`,
         },
         { role: 'user', content: rawText.slice(0, 500) },
       ],

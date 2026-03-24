@@ -3,6 +3,7 @@ import path from 'path';
 import { pool } from '../db/index.js';
 import { config } from '../config/index.js';
 import logger from '../utils/logger.js';
+import { createCompletion as _createCompletion } from '../llm/providers/openrouter.provider.js';
 
 const MUSIC_DIR = '/mnt/data/media/Music';
 

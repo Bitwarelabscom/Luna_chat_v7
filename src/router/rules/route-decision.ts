@@ -10,8 +10,8 @@
  * | any        | any        | high   | pro+tools   |
  * | factual    | yes        | any    | pro+tools   |
  * | any        | any        | medium | pro         |
- * | chat       | no         | low    | nano        |
- * | transform  | no         | low    | nano        |
+ * | chat       | no         | low    | pro         |
+ * | transform  | no         | low    | pro         |
  * | factual    | no         | low    | pro         |
  *
  * If uncertain -> escalate.
@@ -121,23 +121,23 @@ export function determineRoute(input: RouteDecisionInput): RouteDecisionOutput {
     };
   }
 
-  // Rule 7: Chat = nano (fast, cheap)
+  // Rule 7: Chat = pro (tools available if needed)
   if (intentClass === 'chat') {
     return {
-      route: 'nano',
+      route: 'pro',
       confidenceRequired: 'estimate',
       needsTools: false,
       reason: 'Casual conversation',
     };
   }
 
-  // Rule 8: Transform = nano (fast, cheap, user will verify)
+  // Rule 8: Transform = pro (tools available if needed)
   if (intentClass === 'transform') {
     return {
-      route: 'nano',
+      route: 'pro',
       confidenceRequired: 'estimate',
       needsTools: false,
-      reason: 'Transform task - user will verify result',
+      reason: 'Transform task',
     };
   }
 
@@ -173,9 +173,9 @@ export function quickRoute(
     return 'pro+tools';
   }
 
-  // Obvious low risk without fresh data = nano
+  // Obvious low risk without fresh data = pro
   if (isObviouslyLowRisk && !needsFreshData) {
-    return 'nano';
+    return 'pro';
   }
 
   // Need full analysis
@@ -202,8 +202,8 @@ export function validateRoute(
     return false;
   }
 
-  // Nano cannot handle fresh data requirements
-  if (needsFreshData && route === 'nano') {
+  // Fresh data should use pro+tools
+  if (needsFreshData && route === 'pro') {
     return false;
   }
 

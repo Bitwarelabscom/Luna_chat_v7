@@ -127,7 +127,7 @@ services:
       - GOOGLE_ENABLED=${GOOGLE_ENABLED:-true}
       - MEMORYCORE_URL=http://memorycore-api:3002
       - MEMORYCORE_ENABLED=${MEMORYCORE_ENABLED:-true}
-      - LUNA_STREAMS_URL=http://luna-streams:8100
+      - LUNA_STREAMS_URL=http://10.0.0.30:8100
       - LUNA_STREAMS_ENABLED=${LUNA_STREAMS_ENABLED:-true}
       - LUNA_AFFECT_ENABLED=true
       - ORPHEUS_TTS_URL=${ORPHEUS_TTS_URL:-http://10.0.0.30:5005}

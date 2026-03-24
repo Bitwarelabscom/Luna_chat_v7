@@ -66,9 +66,14 @@ function formatIntent(intent: IntentSummary, includeDetails: boolean = true): st
 export function formatIntentsForPrompt(context: IntentContext): string {
   const sections: string[] = [];
 
-  // Active intents
-  if (context.activeIntents.length > 0) {
-    const activeLines = context.activeIntents
+  // Active intents - filter out stale ones not touched in 48 hours
+  const recentIntents = context.activeIntents.filter(intent => {
+    const hoursSinceTouch = (Date.now() - new Date(intent.lastTouchedAt).getTime()) / (1000 * 60 * 60);
+    return hoursSinceTouch < 48;
+  });
+
+  if (recentIntents.length > 0) {
+    const activeLines = recentIntents
       .slice(0, INTENT_DEFAULTS.MAX_ACTIVE_INTENTS)
       .map((intent) => formatIntent(intent, true));
 

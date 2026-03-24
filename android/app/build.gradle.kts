@@ -142,12 +142,8 @@ dependencies {
 
     // Markdown rendering
     implementation("io.noties.markwon:core:4.6.2")
-    implementation("io.noties.markwon:syntax-highlight:4.6.2")
     implementation("io.noties.markwon:ext-strikethrough:4.6.2")
     implementation("io.noties.markwon:ext-tables:4.6.2")
-
-    // Image loading (for avatars)
-    implementation("io.coil-kt:coil-compose:2.5.0")
 
     // Splash screen
     implementation("androidx.core:core-splashscreen:1.0.1")

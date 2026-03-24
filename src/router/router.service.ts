@@ -230,7 +230,7 @@ export async function route(
 
   // TWO-PASS GUARD: In companion mode, keyword matches on words like "history",
   // "compare", "duration" often misclassify casual philosophical chat as factual.
-  // When keywords would escalate a companion message beyond nano, verify with the
+  // When keywords would escalate a companion message, verify with the
   // cheap LLM classifier to catch conversational tone the keywords miss.
   if (
     context.mode === 'companion' &&

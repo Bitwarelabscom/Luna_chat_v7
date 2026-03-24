@@ -1,6 +1,6 @@
 import { Router, Request, Response, RequestHandler } from 'express';
 import { authenticate } from '../auth/auth.middleware.js';
-import * as ollamaTertiary from '../llm/providers/ollama-tertiary.provider.js';
+import * as openrouterProvider from '../llm/providers/openrouter.provider.js';
 import logger from '../utils/logger.js';
 
 const router = Router();
@@ -69,10 +69,9 @@ ${linesList}`;
       },
     ];
 
-    const result = await ollamaTertiary.createCompletion('qwen3:8b', messages, {
+    const result = await openrouterProvider.createCompletion('qwen/qwen3-4b:free', messages, {
       temperature: 0.8,
       maxTokens: 8192,
-      numCtx: 32768,
     });
 
     // Strip markdown code fences if present

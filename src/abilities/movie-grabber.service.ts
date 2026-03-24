@@ -1,7 +1,7 @@
 /**
- * Movie Grabber - autonomous torrent agent powered by qwen3.5:9b
+ * Movie Grabber - autonomous torrent agent powered by OpenRouter
  *
- * Main chat calls this with just a movie name. The 9b model autonomously:
+ * Main chat calls this with just a movie name. The model autonomously:
  * 1. Searches Prowlarr for the best torrent
  * 2. Picks the best result (high seeders, good quality, reasonable size)
  * 3. Sends it to Transmission
@@ -11,30 +11,29 @@
 import { config } from '../config/index.js';
 import * as torrentService from './torrent.service.js';
 import logger from '../utils/logger.js';
+import OpenAI from 'openai';
 
-const OLLAMA_URL = config.ollamaTertiary?.url || 'http://10.0.0.30:11434';
-const MODEL = 'qwen3.5:9b';
+const MODEL = 'qwen/qwen3-4b:free';
 const MAX_STEPS = 6;
 
-interface OllamaToolCall {
-  function: {
-    name: string;
-    arguments: Record<string, unknown>;
-  };
+let openrouterClient: OpenAI | null = null;
+
+function getClient(): OpenAI {
+  if (!openrouterClient) {
+    openrouterClient = new OpenAI({
+      apiKey: config.openrouter?.apiKey || '',
+      baseURL: 'https://openrouter.ai/api/v1',
+      defaultHeaders: {
+        'HTTP-Referer': 'https://luna-chat.bitwarelabs.com',
+        'X-Title': 'Luna Chat',
+      },
+    });
+  }
+  return openrouterClient;
 }
 
-interface OllamaChatResponse {
-  message: {
-    role: string;
-    content: string;
-    thinking?: string;
-    tool_calls?: OllamaToolCall[];
-  };
-  done: boolean;
-}
-
-// Tools the 9b model can use
-const AGENT_TOOLS = [
+// Tools the model can use
+const AGENT_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: 'function',
     function: {
@@ -104,68 +103,47 @@ RULES:
 - Pay attention to user preferences in parentheses (quality, codec, size constraints).
 - After downloading, respond with a brief summary of what you grabbed.`;
 
-  const messages: Array<{ role: string; content: string; tool_calls?: OllamaToolCall[] }> = [
+  const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: 'system', content: systemPrompt },
     { role: 'user', content: preferences ? `Download: ${movieName} (${preferences})` : `Download: ${movieName}` },
   ];
 
   let downloadedTitle = '';
+  const client = getClient();
 
   for (let step = 0; step < MAX_STEPS; step++) {
-    const response = await fetch(`${OLLAMA_URL}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: MODEL,
-        messages: messages.map(m => {
-          const msg: Record<string, unknown> = { role: m.role, content: m.content };
-          if (m.tool_calls) msg.tool_calls = m.tool_calls;
-          return msg;
-        }),
-        tools: AGENT_TOOLS,
-        stream: false,
-        think: true,
-        options: {
-          temperature: 0.3,
-          num_ctx: 8192,
-        },
-      }),
-      signal: AbortSignal.timeout(60000),
-    });
-
-    if (!response.ok) {
-      const errText = await response.text().catch(() => '');
-      logger.error('Movie grabber LLM call failed', { status: response.status, error: errText });
-      return { ok: false, message: `LLM error: ${response.status}` };
-    }
-
-    let data: OllamaChatResponse;
+    let response: OpenAI.Chat.Completions.ChatCompletion;
     try {
-      data = await response.json() as OllamaChatResponse;
+      response = await client.chat.completions.create({
+        model: MODEL,
+        messages,
+        tools: AGENT_TOOLS,
+        temperature: 0.3,
+      });
     } catch (err) {
-      logger.error('Movie grabber failed to parse LLM response', { step, error: (err as Error).message });
-      return { ok: false, message: 'LLM returned malformed JSON - possible OOM or partial response.' };
+      logger.error('Movie grabber LLM call failed', { step, error: (err as Error).message });
+      return { ok: false, message: `LLM error: ${(err as Error).message}` };
     }
-    const assistantMsg = data.message;
+
+    const choice = response.choices[0];
+    if (!choice) {
+      return { ok: false, message: 'LLM returned no choices.' };
+    }
+
+    const assistantMsg = choice.message;
 
     // If the model returned tool calls, execute them
     if (assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0) {
-      // Add assistant message with tool calls to history
-      messages.push({
-        role: 'assistant',
-        content: assistantMsg.content || '',
-        tool_calls: assistantMsg.tool_calls,
-      });
+      messages.push(assistantMsg);
 
-      // Execute each tool call
       for (const tc of assistantMsg.tool_calls) {
         const toolName = tc.function.name;
-        const toolArgs = tc.function.arguments;
+        const toolArgs = JSON.parse(tc.function.arguments) as Record<string, unknown>;
         logger.info('Movie grabber tool call', { step, tool: toolName, args: toolArgs });
 
         try {
           const result = await executeAgentTool(toolName, toolArgs);
-          messages.push({ role: 'tool', content: result });
+          messages.push({ role: 'tool', tool_call_id: tc.id, content: result });
 
           if (toolName === 'torrent_download' && result.startsWith('OK')) {
             downloadedTitle = (toolArgs.title as string) || movieName;
@@ -173,7 +151,7 @@ RULES:
         } catch (err) {
           const errMsg = (err as Error).message;
           logger.error('Movie grabber tool error', { tool: toolName, error: errMsg });
-          messages.push({ role: 'tool', content: `Error: ${errMsg}` });
+          messages.push({ role: 'tool', tool_call_id: tc.id, content: `Error: ${errMsg}` });
         }
       }
       continue;

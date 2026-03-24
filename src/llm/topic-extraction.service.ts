@@ -1,16 +1,14 @@
 /**
  * Topic Extraction Service
  *
- * Uses the ollama_micro provider (LFM 2.5 1.2B on 10.0.0.3) for fast,
- * local topic extraction and intent classification.
- *
- * Typical latency: ~1s. No external API cost.
+ * Uses OpenRouter LFM2.5 Thinking (free) for fast topic extraction
+ * and intent classification.
  */
 
-import { createCompletion, isConfigured } from './providers/ollama-micro.provider.js';
+import { createCompletion, isConfigured } from './providers/openrouter.provider.js';
 import logger from '../utils/logger.js';
 
-const DEFAULT_MODEL = 'tomng/lfm2.5-instruct:1.2b-q8_0';
+const DEFAULT_MODEL = 'qwen/qwen3-4b';
 const TIMEOUT_MS = 3000;
 
 export interface TopicExtractionResult {
@@ -44,7 +42,7 @@ export async function extractTopics(message: string): Promise<TopicExtractionRes
 
   if (!message || message.length < 5) return empty;
   if (!isConfigured()) {
-    logger.debug('Topic extraction skipped - ollama_micro not configured');
+    logger.debug('Topic extraction skipped - openrouter not configured');
     return empty;
   }
 

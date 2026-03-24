@@ -55,8 +55,9 @@ function resolveApiTarget(
     }
   }
 
-  // Prefer remote Ollama @ 10.0.0.30 for coder API, then fallback.
+  // Prefer OpenRouter for coder API, then fallback to local Ollama.
   const preferred =
+    available.find((p) => p.id === 'openrouter') ||
     available.find((p) => p.id === 'ollama_tertiary') ||
     available.find((p) => p.id === 'ollama_secondary') ||
     available.find((p) => p.id === 'ollama') ||
@@ -265,7 +266,7 @@ export function CoderSelector() {
                 </div>
 
                 <p className="text-[10px]" style={{ color: 'var(--theme-text-muted)' }}>
-                  Preferred remote target: Ollama 10.0.0.30
+                  Preferred target: OpenRouter (free models)
                 </p>
               </div>
             </>

@@ -780,6 +780,10 @@ export async function executeTool(
     if (toolName === 'save_fact') {
       logger.info('Luna saving fact', { userId, category: args.category, key: args.fact_key });
       const factsService = await import('../memory/facts.service.js');
+      if (factsService.isSpeculativeFact(args.fact_value)) {
+        logger.warn('Rejected speculative save_fact', { key: args.fact_key, value: args.fact_value });
+        return { toolResponse: `Fact rejected: value appears speculative or interpretive. Facts must be concrete.`, sideEffects };
+      }
       await factsService.storeFact(
         userId,
         {

@@ -741,7 +741,7 @@ router.get('/tts', async (_req: Request, res: Response) => {
 const updateTtsSettingsSchema = z.object({
   engine: z.enum(['elevenlabs', 'openai', 'orpheus']).optional(),
   openaiVoice: z.enum(['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer']).optional(),
-  orpheusVoice: z.enum(['tara', 'leah', 'jess', 'leo', 'dan', 'mia', 'zac', 'naomi']).optional(),
+  orpheusVoice: z.enum(['tara', 'leah', 'jess', 'leo', 'dan', 'mia', 'zac', 'zoe', 'naomi']).optional(),
 });
 
 router.put('/tts', async (req: Request, res: Response) => {
