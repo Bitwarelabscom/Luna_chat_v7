@@ -1027,9 +1027,9 @@ Build/Scripts/build.sh package
 
 ## Luna Streams
 
-Luna Streams is a continuous cognition layer -- three parallel Mamba state-space models (SSMs) running 24/7 on CPU, processing memory events in real-time. Each stream maintains a persistent hidden state encoding compressed understanding. No context windows. No batch jobs. Always on.
+Luna Streams is a continuous cognition layer -- a trained Mamba 2.8B model with MLP heads running 24/7 on a dedicated RTX 3080 GPU, processing memory events in real-time. The model maintains persistent hidden states encoding compressed user understanding. No context windows. No batch jobs. Always on.
 
-**Standalone project**: `/opt/luna-streams/` (Python, FastAPI on port 8100)
+**Standalone service**: Runs on 10.0.0.30 as a systemd service (NOT Docker). Code at `/media/gpu/claude/luna-streams/`, models symlinked from `/media/gpu/claude1/luna-streams-models`. Python + FastAPI on port 8100.
 
 ### Architecture
 
@@ -1047,12 +1047,12 @@ luna.persona.ts  <--GET /api/context--  [Context Injector] (~120 tokens)
 
 ### Inference
 
-- **Model**: `state-spaces/mamba-370m-hf` (371M params)
-- **Format**: GGUF Q8_0 via llama-cpp-python (optimized C++ CPU kernels)
-- **Performance**: 97ms mean latency, 10.3 events/sec, 509MB RAM per stream
+- **Model**: `mamba-2.8b-user-q8_0.gguf` (Mamba 2.8B with trained MLP heads)
+- **Hardware**: RTX 3080, ~3GB VRAM
+- **Format**: GGUF Q8_0 via llama-cpp-python with CUDA acceleration
+- **Performance**: 97ms mean latency, 10.3 events/sec
 - **Target**: <150ms mean latency per step -- PASSED
-
-PyTorch/HuggingFace Mamba falls back to sequential Python loops on CPU (no CUDA kernels), making it unusable (~595ms for 370M). GGUF via llama.cpp provides native C++ Mamba support with AVX2 vectorization.
+- **URL**: `http://10.0.0.30:8100` (WireGuard VPN)
 
 ### Compact Event Encoding
 

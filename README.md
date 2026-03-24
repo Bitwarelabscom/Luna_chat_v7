@@ -45,7 +45,7 @@ Luna has a "job" even when you aren't chatting. She can research news, track you
 
 ## ✨ What Can Luna Do?
 
-*   📊 **Trading (Trader Luna):** A specialized, isolated persona for secure crypto trading on Binance and Crypto.com.
+*   📊 **Trading (Trader Luna):** A specialized, isolated persona for secure crypto trading -- Crypto.com (primary, full order execution) and Binance (market data). 8+ strategies, auto-trading bots, paper portfolio, and real-time WebSocket price feeds.
 *   🎙️ **Voice Intelligence:** Ultra-low latency voice chat that feels like a real conversation.
 *   📧 **Secure Integration:** Manages your Email, Calendar (CalDAV), and IRC with advanced security "Gatekeepers."
 *   🌐 **Visual Browsing:** Luna can open URLs directly via the `open_url` LLM tool for research and link sharing.
@@ -60,11 +60,11 @@ Luna has a "job" even when you aren't chatting. She can research news, track you
 *   🧑‍🤝‍🧑 **Friends System:** Luna has AI "friend" personas she discusses topics with -- a gossip queue with importance ranking, auto-discussion timers, and theater mode for watching deliberations live.
 *   🥽 **VR Luna:** An Unreal Engine 5.5 companion app for Steam Index VR with MetaHuman avatar, spatial voice chat, and three themed rooms (Music, CEO Office, Relax).
 *   🖥️ **KDE Integration:** Desktop integration via WebSocket for seamless Linux desktop notifications and control.
-*   🧬 **Luna Streams (Mamba SSM):** Continuous cognition layer -- three parallel Mamba state-space models running 24/7 on CPU via llama.cpp GGUF inference (97ms/step). Persistent hidden states encode compressed understanding with EMA dual-state buffers and drift detection.
-*   🤖 **Multi-Provider LLM:** Supports OpenAI, Anthropic, Google Gemini (with tool/function calling), Groq, xAI, Moonshot, OpenRouter, and local Ollama models (with micro, secondary, and tertiary tiers for specialized tasks).
+*   🧬 **Luna Streams (Mamba 2.8B):** Continuous cognition layer -- a trained Mamba 2.8B model with MLP heads running 24/7 on GPU (RTX 3080) via llama.cpp GGUF inference (~3GB VRAM). Persistent hidden states encode compressed user understanding with EMA dual-state buffers and drift detection. Runs as a systemd service on a dedicated GPU machine (not Docker).
+*   🤖 **Multi-Provider LLM:** 10 providers -- Anthropic, Google Gemini (with tool/function calling), Groq, xAI, Moonshot, OpenRouter, and local Ollama in 4 tiers: primary (chat), micro (small/fast tasks), secondary (fallback), and tertiary (analysis/music trends). All routed via `openai.client.ts` with format conversion.
 *   🧠 **Cognitive Architecture:** Luna has internal emotional states (valence/arousal/mood), meta-cognition via the `introspect` tool, self-modification with safety guardrails, routine learning, and conversation rhythm adaptation. Enable with `LUNA_AFFECT_ENABLED=true`.
 *   🔁 **Agentic Loop:** Unified tool execution via `src/agentic/tool-executor.ts` -- single source of truth for 56+ tool handlers with cost tracking, context overflow management, and loop breakers. Default limits: 25 steps, $0.50.
-*   🗣️ **Orpheus TTS:** Voice responses use the Orpheus model with angle-bracket emotion tags like `<laugh>`, `<sigh>`, `<whisper>` for natural-sounding speech.
+*   🗣️ **3 TTS Engines:** ElevenLabs (default, v3 emotional expression), OpenAI (6 voices), and Orpheus (9 voices with angle-bracket emotion tags like `<laugh>`, `<sigh>`, `<whisper>`). Configurable per user via settings.
 *   📝 **PKM System:** Obsidian-like personal knowledge management with wikilinks, backlinks, hybrid search (keyword + semantic via pgvector), daily notes, and knowledge CRUD.
 *   📈 **Trading Intelligence:** Crypto market intelligence scraping every 15 minutes, AI-powered strategy analysis every 6 hours, and regime detection for market conditions.
 
@@ -163,7 +163,7 @@ Semantic Memory (PostgreSQL, persistent)
 
 Sessions automatically consolidate through tiers over time. NeuralSleep's Dual-LNN architecture (Thematic + Relational streams) processes memories with consciousness metrics including Phi (integrated information), temporal integration, and self-reference depth.
 
-**Luna Streams** adds a continuous cognition layer on top of this -- three Mamba state-space models (371M params each) process memory events in real-time via GGUF/llama.cpp inference at 97ms per step. Each stream maintains persistent hidden states with dual EMA buffers (fast + slow) and drift detection, injecting compressed context (~120 tokens) into Luna's system prompt.
+**Luna Streams** adds a continuous cognition layer on top of this -- a trained Mamba 2.8B model (quantized to Q8_0 GGUF, ~3GB VRAM) runs 24/7 on a dedicated RTX 3080 GPU as a systemd service. It processes memory events in real-time at ~97ms per step, maintaining persistent hidden states with dual EMA buffers (fast + slow) and drift detection. Compressed context (~120 tokens) is injected into Luna's system prompt. The model runs at `http://10.0.0.30:8100` via WireGuard, not Docker.
 
 **Recent additions (March 2026):**
 - **Spreading Activation**: Graph retrieval now uses BFS spreading activation from seed entities instead of static narrative blobs. Signal decays per hop with configurable thresholds, hub fan limits, and session bonuses.
@@ -223,6 +223,52 @@ Sessions automatically consolidate through tiers over time. NeuralSleep's Dual-L
 <i>News dashboard with enrichment control, 3-day rolling window stats, P1-P4 priority distribution, category breakdown (Finance, Tech, Conflicts, Politics, Science, Health), and recent LLM classifications. (March 2026)</i>
 
 </div>
+
+---
+
+## 🏗️ Architecture
+
+### Tech Stack
+| Layer | Technology |
+|:------|:-----------|
+| **Backend** | Node.js + Express 4.18 + TypeScript 5.9 (ESM) |
+| **Frontend** | Next.js 14.2 + React 18 + Zustand 5 + TipTap (collaborative editor) |
+| **Database** | PostgreSQL (main + MemoryCore pool) + Redis (cache/state) + Neo4j (knowledge graph) |
+| **LLM** | 10 providers: Anthropic, Google, Groq, xAI, Moonshot, OpenRouter, Ollama (4 tiers) |
+| **Voice** | Whisper (STT) + ElevenLabs / OpenAI / Orpheus (TTS) + server-side VAD |
+| **Cognition** | Mamba 2.8B on RTX 3080 (Luna Streams) + Dual-LNN + NeuralSleep consolidation |
+| **Infra** | Docker Compose + WireGuard VPN + systemd (Luna Streams) |
+
+### Docker Services
+```
+luna-api          Express backend (port 3003)
+luna-frontend     Next.js desktop UI (port 3004)
+luna-mobile       Next.js mobile UI (port 5555)
+luna-postgres     PostgreSQL 16
+luna-redis        Redis 7
+luna-neo4j        Neo4j Community (knowledge graph)
+luna-ollama       Ollama (local LLM inference)
+luna-sandbox      Code execution sandbox
+luna-radicale     CalDAV/CardDAV (calendar/contacts)
+luna-n8n          Workflow automation (Suno pipeline)
+docker-proxy      Secure Docker socket proxy
+tradecore         Go trading engine (optional)
+```
+
+**External services** (separate Docker stacks or systemd):
+- `memorycore-api` - 3-tier memory consolidation (port 3002)
+- `searxng` - Privacy-focused web search (port 8080)
+- `newsfetcher` - RSS aggregation (port 8000)
+- `luna-streams` - Mamba 2.8B on GPU at 10.0.0.30:8100 (systemd, not Docker)
+
+### Key Numbers (March 2026)
+- **119** database migrations
+- **56+** LLM tools via unified `executeTool()`
+- **57+** scheduled background jobs
+- **28+** API route modules
+- **26** frontend window apps
+- **16** memory context sources (fault-isolated)
+- **10** LLM providers
 
 ---
 
