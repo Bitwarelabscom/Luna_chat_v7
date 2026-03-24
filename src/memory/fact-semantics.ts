@@ -118,6 +118,8 @@ export function getConceptTokens(factKey: string): string[] {
  * Returns undefined for unmapped keys.
  */
 export function getSemantics(factKey: string): FactSemantics | undefined {
+  if (!factKey) return undefined;
+
   const direct = FACT_KEY_SEMANTICS[factKey];
   if (direct) return direct;
 

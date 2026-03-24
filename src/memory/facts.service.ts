@@ -303,9 +303,12 @@ export async function storeFact(
       intentId
     });
 
-    // Sync to Neo4j (non-blocking)
+    // Sync to Neo4j (non-blocking) - SELECT all columns needed by mapRowToFact
     pool.query(
-      `SELECT id, mention_count, last_mentioned, fact_status, fact_type FROM user_facts
+      `SELECT id, category, fact_key, fact_value, confidence, last_mentioned,
+              mention_count, intent_id, fact_status, fact_type,
+              valid_from, valid_until, supersedes_id, override_priority
+       FROM user_facts
        WHERE user_id = $1 AND category = $2 AND fact_key = $3
        AND (intent_id = $4 OR (intent_id IS NULL AND $4 IS NULL))
        AND fact_status = 'active'

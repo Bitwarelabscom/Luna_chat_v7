@@ -157,17 +157,26 @@ export async function buildMemoryContext(
     // A failure in one source never affects another. Uses Promise.allSettled
     // so all queries complete independently - degraded but never broken.
     const QUERY_TIMEOUT_MS = 5000;
-    const safeQuery = <T>(promise: Promise<T>, fallback: T, label: string): Promise<T> =>
-      Promise.race([
-        promise.catch(err => {
-          logger.warn(`Memory source failed: ${label}`, { userId, error: (err as Error).message });
-          return fallback;
+    const EMBEDDING_TIMEOUT_MS = 8000;
+    const safeQuery = <T>(promise: Promise<T>, fallback: T, label: string, timeoutMs = QUERY_TIMEOUT_MS): Promise<T> => {
+      let timer: ReturnType<typeof setTimeout>;
+      return Promise.race([
+        promise.then(
+          result => { clearTimeout(timer); return result; },
+          err => {
+            clearTimeout(timer);
+            logger.warn(`Memory source failed: ${label}`, { userId, error: (err as Error).message });
+            return fallback;
+          }
+        ),
+        new Promise<T>(resolve => {
+          timer = setTimeout(() => {
+            logger.warn(`Memory source timed out: ${label}`, { userId });
+            resolve(fallback);
+          }, timeoutMs);
         }),
-        new Promise<T>(resolve => setTimeout(() => {
-          logger.warn(`Memory source timed out: ${label}`, { userId });
-          resolve(fallback);
-        }, QUERY_TIMEOUT_MS)),
       ]);
+    };
 
     // Run all 14 sources in parallel - each independently fault-isolated
     const results = await Promise.allSettled([
@@ -175,10 +184,10 @@ export async function buildMemoryContext(
       safeQuery(embeddingService.searchSimilarMessages(
         currentMessage, userId,
         { limit: 5, threshold: 0.75, excludeSessionId: currentSessionId, intentId }
-      ), [], 'similarMessages'),
+      ), [], 'similarMessages', EMBEDDING_TIMEOUT_MS),
       safeQuery(embeddingService.searchSimilarConversations(
         currentMessage, userId, 3, intentId
-      ), [], 'similarConversations'),
+      ), [], 'similarConversations', EMBEDDING_TIMEOUT_MS),
       safeQuery(insightsService.getActiveLearningsForContext(userId, 10), '', 'learnings'),
       safeQuery(memorycoreClient.getConsciousnessMetrics(userId), null, 'consciousness'),
       safeQuery(memorycoreClient.getConsolidatedModel(userId), null, 'consolidatedModel'),
@@ -446,17 +455,25 @@ export async function buildStableMemoryOnly(userId: string): Promise<MemoryConte
   try {
     // Each source independently fault-isolated with try-catch + 5s timeout
     const QUERY_TIMEOUT_MS = 5000;
-    const safeQuery = <T>(promise: Promise<T>, fallback: T, label: string): Promise<T> =>
-      Promise.race([
-        promise.catch(err => {
-          logger.warn(`Memory source failed: ${label}`, { userId, error: (err as Error).message });
-          return fallback;
+    const safeQuery = <T>(promise: Promise<T>, fallback: T, label: string): Promise<T> => {
+      let timer: ReturnType<typeof setTimeout>;
+      return Promise.race([
+        promise.then(
+          result => { clearTimeout(timer); return result; },
+          err => {
+            clearTimeout(timer);
+            logger.warn(`Memory source failed: ${label}`, { userId, error: (err as Error).message });
+            return fallback;
+          }
+        ),
+        new Promise<T>(resolve => {
+          timer = setTimeout(() => {
+            logger.warn(`Memory source timed out: ${label}`, { userId });
+            resolve(fallback);
+          }, QUERY_TIMEOUT_MS);
         }),
-        new Promise<T>(resolve => setTimeout(() => {
-          logger.warn(`Memory source timed out: ${label}`, { userId });
-          resolve(fallback);
-        }, QUERY_TIMEOUT_MS)),
       ]);
+    };
 
     const stableResults = await Promise.allSettled([
       safeQuery(factsService.getUserFacts(userId, { limit: 30 }), [], 'facts'),

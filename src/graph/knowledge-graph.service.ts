@@ -6,6 +6,7 @@
 import * as neo4jClient from './neo4j.client.js';
 import type { UserFact } from '../memory/facts.service.js';
 import { getSemantics } from '../memory/fact-semantics.js';
+import logger from '../utils/logger.js';
 
 // ============================================
 // Types
@@ -41,6 +42,12 @@ export interface FactNetwork {
  */
 export async function syncFactToGraph(userId: string, fact: UserFact): Promise<boolean> {
   if (!neo4jClient.isNeo4jEnabled()) return false;
+  if (!fact.category || !fact.factKey || !fact.factValue) {
+    logger.warn('Skipping Neo4j sync for fact with missing fields', {
+      id: fact.id, hasCategory: !!fact.category, hasKey: !!fact.factKey, hasValue: !!fact.factValue
+    });
+    return false;
+  }
 
   const cypher = `
     MERGE (f:Fact {id: $id})
