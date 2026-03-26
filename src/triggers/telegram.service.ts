@@ -612,27 +612,32 @@ export async function getBotInfo(): Promise<{ username: string; firstName: strin
  * Generate a link code for connecting Telegram
  */
 export async function generateLinkCode(userId: string): Promise<string> {
-  // Delete any existing codes for this user
-  await pool.query(
-    `DELETE FROM telegram_link_codes WHERE user_id = $1`,
-    [userId]
-  );
+  try {
+    // Delete any existing codes for this user
+    await pool.query(
+      `DELETE FROM telegram_link_codes WHERE user_id = $1`,
+      [userId]
+    );
 
-  // Generate a random 8-character code
-  const code = crypto.randomBytes(4).toString('hex').toUpperCase();
+    // Generate a random 8-character code
+    const code = crypto.randomBytes(4).toString('hex').toUpperCase();
 
-  // Expires in 10 minutes
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    // Expires in 10 minutes
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
-  await pool.query(
-    `INSERT INTO telegram_link_codes (user_id, code, expires_at)
-     VALUES ($1, $2, $3)`,
-    [userId, code, expiresAt]
-  );
+    await pool.query(
+      `INSERT INTO telegram_link_codes (user_id, code, expires_at)
+       VALUES ($1, $2, $3)`,
+      [userId, code, expiresAt]
+    );
 
-  logger.info('Generated Telegram link code', { userId, code });
+    logger.info('Generated Telegram link code', { userId, code });
 
-  return code;
+    return code;
+  } catch (error) {
+    logger.error('Failed to generate Telegram link code', { userId, error: (error as Error).message });
+    throw error;
+  }
 }
 
 /**
@@ -640,25 +645,30 @@ export async function generateLinkCode(userId: string): Promise<string> {
  * Returns the user ID if valid
  */
 export async function validateLinkCode(code: string): Promise<string | null> {
-  const result = await pool.query(
-    `SELECT user_id FROM telegram_link_codes
-     WHERE code = $1
-       AND expires_at > NOW()
-       AND used_at IS NULL`,
-    [code.toUpperCase()]
-  );
+  try {
+    const result = await pool.query(
+      `SELECT user_id FROM telegram_link_codes
+       WHERE code = $1
+         AND expires_at > NOW()
+         AND used_at IS NULL`,
+      [code.toUpperCase()]
+    );
 
-  if (result.rows.length === 0) {
+    if (result.rows.length === 0) {
+      return null;
+    }
+
+    // Mark as used
+    await pool.query(
+      `UPDATE telegram_link_codes SET used_at = NOW() WHERE code = $1`,
+      [code.toUpperCase()]
+    );
+
+    return result.rows[0].user_id;
+  } catch (error) {
+    logger.error('Failed to validate Telegram link code', { error: (error as Error).message });
     return null;
   }
-
-  // Mark as used
-  await pool.query(
-    `UPDATE telegram_link_codes SET used_at = NOW() WHERE code = $1`,
-    [code.toUpperCase()]
-  );
-
-  return result.rows[0].user_id;
 }
 
 // ============================================
@@ -674,85 +684,109 @@ export async function linkTelegram(
   username?: string,
   firstName?: string
 ): Promise<TelegramConnection> {
-  const result = await pool.query(
-    `INSERT INTO telegram_connections (user_id, chat_id, username, first_name)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (user_id) DO UPDATE SET
-       chat_id = EXCLUDED.chat_id,
-       username = EXCLUDED.username,
-       first_name = EXCLUDED.first_name,
-       is_active = true,
-       linked_at = NOW()
-     RETURNING *`,
-    [userId, chatId, username || null, firstName || null]
-  );
+  try {
+    const result = await pool.query(
+      `INSERT INTO telegram_connections (user_id, chat_id, username, first_name)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_id) DO UPDATE SET
+         chat_id = EXCLUDED.chat_id,
+         username = EXCLUDED.username,
+         first_name = EXCLUDED.first_name,
+         is_active = true,
+         linked_at = NOW()
+       RETURNING *`,
+      [userId, chatId, username || null, firstName || null]
+    );
 
-  // Enable Telegram notifications by default
-  await pool.query(
-    `UPDATE notification_preferences SET enable_telegram = true WHERE user_id = $1`,
-    [userId]
-  );
+    // Enable Telegram notifications by default
+    await pool.query(
+      `UPDATE notification_preferences SET enable_telegram = true WHERE user_id = $1`,
+      [userId]
+    );
 
-  logger.info('Telegram linked', { userId, chatId, username });
+    logger.info('Telegram linked', { userId, chatId, username });
 
-  return mapConnectionRow(result.rows[0]);
+    return mapConnectionRow(result.rows[0]);
+  } catch (error) {
+    logger.error('Failed to link Telegram', { userId, chatId, error: (error as Error).message });
+    throw error;
+  }
 }
 
 /**
  * Unlink Telegram from a user
  */
 export async function unlinkTelegram(userId: string): Promise<boolean> {
-  const result = await pool.query(
-    `DELETE FROM telegram_connections WHERE user_id = $1 RETURNING id`,
-    [userId]
-  );
+  try {
+    const result = await pool.query(
+      `DELETE FROM telegram_connections WHERE user_id = $1 RETURNING id`,
+      [userId]
+    );
 
-  // Disable Telegram notifications
-  await pool.query(
-    `UPDATE notification_preferences SET enable_telegram = false WHERE user_id = $1`,
-    [userId]
-  );
+    // Disable Telegram notifications
+    await pool.query(
+      `UPDATE notification_preferences SET enable_telegram = false WHERE user_id = $1`,
+      [userId]
+    );
 
-  if ((result.rowCount ?? 0) > 0) {
-    logger.info('Telegram unlinked', { userId });
-    return true;
+    if ((result.rowCount ?? 0) > 0) {
+      logger.info('Telegram unlinked', { userId });
+      return true;
+    }
+
+    return false;
+  } catch (error) {
+    logger.error('Failed to unlink Telegram', { userId, error: (error as Error).message });
+    throw error;
   }
-
-  return false;
 }
 
 /**
  * Get user's Telegram connection
  */
 export async function getTelegramConnection(userId: string): Promise<TelegramConnection | null> {
-  const result = await pool.query(
-    `SELECT * FROM telegram_connections WHERE user_id = $1`,
-    [userId]
-  );
+  try {
+    const result = await pool.query(
+      `SELECT * FROM telegram_connections WHERE user_id = $1`,
+      [userId]
+    );
 
-  return result.rows.length > 0 ? mapConnectionRow(result.rows[0]) : null;
+    return result.rows.length > 0 ? mapConnectionRow(result.rows[0]) : null;
+  } catch (error) {
+    logger.error('Failed to get Telegram connection', { userId, error: (error as Error).message });
+    return null;
+  }
 }
 
 /**
  * Get connection by chat ID
  */
 export async function getConnectionByChatId(chatId: number): Promise<TelegramConnection | null> {
-  const result = await pool.query(
-    `SELECT * FROM telegram_connections WHERE chat_id = $1`,
-    [chatId]
-  );
+  try {
+    const result = await pool.query(
+      `SELECT * FROM telegram_connections WHERE chat_id = $1`,
+      [chatId]
+    );
 
-  return result.rows.length > 0 ? mapConnectionRow(result.rows[0]) : null;
+    return result.rows.length > 0 ? mapConnectionRow(result.rows[0]) : null;
+  } catch (error) {
+    logger.error('Failed to get Telegram connection by chatId', { chatId, error: (error as Error).message });
+    return null;
+  }
 }
 
 /**
  * Update last message time
  */
 export async function updateLastMessageTime(userId: string): Promise<void> {
-  await pool.query(
-    `UPDATE telegram_connections SET last_message_at = NOW() WHERE user_id = $1`,
-    [userId]
-  );
+  try {
+    await pool.query(
+      `UPDATE telegram_connections SET last_message_at = NOW() WHERE user_id = $1`,
+      [userId]
+    );
+  } catch (error) {
+    logger.warn('Failed to update Telegram last message time', { userId, error: (error as Error).message });
+  }
 }
 
 // ============================================
@@ -772,30 +806,35 @@ async function getOrCreateTelegramSession(
     if (activeSessionId) return activeSessionId;
   }
 
-  const title = mode === 'ceo_luna' ? 'Telegram CEO' : 'Telegram';
+  try {
+    const title = mode === 'ceo_luna' ? 'Telegram CEO' : 'Telegram';
 
-  // Check for existing Telegram session
-  const result = await pool.query(
-    `SELECT id FROM sessions
-     WHERE user_id = $1 AND title = $2
-     ORDER BY created_at DESC LIMIT 1`,
-    [userId, title]
-  );
+    // Check for existing Telegram session
+    const result = await pool.query(
+      `SELECT id FROM sessions
+       WHERE user_id = $1 AND title = $2
+       ORDER BY created_at DESC LIMIT 1`,
+      [userId, title]
+    );
 
-  if (result.rows.length > 0) {
-    return result.rows[0].id;
+    if (result.rows.length > 0) {
+      return result.rows[0].id;
+    }
+
+    // Create new Telegram session
+    const session = await sessionService.createSession({
+      userId,
+      title,
+      mode,
+    });
+
+    logger.info('Created Telegram session', { userId, sessionId: session.id, mode, title });
+
+    return session.id;
+  } catch (error) {
+    logger.error('Failed to get/create Telegram session', { userId, mode, error: (error as Error).message });
+    throw error;
   }
-
-  // Create new Telegram session
-  const session = await sessionService.createSession({
-    userId,
-    title,
-    mode,
-  });
-
-  logger.info('Created Telegram session', { userId, sessionId: session.id, mode, title });
-
-  return session.id;
 }
 
 /**
