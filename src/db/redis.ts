@@ -35,7 +35,13 @@ export async function setSessionState(sessionId: string, state: Record<string, u
 
 export async function getSessionState(sessionId: string): Promise<Record<string, unknown> | null> {
   const data = await redis.get(`${SESSION_PREFIX}${sessionId}`);
-  return data ? JSON.parse(data) : null;
+  if (!data) return null;
+  try {
+    return JSON.parse(data);
+  } catch (error) {
+    logger.error('Failed to parse session state JSON', { sessionId, error: (error as Error).message, preview: data.slice(0, 100) });
+    return null;
+  }
 }
 
 export async function deleteSessionState(sessionId: string): Promise<void> {

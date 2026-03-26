@@ -85,7 +85,16 @@ export async function getSessionSummary(
       return await getSessionSummaryFallback(userId, sessionId);
     }
 
-    const summary = JSON.parse(data) as SessionSummary;
+    let summary: SessionSummary;
+    try {
+      summary = JSON.parse(data) as SessionSummary;
+    } catch (parseError) {
+      logger.warn('Corrupted JSON in session summary', {
+        sessionId, userId, error: (parseError as Error).message,
+        preview: data.slice(0, 200),
+      });
+      return null;
+    }
 
     // Convert date strings back to Date objects
     summary.startedAt = new Date(summary.startedAt);
@@ -245,7 +254,16 @@ export async function getIntentSummary(
       return await getIntentSummaryFallback(userId, intentId);
     }
 
-    const summary = JSON.parse(data) as IntentContextSummary;
+    let summary: IntentContextSummary;
+    try {
+      summary = JSON.parse(data) as IntentContextSummary;
+    } catch (parseError) {
+      logger.warn('Corrupted JSON in intent summary', {
+        intentId, userId, error: (parseError as Error).message,
+        preview: data.slice(0, 200),
+      });
+      return null;
+    }
 
     // Convert date strings
     summary.createdAt = new Date(summary.createdAt);

@@ -69,6 +69,7 @@ export async function transaction<T>(
     return result;
   } catch (error) {
     await client.query('ROLLBACK');
+    logger.warn('Transaction rolled back', { error: (error as Error).message });
     throw error;
   } finally {
     client.release();

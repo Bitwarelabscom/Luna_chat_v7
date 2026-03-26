@@ -1000,7 +1000,7 @@ export async function executeTool(
 
     // --- Fallback for unknown tools ---
     logger.warn('Unknown tool called', { tool: toolName });
-    return { toolResponse: `Tool ${toolName} executed.`, sideEffects };
+    return { toolResponse: `Error: Tool "${toolName}" is not recognized.`, sideEffects };
 
   } catch (error) {
     logger.error('Tool execution failed', { tool: toolName, error: (error as Error).message });

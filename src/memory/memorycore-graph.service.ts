@@ -693,151 +693,166 @@ export async function runDailyGraphConsolidation(): Promise<void> {
 }
 
 async function consolidateUserDaily(userId: string): Promise<void> {
+  let weakResult: { count: string } | null = null;
+  let promotedCount = 0;
+
   // 1. EMA edge weight evolution
-  // tau values per edge_type (in seconds):
-  //   co_occurrence: 14 days, semantic: 90 days, temporal: 30 days, causal: 60 days
-  // alpha = 1 - exp(-deltaT / tau)
-  // targetWeight = min(1.0, defaultWeight + 0.05 * ln(activation_count + 1))
-  // newWeight = weight * (1 - alpha) + targetWeight * alpha
-  await mcQuery(
-    `UPDATE memory_edges SET
-      weight = LEAST(1.0, GREATEST(0.0,
-        weight * (1.0 - (1.0 - exp(
-          -EXTRACT(EPOCH FROM (NOW() - COALESCE(last_activated, created_at)))
-          / CASE edge_type
-              WHEN 'co_occurrence' THEN 1209600   -- 14 days
-              WHEN 'discussed' THEN 1209600       -- 14 days
-              WHEN 'semantic' THEN 7776000         -- 90 days
-              WHEN 'temporal' THEN 2592000         -- 30 days
-              WHEN 'causal' THEN 5184000           -- 60 days
-              WHEN 'interested_in' THEN 5184000   -- 60 days
-              WHEN 'working_on' THEN 2592000      -- 30 days
-              WHEN 'knows_person' THEN 7776000    -- 90 days
-              WHEN 'dislikes' THEN 5184000        -- 60 days
-              WHEN 'geopolitical' THEN 2592000    -- 30 days
-              WHEN 'technical_tool' THEN 7776000  -- 90 days
-              ELSE 2592000                         -- 30 days default
-            END
-        )))
-        + LEAST(1.0, 0.5 + 0.05 * LN(activation_count + 1))
-          * (1.0 - exp(
+  try {
+    await mcQuery(
+      `UPDATE memory_edges SET
+        weight = LEAST(1.0, GREATEST(0.0,
+          weight * (1.0 - (1.0 - exp(
             -EXTRACT(EPOCH FROM (NOW() - COALESCE(last_activated, created_at)))
             / CASE edge_type
-                WHEN 'co_occurrence' THEN 1209600
-                WHEN 'discussed' THEN 1209600
-                WHEN 'semantic' THEN 7776000
-                WHEN 'temporal' THEN 2592000
-                WHEN 'causal' THEN 5184000
-                WHEN 'interested_in' THEN 5184000
-                WHEN 'working_on' THEN 2592000
-                WHEN 'knows_person' THEN 7776000
-                WHEN 'dislikes' THEN 5184000
-                WHEN 'geopolitical' THEN 2592000
-                WHEN 'technical_tool' THEN 7776000
-                ELSE 2592000
+                WHEN 'co_occurrence' THEN 1209600   -- 14 days
+                WHEN 'discussed' THEN 1209600       -- 14 days
+                WHEN 'semantic' THEN 7776000         -- 90 days
+                WHEN 'temporal' THEN 2592000         -- 30 days
+                WHEN 'causal' THEN 5184000           -- 60 days
+                WHEN 'interested_in' THEN 5184000   -- 60 days
+                WHEN 'working_on' THEN 2592000      -- 30 days
+                WHEN 'knows_person' THEN 7776000    -- 90 days
+                WHEN 'dislikes' THEN 5184000        -- 60 days
+                WHEN 'geopolitical' THEN 2592000    -- 30 days
+                WHEN 'technical_tool' THEN 7776000  -- 90 days
+                ELSE 2592000                         -- 30 days default
               END
-          ))
-      ))
-    WHERE user_id = $1 AND is_active = true`,
-    [userId]
-  );
+          )))
+          + LEAST(1.0, 0.5 + 0.05 * LN(activation_count + 1))
+            * (1.0 - exp(
+              -EXTRACT(EPOCH FROM (NOW() - COALESCE(last_activated, created_at)))
+              / CASE edge_type
+                  WHEN 'co_occurrence' THEN 1209600
+                  WHEN 'discussed' THEN 1209600
+                  WHEN 'semantic' THEN 7776000
+                  WHEN 'temporal' THEN 2592000
+                  WHEN 'causal' THEN 5184000
+                  WHEN 'interested_in' THEN 5184000
+                  WHEN 'working_on' THEN 2592000
+                  WHEN 'knows_person' THEN 7776000
+                  WHEN 'dislikes' THEN 5184000
+                  WHEN 'geopolitical' THEN 2592000
+                  WHEN 'technical_tool' THEN 7776000
+                  ELSE 2592000
+                END
+            ))
+        ))
+      WHERE user_id = $1 AND is_active = true`,
+      [userId]
+    );
+  } catch (error) {
+    logger.warn('Daily consolidation step failed: EMA weight evolution', { userId, error: (error as Error).message });
+  }
 
   // 2. Deactivate weak edges (but never same_as edges) and self-loops
-  const weakResult = await mcQueryOne<{ count: string }>(
-    `WITH deactivated AS (
-      UPDATE memory_edges SET is_active = false
-      WHERE user_id = $1 AND is_active = true
-        AND (
-          (weight < 0.1 AND edge_type NOT IN ('same_as', 'temporal_pattern'))
-          OR source_node_id = target_node_id
-        )
-      RETURNING id
-    )
-    SELECT COUNT(*) as count FROM deactivated`,
-    [userId]
-  );
-
-  // 3. Recalculate edge_count on all active nodes
-  await mcQuery(
-    `UPDATE memory_nodes n SET
-      edge_count = (
-        SELECT COUNT(*) FROM memory_edges e
-        WHERE e.is_active = true AND e.user_id = $1
-          AND (e.source_node_id = n.id OR e.target_node_id = n.id)
-      )
-    WHERE n.user_id = $1 AND n.is_active = true`,
-    [userId]
-  );
-
-  // 4. Recalculate centrality_score (weighted degree normalized)
-  // centrality = sum(weight of connected edges) / max_possible
-  // We use a simple weighted degree / max(weighted_degree) normalization
-  await mcQuery(
-    `WITH weighted_degrees AS (
-      SELECT n.id,
-        COALESCE(SUM(e.weight), 0) as wd
-      FROM memory_nodes n
-      LEFT JOIN memory_edges e ON e.is_active = true AND e.user_id = $1
-        AND (e.source_node_id = n.id OR e.target_node_id = n.id)
-      WHERE n.user_id = $1 AND n.is_active = true
-      GROUP BY n.id
-    ),
-    max_wd AS (
-      SELECT GREATEST(MAX(wd), 1.0) as max_val FROM weighted_degrees
-    )
-    UPDATE memory_nodes n SET
-      centrality_score = wd.wd / mx.max_val
-    FROM weighted_degrees wd, max_wd mx
-    WHERE n.id = wd.id AND n.user_id = $1`,
-    [userId]
-  );
-
-  // 5. Update recency on edges: decays from 1.0 toward 0 over days
-  await mcQuery(
-    `UPDATE memory_edges SET
-      recency = 1.0 / (1.0 + EXTRACT(EPOCH FROM (NOW() - COALESCE(last_activated, created_at))) / 86400.0)
-    WHERE user_id = $1 AND is_active = true`,
-    [userId]
-  );
-
-  // 6. Promote provisional/unverified nodes to permanent
-  // Criteria: connected edges span >= 3 distinct sessions, node has >= 3 edges,
-  // and has been activated within the last 14 days
-  // First fetch candidates, filter out noise tokens in JS, then promote
-  const promotionCandidates = await mcQuery<{ id: string; node_label: string; node_type: string }>(
-    `SELECT n.id, n.node_label, n.node_type
-    FROM memory_nodes n
-    WHERE n.user_id = $1 AND n.is_active = true
-      AND n.identity_status IN ('provisional', 'unverified')
-      AND n.edge_count >= 3
-      AND n.last_activated > NOW() - INTERVAL '14 days'
-      AND (
-        SELECT COALESCE(MAX(e.distinct_session_count), 0)
-        FROM memory_edges e
-        WHERE e.is_active = true AND e.user_id = $1
-          AND (e.source_node_id = n.id OR e.target_node_id = n.id)
-      ) >= 3`,
-    [userId]
-  );
-
-  // Filter out noise tokens - they should never become permanent
-  const validCandidates = promotionCandidates.filter(
-    (c) => ENTITY_EXEMPT_TYPES.has(c.node_type) || !isNoiseToken(c.node_label)
-  );
-
-  let promotedCount = 0;
-  if (validCandidates.length > 0) {
-    const validIds = validCandidates.map((c) => c.id);
-    const promotedResult = await mcQueryOne<{ count: string }>(
-      `WITH promoted AS (
-        UPDATE memory_nodes SET identity_status = 'permanent'
-        WHERE id = ANY($2) AND user_id = $1
+  try {
+    weakResult = await mcQueryOne<{ count: string }>(
+      `WITH deactivated AS (
+        UPDATE memory_edges SET is_active = false
+        WHERE user_id = $1 AND is_active = true
+          AND (
+            (weight < 0.1 AND edge_type NOT IN ('same_as', 'temporal_pattern'))
+            OR source_node_id = target_node_id
+          )
         RETURNING id
       )
-      SELECT COUNT(*) as count FROM promoted`,
-      [userId, validIds]
+      SELECT COUNT(*) as count FROM deactivated`,
+      [userId]
     );
-    promotedCount = parseInt(promotedResult?.count || '0');
+  } catch (error) {
+    logger.warn('Daily consolidation step failed: weak edge deactivation', { userId, error: (error as Error).message });
+  }
+
+  // 3. Recalculate edge_count on all active nodes
+  try {
+    await mcQuery(
+      `UPDATE memory_nodes n SET
+        edge_count = (
+          SELECT COUNT(*) FROM memory_edges e
+          WHERE e.is_active = true AND e.user_id = $1
+            AND (e.source_node_id = n.id OR e.target_node_id = n.id)
+        )
+      WHERE n.user_id = $1 AND n.is_active = true`,
+      [userId]
+    );
+  } catch (error) {
+    logger.warn('Daily consolidation step failed: edge count recalculation', { userId, error: (error as Error).message });
+  }
+
+  // 4. Recalculate centrality_score (weighted degree normalized)
+  try {
+    await mcQuery(
+      `WITH weighted_degrees AS (
+        SELECT n.id,
+          COALESCE(SUM(e.weight), 0) as wd
+        FROM memory_nodes n
+        LEFT JOIN memory_edges e ON e.is_active = true AND e.user_id = $1
+          AND (e.source_node_id = n.id OR e.target_node_id = n.id)
+        WHERE n.user_id = $1 AND n.is_active = true
+        GROUP BY n.id
+      ),
+      max_wd AS (
+        SELECT GREATEST(MAX(wd), 1.0) as max_val FROM weighted_degrees
+      )
+      UPDATE memory_nodes n SET
+        centrality_score = wd.wd / mx.max_val
+      FROM weighted_degrees wd, max_wd mx
+      WHERE n.id = wd.id AND n.user_id = $1`,
+      [userId]
+    );
+  } catch (error) {
+    logger.warn('Daily consolidation step failed: centrality recalculation', { userId, error: (error as Error).message });
+  }
+
+  // 5. Update recency on edges: decays from 1.0 toward 0 over days
+  try {
+    await mcQuery(
+      `UPDATE memory_edges SET
+        recency = 1.0 / (1.0 + EXTRACT(EPOCH FROM (NOW() - COALESCE(last_activated, created_at))) / 86400.0)
+      WHERE user_id = $1 AND is_active = true`,
+      [userId]
+    );
+  } catch (error) {
+    logger.warn('Daily consolidation step failed: recency update', { userId, error: (error as Error).message });
+  }
+
+  // 6. Promote provisional/unverified nodes to permanent
+  try {
+    const promotionCandidates = await mcQuery<{ id: string; node_label: string; node_type: string }>(
+      `SELECT n.id, n.node_label, n.node_type
+      FROM memory_nodes n
+      WHERE n.user_id = $1 AND n.is_active = true
+        AND n.identity_status IN ('provisional', 'unverified')
+        AND n.edge_count >= 3
+        AND n.last_activated > NOW() - INTERVAL '14 days'
+        AND (
+          SELECT COALESCE(MAX(e.distinct_session_count), 0)
+          FROM memory_edges e
+          WHERE e.is_active = true AND e.user_id = $1
+            AND (e.source_node_id = n.id OR e.target_node_id = n.id)
+        ) >= 3`,
+      [userId]
+    );
+
+    const validCandidates = promotionCandidates.filter(
+      (c) => ENTITY_EXEMPT_TYPES.has(c.node_type) || !isNoiseToken(c.node_label)
+    );
+
+    if (validCandidates.length > 0) {
+      const validIds = validCandidates.map((c) => c.id);
+      const promotedResult = await mcQueryOne<{ count: string }>(
+        `WITH promoted AS (
+          UPDATE memory_nodes SET identity_status = 'permanent'
+          WHERE id = ANY($2) AND user_id = $1
+          RETURNING id
+        )
+        SELECT COUNT(*) as count FROM promoted`,
+        [userId, validIds]
+      );
+      promotedCount = parseInt(promotedResult?.count || '0');
+    }
+  } catch (error) {
+    logger.warn('Daily consolidation step failed: node promotion', { userId, error: (error as Error).message });
   }
 
   const weakCount = parseInt(weakResult?.count || '0');
@@ -886,82 +901,90 @@ export async function runWeeklyGraphConsolidation(): Promise<void> {
 }
 
 async function consolidateUserWeekly(userId: string): Promise<void> {
-  // 1. Prune stale low-value nodes:
-  //    edge_count < 2, emotional_intensity < 0.3, last_activated > 30 days ago
-  const pruneResult = await mcQueryOne<{ count: string }>(
-    `WITH pruned AS (
-      UPDATE memory_nodes SET is_active = false, last_activated = NOW()
-      WHERE user_id = $1 AND is_active = true
-        AND edge_count < 2
-        AND emotional_intensity < 0.3
-        AND last_activated < NOW() - INTERVAL '30 days'
-      RETURNING id
-    )
-    SELECT COUNT(*) as count FROM pruned`,
-    [userId]
-  );
+  let pruneResult: { count: string } | null = null;
 
-  // Deactivate edges connected to pruned nodes
-  await mcQuery(
-    `UPDATE memory_edges SET is_active = false
-    WHERE user_id = $1 AND is_active = true
-      AND (source_node_id IN (SELECT id FROM memory_nodes WHERE user_id = $1 AND is_active = false)
-           OR target_node_id IN (SELECT id FROM memory_nodes WHERE user_id = $1 AND is_active = false))`,
-    [userId]
-  );
+  // 1. Prune stale low-value nodes + deactivate orphan edges
+  try {
+    pruneResult = await mcQueryOne<{ count: string }>(
+      `WITH pruned AS (
+        UPDATE memory_nodes SET is_active = false, last_activated = NOW()
+        WHERE user_id = $1 AND is_active = true
+          AND edge_count < 2
+          AND emotional_intensity < 0.3
+          AND last_activated < NOW() - INTERVAL '30 days'
+        RETURNING id
+      )
+      SELECT COUNT(*) as count FROM pruned`,
+      [userId]
+    );
+
+    await mcQuery(
+      `UPDATE memory_edges SET is_active = false
+      WHERE user_id = $1 AND is_active = true
+        AND (source_node_id IN (SELECT id FROM memory_nodes WHERE user_id = $1 AND is_active = false)
+             OR target_node_id IN (SELECT id FROM memory_nodes WHERE user_id = $1 AND is_active = false))`,
+      [userId]
+    );
+  } catch (error) {
+    logger.warn('Weekly consolidation step failed: pruning', { userId, error: (error as Error).message });
+  }
 
   // 2. Purge noise nodes
   const noiseResult = await purgeNoiseNodes(userId);
 
   // 3. Anti-centrality pressure on hub nodes (graduated scale)
-  // Exempt person/place nodes - they are naturally high-connectivity
-  // 50-99 edges: light pressure (penalty capped at 0.1)
-  // 100-199 edges: moderate pressure (penalty capped at 0.25)
-  // 200+ edges: heavy pressure (penalty capped at 0.4)
-  await mcQuery(
-    `UPDATE memory_nodes SET
-      centrality_score = centrality_score * (1.0 - CASE
-        WHEN edge_count >= 200 THEN LEAST(0.40, LN(edge_count::float / 50.0) / 8.0)
-        WHEN edge_count >= 100 THEN LEAST(0.25, LN(edge_count::float / 50.0) / 10.0)
-        WHEN edge_count >= 50  THEN LEAST(0.10, LN(edge_count::float / 50.0) / 15.0)
-        ELSE 0
-      END)
-    WHERE user_id = $1 AND is_active = true
-      AND edge_count >= 50
-      AND node_type NOT IN ('person', 'place', 'artist')`,
-    [userId]
-  );
+  try {
+    await mcQuery(
+      `UPDATE memory_nodes SET
+        centrality_score = centrality_score * (1.0 - CASE
+          WHEN edge_count >= 200 THEN LEAST(0.40, LN(edge_count::float / 50.0) / 8.0)
+          WHEN edge_count >= 100 THEN LEAST(0.25, LN(edge_count::float / 50.0) / 10.0)
+          WHEN edge_count >= 50  THEN LEAST(0.10, LN(edge_count::float / 50.0) / 15.0)
+          ELSE 0
+        END)
+      WHERE user_id = $1 AND is_active = true
+        AND edge_count >= 50
+        AND node_type NOT IN ('person', 'place', 'artist')`,
+      [userId]
+    );
+  } catch (error) {
+    logger.warn('Weekly consolidation step failed: anti-centrality', { userId, error: (error as Error).message });
+  }
 
   // 4. Merge candidate analysis and safe auto-merge
-  // Find node pairs with same type, co-occurrence edge, similar labels
-  // Require both labels >= 4 chars to avoid "Pi"/"Piano" false positives
-  const mergeCandidates = await mcQuery<{
+  type MergeCandidate = {
     node1_id: string; node1_label: string; node1_edge_count: string;
     node2_id: string; node2_label: string; node2_edge_count: string;
     edge_activation_count: string;
-  }>(
-    `SELECT
-      n1.id as node1_id, n1.node_label as node1_label, n1.edge_count as node1_edge_count,
-      n2.id as node2_id, n2.node_label as node2_label, n2.edge_count as node2_edge_count,
-      e.activation_count as edge_activation_count
-    FROM memory_edges e
-    JOIN memory_nodes n1 ON n1.id = e.source_node_id AND n1.is_active = true
-    JOIN memory_nodes n2 ON n2.id = e.target_node_id AND n2.is_active = true
-    WHERE e.user_id = $1 AND e.is_active = true
-      AND e.source_node_id != e.target_node_id
-      AND n1.node_type = n2.node_type
-      AND e.edge_type = 'co_occurrence'
-      AND e.activation_count >= 3
-      AND LENGTH(n1.node_label) >= 4
-      AND LENGTH(n2.node_label) >= 4
-      AND (
-        n1.node_label ILIKE '%' || n2.node_label || '%'
-        OR n2.node_label ILIKE '%' || n1.node_label || '%'
-      )
-    ORDER BY e.activation_count DESC
-    LIMIT 20`,
-    [userId]
-  );
+  };
+  let mergeCandidates: MergeCandidate[] = [];
+  try {
+    mergeCandidates = await mcQuery<MergeCandidate>(
+      `SELECT
+        n1.id as node1_id, n1.node_label as node1_label, n1.edge_count as node1_edge_count,
+        n2.id as node2_id, n2.node_label as node2_label, n2.edge_count as node2_edge_count,
+        e.activation_count as edge_activation_count
+      FROM memory_edges e
+      JOIN memory_nodes n1 ON n1.id = e.source_node_id AND n1.is_active = true
+      JOIN memory_nodes n2 ON n2.id = e.target_node_id AND n2.is_active = true
+      WHERE e.user_id = $1 AND e.is_active = true
+        AND e.source_node_id != e.target_node_id
+        AND n1.node_type = n2.node_type
+        AND e.edge_type = 'co_occurrence'
+        AND e.activation_count >= 3
+        AND LENGTH(n1.node_label) >= 4
+        AND LENGTH(n2.node_label) >= 4
+        AND (
+          n1.node_label ILIKE '%' || n2.node_label || '%'
+          OR n2.node_label ILIKE '%' || n1.node_label || '%'
+        )
+      ORDER BY e.activation_count DESC
+      LIMIT 20`,
+      [userId]
+    );
+  } catch (error) {
+    logger.warn('Weekly consolidation step failed: merge candidate analysis', { userId, error: (error as Error).message });
+  }
 
   // Auto-merge high-confidence candidates (activation_count >= 5 + exact substring)
   let mergedCount = 0;

@@ -6,7 +6,7 @@
  * Full audit trail with auto-revert on negative sentiment shifts.
  */
 
-import { query } from '../db/postgres.js';
+import { query, transaction } from '../db/postgres.js';
 import { createCompletion } from '../llm/router.js';
 import { getBackgroundFeatureModelConfig } from '../settings/background-llm-settings.service.js';
 import { config } from '../config/index.js';
@@ -79,23 +79,28 @@ async function ensureDefaults(userId: string): Promise<void> {
  * Get all active style parameters for a user.
  */
 export async function getActiveParameters(userId: string): Promise<StyleParameter[]> {
-  await ensureDefaults(userId);
+  try {
+    await ensureDefaults(userId);
 
-  const rows = await query(
-    `SELECT param_name, current_value, baseline, min_value, max_value
-     FROM luna_style_parameters
-     WHERE user_id = $1
-     ORDER BY param_name`,
-    [userId]
-  ) as Array<{ param_name: string; current_value: number; baseline: number; min_value: number; max_value: number }>;
+    const rows = await query(
+      `SELECT param_name, current_value, baseline, min_value, max_value
+       FROM luna_style_parameters
+       WHERE user_id = $1
+       ORDER BY param_name`,
+      [userId]
+    ) as Array<{ param_name: string; current_value: number; baseline: number; min_value: number; max_value: number }>;
 
-  return rows.map(r => ({
-    paramName: r.param_name as StyleParamName,
-    currentValue: r.current_value,
-    baseline: r.baseline,
-    minValue: r.min_value,
-    maxValue: r.max_value,
-  }));
+    return rows.map(r => ({
+      paramName: r.param_name as StyleParamName,
+      currentValue: r.current_value,
+      baseline: r.baseline,
+      minValue: r.min_value,
+      maxValue: r.max_value,
+    }));
+  } catch (error) {
+    logger.error('Failed to get active style parameters', { userId, error: (error as Error).message });
+    return [];
+  }
 }
 
 /**
@@ -134,48 +139,57 @@ export async function proposeAdjustment(
   paramName: StyleParamName,
   newValue: number
 ): Promise<{ applied: boolean; magnitude: number }> {
-  const params = await getActiveParameters(userId);
-  const param = params.find(p => p.paramName === paramName);
-  if (!param) return { applied: false, magnitude: 0 };
+  try {
+    const params = await getActiveParameters(userId);
+    const param = params.find(p => p.paramName === paramName);
+    if (!param) return { applied: false, magnitude: 0 };
 
-  // Clamp to bounds
-  const clampedValue = Math.max(param.minValue, Math.min(param.maxValue, newValue));
-  const magnitude = Math.abs(clampedValue - param.currentValue);
+    // Clamp to bounds
+    const clampedValue = Math.max(param.minValue, Math.min(param.maxValue, newValue));
+    const magnitude = Math.abs(clampedValue - param.currentValue);
 
-  // Enforce max adjustment per cycle
-  const effectiveValue = magnitude > MAX_ADJUSTMENT_PER_CYCLE
-    ? param.currentValue + Math.sign(clampedValue - param.currentValue) * MAX_ADJUSTMENT_PER_CYCLE
-    : clampedValue;
-  const effectiveMagnitude = Math.abs(effectiveValue - param.currentValue);
+    // Enforce max adjustment per cycle
+    const effectiveValue = magnitude > MAX_ADJUSTMENT_PER_CYCLE
+      ? param.currentValue + Math.sign(clampedValue - param.currentValue) * MAX_ADJUSTMENT_PER_CYCLE
+      : clampedValue;
+    const effectiveMagnitude = Math.abs(effectiveValue - param.currentValue);
 
-  if (effectiveMagnitude < 0.01) return { applied: false, magnitude: 0 };
+    if (effectiveMagnitude < 0.01) return { applied: false, magnitude: 0 };
 
-  const autoApply = effectiveMagnitude < AUTO_APPLY_THRESHOLD;
+    const autoApply = effectiveMagnitude < AUTO_APPLY_THRESHOLD;
 
-  // Log the adjustment
-  await query(
-    `INSERT INTO luna_self_adjustments (user_id, session_id, observation, param_name, old_value, new_value, magnitude, approved, applied)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-    [userId, sessionId, observation, paramName, param.currentValue, effectiveValue, effectiveMagnitude, autoApply, autoApply]
-  );
+    // Log + apply atomically in a transaction
+    await transaction(async (client) => {
+      await client.query(
+        `INSERT INTO luna_self_adjustments (user_id, session_id, observation, param_name, old_value, new_value, magnitude, approved, applied)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [userId, sessionId, observation, paramName, param.currentValue, effectiveValue, effectiveMagnitude, autoApply, autoApply]
+      );
 
-  // Apply if small enough
-  if (autoApply) {
-    await query(
-      `UPDATE luna_style_parameters SET current_value = $1, updated_at = NOW()
-       WHERE user_id = $2 AND param_name = $3`,
-      [effectiveValue, userId, paramName]
-    );
-    logger.info('Luna self-adjustment auto-applied', {
-      userId, paramName, oldValue: param.currentValue, newValue: effectiveValue, magnitude: effectiveMagnitude,
+      if (autoApply) {
+        await client.query(
+          `UPDATE luna_style_parameters SET current_value = $1, updated_at = NOW()
+           WHERE user_id = $2 AND param_name = $3`,
+          [effectiveValue, userId, paramName]
+        );
+      }
     });
-  } else {
-    logger.info('Luna self-adjustment proposed (needs approval)', {
-      userId, paramName, oldValue: param.currentValue, newValue: effectiveValue, magnitude: effectiveMagnitude,
-    });
+
+    if (autoApply) {
+      logger.info('Luna self-adjustment auto-applied', {
+        userId, paramName, oldValue: param.currentValue, newValue: effectiveValue, magnitude: effectiveMagnitude,
+      });
+    } else {
+      logger.info('Luna self-adjustment proposed (needs approval)', {
+        userId, paramName, oldValue: param.currentValue, newValue: effectiveValue, magnitude: effectiveMagnitude,
+      });
+    }
+
+    return { applied: autoApply, magnitude: effectiveMagnitude };
+  } catch (error) {
+    logger.error('Failed to propose style adjustment', { userId, paramName, error: (error as Error).message });
+    return { applied: false, magnitude: 0 };
   }
-
-  return { applied: autoApply, magnitude: effectiveMagnitude };
 }
 
 /**
@@ -309,31 +323,36 @@ export async function checkRevertCondition(
  * Get recent adjustments for display/audit.
  */
 export async function getRecentAdjustments(userId: string, limit = 10): Promise<SelfAdjustment[]> {
-  const rows = await query(
-    `SELECT id, observation, param_name, old_value, new_value, magnitude, approved, applied, reverted, created_at
-     FROM luna_self_adjustments
-     WHERE user_id = $1
-     ORDER BY created_at DESC
-     LIMIT $2`,
-    [userId, limit]
-  ) as Array<{
-    id: string; observation: string; param_name: string;
-    old_value: number; new_value: number; magnitude: number;
-    approved: boolean; applied: boolean; reverted: boolean; created_at: Date;
-  }>;
+  try {
+    const rows = await query(
+      `SELECT id, observation, param_name, old_value, new_value, magnitude, approved, applied, reverted, created_at
+       FROM luna_self_adjustments
+       WHERE user_id = $1
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [userId, limit]
+    ) as Array<{
+      id: string; observation: string; param_name: string;
+      old_value: number; new_value: number; magnitude: number;
+      approved: boolean; applied: boolean; reverted: boolean; created_at: Date;
+    }>;
 
-  return rows.map(r => ({
-    id: r.id,
-    observation: r.observation,
-    paramName: r.param_name,
-    oldValue: r.old_value,
-    newValue: r.new_value,
-    magnitude: r.magnitude,
-    approved: r.approved,
-    applied: r.applied,
-    reverted: r.reverted,
-    createdAt: r.created_at,
-  }));
+    return rows.map(r => ({
+      id: r.id,
+      observation: r.observation,
+      paramName: r.param_name,
+      oldValue: r.old_value,
+      newValue: r.new_value,
+      magnitude: r.magnitude,
+      approved: r.approved,
+      applied: r.applied,
+      reverted: r.reverted,
+      createdAt: r.created_at,
+    }));
+  } catch (error) {
+    logger.warn('Failed to get recent adjustments', { userId, error: (error as Error).message });
+    return [];
+  }
 }
 
 /**
@@ -347,13 +366,18 @@ export async function overrideParameter(
   const def = DEFAULT_PARAMS[paramName];
   if (!def) throw new Error(`Unknown style parameter: ${paramName}`);
 
-  const clamped = Math.max(def.min, Math.min(def.max, newValue));
-  await ensureDefaults(userId);
-  await query(
-    `UPDATE luna_style_parameters SET current_value = $1, updated_at = NOW()
-     WHERE user_id = $2 AND param_name = $3`,
-    [clamped, userId, paramName]
-  );
+  try {
+    const clamped = Math.max(def.min, Math.min(def.max, newValue));
+    await ensureDefaults(userId);
+    await query(
+      `UPDATE luna_style_parameters SET current_value = $1, updated_at = NOW()
+       WHERE user_id = $2 AND param_name = $3`,
+      [clamped, userId, paramName]
+    );
+  } catch (error) {
+    logger.error('Failed to override style parameter', { userId, paramName, error: (error as Error).message });
+    throw error;
+  }
 }
 
 export default {
