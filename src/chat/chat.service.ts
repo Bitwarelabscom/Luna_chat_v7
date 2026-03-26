@@ -617,11 +617,20 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     },
   });
 
-  // Handle tool calls using proper tool calling flow
-  if (completion.toolCalls && completion.toolCalls.length > 0) {
-    // Log what tools were called
+  // Handle tool calls in a loop - keeps calling tools until LLM produces text
+  const PM_MAX_TOOL_STEPS = 10;
+  let toolStep = 0;
+  const toolCtxPm = {
+    userId,
+    sessionId,
+    mode,
+    mcpUserTools: mcpUserTools.map(t => ({ serverId: t.serverId, name: t.name })),
+  };
+
+  while (completion.toolCalls && completion.toolCalls.length > 0 && toolStep < PM_MAX_TOOL_STEPS) {
+    toolStep++;
     const toolNames = completion.toolCalls.map(tc => tc.function.name);
-    logger.info('Tool calls received from LLM', { toolNames, count: toolNames.length });
+    logger.info('Tool calls received from LLM', { toolNames, count: toolNames.length, step: toolStep });
 
     // Add assistant message with tool calls to conversation
     messages.push({
@@ -630,16 +639,7 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
       tool_calls: completion.toolCalls,
     } as ChatMessage);
 
-    // Build tool execution context for the shared executor
-    const toolCtxPm = {
-      userId,
-      sessionId,
-      mode,
-      mcpUserTools: mcpUserTools.map(t => ({ serverId: t.serverId, name: t.name })),
-    };
-
     for (const toolCall of completion.toolCalls) {
-      // Delegate all tool execution to the shared executor
       const pmToolResult = await executeTool(toolCall, toolCtxPm);
       messages.push({
         role: 'tool',
@@ -651,31 +651,33 @@ export async function processMessage(input: ChatInput): Promise<ChatOutput> {
     // Monitor tool results for suspicious content before sending to LLM
     const hasSuspiciousContent = monitorToolResults(messages);
     if (hasSuspiciousContent) {
-      logger.warn('Suspicious content detected in tool results before second completion', {
-        sessionId,
-        userId,
-        messageCount: messages.length,
+      logger.warn('Suspicious content detected in tool results', {
+        sessionId, userId, step: toolStep, messageCount: messages.length,
       });
     }
 
-    // Get final response with tool results in context
-    logger.info('Making second completion with tool results', { messageCount: messages.length });
+    // Next completion - keep tools available so LLM can chain calls
     completion = await createChatCompletion({
       messages,
+      tools: legacyTools.length > 0 ? legacyTools : undefined,
       provider: modelConfig.provider,
       model: modelConfig.model,
       loggingContext: {
         userId,
         sessionId,
         source: 'chat',
-        nodeName: 'chat_tool_followup',
+        nodeName: `chat_tool_step_${toolStep}`,
       },
     });
-    logger.info('Second completion result', {
-      contentLength: completion.content?.length || 0,
-      contentPreview: completion.content?.substring(0, 100),
+    logger.info('Tool step completion result', {
+      step: toolStep, contentLength: completion.content?.length || 0,
       finishReason: completion.finishReason,
+      hasMoreToolCalls: !!(completion.toolCalls && completion.toolCalls.length > 0),
     });
+  }
+
+  if (toolStep >= PM_MAX_TOOL_STEPS) {
+    logger.warn('processMessage hit max tool steps', { sessionId, userId, steps: toolStep });
   }
 
   // Save assistant response
