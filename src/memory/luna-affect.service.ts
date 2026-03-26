@@ -158,7 +158,16 @@ Luna responded: "${signals.lunaResponse.slice(0, 400)}"`,
       }
     );
 
-    const parsed = JSON.parse(analysisResult.content.trim());
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let parsed: Record<string, any>;
+    try {
+      parsed = JSON.parse(analysisResult.content.trim());
+    } catch {
+      logger.debug('Luna affect LLM returned invalid JSON, keeping current state', {
+        userId, raw: analysisResult.content.slice(0, 100),
+      });
+      return;
+    }
 
     // Blend new signals with existing state (exponential moving average)
     const newAffect = {

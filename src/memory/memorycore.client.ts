@@ -83,6 +83,7 @@ export interface InteractionEnrichment {
 // MemoryCore session tracking: maps chatSessionId -> memorycoreSessionId
 // This enables proper session lifecycle management for memory consolidation
 const memorycoreSessionMap = new Map<string, string>();
+const MAX_SESSION_MAP_SIZE = 50;
 
 /**
  * Ensures a MemoryCore session exists for the given chat session.
@@ -95,6 +96,13 @@ export async function ensureSession(chatSessionId: string, userId: string): Prom
 
   const mcSession = await startSession(userId);
   if (mcSession) {
+    if (memorycoreSessionMap.size >= MAX_SESSION_MAP_SIZE) {
+      const oldestKey = Array.from(memorycoreSessionMap.keys())[0];
+      if (oldestKey) {
+        memorycoreSessionMap.delete(oldestKey);
+        logger.warn('memorycoreSessionMap evicted oldest entry', { evictedKey: oldestKey });
+      }
+    }
     memorycoreSessionMap.set(chatSessionId, mcSession.sessionId);
     logger.info('MemoryCore session started', { chatSessionId, memorycoreSessionId: mcSession.sessionId, userId });
     return mcSession.sessionId;

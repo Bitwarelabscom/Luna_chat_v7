@@ -68,6 +68,44 @@ const ENGLISH_STOPWORDS = new Set([
   'tried', 'asked', 'needed', 'called', 'turned', 'started',
   'looked', 'wanted', 'thought', 'working', 'looking', 'getting',
   'making', 'taking', 'trying', 'using', 'saying', 'coming',
+  // Informal affirmations, fillers, interjections
+  'yep', 'yup', 'nah', 'nope', 'huh', 'hmm', 'umm', 'wow',
+  'damn', 'hell', 'crap', 'dude', 'bro', 'lol', 'haha',
+  'screw', 'stuff', 'whatever', 'anyway', 'anyways', 'btw',
+  // Generic nouns/adjectives that aren't specific entities
+  'content', 'goal', 'risk', 'risks', 'structure', 'tool',
+  'strong', 'top', 'avoid', 'key', 'style', 'user', 'release',
+  'target', 'agent', 'core', 'log', 'power', 'kill', 'static',
+  'performance', 'mood', 'dynamic', 'self', 'model', 'daily',
+  'subtle', 'intimate', 'fade', 'slight', 'intent', 'anything',
+  'search', 'needs', 'handles', 'structured', 'fully', 'system',
+  'dedicated', 'score', 'cost', 'stable', 'theme', 'tone',
+  'hybrid', 'length', 'status', 'identity', 'choose', 'single',
+  'higher', 'lower', 'screen', 'code', 'budget', 'persistent',
+  'strategic', 'quiet', 'fix', 'store', 'brain', 'drive',
+  'solid', 'soon', 'keeps', 'below', 'above', 'around',
+  'within', 'without', 'inside', 'outside', 'between', 'across',
+  'during', 'before', 'behind', 'beside', 'beyond', 'toward',
+  'nothing', 'everything', 'something', 'someone', 'anyone',
+  'nobody', 'everybody', 'somewhere', 'anywhere', 'nowhere',
+  'always', 'never', 'often', 'sometimes', 'usually', 'rarely',
+  'quite', 'rather', 'almost', 'enough', 'simply', 'merely',
+  'likely', 'probably', 'possibly', 'certainly', 'definitely',
+  'perhaps', 'instead', 'despite', 'unless', 'although',
+  'however', 'therefore', 'otherwise', 'meanwhile', 'overall',
+  // More generic technical/process words
+  'config', 'setup', 'option', 'setting', 'feature', 'module',
+  'version', 'format', 'method', 'result', 'response', 'request',
+  'error', 'issue', 'patch', 'debug', 'deploy', 'scope',
+  'layer', 'block', 'chunk', 'batch', 'queue', 'stack',
+  'event', 'state', 'mode', 'level', 'stage', 'phase',
+  'logic', 'flow', 'loop', 'task', 'item', 'entry',
+  // Adjectives/descriptors that leak as entities
+  'aggressive', 'creative', 'experimental', 'cinematic',
+  'melancholic', 'minimalist', 'atmospheric', 'dreamy',
+  'energetic', 'intense', 'haunting', 'organic', 'raw',
+  'smooth', 'sharp', 'bright', 'dense', 'sparse', 'loose',
+  'tight', 'clean', 'dirty', 'fresh', 'sweet', 'bitter',
 ]);
 
 const SWEDISH_STOPWORDS = new Set([
@@ -83,6 +121,9 @@ const SWEDISH_STOPWORDS = new Set([
 
 const MIN_ENTITY_LENGTH = 3;
 
+// Combined set for single-lookup stopword checks
+const ALL_STOPWORDS = new Set([...ENGLISH_STOPWORDS, ...SWEDISH_STOPWORDS]);
+
 /**
  * Check if a label/name is a stopword or noise.
  * Catches: single stopwords, phrase fragments starting with stopwords,
@@ -94,8 +135,7 @@ export function isNoiseToken(text: string): boolean {
   if (lower.length < MIN_ENTITY_LENGTH) return true;
 
   // Single-word check against stoplists
-  if (ENGLISH_STOPWORDS.has(lower)) return true;
-  if (SWEDISH_STOPWORDS.has(lower)) return true;
+  if (ALL_STOPWORDS.has(lower)) return true;
 
   // Reject purely numeric tokens
   if (/^\d+$/.test(lower)) return true;
@@ -106,7 +146,7 @@ export function isNoiseToken(text: string): boolean {
   const words = lower.split(/\s+/);
   if (words.length > 1) {
     // Phrase starting with a stopword: "Hey Henke", "The Linux", "Would Do If"
-    if (ENGLISH_STOPWORDS.has(words[0]) || SWEDISH_STOPWORDS.has(words[0])) return true;
+    if (ALL_STOPWORDS.has(words[0])) return true;
     // Sentence-like: contains punctuation typical of sentences (not names/titles)
     if (/[.!?]$/.test(lower) && words.length >= 4) return true;
     // Too many words to be an entity (> 5 words is a sentence fragment)
@@ -494,7 +534,7 @@ export async function purgeNoiseNodes(): Promise<{ deletedTopics: number; delete
   if (!neo4jClient.isNeo4jEnabled()) return { deletedTopics: 0, deletedEntities: 0 };
 
   // Build Cypher-compatible stopword list (lowercased)
-  const allStopwords = [...ENGLISH_STOPWORDS, ...SWEDISH_STOPWORDS];
+  const allStopwords = Array.from(ALL_STOPWORDS);
 
   const deleteTopicsCypher = `
     MATCH (t:Topic)

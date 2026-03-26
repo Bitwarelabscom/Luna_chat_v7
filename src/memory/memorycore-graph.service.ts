@@ -2,6 +2,13 @@ import { mcQuery, mcQueryOne } from '../db/memorycore-pool.js';
 import { isNoiseToken } from '../graph/entity-graph.service.js';
 import logger from '../utils/logger.js';
 
+// Node types representing real-world entities where stopwords can be legitimate names.
+// Used in noise purging and node promotion to exempt these types from stopword filtering.
+const ENTITY_EXEMPT_TYPES = new Set([
+  'song', 'album', 'artist', 'person', 'place', 'brand', 'product',
+  'organization', 'project', 'game', 'movie', 'show', 'book',
+]);
+
 // Types matching MemoryCore's PostgreSQL schema
 export interface GraphNode {
   id: string;
@@ -595,26 +602,19 @@ export async function purgeNoiseNodes(
   userId: string
 ): Promise<{ deactivatedNodes: number; deactivatedEdges: number }> {
   try {
-    // Node types that are exempt from noise purging - these represent
-    // real-world entities where stopwords can be legitimate names
-    const NOISE_EXEMPT_TYPES = new Set([
-      'song', 'album', 'artist', 'person', 'place', 'brand', 'product',
-      'organization', 'project', 'game', 'movie', 'show', 'book',
-    ]);
-
-    // Get all active node labels for this user
-    const nodes = await mcQuery<{ id: string; node_label: string; node_type: string }>(
-      `SELECT id, node_label, node_type FROM memory_nodes WHERE user_id = $1 AND is_active = true`,
-      [userId]
+    // Get active non-exempt nodes for this user (exempt types filtered in SQL)
+    const nodes = await mcQuery<{ id: string; node_label: string }>(
+      `SELECT id, node_label FROM memory_nodes
+       WHERE user_id = $1 AND is_active = true AND node_type != ALL($2)`,
+      [userId, Array.from(ENTITY_EXEMPT_TYPES)]
     );
 
     const noiseNodeIds: string[] = [];
-    for (const node of nodes) {
-      if (NOISE_EXEMPT_TYPES.has(node.node_type)) continue;
+    Array.from(nodes).forEach((node) => {
       if (isNoiseToken(node.node_label)) {
         noiseNodeIds.push(node.id);
       }
-    }
+    });
 
     if (noiseNodeIds.length === 0) {
       return { deactivatedNodes: 0, deactivatedEdges: 0 };
@@ -803,36 +803,52 @@ async function consolidateUserDaily(userId: string): Promise<void> {
   // 6. Promote provisional/unverified nodes to permanent
   // Criteria: connected edges span >= 3 distinct sessions, node has >= 3 edges,
   // and has been activated within the last 14 days
-  const promotedResult = await mcQueryOne<{ count: string }>(
-    `WITH promotion_candidates AS (
-      SELECT n.id
-      FROM memory_nodes n
-      WHERE n.user_id = $1 AND n.is_active = true
-        AND n.identity_status IN ('provisional', 'unverified')
-        AND n.edge_count >= 3
-        AND n.last_activated > NOW() - INTERVAL '14 days'
-        AND (
-          SELECT COALESCE(MAX(e.distinct_session_count), 0)
-          FROM memory_edges e
-          WHERE e.is_active = true AND e.user_id = $1
-            AND (e.source_node_id = n.id OR e.target_node_id = n.id)
-        ) >= 3
-    ),
-    promoted AS (
-      UPDATE memory_nodes SET identity_status = 'permanent'
-      WHERE id IN (SELECT id FROM promotion_candidates) AND user_id = $1
-      RETURNING id
-    )
-    SELECT COUNT(*) as count FROM promoted`,
+  // First fetch candidates, filter out noise tokens in JS, then promote
+  const promotionCandidates = await mcQuery<{ id: string; node_label: string; node_type: string }>(
+    `SELECT n.id, n.node_label, n.node_type
+    FROM memory_nodes n
+    WHERE n.user_id = $1 AND n.is_active = true
+      AND n.identity_status IN ('provisional', 'unverified')
+      AND n.edge_count >= 3
+      AND n.last_activated > NOW() - INTERVAL '14 days'
+      AND (
+        SELECT COALESCE(MAX(e.distinct_session_count), 0)
+        FROM memory_edges e
+        WHERE e.is_active = true AND e.user_id = $1
+          AND (e.source_node_id = n.id OR e.target_node_id = n.id)
+      ) >= 3`,
     [userId]
   );
 
-  const weakCount = parseInt(weakResult?.count || '0');
-  const promotedCount = parseInt(promotedResult?.count || '0');
+  // Filter out noise tokens - they should never become permanent
+  const validCandidates = promotionCandidates.filter(
+    (c) => ENTITY_EXEMPT_TYPES.has(c.node_type) || !isNoiseToken(c.node_label)
+  );
 
-  if (weakCount > 0 || promotedCount > 0) {
+  let promotedCount = 0;
+  if (validCandidates.length > 0) {
+    const validIds = validCandidates.map((c) => c.id);
+    const promotedResult = await mcQueryOne<{ count: string }>(
+      `WITH promoted AS (
+        UPDATE memory_nodes SET identity_status = 'permanent'
+        WHERE id = ANY($2) AND user_id = $1
+        RETURNING id
+      )
+      SELECT COUNT(*) as count FROM promoted`,
+      [userId, validIds]
+    );
+    promotedCount = parseInt(promotedResult?.count || '0');
+  }
+
+  const weakCount = parseInt(weakResult?.count || '0');
+
+  // 7. Daily noise purge - catch noise nodes before they accumulate
+  const noiseResult = await purgeNoiseNodes(userId);
+
+  if (weakCount > 0 || promotedCount > 0 || noiseResult.deactivatedNodes > 0) {
     logger.info('Daily consolidation results', {
       userId, weakEdgesDeactivated: weakCount, nodesPromoted: promotedCount,
+      noiseNodes: noiseResult.deactivatedNodes, noiseEdges: noiseResult.deactivatedEdges,
     });
   }
 }

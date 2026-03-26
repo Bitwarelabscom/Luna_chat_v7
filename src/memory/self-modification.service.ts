@@ -235,7 +235,16 @@ Only suggest ONE adjustment at a time. Be conservative - small changes only.`,
       }
     );
 
-    const parsed = JSON.parse(result.content.trim());
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let parsed: Record<string, any>;
+    try {
+      parsed = JSON.parse(result.content.trim());
+    } catch {
+      logger.debug('Self-modification LLM returned invalid JSON', {
+        userId, raw: result.content.slice(0, 100),
+      });
+      return;
+    }
     if (parsed.param && Object.keys(DEFAULT_PARAMS).includes(parsed.param)) {
       await proposeAdjustment(
         userId,
