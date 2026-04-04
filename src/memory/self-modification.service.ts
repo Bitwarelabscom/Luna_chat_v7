@@ -52,6 +52,37 @@ const DEFAULT_PARAMS: Record<StyleParamName, { baseline: number; min: number; ma
 
 const MAX_ADJUSTMENT_PER_CYCLE = 0.15;
 const AUTO_APPLY_THRESHOLD = 0.3; // magnitude below this auto-applies
+const DRIFT_THRESHOLD_RATIO = 0.80;  // param "near ceiling" when at 80%+ of range
+const DRIFT_PARAM_COUNT = 3;         // systemic drift when 3+ params near ceiling
+const BASELINE_GRAVITY_RATE = 0.02;  // per-cycle pull toward baseline
+const MIN_EFFECTIVE_STEP = 0.04;     // minimum meaningful LLM-suggested adjustment
+
+/**
+ * Compute drift metrics for current parameters. Pure function, no DB or LLM calls.
+ */
+function computeDriftState(params: StyleParameter[]): {
+  driftDetected: boolean;
+  nearCeilingParams: StyleParamName[];
+  nearFloorParams: StyleParamName[];
+} {
+  const nearCeiling: StyleParamName[] = [];
+  const nearFloor: StyleParamName[] = [];
+
+  for (const p of params) {
+    const range = p.maxValue - p.minValue;
+    if (range <= 0) continue;
+    const positionInRange = (p.currentValue - p.minValue) / range;
+
+    if (positionInRange >= DRIFT_THRESHOLD_RATIO) {
+      nearCeiling.push(p.paramName);
+    } else if (positionInRange <= (1 - DRIFT_THRESHOLD_RATIO)) {
+      nearFloor.push(p.paramName);
+    }
+  }
+
+  const driftDetected = nearCeiling.length >= DRIFT_PARAM_COUNT || nearFloor.length >= DRIFT_PARAM_COUNT;
+  return { driftDetected, nearCeilingParams: nearCeiling, nearFloorParams: nearFloor };
+}
 
 /**
  * Ensure default style parameters exist for a user.
@@ -154,7 +185,7 @@ export async function proposeAdjustment(
       : clampedValue;
     const effectiveMagnitude = Math.abs(effectiveValue - param.currentValue);
 
-    if (effectiveMagnitude < 0.01) return { applied: false, magnitude: 0 };
+    if (effectiveMagnitude < MIN_EFFECTIVE_STEP) return { applied: false, magnitude: 0 };
 
     const autoApply = effectiveMagnitude < AUTO_APPLY_THRESHOLD;
 
@@ -200,18 +231,55 @@ export async function detectAdjustmentOpportunity(userId: string, sessionId: str
   if (!config.lunaAffect?.enabled) return;
 
   try {
-    // Get recent messages (last 10 exchanges)
+    // Get recent user+assistant messages only (no system/tool messages)
     const recentMessages = await query(
       `SELECT role, content FROM messages
        WHERE session_id IN (SELECT id FROM sessions WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 3)
+         AND role IN ('user', 'assistant')
        ORDER BY created_at DESC
        LIMIT 20`,
       [userId]
     ) as Array<{ role: string; content: string }>;
 
-    if (recentMessages.length < 6) return; // Not enough data
+    // Require actual conversation: both sides must be represented
+    const userMessageCount = recentMessages.filter(m => m.role === 'user').length;
+    const assistantMessageCount = recentMessages.filter(m => m.role === 'assistant').length;
+    if (recentMessages.length < 6 || userMessageCount < 3 || assistantMessageCount < 2) return;
 
     const currentParams = await getActiveParameters(userId);
+
+    // Drift detection + baseline gravity correction
+    const driftState = computeDriftState(currentParams);
+    if (driftState.driftDetected && driftState.nearCeilingParams.length > 0) {
+      const mostDrifted = currentParams
+        .filter(p => driftState.nearCeilingParams.includes(p.paramName))
+        .sort((a, b) => Math.abs(b.currentValue - b.baseline) - Math.abs(a.currentValue - a.baseline))[0];
+
+      if (mostDrifted) {
+        const gravityDirection = Math.sign(mostDrifted.baseline - mostDrifted.currentValue);
+        const gravityValue = mostDrifted.currentValue + gravityDirection * BASELINE_GRAVITY_RATE;
+        const clampedGravity = Math.max(mostDrifted.minValue, Math.min(mostDrifted.maxValue, gravityValue));
+
+        await transaction(async (client) => {
+          await client.query(
+            `INSERT INTO luna_self_adjustments (user_id, session_id, observation, param_name, old_value, new_value, magnitude, approved, applied)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, true, true)`,
+            [userId, sessionId, 'Baseline gravity correction', mostDrifted.paramName,
+             mostDrifted.currentValue, clampedGravity, Math.abs(clampedGravity - mostDrifted.currentValue)]
+          );
+          await client.query(
+            `UPDATE luna_style_parameters SET current_value = $1, updated_at = NOW()
+             WHERE user_id = $2 AND param_name = $3`,
+            [clampedGravity, userId, mostDrifted.paramName]
+          );
+        });
+
+        logger.info('Baseline gravity applied', {
+          userId, paramName: mostDrifted.paramName,
+          oldValue: mostDrifted.currentValue, newValue: clampedGravity,
+        });
+      }
+    }
 
     const modelConfig = await getBackgroundFeatureModelConfig(userId, 'luna_affect_analysis');
 
@@ -219,9 +287,17 @@ export async function detectAdjustmentOpportunity(userId: string, sessionId: str
       `${p.paramName}: ${p.currentValue.toFixed(2)} (baseline: ${p.baseline.toFixed(2)}, range: ${p.minValue}-${p.maxValue})`
     ).join('\n');
 
-    const conversationSample = recentMessages.slice(0, 10).map(m =>
-      `${m.role}: ${m.content.slice(0, 150)}`
+    // Chronological order, clear role labels
+    const conversationSample = recentMessages.slice(0, 10).reverse().map(m =>
+      `${m.role === 'user' ? 'User' : 'Luna'}: ${m.content.slice(0, 150)}`
     ).join('\n');
+
+    const driftGuidance = driftState.driftDetected
+      ? `\n\nDRIFT WARNING: ${driftState.nearCeilingParams.length} parameters are near their maximum (${driftState.nearCeilingParams.join(', ')}). ` +
+        `Consider whether any should decrease toward baseline. ` +
+        `Sustained high values across many parameters reduces distinctiveness. ` +
+        `A decrease is a valid and often appropriate suggestion.`
+      : '';
 
     const result = await createCompletion(
       modelConfig.primary.provider,
@@ -235,7 +311,7 @@ ${paramSummary}
 
 If an adjustment is warranted, output JSON: {"param": "param_name", "new_value": 0.X, "observation": "brief reason"}
 If no adjustment needed, output: {"param": null}
-Only suggest ONE adjustment at a time. Be conservative - small changes only.`,
+Only suggest ONE adjustment at a time. Be conservative - small changes only.${driftGuidance}`,
         },
         {
           role: 'user',
