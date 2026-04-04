@@ -6,6 +6,7 @@ import { gpuOrchestrator } from '../gpu/gpu-orchestrator.service.js';
 
 const ELEVENLABS_API_URL = 'https://api.elevenlabs.io/v1';
 const OPENAI_API_URL = 'https://api.openai.com/v1';
+const FISH_AUDIO_API_URL = 'https://api.fish.audio/v1';
 
 // OpenAI TTS voices
 export const OPENAI_VOICES = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'] as const;
@@ -17,14 +18,16 @@ export type OrpheusVoice = typeof ORPHEUS_VOICES[number];
 
 // TTS Settings interface
 export interface TTSSettings {
-  engine: 'elevenlabs' | 'openai' | 'orpheus';
+  engine: 'elevenlabs' | 'openai' | 'orpheus' | 'fish_audio';
   openaiVoice: OpenAIVoice;
   orpheusVoice: OrpheusVoice;
+  fishAudioReferenceId?: string;
+  fishAudioModel?: 's1' | 's2-pro';
 }
 
 // Default TTS settings
 const DEFAULT_TTS_SETTINGS: TTSSettings = {
-  engine: 'elevenlabs',
+  engine: 'fish_audio',
   openaiVoice: 'nova',
   orpheusVoice: 'zoe',
 };
@@ -69,6 +72,8 @@ export async function getTtsSettings(): Promise<TTSSettings> {
         engine: parsed.engine || DEFAULT_TTS_SETTINGS.engine,
         openaiVoice: parsed.openaiVoice || DEFAULT_TTS_SETTINGS.openaiVoice,
         orpheusVoice: parsed.orpheusVoice || DEFAULT_TTS_SETTINGS.orpheusVoice,
+        fishAudioReferenceId: parsed.fishAudioReferenceId,
+        fishAudioModel: parsed.fishAudioModel,
       };
     }
   } catch (error) {
@@ -88,6 +93,8 @@ export async function updateTtsSettings(settings: Partial<TTSSettings>): Promise
     engine: settings.engine || current.engine,
     openaiVoice: settings.openaiVoice || current.openaiVoice,
     orpheusVoice: settings.orpheusVoice || current.orpheusVoice,
+    fishAudioReferenceId: settings.fishAudioReferenceId !== undefined ? settings.fishAudioReferenceId : current.fishAudioReferenceId,
+    fishAudioModel: settings.fishAudioModel || current.fishAudioModel,
   };
 
   // Validate OpenAI voice
@@ -201,7 +208,9 @@ function getDefaultModel(): string {
  * Check if ElevenLabs is enabled
  */
 export function isEnabled(): boolean {
-  return config.elevenlabs?.enabled !== false && !!config.elevenlabs?.apiKey;
+  const elevenLabsOk = config.elevenlabs?.enabled !== false && !!config.elevenlabs?.apiKey;
+  const fishAudioOk = config.fishAudio?.enabled !== false && !!config.fishAudio?.apiKey;
+  return elevenLabsOk || fishAudioOk;
 }
 
 /**
@@ -226,6 +235,10 @@ export async function synthesizeSpeech(options: TTSOptions): Promise<Buffer> {
 
   if (settings.engine === 'orpheus') {
     return synthesizeWithOrpheus(text, settings.orpheusVoice);
+  }
+
+  if (settings.engine === 'fish_audio') {
+    return synthesizeWithFishAudio(text, settings.fishAudioReferenceId, settings.fishAudioModel);
   }
 
   // Default to ElevenLabs
@@ -433,6 +446,138 @@ async function synthesizeWithOrpheus(text: string, voice: OrpheusVoice = 'tara')
 }
 
 /**
+ * Synthesize speech using Fish Audio TTS API (cloud)
+ */
+async function synthesizeWithFishAudio(text: string, referenceId?: string, model?: string): Promise<Buffer> {
+  const apiKey = config.fishAudio?.apiKey;
+  if (!apiKey) {
+    throw new Error('Fish Audio API key not configured');
+  }
+
+  const fishModel = model || config.fishAudio?.model || 's1';
+  const fishRefId = referenceId || config.fishAudio?.referenceId || undefined;
+
+  logger.info('Synthesizing speech with Fish Audio', {
+    textLength: text.length,
+    model: fishModel,
+    referenceId: fishRefId ? `${fishRefId.slice(0, 8)}...` : 'none',
+  });
+
+  try {
+    const body: Record<string, unknown> = {
+      text,
+      format: 'mp3',
+      mp3_bitrate: 128,
+      latency: 'balanced',
+      chunk_length: 300,
+    };
+    if (fishRefId) {
+      body.reference_id = fishRefId;
+    }
+
+    const response = await fetch(`${FISH_AUDIO_API_URL}/tts`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'model': fishModel,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      logger.error('Fish Audio TTS API error', {
+        status: response.status,
+        error: errorText,
+      });
+      throw new Error(`Fish Audio TTS error: ${response.status} - ${errorText}`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    logger.info('Speech synthesized successfully with Fish Audio', {
+      audioSize: buffer.length,
+      model: fishModel,
+    });
+
+    return buffer;
+  } catch (error) {
+    logger.error('Fish Audio TTS synthesis error', {
+      error: (error as Error).message,
+      textLength: text.length,
+    });
+    throw error;
+  }
+}
+
+/**
+ * Stream Fish Audio TTS response directly to Express response.
+ * Fish Audio returns Transfer-Encoding: chunked natively as audio/mpeg.
+ */
+export async function streamFishAudioChunked(
+  text: string,
+  referenceId: string | undefined,
+  model: string | undefined,
+  res: import('express').Response
+): Promise<void> {
+  const apiKey = config.fishAudio?.apiKey;
+  if (!apiKey) {
+    throw new Error('Fish Audio API key not configured');
+  }
+
+  const cleanText = stripMarkdown(text);
+  const fishModel = model || config.fishAudio?.model || 's1';
+  const fishRefId = referenceId || config.fishAudio?.referenceId || undefined;
+
+  logger.info('Streaming Fish Audio TTS', { textLength: cleanText.length, model: fishModel });
+
+  const body: Record<string, unknown> = {
+    text: cleanText,
+    format: 'mp3',
+    mp3_bitrate: 128,
+    latency: 'normal',
+  };
+  if (fishRefId) {
+    body.reference_id = fishRefId;
+  }
+
+  const response = await fetch(`${FISH_AUDIO_API_URL}/tts`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      'model': fishModel,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Fish Audio stream error: ${response.status} - ${errorText}`);
+  }
+
+  res.setHeader('Content-Type', 'audio/mpeg');
+  res.setHeader('Transfer-Encoding', 'chunked');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('X-Accel-Buffering', 'no');
+
+  const reader = response.body!.getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      res.write(Buffer.from(value));
+    }
+  } catch (error) {
+    logger.error('Fish Audio stream pipe error', { error: (error as Error).message });
+  } finally {
+    res.end();
+  }
+}
+
+/**
  * Strip markdown formatting from text for cleaner TTS output
  */
 function stripMarkdown(text: string): string {
@@ -632,6 +777,7 @@ export default {
   synthesizeSpeech,
   streamSpeech,
   streamOrpheusChunked,
+  streamFishAudioChunked,
   getLunaVoice,
   listVoices,
   isEnabled,

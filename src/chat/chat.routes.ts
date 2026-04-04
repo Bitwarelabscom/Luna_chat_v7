@@ -450,10 +450,15 @@ router.post('/tts', ttsRateLimit, async (req: Request, res: Response) => {
 
     const data = ttsSchema.parse(req.body);
 
-    // Always stream Orpheus - split into paragraphs, play first while rest generates
+    // Stream engines that support native chunked streaming
     const settings = await ttsService.getTtsSettings();
     if (settings.engine === 'orpheus') {
       await ttsService.streamOrpheusChunked(data.text, settings.orpheusVoice, res);
+      return;
+    }
+
+    if (settings.engine === 'fish_audio') {
+      await ttsService.streamFishAudioChunked(data.text, settings.fishAudioReferenceId, settings.fishAudioModel, res);
       return;
     }
 

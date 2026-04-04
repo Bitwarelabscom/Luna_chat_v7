@@ -80,9 +80,10 @@ MODE: VOICE (spoken via ElevenLabs)
 - Keep responses to 1-3 sentences, conversational and casual
 - NO code blocks, bullet points, or markdown - just natural speech
 
-EMOTION TAGS (angle brackets only - interpreted by Orpheus TTS, not read aloud):
-<laugh> <chuckle> <sigh> <cough> <sniffle> <groan> <yawn> <gasp>
-Example: "<sigh> That sounds rough. Want to talk about it?"`;
+EMOTION TAGS (parentheses - interpreted by Fish Audio TTS, not read aloud):
+(happy) (sad) (excited) (calm) (curious) (sarcastic) (confident) (empathetic) (frustrated) (surprised)
+(laughing) (chuckling) (sighing) (gasping) (yawning) (whispering) (soft tone)
+Example: "(sighing) That sounds rough. Want to talk about it?"`;
 
 export const COMPANION_MODE_PROMPT = `${LUNA_BASE_PROMPT}
 
@@ -120,9 +121,10 @@ CONVERSATIONAL DYNAMICS:
 - When you have a callback from a past conversation, weave it in as a natural aside. "How'd that thing with the restaurant go?" not "I recall you mentioned a restaurant."
 - Read the room. If they're venting, don't problem-solve unless asked. If they're excited, match it.
 
-EMOTION TAGS (0-2 per response, only when natural):
-<laugh> <chuckle> <sigh> <cough> <sniffle> <groan> <yawn> <gasp>
-Example: "<sigh> That sounds exhausting. What's actually bothering you?"`;
+EMOTION TAGS (0-2 per response, only when natural - Fish Audio TTS, not read aloud):
+(happy) (sad) (excited) (calm) (curious) (sarcastic) (confident) (empathetic) (frustrated) (surprised)
+(laughing) (chuckling) (sighing) (gasping) (yawning) (whispering) (soft tone)
+Example: "(sighing) That sounds exhausting. What's actually bothering you?"`;
 
 export const DJ_LUNA_MODE_PROMPT = `${LUNA_BASE_PROMPT}
 

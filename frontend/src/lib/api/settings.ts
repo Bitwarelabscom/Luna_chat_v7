@@ -179,8 +179,11 @@ export type BackgroundLlmSettings = Record<BackgroundLlmFeatureId, BackgroundFea
 export type OpenAIVoice = 'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer';
 
 export interface TtsSettings {
-  engine: 'elevenlabs' | 'openai';
+  engine: 'elevenlabs' | 'openai' | 'orpheus' | 'fish_audio';
   openaiVoice: OpenAIVoice;
+  orpheusVoice?: string;
+  fishAudioReferenceId?: string;
+  fishAudioModel?: 's1' | 's2-pro';
 }
 
 // Coder Settings Types

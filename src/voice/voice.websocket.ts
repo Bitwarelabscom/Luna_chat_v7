@@ -334,15 +334,40 @@ async function processUtterance(
 
   let transcript = '';
   try {
-    const sttClient = config.stt.baseUrl
-      ? new OpenAI({ apiKey: 'not-needed', baseURL: config.stt.baseUrl })
-      : new OpenAI({ apiKey: config.openai.apiKey });
-    const response = await sttClient.audio.transcriptions.create({
-      file: file,
-      model: config.stt.model,
-      language: config.stt.language,
-    });
-    transcript = response.text.trim();
+    if (config.stt.provider === 'fish') {
+      // Fish Audio ASR
+      const apiKey = config.fishAudio?.apiKey;
+      if (!apiKey) throw new Error('Fish Audio API key not configured for STT');
+
+      const formData = new FormData();
+      formData.append('audio', new Blob([wavBuffer], { type: 'audio/wav' }), 'input.wav');
+      if (config.stt.language) formData.append('language', config.stt.language);
+      formData.append('ignore_timestamps', 'true');
+
+      const response = await fetch('https://api.fish.audio/v1/asr', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${apiKey}` },
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Fish Audio ASR error: ${response.status} - ${errorText}`);
+      }
+      const result = await response.json() as { text?: string };
+      transcript = (result.text || '').trim();
+    } else {
+      // Whisper STT (openai/groq/local)
+      const sttClient = config.stt.baseUrl
+        ? new OpenAI({ apiKey: 'not-needed', baseURL: config.stt.baseUrl })
+        : new OpenAI({ apiKey: config.openai.apiKey });
+      const response = await sttClient.audio.transcriptions.create({
+        file: file,
+        model: config.stt.model,
+        language: config.stt.language,
+      });
+      transcript = response.text.trim();
+    }
   } catch (err) {
     logger.error('STT Failed', { error: (err as Error).message });
     ws.send(JSON.stringify({ type: 'error', error: 'Transcription failed' }));

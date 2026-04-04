@@ -118,6 +118,13 @@ const configSchema = z.object({
     enabled: z.coerce.boolean().default(true),
   }).optional(),
 
+  fishAudio: z.object({
+    apiKey: z.string().optional(),
+    model: z.enum(['s1', 's2-pro']).default('s1'),
+    referenceId: z.string().optional(),
+    enabled: z.coerce.boolean().default(true),
+  }).optional(),
+
   memorycore: z.object({
     url: z.string().url(),
     enabled: z.coerce.boolean().default(true),
@@ -259,7 +266,7 @@ const configSchema = z.object({
   }).optional(),
 
   stt: z.object({
-    provider: z.enum(['openai', 'groq', 'local']).default('openai'),
+    provider: z.enum(['openai', 'groq', 'local', 'fish']).default('openai'),
     model: z.string().default('whisper-1'),
     baseUrl: z.string().optional(),
     language: z.string().optional(),
@@ -285,8 +292,10 @@ const configSchema = z.object({
 
   suno: z.object({
     apiUrl: z.string().url().default('http://10.0.0.10:3000'),
+    browserApiUrl: z.string().url().default('http://10.0.0.30:3001'),
     ollamaUrl: z.string().url().default('http://10.0.0.30:11434'),
     ollamaModel: z.string().default('qwen3.5:4b-q4_K_M'),
+    defaultWeirdness: z.coerce.number().int().min(0).max(100).default(50),
   }),
 
   prowlarr: z.object({
@@ -408,6 +417,13 @@ const rawConfig = {
     url: process.env.ORPHEUS_TTS_URL,
     voice: process.env.ORPHEUS_TTS_VOICE,
     enabled: process.env.ORPHEUS_TTS_ENABLED,
+  },
+
+  fishAudio: {
+    apiKey: process.env.FISH_AUDIO_API_KEY,
+    model: process.env.FISH_AUDIO_MODEL,
+    referenceId: process.env.FISH_AUDIO_REFERENCE_ID,
+    enabled: process.env.FISH_AUDIO_ENABLED,
   },
 
   memorycore: {
@@ -577,8 +593,10 @@ const rawConfig = {
 
   suno: {
     apiUrl: process.env.SUNO_API_URL,
+    browserApiUrl: process.env.SUNO_BROWSER_API_URL,
     ollamaUrl: process.env.SUNO_OLLAMA_URL,
     ollamaModel: process.env.SUNO_OLLAMA_MODEL,
+    defaultWeirdness: process.env.SUNO_DEFAULT_WEIRDNESS,
   },
 
   prowlarr: {

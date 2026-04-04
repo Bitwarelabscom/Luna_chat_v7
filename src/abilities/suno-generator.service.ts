@@ -189,30 +189,38 @@ async function generateTitleFromOllama(): Promise<{ title: string; textureTags: 
 }
 
 /**
- * Submit a generation to the Suno API.
+ * Submit a generation via Suno browser automation (v5.5).
+ * Calls the suno-browser-api wrapper on the GPU server which drives suno.com UI.
  */
-async function submitToSuno(payload: Record<string, unknown>): Promise<string> {
-  const sunoUrl = config.suno.apiUrl;
+async function submitViaBrowser(payload: {
+  title: string;
+  style: string;
+  lyrics: string;
+  weirdness?: number;
+}): Promise<void> {
+  const browserApiUrl = config.suno.browserApiUrl;
 
-  const response = await fetch(`${sunoUrl}/api/custom_generate`, {
+  const response = await fetch(`${browserApiUrl}/api/browser_generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(30_000),
+    body: JSON.stringify({
+      title: payload.title,
+      style: payload.style,
+      lyrics: payload.lyrics,
+      weirdness: payload.weirdness ?? config.suno.defaultWeirdness,
+    }),
+    signal: AbortSignal.timeout(360_000), // 6 min timeout (script takes ~3 min)
   });
 
   if (!response.ok) {
     const text = await response.text().catch(() => '');
-    throw new Error(`Suno API returned HTTP ${response.status}: ${text}`);
+    throw new Error(`Suno browser API returned HTTP ${response.status}: ${text}`);
   }
 
-  const data = await response.json() as Array<{ id?: string }> | { id?: string };
-  const items = Array.isArray(data) ? data : [data];
-  const sunoId = items[0]?.id;
-  if (!sunoId) {
-    throw new Error('Suno API response missing track ID');
+  const data = await response.json() as { success?: boolean; error?: string };
+  if (!data.success) {
+    throw new Error(data.error || 'Browser automation failed to click Create');
   }
-  return sunoId;
 }
 
 interface PollResult {
@@ -246,9 +254,8 @@ async function pollSuno(sunoId: string): Promise<PollResult> {
 }
 
 /**
- * Submit a single track to Suno. Does NOT poll -- polling is handled
- * separately by pollProcessingGenerations() on a 60s job timer.
- * This keeps the queue fast (~5s per item instead of ~10min).
+ * Submit a single track to Suno via browser automation (v5.5).
+ * Blocks until the browser script completes (~3 min), then marks completed.
  */
 async function processGeneration(
   gen: SunoGeneration,
@@ -262,24 +269,19 @@ async function processGeneration(
   try {
     // Mark as processing
     await pool.query(`UPDATE suno_generations SET status = 'processing' WHERE id = $1`, [taskId]);
-    logger.info('Suno generation started', { taskId, userId });
+    logger.info('Suno generation started (browser v5.5)', { taskId, userId });
 
     let finalTitle: string;
     let finalStyle: string;
+    let finalLyrics: string;
     let bpm: number | null = null;
     let key: string | null = null;
-    let sunoPayload: Record<string, unknown>;
 
     if (lyrics) {
       // Song mode: use provided lyrics and title
       finalTitle = title || 'Untitled';
       finalStyle = styleOverride || 'pop, 120bpm, female vocal';
-      sunoPayload = {
-        prompt: lyrics,
-        tags: finalStyle,
-        title: finalTitle,
-        make_instrumental: false,
-      };
+      finalLyrics = lyrics;
     } else {
       // Ambient mode: generate title via Ollama
       let textureTags = 'soft pad, gentle pulse';
@@ -295,23 +297,34 @@ async function processGeneration(
       bpm = Math.floor(Math.random() * 21) + 60;
       key = KEYS[Math.floor(Math.random() * KEYS.length)];
       finalStyle = styleOverride || `${textureTags}, ${bpm}bpm, ${key}, instrumental, ambient`;
-
-      sunoPayload = {
-        prompt: AMBIENT_PROMPT,
-        tags: finalStyle,
-        title: finalTitle,
-        make_instrumental: true,
-        negative_tags: 'vocals, speech, lyrics, singing',
-      };
+      finalLyrics = AMBIENT_PROMPT;
     }
 
-    // Submit to Suno and store sunoId - no polling
-    const sunoId = await submitToSuno(sunoPayload);
+    // Submit via browser automation - blocks until Create is clicked and generation completes
+    await submitViaBrowser({
+      title: finalTitle,
+      style: finalStyle,
+      lyrics: finalLyrics,
+      weirdness: config.suno.defaultWeirdness,
+    });
+
+    // Browser automation completed successfully - mark as completed
     await pool.query(
-      `UPDATE suno_generations SET suno_id = $1, title = $2, style = $3, bpm = $4, key = $5 WHERE id = $6`,
-      [sunoId, finalTitle, finalStyle, bpm, key, taskId],
+      `UPDATE suno_generations
+       SET title = $1, style = $2, bpm = $3, key = $4,
+           status = 'completed', completed_at = NOW()
+       WHERE id = $5`,
+      [finalTitle, finalStyle, bpm, key, taskId],
     );
-    logger.info('Suno track submitted', { taskId, sunoId });
+    logger.info('Suno track generated via browser (v5.5)', { taskId, title: finalTitle });
+
+    // Notify album pipeline
+    try {
+      const { handleSunoComplete } = await import('../ceo/album-pipeline.service.js');
+      await handleSunoComplete(taskId);
+    } catch (err) {
+      logger.warn('Album pipeline callback check failed (non-fatal)', { taskId, error: (err as Error).message });
+    }
   } catch (err) {
     logger.error('Suno processGeneration failed', { taskId, error: (err as Error).message });
     await handleCallback({

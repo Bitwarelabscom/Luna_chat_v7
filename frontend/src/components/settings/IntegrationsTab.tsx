@@ -470,7 +470,19 @@ export default function IntegrationsTab() {
             <label className="block text-sm text-theme-text-muted mb-2">
               Text-to-Speech Engine
             </label>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
+              <button
+                onClick={() => handleTtsUpdate({ engine: 'fish_audio' })}
+                disabled={savingTts}
+                className={`p-3 rounded-lg border-2 transition text-left ${
+                  ttsSettings?.engine === 'fish_audio'
+                    ? 'border-theme-accent-primary bg-theme-accent-primary/10'
+                    : 'border-theme-border hover:border-theme-text-muted'
+                }`}
+              >
+                <div className="font-medium text-theme-text-primary">Fish Audio</div>
+                <div className="text-xs text-theme-text-muted">Expressive, 69 emotions</div>
+              </button>
               <button
                 onClick={() => handleTtsUpdate({ engine: 'elevenlabs' })}
                 disabled={savingTts}
@@ -497,6 +509,66 @@ export default function IntegrationsTab() {
               </button>
             </div>
           </div>
+
+          {/* Fish Audio Voice Config - only show when Fish Audio is selected */}
+          {ttsSettings?.engine === 'fish_audio' && (
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm text-theme-text-muted mb-2">
+                  Voice Model ID
+                </label>
+                <input
+                  type="text"
+                  value={ttsSettings.fishAudioReferenceId || ''}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    // Debounce - only save when user stops typing
+                    clearTimeout((window as any).__fishAudioTimer);
+                    (window as any).__fishAudioTimer = setTimeout(() => {
+                      handleTtsUpdate({ fishAudioReferenceId: val });
+                    }, 800);
+                    setTtsSettings({ ...ttsSettings, fishAudioReferenceId: val });
+                  }}
+                  placeholder="Paste reference_id from fish.audio"
+                  className="w-full p-2 rounded-lg border border-theme-border bg-theme-bg-secondary text-theme-text-primary text-sm"
+                />
+                <p className="text-xs text-theme-text-muted mt-1">
+                  Get voice model IDs from fish.audio - leave empty for default voice
+                </p>
+              </div>
+              <div>
+                <label className="block text-sm text-theme-text-muted mb-2">
+                  Model
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => handleTtsUpdate({ fishAudioModel: 's1' })}
+                    disabled={savingTts}
+                    className={`p-2 rounded-lg border transition text-left ${
+                      (ttsSettings.fishAudioModel || 's1') === 's1'
+                        ? 'border-theme-accent-primary bg-theme-accent-primary/10'
+                        : 'border-theme-border hover:border-theme-text-muted'
+                    }`}
+                  >
+                    <div className="font-medium text-sm text-theme-text-primary">S1</div>
+                    <div className="text-xs text-theme-text-muted">69 emotion tags</div>
+                  </button>
+                  <button
+                    onClick={() => handleTtsUpdate({ fishAudioModel: 's2-pro' })}
+                    disabled={savingTts}
+                    className={`p-2 rounded-lg border transition text-left ${
+                      ttsSettings.fishAudioModel === 's2-pro'
+                        ? 'border-theme-accent-primary bg-theme-accent-primary/10'
+                        : 'border-theme-border hover:border-theme-text-muted'
+                    }`}
+                  >
+                    <div className="font-medium text-sm text-theme-text-primary">S2 Pro</div>
+                    <div className="text-xs text-theme-text-muted">Free-form emotions</div>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* OpenAI Voice Selection - only show when OpenAI is selected */}
           {ttsSettings?.engine === 'openai' && (

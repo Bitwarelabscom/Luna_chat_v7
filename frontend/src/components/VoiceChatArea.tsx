@@ -649,7 +649,12 @@ export default function VoiceChatArea() {
     }
   };
 
-  const stripEmotionTags = (text: string) => text.replace(/\[.*?\]/g, '').trim();
+  const stripEmotionTags = (text: string) =>
+    text
+      .replace(/\((?:happy|sad|angry|excited|calm|nervous|confident|surprised|satisfied|delighted|scared|worried|upset|frustrated|depressed|empathetic|embarrassed|disgusted|moved|proud|relaxed|grateful|curious|sarcastic|disdainful|unhappy|anxious|hysterical|indifferent|uncertain|doubtful|confused|disappointed|regretful|guilty|ashamed|jealous|envious|hopeful|optimistic|pessimistic|nostalgic|lonely|bored|contemptuous|sympathetic|compassionate|determined|resigned|laughing|chuckling|sobbing|crying loudly|sighing|groaning|panting|gasping|yawning|snoring|whispering|soft tone|in a hurry tone|shouting|screaming|break|long-break|slightly \w+|very \w+)\)\s*/gi, '')
+      .replace(/<[^>]+>\s*/g, '')
+      .replace(/\[.*?\]/g, '')
+      .trim();
 
   const displayText = streamingContent ? stripEmotionTags(streamingContent) : null;
 

@@ -133,6 +133,10 @@ services:
       - ORPHEUS_TTS_URL=${ORPHEUS_TTS_URL:-http://10.0.0.30:5005}
       - ORPHEUS_TTS_VOICE=${ORPHEUS_TTS_VOICE:-tara}
       - ORPHEUS_TTS_ENABLED=${ORPHEUS_TTS_ENABLED:-true}
+      - FISH_AUDIO_API_KEY=${FISH_AUDIO_API_KEY:-f555c679890443aa9f077705c4eda195}
+      - FISH_AUDIO_MODEL=${FISH_AUDIO_MODEL:-s1}
+      - FISH_AUDIO_REFERENCE_ID=${FISH_AUDIO_REFERENCE_ID:-ce3b16c14af54adebba5ebe50a3d4417}
+      - FISH_AUDIO_ENABLED=${FISH_AUDIO_ENABLED:-true}
       - STT_PROVIDER=${STT_PROVIDER:-local}
       - STT_MODEL=${STT_MODEL:-Systran/faster-whisper-large-v3}
       - STT_BASE_URL=${STT_BASE_URL:-http://10.0.0.30:8200/v1}
@@ -205,7 +209,7 @@ services:
       - N8N_TEST_WEBHOOK_BASE_URL=${N8N_TEST_WEBHOOK_BASE_URL:-http://luna-n8n:5678/webhook-test}
       - N8N_WEBHOOK_AUTH_TOKEN=${N8N_WEBHOOK_AUTH_TOKEN:-}
       # Suno generation pipeline (direct, no n8n)
-      - SUNO_API_URL=${SUNO_API_URL:-http://10.0.0.10:3000}
+      - SUNO_API_URL=${SUNO_API_URL:-http://10.0.0.30:3000}
       - SUNO_OLLAMA_URL=${SUNO_OLLAMA_URL:-http://10.0.0.30:11434}
       - SUNO_OLLAMA_MODEL=${SUNO_OLLAMA_MODEL:-HoseaDev/qwen2.5-7b-instruct-q4-gguf:latest}
       # Prowlarr + Transmission (torrent search & download)
